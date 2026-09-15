@@ -1,0 +1,25 @@
+# Secrets: Anthropic API key, ATS account password, Postgres password.
+.env
+
+# Logged-in browser session (cookies for your employer ATS accounts).
+browser_profile/
+
+# Generated per-application materials and scratch state.
+output/
+logs/
+data/*.db
+data/_*.json
+data/_*.txt
+
+__pycache__/
+*.py[cod]
+venv/
+
+# Your resume and any other personal documents dropped in data/.
+data/*.pdf
+data/*.docx
+data/*.doc
+
+# Editor/tool scratch.
+.pytest_cache/
+.vscode/

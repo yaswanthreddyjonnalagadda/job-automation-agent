@@ -1,0 +1,31 @@
+# Postgres for the job application tracker.
+#
+#   docker compose up -d      start
+#   docker compose down       stop (data survives)
+#   docker compose down -v    stop AND delete all data
+#
+# The password comes from POSTGRES_PASSWORD in .env, which is generated
+# locally and never committed.
+services:
+  db:
+    image: postgres:16
+    container_name: job-agent-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-job_agent}
+      POSTGRES_USER: ${POSTGRES_USER:-job_agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    ports:
+      # Bound to loopback on purpose: this database holds the user's resume,
+      # address and phone number, so it must not be reachable from the LAN.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-job_agent} -d ${POSTGRES_DB:-job_agent}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
