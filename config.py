@@ -54,8 +54,8 @@ class UserProfile:
     current_location: str = "Fairfax, VA"  # used to autofill combined "current location" form fields
     locations: tuple[str, ...] = ("Remote", "Fairfax, VA", "Arlington, VA")  # preferred, not exclusive
     open_to_relocation: bool = True  # anywhere in the US -- remote, hybrid, or fully onsite all fine
-    salary_min: int = 120_000
-    salary_max: int = 180_000
+    salary_min: int = 125_000
+    salary_max: int = 185_000
     years_experience: int = 5
     requires_visa_sponsorship: bool = True  # on H-1B; a transfer counts as sponsorship
     linkedin_url: str = "https://www.linkedin.com/in/yaswanthreddyjonnalagadda"
@@ -66,6 +66,9 @@ class UserProfile:
     # (veteran/disability/ethnicity/gender) are voluntary self-identification
     # the user chose to disclose -- never infer or change them.
     work_authorization: str = "H-1B"
+    # Supplied by the user on 2026-09-15 so these are never asked again.
+    us_citizen: str = "No"
+    security_clearance_level: str = "None"
     legally_eligible_to_work: str = "Yes"
     availability_to_start: str = "Immediately"
     willing_to_travel: str = "Greater than 50%"  # user is open to up to 100%

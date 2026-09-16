@@ -724,6 +724,16 @@ class JobApplicationAssistant:
             (r"(authori[sz]ed|eligible) to work", [g("legally_eligible_to_work", "Yes")]),
             (r"sponsor", ["Yes" if sponsorship else "No"]),
             (r"at least 18|18 years of age|over (the age of )?18", [g("at_least_18")]),
+            (r"u\.?s\.? citizen|united states citizen|citizen of the (u\.?s\.?|united states)",
+             [g("us_citizen"), "No, I am not a U.S. Citizen"] if g("us_citizen").lower() == "no"
+             else [g("us_citizen")]),
+            (r"clearance", ["I do not have a clearance", "No clearance", "None",
+                            "Not applicable", "N/A"]
+             if g("security_clearance_level").lower() in {"none", "", "no clearance"}
+             else [g("security_clearance_level")]),
+            (r"years of (relevant |related |professional )?experience|how many years",
+             [str(getattr(profile, "years_experience", "") or ""),
+              f"{getattr(profile, 'years_experience', '')} years"]),
             (r"^\s*country code", [f"({g('phone_country_code', '+1')}) {country}"]),
             (r"^\s*country(/region)?( of residence)?\s*:?\s*\*?\s*$", [country, "United States of America"]),
             (r"^\s*\*?\s*(state|province)(/province)?(/region)?\s*:?\s*\*?\s*$", [g("state"), "VA", "Virginia (VA)"]),
@@ -794,7 +804,7 @@ class JobApplicationAssistant:
         EEO self-identification) straight from the profile, then repairs a
         phone number the form rejected."""
         self.accept_consent_dialog(page)
-        if not hasattr(profile, "education"):
+        if not all(hasattr(profile, f) for f in ("education", "us_citizen", "security_clearance_level")):
             # A run that started before new profile fields were added: re-read
             # config.py so a hot reload can use them without restarting.
             try:
@@ -980,23 +990,115 @@ class JobApplicationAssistant:
         self.values.record(page, f"[id={json.dumps(control['id'])}]", options[idx], "profile:standard answer")
         logger.info("PROFILE_ANSWER: %r -> %r", control["question"][:60], options[idx])
 
+    def _salary_band(self, texts: list[str]) -> int | None:
+        """Which offered pay band to pick when a form asks for a salary range
+        rather than a number.
+
+        Employers word bands their own way ("$120k - $160k", "150,000-175,000"),
+        so the band is chosen by overlap with the range in the profile. A band
+        that doesn't overlap it at all is never picked -- that would be asking
+        for money the user didn't ask for.
+        """
+        profile = getattr(self, "_profile", None)
+        low, high = getattr(profile, "salary_min", 0), getattr(profile, "salary_max", 0)
+        if not (low and high):
+            return None
+
+        def amounts(text: str) -> list[int]:
+            found = []
+            for number, k in re.findall(r"([\d][\d,]*)\s*(k?)", text, re.I):
+                try:
+                    value = float(number.replace(",", ""))
+                except ValueError:
+                    continue
+                if k:
+                    value *= 1_000
+                if value >= 1_000:
+                    found.append(int(value))
+            return found
+
+        best, best_overlap = None, 0
+        for index, text in enumerate(texts):
+            values = amounts(text)
+            if not values:
+                continue
+            band_low, band_high = min(values), max(values)
+            if band_high == band_low:  # an open-ended band ("$150,000+")
+                band_high = band_low * 2
+            overlap = min(high, band_high) - max(low, band_low)
+            if overlap > best_overlap:
+                best, best_overlap = index, overlap
+        if best is not None:
+            logger.info("PROFILE_ANSWER: salary band %r covers %s-%s", texts[best], low, high)
+        return best
+
+    def displayed_value(self, field) -> str:
+        """What a picker shows as chosen.
+
+        A react-select style combobox (Greenhouse) clears its search input
+        once you pick an option and renders the choice in a sibling element,
+        so input_value() alone reports an answered field as still blank.
+        """
+        try:
+            value = field.input_value()
+        except Exception:
+            value = ""
+        if value:
+            return value
+        try:
+            return field.evaluate("""e => {
+                const shownIn = n => n && n.querySelector(
+                    '[class*=singleValue], [class*=single-value], [class*=multiValue], [class*=multi-value]');
+                let n = e.parentElement;
+                for (let i = 0; i < 5 && n; i++, n = n.parentElement) {
+                    const shown = shownIn(n);
+                    if (shown) return shown.innerText.trim();
+                }
+                return '';
+            }""") or ""
+        except Exception:
+            return ""
+
     def _answer_combobox_from_profile(self, page: Page, control: dict, candidates: list[str]) -> None:
         field = page.locator(f"[id={json.dumps(control['id'])}]")
+        wants_dial_code = bool(re.search(r"country code|dial|phone|^\s*\*?\s*country",
+                                         control.get("question", ""), re.I))
         scope = page.locator(f"[id={json.dumps(control['listbox'])}]") if control["listbox"] else page
         if scope is not page and scope.count() == 0:
             scope = page  # the named list isn't in the page (SuccessFactors renders it elsewhere)
 
+        # A phone field's dialling-code list ("Afghanistan+93") is open on many
+        # application pages at once. Reading "any visible option" therefore
+        # offered a clearance question the country list; these are the options
+        # of the field being answered, not of the page.
+        dial_code = re.compile(r"\+\d{1,4}$")
+
         def visible_options():
-            opts = scope.locator("[role=option]")
-            texts = [t.strip() for t in opts.all_inner_texts()]
-            if not texts and scope is not page:
-                # SuccessFactors paginated pickers list plain <li> items.
-                opts = scope.locator("li")
+            if scope is not page:
+                opts = scope.locator("[role=option]")
                 texts = [t.strip() for t in opts.all_inner_texts()]
-            if not texts:
-                opts = page.locator("[role=option]:visible, [role=listbox] li:visible")
+                if not texts:
+                    # SuccessFactors paginated pickers list plain <li> items.
+                    opts = scope.locator("li")
+                    texts = [t.strip() for t in opts.all_inner_texts()]
+                if texts:
+                    return opts, texts
+            # The field owns no named list: prefer a react-select menu
+            # (Greenhouse renders it outside the field, with no aria link
+            # back), then any open list that isn't the dialling-code one.
+            for selector in ("[class*=select__option]:visible",
+                             "[class*=menu] [role=option]:visible",
+                             "[role=option]:visible",
+                             "[role=listbox]:visible li:visible"):
+                opts = page.locator(selector)
+                if not opts.count():
+                    continue
                 texts = [t.strip() for t in opts.all_inner_texts()]
-            return opts, texts
+                if texts and not wants_dial_code and                         sum(bool(dial_code.search(t)) for t in texts) > len(texts) / 2:
+                    continue  # this is the phone widget's country list
+                if texts:
+                    return opts, texts
+            return page.locator("[class*=select__option]:visible"), []
 
         try:
             field.evaluate("e => e.scrollIntoView({block: 'center'})")
@@ -1022,6 +1124,8 @@ class JobApplicationAssistant:
             except Exception:
                 pass
         idx = self._best_option(texts, candidates)
+        if idx is None and re.search(r"salary|compensation|pay range", control.get("question", ""), re.I):
+            idx = self._salary_band(texts)
         if idx is None:
             # Long lists (countries, dialling codes) only render a slice until
             # you type; filter on the candidate's plain words.
@@ -1038,9 +1142,13 @@ class JobApplicationAssistant:
             return
         self._click_resiliently(opts.nth(idx), timeout_ms=4_000)
         page.wait_for_timeout(500)
-        self.values.record(page, f"[id={json.dumps(control['id'])}]", field.input_value() or texts[idx],
+        shown = self.displayed_value(field)
+        self.values.record(page, f"[id={json.dumps(control['id'])}]", shown or texts[idx],
                            "profile:standard answer")
-        logger.info("PROFILE_ANSWER: %r -> %r (now %r)", control["question"][:60], texts[idx], field.input_value())
+        # An earlier pass may have filed this question as unanswerable (before
+        # the right option list was found); it is answered now.
+        self.clear_ambiguous(control["question"])
+        logger.info("PROFILE_ANSWER: %r -> %r (now %r)", control["question"][:60], texts[idx], shown)
 
     def _answer_radio_groups_from_profile(self, page: Page, rules) -> None:
         try:
@@ -2248,7 +2356,18 @@ class JobApplicationAssistant:
                         }
                         if (!visible(el)) continue;
                         const l = labelOf(el);
-                        if (isRequired(el, l) && !(el.value || '').trim()) blanks.push(text(l, el));
+                        let value = (el.value || '').trim();
+                        if (!value) {
+                            // A react-select combobox clears its search input
+                            // once you choose; the choice sits beside it.
+                            let n = el.parentElement;
+                            for (let i = 0; i < 5 && n && !value; i++, n = n.parentElement) {
+                                const shown = n.querySelector('[class*=singleValue], [class*=single-value],'
+                                                            + '[class*=multiValue], [class*=multi-value]');
+                                if (shown) value = shown.innerText.trim();
+                            }
+                        }
+                        if (isRequired(el, l) && !value) blanks.push(text(l, el));
                     }
                     // Yes/No-style toggle buttons (Ashby): a row of aria-pressed
                     // buttons with none pressed.
@@ -3944,6 +4063,16 @@ class JobApplicationAssistant:
                         value = el.selectedIndex >= 0 ? (el.options[el.selectedIndex]?.text || '') : '';
                     } else {
                         value = el.value || '';
+                        if (!value) {
+                            // A react-select combobox clears its search input
+                            // after a choice and shows the value alongside it.
+                            let n = el.parentElement;
+                            for (let i = 0; i < 5 && n && !value; i++, n = n.parentElement) {
+                                const shown = n.querySelector('[class*=singleValue], [class*=single-value],'
+                                                            + '[class*=multiValue], [class*=multi-value]');
+                                if (shown) value = shown.innerText.trim();
+                            }
+                        }
                     }
                     const label = (labelOf(el) || '').replace(/\\s+/g, ' ').trim();
                     out.push({
@@ -4076,6 +4205,13 @@ class JobApplicationAssistant:
         self.__dict__.setdefault("_ambiguous_choices", [])
         if entry not in self._ambiguous_choices:
             self._ambiguous_choices.append(entry)
+
+    def clear_ambiguous(self, question: str) -> None:
+        """Drops an earlier 'no matching option' note for a question that has
+        since been answered, so it doesn't hold up the hand-over report."""
+        key = f"{question[:70]!r}:"
+        self.__dict__.setdefault("_ambiguous_choices", [])
+        self._ambiguous_choices = [e for e in self._ambiguous_choices if not e.startswith(key)]
 
     def note_unsupported_question(self, question: str) -> None:
         """Records a custom question with no approved answer."""

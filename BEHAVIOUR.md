@@ -25,6 +25,21 @@ the result, and hand the finished application over.
 | Never submits duplicates | `apply.already_submitted()` and `db.find_submitted()` match by URL (ignoring tracking parameters) and by company+title | `test_a_previously_submitted_job_is_refused` |
 | Never claims unsupported facts | `safety.unsupported_claims()` rejects a tailored resume or letter that invents a figure, date or certification | `test_invented_numbers_and_certifications_are_caught` |
 
+## What it learns from you
+
+Anything on the form the agent did not write is treated as **your** answer: it
+is never overwritten, and it is remembered (`form_answers`, marked
+`answered_by=user`). On the next application the same question -- however that
+employer words it -- is answered from what you gave last time, before Claude is
+asked for anything. An answer you typed outranks one the agent drafted, and a
+remembered answer is only reused when it is among the options the new form
+actually offers.
+
+Fixed facts live in `config.py` (`UserProfile`) and are filled on every
+application without asking: citizenship, clearance, years of experience,
+salary range, education, EEO answers. A pay-band dropdown is answered with the
+band that overlaps your range; a band outside it is left for you.
+
 ## Before it stops
 
 `apply_flow.hand_over()` runs, in order:

@@ -260,30 +260,31 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
             normalise_contact_details(strip_model_preamble(raw, profile), profile),
             profile, job,
         )
+        # The user's decision (2026-09-15): always send Claude's tailored
+        # resume. If a draft names something the real resume doesn't, it is
+        # rewritten once with that pointed out -- quietly, and the tailored
+        # resume is used either way.
         unsupported = safety.unsupported_claims(resume.raw_text, tailored)
         if unsupported:
-            # Tailoring may rewrite wording, never add facts. Give it one more
-            # go with the offending claims named -- a single invented model
-            # number shouldn't cost the whole tailored resume -- and fall back
-            # to the real resume if it does it again.
             logger.warning("TAILORING_RETRY: it claimed %s, which isn't in the resume",
                            ", ".join(unsupported[:6]))
-            retry = claude.tailor_resume(
-                resume, job, profile,
-                extra_instruction=(
-                    "Your previous draft claimed these, which do NOT appear in the candidate's "
-                    f"resume: {', '.join(unsupported[:10])}. Write it again using only what the "
-                    "resume actually says. Do not name specific product models, versions, metrics "
-                    "or certifications unless the resume names them."
-                ),
-            )
-            tailored = ensure_resume_header(
-                normalise_contact_details(strip_model_preamble(retry, profile), profile), profile, job)
-            unsupported = safety.unsupported_claims(resume.raw_text, tailored)
-            if unsupported:
-                logger.error("TAILORING_REJECTED: it still claimed %s -- attaching the original resume",
-                             ", ".join(unsupported[:6]))
-                return generic
+            try:
+                retry = claude.tailor_resume(
+                    resume, job, profile,
+                    extra_instruction=(
+                        "Your previous draft claimed these, which do NOT appear in the candidate's "
+                        f"resume: {', '.join(unsupported[:10])}. Write it again using only what the "
+                        "resume actually says. Do not name specific product models, versions, metrics "
+                        "or certifications unless the resume names them."
+                    ),
+                )
+                retried = ensure_resume_header(
+                    normalise_contact_details(strip_model_preamble(retry, profile), profile), profile, job)
+                still = safety.unsupported_claims(resume.raw_text, retried)
+                if len(still) < len(unsupported):
+                    tailored, unsupported = retried, still
+            except Exception as exc:
+                logger.warning("TAILORING_RETRY failed (%s) -- keeping the first draft", exc)
         resume_txt.write_text(tailored, encoding="utf-8")
         build_resume_pdf(resume_txt, resume_pdf)
         logger.info("Tailored resume written to %s", resume_pdf.name)
@@ -402,6 +403,66 @@ def collect_evidence(assistant, page, job_dir: Path, step: int) -> dict:
     return paths
 
 
+def remembered_answers(tracker, questions) -> dict:
+    """Answers already given to the same question on an earlier application.
+
+    Employers word screening questions differently, so the lookup matches on
+    meaning (db.recall_answer). An answer the user typed themselves outranks
+    one the agent drafted, and a choice that isn't among the options this
+    employer offers is not reused -- that would be putting words in their
+    mouth.
+    """
+    if not hasattr(tracker, "recall_answer"):
+        return {}
+    recalled: dict[str, str] = {}
+    for question in questions:
+        try:
+            matches = tracker.recall_answer(question.question_text, limit=5)
+        except Exception as exc:
+            logger.debug("Recall failed for %r: %s", question.question_text[:50], exc)
+            continue
+        matches.sort(key=lambda m: m.get("answered_by") != "user")  # the user's own answer first
+        for match in matches:
+            answer = (match.get("answer") or "").strip()
+            options = question.options or []
+            if not answer or (options and answer not in options):
+                continue
+            recalled[question.question_text] = answer
+            logger.info("RECALLED: %r -> %r (answered by %s before)",
+                        question.question_text[:60], answer[:40], match.get("answered_by"))
+            break
+    return recalled
+
+
+def learn_user_answers(assistant, page, tracker, key, profile) -> int:
+    """Records what the user filled in by hand, so the next application answers
+    it by itself.
+
+    Only values the agent did not write are learned, and only where they are
+    not already in the profile. Legal attestations and signatures are never
+    stored: those are the user's to give every time.
+    """
+    if not hasattr(tracker, "record_answer"):
+        return 0
+    known = {str(v).strip().lower() for v in safety.profile_values(profile).values() if str(v).strip()}
+    host = urlparse(page.url).netloc
+    learned = 0
+    for field in assistant.read_back_fields(page):
+        label, value = (field.get("label") or "").strip(), (field.get("value") or "").strip()
+        if field.get("source") == "agent" or not label or not value or len(label) < 6:
+            continue
+        if value.lower() in known or safety.is_attestation(label) or safety.is_attestation(value):
+            continue
+        try:
+            tracker.record_answer(key, host, label, value, answered_by="user")
+            learned += 1
+        except Exception as exc:
+            logger.debug("Could not remember %r: %s", label[:50], exc)
+    if learned:
+        logger.info("LEARNED: remembered %d answer(s) you filled in, for next time", learned)
+    return learned
+
+
 def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: str, summary_path: Path,
               config=None, profile=None, documents: Optional[dict] = None, step: int = 1) -> str:
     """The end of the agent's work on a form.
@@ -414,6 +475,8 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
     Returns the status that was set.
     """
     documents = documents or {}
+    if profile is not None:
+        learn_user_answers(assistant, page, tracker, key, profile)
     report = assistant.validate_application(page, resume_name)
     form_fields = assistant.read_back_fields(page)
     evidence = collect_evidence(assistant, page, job_dir, step)
@@ -655,17 +718,22 @@ def main() -> None:
             # agent then only corrects and completes the rest.
             if hasattr(assistant, "autofill_from_resume"):
                 assistant.autofill_from_resume(page, attach_resume)
+            # Anything on the form the agent did not write is the user's own
+            # answer: remember it before filling, both so it is not overwritten
+            # and so the next application can use it.
+            learn_user_answers(assistant, page, tracker, key, profile)
             fields = assistant.detect_form_fields(page)
             filled_fields = assistant.fill_detected_fields(page, fields, profile)
 
             questions = assistant.detect_screening_questions(page, fields)
-            answers: dict[str, str] = {}
-            if questions:
+            answers: dict[str, str] = remembered_answers(tracker, questions)
+            unanswered = [q for q in questions if q.question_text not in answers]
+            if unanswered:
                 try:
-                    answers = claude.answer_screening_questions(
+                    answers.update(claude.answer_screening_questions(
                         resume, job, profile,
-                        [{"question_text": q.question_text, "input_type": q.input_type, "options": q.options} for q in questions],
-                    )
+                        [{"question_text": q.question_text, "input_type": q.input_type, "options": q.options} for q in unanswered],
+                    ))
                 except ClaudeIntegrationError as exc:
                     logger.error("SCREENING_QA_FAILED: %s", exc)
             assistant.fill_screening_answers(page, questions, answers)
