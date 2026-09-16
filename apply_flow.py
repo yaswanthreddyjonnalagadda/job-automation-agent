@@ -832,6 +832,14 @@ def main() -> None:
             learn_user_answers(assistant, page, tracker, key, profile)
             remember_progress(tracker, key, page)
             fields = assistant.detect_form_fields(page)
+            if not fields:
+                # Nothing to fill here: the page may be a chooser (Dayforce
+                # offers to apply with or without an account) or a banner over
+                # the form. Clearing it costs a moment and recovers a run that
+                # would otherwise stop with an empty application.
+                page = assistant.dismiss_apply_chooser(page)
+                assistant.accept_consent_dialog(page)
+                fields = assistant.detect_form_fields(page)
             filled_fields = assistant.fill_detected_fields(page, fields, profile)
 
             questions = assistant.detect_screening_questions(page, fields)
