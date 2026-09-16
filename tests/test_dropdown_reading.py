@@ -345,3 +345,39 @@ def test_a_click_that_never_lands_does_not_end_the_run(page, agent):
     assert agent.click_next_step(page) is False  # the overlay swallows every click
     assert not page.is_closed()
     assert page.input_value("#answered") == "something"
+
+
+SHARED_NAME_RADIOS = """
+<html><body>
+  <div role="radiogroup" aria-label="Gender radio input">
+    <label><input type="radio" name="YPqjbf" value="1">Male</label>
+    <label><input type="radio" name="YPqjbf" value="2">Female</label>
+    <label><input type="radio" name="YPqjbf" value="3">I choose not to disclose</label>
+  </div>
+  <div role="radiogroup" aria-label="Veteran status radio input">
+    <label><input type="radio" name="YPqjbf" value="1">I identify as a protected veteran</label>
+    <label><input type="radio" name="YPqjbf" value="2">I am not a protected veteran</label>
+    <label><input type="radio" name="YPqjbf" value="3">I choose not to disclose</label>
+  </div>
+</body></html>
+"""
+
+
+def test_radios_are_grouped_as_the_page_groups_them(page, agent):
+    """Google gives every radio on its form the same name ("YPqjbf") and
+    separates the questions with role="radiogroup". Keying on the name made
+    five questions look like one question with thirteen answers: four went
+    unanswered, and an answer could have been ticked on the wrong question."""
+    page.set_content(SHARED_NAME_RADIOS)
+    groups = agent.radio_groups(page)
+    assert [g["question"] for g in groups] == ["Gender radio input", "Veteran status radio input"]
+    assert groups[0]["labels"] == ["Male", "Female", "I choose not to disclose"]
+
+
+def test_an_answer_lands_on_its_own_question(page, agent):
+    page.set_content(SHARED_NAME_RADIOS)
+    groups = agent.radio_groups(page)
+    assert agent.answer_radio_group(page, groups[1], "I am not a protected veteran")
+    checked = page.eval_on_selector_all(
+        "input[type=radio]", "els => els.map(e => e.checked)")
+    assert checked == [False, False, False, False, True, False]

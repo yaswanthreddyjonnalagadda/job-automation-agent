@@ -1315,70 +1315,111 @@ class JobApplicationAssistant:
         self.clear_ambiguous(control["question"])
         logger.info("PROFILE_ANSWER: %r -> %r (now %r)", control["question"][:60], texts[idx], shown)
 
-    def _answer_radio_groups_from_profile(self, page: Page, rules) -> None:
-        try:
-            groups = page.evaluate(
-                """() => {
-                    const groups = {};
-                    for (const r of document.querySelectorAll('input[type=radio]')) {
-                        if (r.name) (groups[r.name] ||= []).push(r);
-                    }
-                    const labelOf = r => ((r.id && document.querySelector(`label[for="${CSS.escape(r.id)}"]`)?.innerText)
-                                          || r.closest('label')?.innerText || r.value || '').trim();
-                    return Object.entries(groups).map(([name, rs]) => {
-                        const labels = rs.map(labelOf);
-                        let q = '';
-                        const rg = rs[0].closest('fieldset, [role=radiogroup]');
-                        if (rg) {
-                            const lb = rg.getAttribute('aria-labelledby');
-                            q = (lb && document.getElementById(lb)?.innerText) || rg.querySelector('legend')?.innerText
-                                || rg.getAttribute('aria-label') || '';
-                        }
-                        if (!q) {
-                            // Climb from the options' common container until
-                            // text other than the option labels appears.
-                            let n = rs[0].parentElement;
-                            while (n && !rs.every(r => n.contains(r))) n = n.parentElement;
-                            for (let i = 0; i < 4 && n && !q; i++, n = n.parentElement) {
-                                let t = n.innerText || '';
-                                for (const l of labels) if (l) t = t.split(l).join(' ');
-                                t = t.replace(/\\s+/g, ' ').trim();
-                                if (t) q = t;
-                            }
-                        }
-                        const realChoice = rs.some((r, i) => r.checked && !/^\\s*(no selection|select|none selected)\\s*$/i.test(labels[i]));
-                        return {name, question: q.slice(0, 300), labels, checked: realChoice};
-                    });
-                }"""
-            )
-        except Exception as exc:
-            logger.warning("Radio-group scan failed: %s", exc)
-            return
+    def radio_groups(self, page: Page) -> list[dict]:
+        """Every radio question on the page: its text, its options, and whether
+        one is chosen.
 
-        for grp in groups:
-            if grp["checked"]:
+        A group is a role="radiogroup" or fieldset when the page provides one,
+        and a shared name attribute otherwise. Google gives all thirteen radios
+        on its form the same name and separates the questions by container, so
+        grouping by name alone made them one question with thirteen answers.
+
+        Each option gets a stable id, so a choice can be made on exactly the
+        option it belongs to.
+        """
+        try:
+            return page.evaluate("""() => {
+                const visible = e => !!(e.offsetParent || e.getClientRects().length);
+                const labelOf = r => {
+                    const byFor = r.id && document.querySelector(`label[for="${CSS.escape(r.id)}"]`);
+                    return ((byFor && byFor.innerText) || (r.closest('label') || {}).innerText
+                            || r.getAttribute('aria-label') || r.value || '').replace(/\\s+/g, ' ').trim();
+                };
+                const questionOf = (container, radios, labels) => {
+                    if (container) {
+                        const by = container.getAttribute('aria-labelledby');
+                        const named = by && document.getElementById(by);
+                        const legend = container.querySelector('legend');
+                        const text = (named && named.innerText) || (legend && legend.innerText)
+                                   || container.getAttribute('aria-label') || '';
+                        if (text.trim()) return text.replace(/\\s+/g, ' ').trim();
+                    }
+                    // No container text: climb until something other than the
+                    // option labels themselves appears.
+                    let n = radios[0].parentElement;
+                    while (n && !radios.every(r => n.contains(r))) n = n.parentElement;
+                    for (let i = 0; i < 4 && n; i++, n = n.parentElement) {
+                        let t = n.innerText || '';
+                        for (const l of labels) if (l) t = t.split(l).join(' ');
+                        t = t.replace(/\\s+/g, ' ').trim();
+                        if (t) return t;
+                    }
+                    return '';
+                };
+
+                const groups = [];
+                const claimed = new Set();
+                let counter = 0;
+                const build = (container, radios) => {
+                    radios = radios.filter(visible);
+                    if (!radios.length) return;
+                    radios.forEach(r => { if (!r.id) r.id = 'agent-radio-' + (counter++); });
+                    const labels = radios.map(labelOf);
+                    const placeholder = /^\\s*(no selection|select|none selected)\\s*$/i;
+                    groups.push({
+                        key: 'group-' + groups.length,
+                        question: questionOf(container, radios, labels).slice(0, 300),
+                        labels,
+                        ids: radios.map(r => r.id),
+                        checked: radios.some((r, i) => r.checked && !placeholder.test(labels[i])),
+                        required: !!(container && (container.getAttribute('aria-required') === 'true'
+                                                   || container.querySelector('[required]'))),
+                    });
+                    radios.forEach(r => claimed.add(r));
+                };
+
+                for (const container of document.querySelectorAll('[role=radiogroup], fieldset')) {
+                    build(container, [...container.querySelectorAll('input[type=radio]')]);
+                }
+                const byName = {};
+                for (const r of document.querySelectorAll('input[type=radio]')) {
+                    if (claimed.has(r) || !r.name) continue;
+                    (byName[r.name] ||= []).push(r);
+                }
+                for (const radios of Object.values(byName)) build(null, radios);
+                return groups;
+            }""")
+        except Exception as exc:
+            logger.warning("Radio-group scan failed: %s", str(exc).splitlines()[0][:120])
+            return []
+
+    def answer_radio_group(self, page: Page, group: dict, answer: str) -> bool:
+        """Chooses one option of one radio question, by that option's own id."""
+        index = self._best_option(group.get("labels") or [], [answer])
+        if index is None:
+            return False
+        element = page.query_selector(f"[id={json.dumps(group['ids'][index])}]")
+        if element is None:
+            return False
+        return self.select_radio(page, element)
+
+    def _answer_radio_groups_from_profile(self, page: Page, rules) -> None:
+        for group in self.radio_groups(page):
+            if group["checked"] or not group["question"]:
                 continue
-            candidates = self._rule_for(grp["question"], rules)
+            candidates = self._rule_for(group["question"], rules)
             if not candidates:
                 continue
-            idx = self._best_option(grp["labels"], candidates)
-            if idx is None:
+            index = self._best_option(group["labels"], candidates)
+            if index is None:
+                self.note_ambiguous_choice(group["question"], group["labels"], candidates[0])
                 continue
-            radio = page.locator(f"input[type=radio][name={json.dumps(grp['name'])}]").nth(idx)
-            try:
-                radio.check(force=True, timeout=4_000)
-            except Exception:
-                try:
-                    # A sticky footer (CBTS's Cancel / Submit bar) can sit over the
-                    # last question, so pointer clicks never land; clicking the
-                    # radio from script still fires the form's change handler.
-                    radio.evaluate("r => { r.scrollIntoView({block: 'center'}); r.click(); }", timeout=3_000)
-                    if not radio.is_checked(timeout=2_000):
-                        raise RuntimeError("radio did not stay selected")
-                except Exception as exc:
-                    logger.warning("Could not answer %r: %s", grp["question"][:60], str(exc).splitlines()[0][:120])
-                    continue
-            logger.info("PROFILE_ANSWER: %r -> %r", grp["question"][:60], grp["labels"][idx][:60])
+            if self.answer_radio_group(page, group, group["labels"][index]):
+                self.values.record(page, f"[id={json.dumps(group['ids'][index])}]",
+                                   group["labels"][index], "profile:standard answer")
+                logger.info("PROFILE_ANSWER: %r -> %r", group["question"][:60], group["labels"][index][:60])
+            else:
+                logger.warning("Could not answer %r", group["question"][:60])
 
     def _answer_text_questions(self, page: Page, profile) -> None:
         """Free-text questions with a known answer: salary expectations (the
@@ -3293,19 +3334,16 @@ class JobApplicationAssistant:
                 input_type="select", selector=selector, options=options,
             ))
 
-        seen_groups = set()
-        for el in page.query_selector_all("input[type='radio']"):
-            if not el.is_visible():
+        # Grouped as the page groups them: Google gives every radio the same
+        # name and separates the questions with role="radiogroup", so keying on
+        # the name made five questions look like one with thirteen answers --
+        # and an answer could have been ticked on the wrong question.
+        for group in self.radio_groups(page):
+            if group["checked"] or not group["question"]:
                 continue
-            name = el.get_attribute("name")
-            if not name or name in seen_groups:
-                continue
-            seen_groups.add(name)
-            group = page.query_selector_all(f"input[type='radio'][name='{name}']")
-            options = [self._label_for(page, ge) or (ge.get_attribute("value") or "") for ge in group]
-            question_text = self._group_question_text(el) or name
             questions.append(DetectedQuestion(
-                question_text=question_text, input_type="radio", selector=name, options=options,
+                question_text=group["question"], input_type="radio",
+                selector=group["key"], options=group["labels"],
             ))
 
         # Questions rendered in a shape this scan cannot see (Amazon drives a
@@ -3353,12 +3391,12 @@ class JobApplicationAssistant:
                     if self._select_option_safely(page, q.selector, answer, q.question_text):
                         filled += 1
                 elif q.input_type == "radio":
-                    target = None
-                    for ge in page.query_selector_all(f"input[type='radio'][name='{q.selector}']"):
-                        if (self._label_for(page, ge) or ge.get_attribute("value") or "").strip().lower() == answer.strip().lower():
-                            target = ge
-                            break
-                    if target and self.select_radio(page, target):
+                    group = next((g for g in self.radio_groups(page)
+                                  if g["key"] == q.selector or g["question"] == q.question_text), None)
+                    if group and self.answer_radio_group(page, group, answer):
+                        index = self._best_option(group["labels"], [answer])
+                        self.values.record(page, f"[id={json.dumps(group['ids'][index])}]",
+                                           answer, "screening answer")
                         filled += 1
             except Exception as exc:
                 logger.warning("Could not fill screening answer for %r: %s", q.question_text, exc)
