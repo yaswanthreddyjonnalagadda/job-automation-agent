@@ -47,3 +47,35 @@ def test_a_page_title_is_not_used_as_a_job_title(monkeypatch):
     assert job["company"] == "Example Corp"
     assert "Job ID" not in job["title"]
     assert "|" not in job["title"]
+
+
+def test_a_tenant_hosted_portal_names_the_employer_not_the_vendor():
+    """Dayforce gives every client a path of its own, so the host is the
+    software vendor and the path is the employer. Read the other way round,
+    an application was tracked against "Dayforcehcm"."""
+    assert job_sources._company_from_url(
+        "https://jobs.dayforcehcm.com/en-US/lumos/CANDIDATEPORTAL/jobs/9416") == "Lumos"
+    assert job_sources._company_from_url(
+        "https://acme.wd1.myworkdayjobs.com/en-US/careers/job/123") == "Acme"
+
+
+def test_a_plain_host_is_still_read_as_the_company():
+    assert job_sources._company_from_url("https://careers.example-corp.com/jobs/7") == "Example Corp"
+
+
+def test_a_page_title_is_reduced_to_a_job_title():
+    assert job_sources._clean_page_title(
+        "Support Engineer, Leo - Job ID: 10539098 | Amazon.jobs") == "Support Engineer, Leo"
+    assert job_sources._clean_page_title("Network Provisioning Engineer") == "Network Provisioning Engineer"
+
+
+def test_a_posting_that_needs_rendering_is_not_read_from_the_served_html(monkeypatch):
+    """Dayforce serves 136 characters of text and builds the rest in the
+    browser: every reader that works on the served HTML found nothing, and the
+    run stopped at "Could not read a job description"."""
+    served = "<html><head><title>Job Details | Dayforce Jobs</title></head><body>Skip to Content Sign In</body></html>"
+    monkeypatch.setattr(job_sources.requests, "get", lambda *a, **k: _Response(served))
+    monkeypatch.setattr(job_sources, "fetch_rendered_job", lambda url: {"title": "rendered"})
+    assert job_sources.fetch_generic_job("https://jobs.dayforcehcm.com/en-US/lumos/CANDIDATEPORTAL/jobs/9416") is None
+    assert job_sources.resolve_job(
+        "https://jobs.dayforcehcm.com/en-US/lumos/CANDIDATEPORTAL/jobs/9416") == {"title": "rendered"}

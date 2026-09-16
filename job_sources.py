@@ -404,6 +404,101 @@ def fetch_amazon_job(url: str) -> dict | None:
             "url": url, "raw_text": text[:20000]}
 
 
+def fetch_rendered_job(url: str) -> dict | None:
+    """Reads a posting that only exists after its JavaScript runs.
+
+    Dayforce serves 136 characters of text and builds the rest in the browser,
+    so every reader that works on the served HTML found nothing and the run
+    stopped at "Could not read a job description". This one opens the page the
+    way a person would and reads what they would see. It is the last resort:
+    it costs a browser launch, so it runs only when the plain readers fail.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception:
+        return None
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=15_000)
+                except Exception:
+                    page.wait_for_timeout(4_000)
+                data = page.evaluate("""() => {
+                    const clean = s => (s || '').replace(/[ \\t]+/g, ' ').trim();
+                    const meta = n => {
+                        const m = document.querySelector(`meta[property="${n}"], meta[name="${n}"]`);
+                        return m ? m.getAttribute('content') : '';
+                    };
+                    // A posting rendered in script often carries JSON-LD too,
+                    // added at the same time.
+                    let posting = null;
+                    for (const tag of document.querySelectorAll('script[type="application/ld+json"]')) {
+                        try {
+                            const parsed = JSON.parse(tag.textContent);
+                            for (const entry of [].concat(parsed, parsed['@graph'] || [])) {
+                                if (entry && entry['@type'] === 'JobPosting') posting = entry;
+                            }
+                        } catch (e) { /* not this one */ }
+                    }
+                    const heading = [...document.querySelectorAll('h1, h2')]
+                        .map(h => clean(h.innerText)).find(t => t.length > 3) || '';
+                    const main = document.querySelector('main, [role=main], article, #content, .job-details');
+                    return {
+                        title: clean((posting && posting.title) || heading || meta('og:title') || document.title),
+                        company: clean((posting && posting.hiringOrganization && posting.hiringOrganization.name) || ''),
+                        location: clean((posting && posting.jobLocation && posting.jobLocation.address
+                                         && posting.jobLocation.address.addressLocality) || ''),
+                        text: clean((main || document.body).innerText),
+                    };
+                }""")
+            finally:
+                browser.close()
+    except Exception as exc:
+        logger.warning("Could not render %s: %s", url, str(exc).splitlines()[0][:120])
+        return None
+
+    body = re.sub(r"\n{3,}", "\n\n", (data.get("text") or "")).strip()
+    title = _clean_page_title(data.get("title") or "")
+    if not title or len(body) < 400:
+        return None
+
+    company = data.get("company") or _company_from_url(url)
+    logger.info("Read the posting by rendering the page (%s)", urlparse(url).netloc)
+    return {"title": title, "company": company, "location": data.get("location") or "",
+            "url": url, "raw_text": body[:20000]}
+
+
+def _clean_page_title(title: str) -> str:
+    """A job title, not a page title: no site name, no job id."""
+    title = re.split(r"\s+[|\u2013\u2014]\s+", title)[0]
+    return re.sub(r"\s*[-\u2013]\s*Job ID:?\s*\d+\s*$", "", title).strip()
+
+
+def _company_from_url(url: str) -> str:
+    """The employer, from the address a tenant-hosted portal uses.
+
+    Dayforce gives every client a path of its own
+    (jobs.dayforcehcm.com/en-US/<client>/CANDIDATEPORTAL/...), so the host is
+    the software vendor and the path is the employer.
+    """
+    parsed = urlparse(url)
+    host = re.sub(r"^(www|jobs|careers|apply|recruiting)\.", "", parsed.netloc)
+    vendors = ("dayforcehcm", "myworkdayjobs", "icims", "greenhouse", "lever",
+               "ashbyhq", "smartrecruiters", "successfactors", "taleo", "paylocity")
+    if any(v in host for v in vendors):
+        for part in parsed.path.strip("/").split("/"):
+            token = part.strip().lower()
+            if token in ("en-us", "en", "candidateportal", "jobs", "job", "careers") or token.isdigit():
+                continue
+            return part.replace("-", " ").replace("_", " ").title()
+    return host.split(".")[0].replace("-", " ").title()
+
+
 def fetch_generic_job(url: str) -> dict | None:
     """Best-effort fetch for non-Workday pages."""
     try:
@@ -466,6 +561,7 @@ def resolve_job(url: str) -> dict | None:
         or fetch_amazon_job(url)
         or fetch_schema_org_job(url)
         or fetch_generic_job(url)
+        or fetch_rendered_job(url)  # a posting that only exists once its script runs
     )
 
 
