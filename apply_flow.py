@@ -416,6 +416,29 @@ def on_form_resume(assistant, prepared):
     return getattr(assistant, "attached_resume", None) or prepared
 
 
+def remember_progress(tracker, key: str, page, note: str = "") -> None:
+    """Writes down where this application has got to.
+
+    Called on every pass rather than only when a review package is written, so
+    a run that is stopped, crashes, or has its browser closed still leaves a
+    record pointing at the page it reached -- which is what Resume reopens.
+    """
+    try:
+        url = page.url
+    except Exception:
+        return
+    if hasattr(tracker, "update_last_page"):
+        try:
+            tracker.update_last_page(key, url)
+        except Exception as exc:
+            logger.debug("Could not record the page: %s", exc)
+    if note and hasattr(tracker, "record_event"):
+        try:
+            tracker.record_event(key, "note", f"{note}: {url}"[:400])
+        except Exception as exc:
+            logger.debug("Could not record the event: %s", exc)
+
+
 def remembered_answers(tracker, questions) -> dict:
     """Answers already given to the same question on an earlier application.
 
@@ -752,7 +775,25 @@ def main() -> None:
     with JobApplicationAssistant(config) as assistant:
         # Lets the assistant check and record which employers have accounts.
         assistant.tracker, assistant.employer, assistant._profile = tracker, job.company, profile
+        existing = tracker.get(key) if hasattr(tracker, "get") else None
+        if existing and existing.status not in ("prepared",):
+            logger.info("PICKING UP: %s was last %s%s", existing.title[:50],
+                        existing.status.replace("_", " "),
+                        f" at {existing.last_page_url[:60]}" if getattr(existing, "last_page_url", "") else "")
+            if hasattr(tracker, "record_event"):
+                try:
+                    tracker.record_event(key, "note",
+                                         f"picked up again; was {existing.status}")
+                except Exception as exc:
+                    logger.debug("Could not record the pick-up: %s", exc)
+
         resume_at = getattr(args, "open_url", "") or ""
+        if not resume_at and existing and getattr(existing, "last_page_url", ""):
+            # Started from the posting, but this application is already open on
+            # the employer's site: carry on from there rather than walking the
+            # whole wizard again.
+            resume_at = existing.last_page_url
+            logger.info("Continuing where the last run left it")
         if resume_at:
             # Resuming: the application form itself, not the posting. Walking
             # the posting again would re-enter a wizard the last run had
@@ -789,6 +830,7 @@ def main() -> None:
             # answer: remember it before filling, both so it is not overwritten
             # and so the next application can use it.
             learn_user_answers(assistant, page, tracker, key, profile)
+            remember_progress(tracker, key, page)
             fields = assistant.detect_form_fields(page)
             filled_fields = assistant.fill_detected_fields(page, fields, profile)
 
@@ -911,10 +953,12 @@ def main() -> None:
                     "the page confirmed it (see submitted_confirmation.png)"
                 status, note = safety.verification_status(evidence)
                 tracker.update_status(key, status, notes=note)
+                remember_progress(tracker, key, page, "submitted by the user")
                 logger.info("SUBMITTED_BY_USER: confirmation seen on %s", page.url)
                 return
 
             if decision in ("browser_closed", "left_form"):
+                remember_progress(tracker, key, page, f"run ended: {decision}")
                 # The application left the screen without any confirmation. It
                 # may or may not have gone through, so it is never recorded as
                 # submitted -- it goes to the user to check.

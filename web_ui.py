@@ -169,9 +169,10 @@ def start_apply():
         return redirect(url_for("index"))
     # A browser profile can only be held by one process, so refuse to start a
     # second run while one is live rather than failing confusingly later.
-    with _RUNS_LOCK:
-        if any(r["state"] == "running" for r in _RUNS.values()):
-            return redirect(url_for("index", error="An application is already running."))
+    busy = _running_url()
+    if busy:
+        return redirect(url_for("index", error=(
+            f"{busy[:80]} is still running. Stop it from its row, or wait for it to finish.")))
     threading.Thread(target=_run_apply, args=(url,), daemon=True).start()
     return redirect(url_for("index"))
 
@@ -248,9 +249,10 @@ def resume_application(app_id: int):
         return redirect(url_for("index", error="That application has no URL to resume."))
     if record.status == "submitted":
         return redirect(url_for("index", error=f"{record.title} was already submitted."))
-    with _RUNS_LOCK:
-        if any(r["state"] == "running" for r in _RUNS.values()):
-            return redirect(url_for("index", error="An application is already running."))
+    busy = _running_url()
+    if busy:
+        return redirect(url_for("index", error=(
+            f"{busy[:80]} is still running. Stop it from its row, or wait for it to finish.")))
     # The page the application actually reached, so the agent picks the form
     # back up rather than walking the posting from the start again.
     open_url = getattr(record, "last_page_url", "") or ""
@@ -360,6 +362,21 @@ def index():
     return render_template_string(
         INDEX_HTML, apps=apps, runs=runs, signals=signals, error=request.args.get("error"),
     )
+
+
+def _running_url() -> str:
+    """The posting whose run is actually live, if any.
+
+    A run only counts as running while its process is: the dashboard used to
+    refuse a new application on the strength of its own bookkeeping, which
+    outlived the run itself and left the button doing nothing.
+    """
+    with _RUNS_LOCK:
+        for url, run in _RUNS.items():
+            if run.get("state") == "running" and (run.get("proc") is not None
+                                                  or _process_alive(run.get("pid"))):
+                return url
+    return ""
 
 
 def _current_runs() -> dict:

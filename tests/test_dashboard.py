@@ -90,11 +90,26 @@ def test_resume_refuses_an_application_already_submitted(client, monkeypatch):
 def test_resume_refuses_while_another_run_is_live(client, monkeypatch):
     record = Record()
     monkeypatch.setattr(web_ui, "get_tracker", lambda: type("T", (), {"list_all": lambda s: [record]})())
-    web_ui._RUNS["other"] = {"state": "running", "log": "", "started": None, "proc": None, "pid": None,
-                             "stopping": False}
+    monkeypatch.setattr(web_ui, "_process_alive", lambda pid: pid == 4242)
+    web_ui._RUNS["https://jobs.example.com/other"] = {
+        "state": "running", "log": "", "started": None, "proc": None,
+        "pid": 4242, "stopping": False}          # a process that is still there
     response = client.post("/resume/1", follow_redirects=True)
     assert client.started == []
-    assert "already running" in response.get_data(as_text=True)
+    assert "still running" in response.get_data(as_text=True)
+
+
+def test_a_run_whose_process_is_gone_does_not_block_a_new_one(client, monkeypatch):
+    """The dashboard refused to start an application because of a run it had
+    recorded as running long after that run ended -- the state outlived the
+    process, and the button did nothing with no explanation."""
+    record = Record()
+    monkeypatch.setattr(web_ui, "get_tracker", lambda: type("T", (), {"list_all": lambda s: [record]})())
+    web_ui._RUNS["https://jobs.example.com/finished"] = {
+        "state": "running", "log": "", "started": None, "proc": None,
+        "pid": None, "stopping": False}          # nothing behind it any more
+    client.post("/resume/1")
+    assert client.started == [(record.url, "")]
 
 
 def test_reload_agent_signals_a_waiting_run(client, tmp_path, monkeypatch):
