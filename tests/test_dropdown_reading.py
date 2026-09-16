@@ -532,3 +532,20 @@ def test_a_picker_whose_input_cannot_be_clicked_is_opened_by_its_wrapper(page, a
       </body></html>""")
     assert agent.open_picker_control(page, page.locator("#country").first)
     assert page.title() == "opened"
+
+
+def test_an_ant_design_choice_is_read_back(page, agent):
+    """Ant Design shows the chosen value in .ant-select-selection-item, so a
+    Country the agent had just chosen read back as blank and the field went on
+    being reported as still empty."""
+    page.set_content("""<html><body>
+        <div class="ant-select"><div class="ant-select-selector">
+          <span class="ant-select-selection-item" title="United States">United States</span>
+          <span class="ant-select-selection-search">
+            <input type="search" id="country" class="ant-select-selection-search-input" value="">
+          </span>
+        </div></div>
+      </body></html>""")
+    assert agent.displayed_value(page.locator("#country").first) == "United States"
+    blanks = agent.find_required_blanks(page)["required_still_blank"]
+    assert not [b for b in blanks if "country" in b.lower()]

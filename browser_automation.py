@@ -1245,7 +1245,8 @@ class JobApplicationAssistant:
         try:
             return field.evaluate("""e => {
                 const shownIn = n => n && n.querySelector(
-                    '[class*=singleValue], [class*=single-value], [class*=multiValue], [class*=multi-value]');
+                    '[class*=singleValue], [class*=single-value], [class*=multiValue], [class*=multi-value],'
+                    + '[class*=selection-item]:not([class*=search])');
                 let n = e.parentElement;
                 for (let i = 0; i < 4 && n; i++, n = n.parentElement) {
                     // Another field inside this ancestor means we have left
@@ -1375,8 +1376,15 @@ class JobApplicationAssistant:
             # Long lists (countries, dialling codes) only render a slice until
             # you type; filter on the candidate's plain words.
             term = re.sub(r"\([^)]*\)", "", candidates[0]).strip()
-            field.fill("")
-            field.type(term, delay=30)
+            self.open_picker_control(page, field)
+            try:
+                field.fill("", timeout=3_000)
+            except Exception:
+                pass  # not editable until it is open; typing still filters
+            try:
+                field.type(term, delay=30, timeout=5_000)
+            except Exception:
+                page.keyboard.type(term, delay=30)
             page.wait_for_timeout(900)
             opts, texts = visible_options()
             idx = self._best_option(texts, candidates)
@@ -2766,7 +2774,8 @@ class JobApplicationAssistant:
                             for (let i = 0; i < 4 && n && !value; i++, n = n.parentElement) {
                                 if (n.querySelectorAll('input, select, textarea').length > 1) break;
                                 const shown = n.querySelector('[class*=singleValue], [class*=single-value],'
-                                                            + '[class*=multiValue], [class*=multi-value]');
+                                                            + '[class*=multiValue], [class*=multi-value],'
+                                                            + '[class*=selection-item]:not([class*=search])');
                                 if (shown) value = shown.innerText.trim();
                             }
                         }
@@ -4653,7 +4662,8 @@ class JobApplicationAssistant:
                             for (let i = 0; i < 4 && n && !value; i++, n = n.parentElement) {
                                 if (n.querySelectorAll('input, select, textarea').length > 1) break;
                                 const shown = n.querySelector('[class*=singleValue], [class*=single-value],'
-                                                            + '[class*=multiValue], [class*=multi-value]');
+                                                            + '[class*=multiValue], [class*=multi-value],'
+                                                            + '[class*=selection-item]:not([class*=search])');
                                 if (shown) value = shown.innerText.trim();
                             }
                         }
