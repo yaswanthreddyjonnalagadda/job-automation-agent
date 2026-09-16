@@ -549,3 +549,18 @@ def test_an_ant_design_choice_is_read_back(page, agent):
     assert agent.displayed_value(page.locator("#country").first) == "United States"
     blanks = agent.find_required_blanks(page)["required_still_blank"]
     assert not [b for b in blanks if "country" in b.lower()]
+
+
+def test_an_unlisted_referral_source_is_answered_as_other(page, agent):
+    """Segra's 'How did you hear about this job?' offers Indeed, LinkedIn,
+    Glassdoor, referrals and Other -- no company website, which is what the
+    profile says. Where the stated source is not among the options, Other is
+    what it actually was."""
+    texts = ["Recruitment Agency or Firm", "CareerBuilder", "Indeed", "Linkedin", "Other"]
+    assert agent._best_option(texts, ["Company Career Site", "Company Website"]) is None
+    assert next(i for i, t in enumerate(texts) if t.lower() == "other") == 4
+
+
+def test_a_listed_source_is_preferred_over_other(page, agent):
+    texts = ["Indeed", "Company Website", "Other"]
+    assert agent._best_option(texts, ["Company Career Site", "Company Website"]) == 1

@@ -863,6 +863,10 @@ class JobApplicationAssistant:
             (r"sponsor", ["Yes" if sponsorship else "No"]),
             (r"at least 18|18 years of age|over (the age of )?18", [g("at_least_18")]),
             (r"full legal name", [g("full_name")]),
+            (r"preferred contact( method)?|how (would you like|do you prefer) (us )?to (contact|reach)",
+             [g("preferred_contact_method", "Email"), "Email", "E-mail", "Email Address"]),
+            (r"preferred contact( method)?|how (would you like|do you prefer) (us )?to (contact|reach)",
+             [g("preferred_contact_method", "Email"), "Email", "E-mail", "Email Address"]),
             # Asked outright on export-control sections. The profile states it;
             # the agent never works it out from a name or a visa status.
             (r"(country|countries)(/region)?.{0,20}citizenship|citizenship.{0,20}(country|countries)",
@@ -890,7 +894,9 @@ class JobApplicationAssistant:
             # Supported by the school's own name in the profile, nothing more.
             (r"school type|type of (school|institution)", self._school_type_candidates(profile)),
             # Only where the posting link says so, or the profile states it.
-            (r"how did you hear", [self._job_source_name(), g("how_did_you_hear")]),
+            (r"how did you hear|how were you referred|source of (your )?application|referral source",
+             [self._job_source_name(), g("how_did_you_hear"), "Company Website",
+              "Careers Website", "Corporate Website", "Employer Website", "Company Site"]),
             (r"preferred language", [g("preferred_language")]),
             # Only ever matches a disability list: the candidates are disability answers.
             (r"please select one of the options below", [g("disability_status"), "No, I do not have a disability"]),
@@ -1372,6 +1378,13 @@ class JobApplicationAssistant:
         idx = self._best_option(texts, candidates)
         if idx is None and re.search(r"salary|compensation|pay range", control.get("question", ""), re.I):
             idx = self._salary_band(texts)
+        if idx is None and re.search(r"how did you hear|referral source|source of", control.get("question", ""), re.I):
+            # Segra's list offers Indeed, LinkedIn, Glassdoor and referrals --
+            # no company website at all. Where the source the profile states is
+            # not among the options, "Other" is what it actually was.
+            idx = next((i for i, t in enumerate(texts) if t.strip().lower() == "other"), None)
+            if idx is not None:
+                logger.info("The source in your profile is not offered here; choosing Other")
         if idx is None:
             # Long lists (countries, dialling codes) only render a slice until
             # you type; filter on the candidate's plain words.
@@ -1388,6 +1401,23 @@ class JobApplicationAssistant:
             page.wait_for_timeout(900)
             opts, texts = visible_options()
             idx = self._best_option(texts, candidates)
+            if idx is None and " " in term:
+                # Ant Design renders a handful of options and leaves the rest
+                # to its filter, so a whole phrase matches nothing where its
+                # first word would: "Company Career Site" against a list that
+                # offers "Company Website".
+                first_word = term.split()[0]
+                try:
+                    field.fill("", timeout=2_000)
+                except Exception:
+                    pass
+                try:
+                    field.type(first_word, delay=30, timeout=5_000)
+                except Exception:
+                    page.keyboard.type(first_word, delay=30)
+                page.wait_for_timeout(900)
+                opts, texts = visible_options()
+                idx = self._best_option(texts, candidates)
         if idx is None:
             page.keyboard.press("Escape")
             self.note_ambiguous_choice(control["question"], texts, candidates[0] if candidates else "")

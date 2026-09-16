@@ -83,6 +83,10 @@ class UserProfile:
     work_arrangements: tuple[str, ...] = ("In Person Office", "Remote Virtual", "Hybrid")
     work_type: str = "Full-Time"
     how_did_you_hear: str = "Company Career Site"
+    # How an employer should reach you first. Dayforce asks it outright.
+    preferred_contact_method: str = "Email"
+    # How an employer should reach you first. Dayforce asks it outright.
+    preferred_contact_method: str = "Email"
     # Supplied by the user on 2026-09-15 (IGT application).
     bound_by_non_compete: str = "No"
     # Answers the agent may give only because the user stated them. Leave a
