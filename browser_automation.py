@@ -636,6 +636,14 @@ class JobApplicationAssistant:
             logger.warning("Could not fill %s: %s", what or selector, str(exc).splitlines()[0][:120])
             return False
 
+    def _current_value(self, page: Page, selector: str) -> str:
+        """What a control holds right now, picker or plain input."""
+        try:
+            field = page.locator(selector).first
+            return self.displayed_value(field) or ""
+        except Exception:
+            return ""
+
     def fill_detected_fields(
         self, page: Page, fields: list[DetectedField], profile: UserProfile
     ) -> list[DetectedField]:
@@ -709,6 +717,32 @@ class JobApplicationAssistant:
             except Exception as exc:
                 logger.warning("Could not fill field %s: %s", field.selector, exc)
         logger.info("Auto-filled %d/%d detected fields", len(actually_filled), len(fields))
+
+        # A form that rebuilds itself after reading the resume (Dayforce) drops
+        # what was typed into the version before it: address, postcode and
+        # phone were filled and then blank again at hand-over. So look once
+        # more, after the page has settled, and fill what is still empty.
+        if actually_filled and not getattr(self, "_refilling", False):
+            self._refilling = True
+            try:
+                page.wait_for_timeout(1_500)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=5_000)
+                except Exception:
+                    pass
+                blanks = [f for f in self.detect_form_fields(page)
+                          if f.matched_profile_key and f.selector
+                          and values.get(f.matched_profile_key)
+                          and not (self._current_value(page, f.selector) or "").strip()]
+                if blanks:
+                    logger.info("Filling %d field(s) the page cleared while it rebuilt itself", len(blanks))
+                    for again in self.fill_detected_fields(page, blanks, profile):
+                        if again not in actually_filled:
+                            actually_filled.append(again)
+            except Exception as exc:
+                logger.debug("Second fill pass failed: %s", str(exc).splitlines()[0][:120])
+            finally:
+                self._refilling = False
         self.handle_auth_gate(page, profile.email)
         self.apply_dropdown_answers(page)
         self._profile = profile
@@ -1253,6 +1287,12 @@ class JobApplicationAssistant:
             # (Greenhouse renders it outside the field, with no aria link
             # back), then any open list that isn't the dialling-code one.
             for selector in ("[class*=select__option]:visible",
+                             # Ant Design (Dayforce) renders its menu in a
+                             # portal at the end of the body, with the options
+                             # as divs rather than option elements.
+                             ".ant-select-dropdown:not(.ant-select-dropdown-hidden) "
+                             "[class*=ant-select-item-option]:visible",
+                             "[class*=select-item-option]:visible",
                              "[class*=menu] [role=option]:visible",
                              "[role=option]:visible",
                              "[role=listbox]:visible li:visible"):

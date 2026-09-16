@@ -489,3 +489,27 @@ def test_the_chooser_applies_without_an_account(page, agent):
       </body></html>""")
     agent.dismiss_apply_chooser(page)
     assert page.title() == "chose guest"
+
+
+ANT_SELECT = """
+<html><body>
+  <div class="ant-select">
+    <input type="search" id="country" role="combobox" class="ant-select-selection-search-input"
+           aria-expanded="false" style="width:200px;height:32px">
+  </div>
+  <div class="ant-select-dropdown">
+    <div class="ant-select-item ant-select-item-option" title="Canada">Canada</div>
+    <div class="ant-select-item ant-select-item-option" title="United States">United States</div>
+  </div>
+</body></html>
+"""
+
+
+def test_an_ant_design_picker_offers_its_options(page, agent):
+    """Dayforce builds Country, State and 'How did you hear' with Ant Design,
+    which renders its menu in a portal of divs -- not option elements -- so the
+    agent saw no options and left four required fields blank."""
+    page.set_content(ANT_SELECT)
+    options = page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden) "
+                           "[class*=ant-select-item-option]:visible")
+    assert [t.strip() for t in options.all_inner_texts()] == ["Canada", "United States"]
