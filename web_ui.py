@@ -16,6 +16,7 @@ launch a browser that is signed into their employer ATS accounts.
 from __future__ import annotations
 
 import io
+import json
 import os
 import signal
 import subprocess
@@ -26,6 +27,7 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, redirect, render_template_string, request, send_file, url_for
 
+from config import get_app_config
 from db import get_tracker
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -177,7 +179,62 @@ def application(app_id: int):
             "WHERE application_id = %s ORDER BY question",
             (app_id,),
         ).fetchall()
-    return render_template_string(DETAIL_HTML, a=record, docs=docs, answers=answers)
+    events = tracker.events(record.dedup_key) if hasattr(tracker, "events") else []
+    decision, validation = latest_decision(events), latest_validation(record)
+    return render_template_string(
+        DETAIL_HTML, a=record, docs=docs, answers=answers, events=events,
+        decision=decision, validation=validation, progress=progress_of(record, validation),
+        auto_submit_on=get_app_config().auto_submit_verified_only,
+    )
+
+
+def latest_decision(events) -> dict:
+    """The newest verified-auto-submit decision for this application."""
+    for event in events:
+        if event.get("kind") == "auto_submit" and isinstance(event.get("payload"), dict):
+            return event["payload"]
+    return {}
+
+
+def latest_validation(record) -> dict:
+    """The newest validation report written beside a review package."""
+    folder = BASE_DIR / "output"
+    candidates = sorted(folder.glob("*/step_*/validation.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    company = (record.company or "").replace(" ", "_").lower()
+    for path in candidates:
+        if company and company.split("_")[0] not in path.as_posix().lower():
+            continue
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+    return {}
+
+
+def progress_of(record, validation: dict) -> dict:
+    """How far along an application is, for the dashboard's progress bar."""
+    order = ["prepared", "form_filled", "ready_to_submit", "submitted"]
+    step = order.index(record.status) + 1 if record.status in order else 0
+    blocked = record.status == "needs_user_review"
+    missing = list(validation.get("required_still_blank") or [])
+    return {"step": step, "of": len(order), "blocked": blocked, "missing": missing,
+            "errors": list(validation.get("errors_shown") or []),
+            "attestations": list(validation.get("attestations_pending") or []),
+            "captcha": bool(validation.get("captcha"))}
+
+
+@app.get("/evidence")
+def evidence():
+    """Serves a screenshot/HTML/comparison file from this application's own
+    output folder. Nothing outside output/ is readable."""
+    target = Path(request.args.get("path", "")).resolve()
+    root = (BASE_DIR / "output").resolve()
+    if not str(target).startswith(str(root)) or not target.is_file():
+        abort(404)
+    if target.suffix.lower() == ".png":
+        return send_file(target, mimetype="image/png")
+    return Response(target.read_text(encoding="utf-8", errors="replace"),
+                    mimetype="text/plain" if target.suffix != ".html" else "text/html")
 
 
 @app.get("/document/<int:doc_id>")
@@ -391,6 +448,83 @@ DETAIL_HTML = """
       </tr>
       {% else %}
       <tr><td colspan="4" class="muted">No documents stored.</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <h2>Progress</h2>
+  <div class="card">
+    <p><strong>{{ a.status.replace('_', ' ') }}</strong>
+       &mdash; step {{ progress.step }} of {{ progress.of }}
+       {% if progress.blocked %}<span class="pill needs_user_review">needs you</span>{% endif %}</p>
+    {% if a.notes %}<p class="muted">{{ a.notes }}</p>{% endif %}
+    {% if progress.missing or progress.errors or progress.attestations or progress.captcha %}
+      <p><strong>Still to do</strong></p>
+      <ul style="margin:4px 0 0 18px">
+        {% for m in progress.missing %}<li>blank: {{ m }}</li>{% endfor %}
+        {% for e in progress.errors %}<li>error: {{ e }}</li>{% endfor %}
+        {% for s in progress.attestations %}<li>your signature/attestation: {{ s }}</li>{% endfor %}
+        {% if progress.captcha %}<li>a CAPTCHA is showing &mdash; only you can complete it</li>{% endif %}
+      </ul>
+    {% else %}
+      <p class="muted">Nothing outstanding on the last check.</p>
+    {% endif %}
+  </div>
+
+  <h2>Verified auto-submit</h2>
+  <div class="card">
+    <p class="muted">Setting: <strong>{{ 'on' if auto_submit_on else 'off' }}</strong>
+       (AUTO_SUBMIT_VERIFIED_ONLY). The agent submits only when every check below passes.</p>
+    {% if decision %}
+      <p><strong>{{ 'Eligible' if decision.eligible else 'Not eligible' }}</strong>
+         <span class="muted">decided {{ decision.decided_at }}</span></p>
+      {% if decision.reasons %}
+        <ul style="margin:4px 0 8px 18px">
+          {% for r in decision.reasons %}<li>{{ r }}</li>{% endfor %}
+        </ul>
+      {% endif %}
+      {% if decision.field_comparisons %}
+        <table>
+          <tr><th>Field</th><th>On the form</th><th>Approved value</th><th>Source</th><th></th></tr>
+          {% for c in decision.field_comparisons %}
+            <tr>
+              <td>{{ c.label }}</td><td>{{ c.on_form }}</td><td>{{ c.approved }}</td>
+              <td class="muted">{{ c.source }}</td>
+              <td>{% if c.matches %}<span class="pill submitted">match</span>
+                  {% elif c.required %}<span class="pill needs_user_review">check</span>
+                  {% else %}<span class="muted">optional</span>{% endif %}</td>
+            </tr>
+          {% endfor %}
+        </table>
+      {% endif %}
+      {% if decision.evidence_paths %}
+        <p class="muted" style="margin-top:8px">Evidence:
+          {% for name, path in decision.evidence_paths.items() %}
+            <a href="/evidence?path={{ path }}" target="_blank">{{ name }}</a>{{ ", " if not loop.last }}
+          {% endfor %}
+        </p>
+      {% endif %}
+    {% else %}
+      <p class="muted">No decision recorded for this application yet.</p>
+    {% endif %}
+  </div>
+
+  <h2>History</h2>
+  <div class="card">
+    <table>
+      <tr><th>When</th><th>Kind</th><th>What happened</th><th>Evidence</th></tr>
+      {% for e in events %}
+        <tr>
+          <td class="muted">{{ e.created_at|local }}</td>
+          <td>{{ e.kind }}</td>
+          <td>{{ (e.message or '')[:160] }}</td>
+          <td>
+            {% if e.screenshot_path %}<a href="/evidence?path={{ e.screenshot_path }}" target="_blank">screenshot</a>{% endif %}
+            {% if e.html_path %} <a href="/evidence?path={{ e.html_path }}" target="_blank">html</a>{% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="muted">No events recorded yet.</td></tr>
       {% endfor %}
     </table>
   </div>

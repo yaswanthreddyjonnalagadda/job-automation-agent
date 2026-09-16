@@ -130,6 +130,18 @@ class AppConfig:
     browser_headless: bool = False
     claude_max_retries: int = 3
     claude_request_timeout: float = 60.0
+    # Opt-in verified auto-submit. OFF unless AUTO_SUBMIT_VERIFIED_ONLY=true is
+    # set in .env. Even when on, the agent submits only if every required field
+    # exactly matches approved profile/resume data, the job identity and the
+    # uploaded documents match the tracked application, and nothing uncertain
+    # (CAPTCHA, attestation, ambiguous choice, warning) is on the page --
+    # see safety.evaluate_auto_submit().
+    auto_submit_verified_only: bool = field(
+        default_factory=lambda: os.getenv("AUTO_SUBMIT_VERIFIED_ONLY", "").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    # How many times a flaky page action is retried before it is reported.
+    action_retries: int = 3
 
 
 def get_user_profile() -> UserProfile:

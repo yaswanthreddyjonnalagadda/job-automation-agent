@@ -32,6 +32,8 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+from datetime import datetime, timezone
+from typing import Optional
 import logging
 import sys
 from urllib.parse import urlparse
@@ -64,6 +66,35 @@ logging.basicConfig(
 logging.getLogger("anthropic").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("apply_flow")
+
+# Nothing the agent logs may carry an API key, a password, an email address or
+# a phone number -- log files get shared far more casually than the database.
+safety.install_log_redaction()
+safety.install_log_redaction("browser_automation")
+
+
+class JsonLogHandler(logging.Handler):
+    """One JSON object per line, for reading a run back by machine."""
+
+    def __init__(self, path: Path):
+        super().__init__()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._path = path
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            entry = {
+                "time": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
+                "level": record.levelname,
+                "logger": record.name,
+                "event": (record.getMessage().split(":", 1)[0][:40]
+                          if record.getMessage()[:40].isupper() else ""),
+                "message": safety.redact(record.getMessage())[:2000],
+            }
+            with self._path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry) + "\n")
+        except Exception:
+            pass
 
 
 def open_tracker(config):
@@ -321,20 +352,101 @@ def decide_next_step(assistant, page, step: int, experience_data: dict, filled_e
     return "stop"
 
 
-def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: str, summary_path: Path) -> str:
-    """The end of the agent's work on a form: validate, record, hand over.
+def approved_answers_file() -> dict:
+    """Answers the user has explicitly approved for any application, from
+    data/_approved_answers.json ({"label": "answer"}). Nothing else counts as
+    an approved answer."""
+    path = Path("data/_approved_answers.json")
+    try:
+        if path.is_file():
+            return json.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception as exc:
+        logger.warning("Could not read approved answers: %s", exc)
+    return {}
+
+
+def collect_evidence(assistant, page, job_dir: Path, step: int) -> dict:
+    """Full-page screenshot and page HTML, saved before any decision is made."""
+    evidence_dir = job_dir / f"evidence_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_step{step}"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    paths = {}
+    try:
+        shot = evidence_dir / "page.png"
+        page.screenshot(path=str(shot), full_page=True)
+        paths["screenshot"] = str(shot)
+    except Exception as exc:
+        logger.warning("Could not capture the screenshot: %s", exc)
+    try:
+        html = evidence_dir / "page.html"
+        html.write_text(page.content(), encoding="utf-8")
+        paths["html"] = str(html)
+    except Exception as exc:
+        logger.warning("Could not capture the page HTML: %s", exc)
+    return paths
+
+
+def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: str, summary_path: Path,
+              config=None, profile=None, documents: Optional[dict] = None, step: int = 1) -> str:
+    """The end of the agent's work on a form.
 
     1. validate required fields   2. detect visible errors
-    3. screenshot + summary (already written by the caller)
-    4. set the status            5. raise the browser window
-    6. print a message asking the user to review and click Submit
+    3. capture screenshot, page HTML, field-by-field comparison and an audit record
+    4. decide (verified auto-submit, off by default) 5. set the status
+    6. raise the browser window 7. say plainly what is left for the user
 
-    Returns the status that was set. The agent never clicks Submit itself.
+    Returns the status that was set.
     """
+    documents = documents or {}
     report = assistant.validate_application(page, resume_name)
-    status, message = safety.handover_status(report)
+    form_fields = assistant.read_back_fields(page)
+    evidence = collect_evidence(assistant, page, job_dir, step)
 
+    # Which documents on the form are ours, verified by content, not by name.
+    verified_documents = all(
+        tracker.document_matches(key, kind, path)
+        for kind, path in documents.items() if path
+    ) if hasattr(tracker, "document_matches") and documents else False
+
+    tracked = {}
+    if hasattr(tracker, "get"):
+        record = tracker.get(key)
+        if record:
+            tracked = {"title": record.title, "company": record.company, "url": record.url}
+
+    approved = safety.approved_values(form_fields, profile, approved_answers_file(),
+                                      getattr(assistant.values, "records", {}))
+    decision = safety.evaluate_auto_submit(
+        enabled=bool(getattr(config, "auto_submit_verified_only", False)),
+        job={"title": job.title, "company": job.company, "url": page.url},
+        tracked=tracked or {"title": job.title, "company": job.company, "url": page.url},
+        report=report,
+        form_fields=form_fields,
+        approved=approved,
+        uploaded_documents=report.get("attached_documents") or [],
+        expected_documents=[Path(p).name for p in documents.values() if p],
+        documents_verified=verified_documents,
+        evidence_paths=evidence,
+    )
+
+    # The field-by-field comparison report, beside the screenshot it describes.
+    comparison_path = Path(evidence.get("screenshot", str(job_dir / "x"))).with_name("comparison.json")
+    comparison_path.write_text(json.dumps(decision.as_dict(), indent=2), encoding="utf-8")
+    evidence["comparison"] = str(comparison_path)
     summary_path.with_name("validation.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    if hasattr(tracker, "record_event"):
+        tracker.record_event(key, "auto_submit", decision.summary(),
+                             screenshot_path=evidence.get("screenshot", ""),
+                             html_path=evidence.get("html", ""),
+                             payload=decision.as_dict())
+
+    status, message = safety.handover_status(report)
+    if decision.eligible:
+        submitted = submit_verified(assistant, page, tracker, key, job, job_dir, decision)
+        if submitted:
+            return STATUS_SUBMITTED
+        status, message = STATUS_NEEDS_USER_REVIEW, "verified auto-submit did not complete -- please check the form"
+
     tracker.update_status(key, status, notes=message)
     assistant.raise_window(page)
 
@@ -349,16 +461,52 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
             logger.info("  still blank : %s", item)
         for item in report["errors_shown"]:
             logger.info("  form error  : %s", item)
+        for item in report.get("warnings_shown", []):
+            logger.info("  warning     : %s", item)
         for item in report["attestations_pending"]:
             logger.info("  your signature/attestation: %s", item)
+        for item in report.get("ambiguous_choices", []):
+            logger.info("  unclear choice: %s", item)
+        for item in report.get("unsupported_questions", []):
+            logger.info("  no approved answer: %s", item)
         if report["captcha"]:
             logger.info("  a CAPTCHA is showing -- only you can complete it")
     if report.get("resume_attached") is False:
         logger.info("  the resume does not show as attached")
+    if not decision.eligible:
+        logger.info("Auto-submit: %s", decision.summary())
     logger.info("Review the form in the browser window, then click Submit yourself.")
-    logger.info("The agent never submits. Screenshot and summary: %s", summary_path.parent)
+    logger.info("Evidence: %s", ", ".join(evidence.values()) or summary_path.parent)
     logger.info(banner)
     return status
+
+
+def submit_verified(assistant, page, tracker, key, job, job_dir: Path, decision) -> bool:
+    """Submits ONLY on an eligible AutoSubmitDecision (every required field
+    matched approved data, job and documents verified, nothing uncertain on the
+    page), and only because the user turned AUTO_SUBMIT_VERIFIED_ONLY on.
+
+    The evidence in `decision` was captured before this ran. Afterwards the
+    application is still only recorded as submitted once the site or an email
+    confirms it -- clicking is not evidence.
+    """
+    logger.info("AUTO_SUBMIT: %s -- submitting %s at %s", decision.summary(), job.title, job.company)
+    if hasattr(tracker, "record_event"):
+        tracker.record_event(key, "auto_submit", "clicked Submit after verification",
+                             payload={"reasons": [], "evidence": decision.evidence_paths})
+    clicked = assistant.click_verified_submit(page)
+    if not clicked:
+        logger.error("AUTO_SUBMIT_FAILED: the Submit button could not be clicked")
+        return False
+    evidence = assistant.wait_for_submission_evidence(page, job.title)
+    status, note = safety.verification_status(evidence)
+    tracker.update_status(key, status, notes=note)
+    try:
+        page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
+    except Exception:
+        pass
+    logger.info("AUTO_SUBMIT result: %s -- %s", status, note)
+    return status == STATUS_SUBMITTED
 
 
 def reload_browser_automation(assistant: JobApplicationAssistant) -> JobApplicationAssistant:
@@ -417,6 +565,8 @@ def main() -> None:
 
     config = get_app_config()
     profile = get_user_profile()
+    structured = JsonLogHandler(config.log_dir / f"run_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.jsonl")
+    logging.getLogger().addHandler(structured)
 
     job_input = json.loads(Path(args.job_json).read_text(encoding="utf-8-sig"))
     job = build_job_description(
@@ -570,8 +720,12 @@ def main() -> None:
                 if decision == "fill_experience":
                     filled_experience = True
                 if decision == "stop":
+                    assistant.save_progress(page)
                     hand_over(assistant, page, tracker, key, job, job_dir,
-                              Path(attach_resume).name, summary_path)
+                              Path(attach_resume).name, summary_path, config=config, profile=profile,
+                              documents={"resume": attach_resume,
+                                         **({"cover_letter": letter[1]} if letter else {})},
+                              step=step)
                     try:
                         decision = assistant.wait_for_signal(signal_path, timeout_seconds=args.timeout, page=page)
                     except TimeoutError:

@@ -254,32 +254,4 @@ def test_the_same_posting_with_tracking_parameters_is_the_same_job():
 
 
 # ---------------------------------------------------------------- the hand-over itself
-def test_hand_over_validates_records_and_asks_the_user(page, tmp_path):
-    import apply_flow
-
-    page.set_content("<label for=n>Full name</label><input id=n value='Yaswanth'><button>Submit application</button>")
-
-    class Assistant:
-        raised = False
-        def validate_application(self, page, resume_name=""):
-            return {"required_still_blank": [], "errors_shown": [], "unanswered_questions": [],
-                    "attestations_pending": [], "captcha": False, "resume_attached": True, "page_url": "x"}
-        def raise_window(self, page):
-            Assistant.raised = True
-
-    class Tracker:
-        recorded = None
-        def update_status(self, key, status, notes=None):
-            Tracker.recorded = (status, notes)
-
-    class Job:
-        title, company = "Engineer NOC I", "IGT"
-
-    summary = tmp_path / "review_summary.json"
-    summary.write_text("{}", encoding="utf-8")
-    status = apply_flow.hand_over(Assistant(), page, Tracker(), "key", Job(), tmp_path, "resume.pdf", summary)
-
-    assert status == "ready_to_submit"
-    assert Tracker.recorded[0] == "ready_to_submit"
-    assert Assistant.raised is True                      # browser brought to the front
-    assert (tmp_path / "validation.json").is_file()       # validation recorded beside the summary
+# (the hand-over is covered in detail by tests/test_auto_submit.py)

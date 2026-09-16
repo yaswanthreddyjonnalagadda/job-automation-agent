@@ -9,7 +9,18 @@ directly and are the next thing to move.
 
 from __future__ import annotations
 
+import json
+import logging
+import re
+import time
+from pathlib import Path
+from typing import Optional
+
+from playwright.sync_api import Page
+
 from .base import SiteAdapter
+
+logger = logging.getLogger("browser_automation")
 
 # data-automation-id values used by the wizard helpers.
 SIGN_IN_SUBMIT = "button[data-automation-id='signInSubmitButton']"
@@ -19,6 +30,94 @@ ACTIVE_STEP = "[data-automation-id='progressBarActiveStep']"
 EMAIL_INPUT = "input[data-automation-id='email']"
 # Repeated Work Experience / Education entries ("workExperience-3--jobTitle").
 ENTRY_ID_MARKERS = ("workexperience-", "education-", "languages-", "certification-")
+
+
+def _degree_candidates(degree: str) -> list[str]:
+    """Maps a degree description onto the option labels these dropdowns
+    actually offer, most-specific first. Workday's list has no
+    'Bachelor of Technology'/'Engineering' entry, so a BTech maps to
+    Bachelor of Science (the standard equivalent) rather than the much
+    looser 'Technical Degree/Diploma'. Ordering matters: a bare 'Master'
+    substring otherwise matches 'Masters of Arts' first, which would put
+    the wrong degree on a real application.
+
+    The short bare forms ('Masters', 'Bachelors') come last as a fallback:
+    some tenants list only those, with no field-of-study variants at all.
+    """
+    d = degree.lower()
+    if "master" in d or d.startswith("ms") or "m.s" in d:
+        return ["Masters of Science", "Master of Science", "Masters of Arts", degree, "Masters", "Master"]
+    if "bachelor" in d or "btech" in d or d.startswith("bs") or "b.tech" in d:
+        return ["Bachelor of Science", "Bachelor of Arts", degree, "Bachelors", "Bachelor"]
+    if "doctor" in d or "phd" in d:
+        return ["Doctor of Philosophy", degree, "Doctorate"]
+    if "associate" in d:
+        return ["Associate of Science", "Associate of Arts", degree, "Associates"]
+    return [degree]
+
+
+def _split_month_year(date_str: str) -> tuple[str, str]:
+    """'02/2025' -> ('2', '2025'). Empty/malformed input -> ('', '').
+
+    The month is deliberately NOT zero-padded: a two-character month makes
+    these spinbutton widgets auto-advance to the next date part mid-write,
+    and the year keystrokes then land in the wrong sub-field (observed
+    producing 'MM/2812' across every date). Unpadded worked."""
+    if not date_str or "/" not in date_str:
+        return "", ""
+    month, _, year = date_str.partition("/")
+    month = month.strip()
+    return (str(int(month)) if month.isdigit() else ""), year.strip()
+
+# Maps our known profile fields to likely form field identifiers (name/id/
+# placeholder/label substrings, lowercased). Extend as you encounter new ATS
+# platforms (Workday, Greenhouse, Lever, iCIMS, etc.).
+# Order matters: _match_field returns the FIRST match, so more specific
+# hints (first/middle/last name, exact "phone number") must come before
+# broader ones (bare "name", bare "phone") or they'll shadow each other --
+# e.g. a generic "name" hint would wrongly match "First Name" too.
+_FIELD_HINTS: dict[str, list[str]] = {
+    "prefix": ["prefix", "title (mr", "salutation"],
+    "first_name": ["first name", "firstname", "fname"],
+    "middle_name": ["middle name", "middlename"],
+    # NOTE: no bare "lname" here -- it collides as a substring with
+    # "schoolName" (schoo-LNAME), which put the candidate's surname into
+    # Education's School field.
+    "last_name": ["last name", "lastname", "surname"],
+    "email": ["email"],
+    # Bare "phone" is needed as well as the longer forms: Greenhouse labels the
+    # field simply "Phone", and requiring "phone number" left it blank.
+    "phone": ["phone number", "mobile number", "telephone number", "phone", "mobile"],
+    "address_line1": ["address line 1", "street address", "address 1"],
+    "city": ["city"],
+    # "county" is safe alongside "country" -- neither contains the other.
+    "county": ["county", "regionsubdivision"],
+    "state": ["state", "province"],
+    "postal_code": ["postal code", "zip code", "zipcode", "zip"],
+    "location": ["location", "current location"],
+    "linkedin_url": ["linkedin"],
+    "portfolio_url": ["portfolio", "website", "personal site"],
+    # Deliberately NO bare "name" hint here: internal field identifiers like
+    # "companyName" or "schoolName" contain "name" as a substring, and a
+    # bare hint wrongly matches those and overwrites them with the
+    # candidate's own name instead of leaving them alone.
+    # "_systemfield_name" is Ashby's fixed id for its plain "Name" field --
+    # specific enough to be safe where a bare "name" is not.
+    "full_name": ["full name", "your name", "applicant name", "_systemfield_name"],
+}
+
+# Word-boundary matching, not raw substring: a bare "state" hint matched
+# inside "united states" ("are you legally authorized to work in the united
+# states?") and nearly filled a work-authorization question with "Virginia".
+# \bstate\b requires 'state' as a whole word, which "states" is not -- and
+# this still correctly misses camelCase ids like "companyName" (lowercased to
+# "companyname"), since there's no word boundary between "company" and "name"
+# with no separator between them. One general fix for the whole bug class
+# instead of removing hints one collision at a time.
+_FIELD_HINT_PATTERNS: dict[str, list[re.Pattern]] = {
+    key: [re.compile(rf"\b{re.escape(hint)}\b") for hint in hints]
+    for key, hints in _FIELD_HINTS.items()
+}
 
 
 class WorkdayAdapter(SiteAdapter):
@@ -35,3 +134,791 @@ class WorkdayAdapter(SiteAdapter):
             return page.locator(DELETE_FILE).count() == 0
         except Exception:
             return None
+
+    # ------------------------------------------------------------------
+    # Workday's repeated-entry wizard (My Experience) and its pickers.
+    # Moved here from browser_automation.py: every selector below is
+    # Workday's own markup, and nothing outside Workday uses these.
+    # Each takes the assistant so it can use the shared browser helpers.
+    # ------------------------------------------------------------------
+    def fill_experience_section(self, assistant, page: Page, experiences: list[dict]) -> None:
+        """Deletes any existing Work Experience entries first (so a prior
+        partial/buggy fill attempt can't leave stale or mismatched data
+        behind), fills fresh entries from structured resume data, then
+        waits and does a final correction pass -- some sites asynchronously
+        overwrite Role Description a few seconds after entry creation,
+        well past any fill-time verification."""
+        self.delete_all_entries(assistant, page, "Work Experience", "Education")
+        to_index = 0
+        for i, job in enumerate(experiences):
+            self._ensure_entry_slot(assistant, page, "Work Experience", "input[id$='--jobTitle']", i)
+            # Address each entry by id+index, the way education already does.
+            # fill_first_matching always wrote to the FIRST matching box, so
+            # with several entries on screen the values landed on the wrong
+            # rows -- one role ended up tagged with another's location.
+            self.fill_by_id_suffix(assistant, page, "--jobTitle", i, job.get("title", ""))
+            self.fill_by_id_suffix(assistant, page, "--companyName", i, job.get("company", ""))
+            self.fill_by_id_suffix(assistant, page, "--location", i, job.get("location", ""))
+            start_month, start_year = _split_month_year(job.get("start", ""))
+            self.fill_date_spinner(assistant, page, "workExperience", "startDate", i, start_month, start_year)
+            if job.get("current"):
+                assistant.check_first_matching(page, ["currently work here"])
+            else:
+                end_month, end_year = _split_month_year(job.get("end", ""))
+                # 'To' only renders for non-current entries, so index among
+                # those, not the overall job index.
+                self.fill_date_spinner(assistant, page, "workExperience", "endDate", to_index, end_month, end_year)
+                to_index += 1
+            self.fill_by_id_suffix(assistant, page, "--roleDescription", i, job.get("description", ""))
+        logger.info("Filled %d work experience entries", len(experiences))
+
+        for wait_ms in (3_000, 4_000, 5_000):
+            page.wait_for_timeout(wait_ms)
+            for i, job in enumerate(experiences):
+                self.fill_by_id_suffix(assistant, page, "--jobTitle", i, job.get("title", ""))
+                self.fill_by_id_suffix(assistant, page, "--companyName", i, job.get("company", ""))
+                self.fill_by_id_suffix(assistant, page, "--location", i, job.get("location", ""))
+                self.fill_by_id_suffix(assistant, page, "--roleDescription", i, job.get("description", ""))
+                start_month, start_year = _split_month_year(job.get("start", ""))
+                if start_year and not self._date_year_is(assistant, page, "workExperience", "startDate", i, start_year):
+                    self.fill_date_spinner(assistant, page, "workExperience", "startDate", i, start_month, start_year)
+        logger.info("Final correction pass done for work experience")
+
+    def fill_education_section(self, assistant, page: Page, education: list[dict]) -> None:
+        self.delete_all_entries(assistant, page, "Education", "Certifications")
+        for i, edu in enumerate(education):
+            self._ensure_entry_slot(assistant, page, "Education", "input[id$='--schoolName']", i)
+            self.fill_by_id_suffix(assistant, page, "--schoolName", i, edu.get("school", ""))
+            degree = edu.get("degree", "")
+            if degree:
+                self.select_from_button_dropdown(assistant, page, "--degree", i, _degree_candidates(degree))
+            self.fill_by_id_suffix(assistant, page, "--fieldOfStudy", i, edu.get("field", ""))
+            _, end_year = _split_month_year(edu.get("end", ""))
+            # Education's date part is 'lastYearAttended', not 'endDate'.
+            self.fill_date_spinner(assistant, page, "education", "lastYearAttended", i, "", end_year)
+        logger.info("Filled %d education entries", len(education))
+
+        # Dates belong in the correction pass too: a year that verified as
+        # correct at fill time was later found showing 2922 instead of 2022,
+        # the same delayed overwrite that hits titles and company names.
+        for wait_ms in (3_000, 4_000, 5_000):
+            page.wait_for_timeout(wait_ms)
+            for i, edu in enumerate(education):
+                self.fill_by_id_suffix(assistant, page, "--schoolName", i, edu.get("school", ""))
+                self.fill_by_id_suffix(assistant, page, "--fieldOfStudy", i, edu.get("field", ""))
+                _, end_year = _split_month_year(edu.get("end", ""))
+                if end_year and not self._date_year_is(assistant, page, "education", "lastYearAttended", i, end_year):
+                    self.fill_date_spinner(assistant, page, "education", "lastYearAttended", i, "", end_year)
+        logger.info("Final correction pass done for education")
+
+    def _date_year_is(self, assistant, page: Page, section_key: str, date_key: str, index: int, year: str) -> bool:
+        """True when a date widget's year part already reads `year` -- so the
+        correction pass only re-types dates that actually drifted."""
+        try:
+            got = page.locator(
+                f"input[data-automation-id='dateSectionYear-input']"
+                f"[id*='{section_key}'][id*='{date_key}']"
+            ).nth(index).input_value()
+        except Exception:
+            return False
+        return (got or "").strip() == year
+
+    def fill_by_id_suffix(self, assistant, page: Page, id_suffix: str, index: int, value: str, retries: int = 2) -> bool:
+        """Fills the Nth field whose id ends with the given suffix (e.g.
+        '--schoolName'). These custom widgets don't associate their visible
+        label in a way label-text matching can find, so targeting the
+        stable id is the only reliable option -- and unlike label matching
+        it can't collide with an unrelated field."""
+        if not value:
+            return False
+        locator = page.locator(f"input[id$='{id_suffix}'], textarea[id$='{id_suffix}']").nth(index)
+        try:
+            if locator.count() == 0:
+                logger.warning("No field found with id suffix %r at index %d", id_suffix, index)
+                return False
+        except Exception as exc:
+            logger.warning("Lookup failed for id suffix %r: %s", id_suffix, exc)
+            return False
+        for attempt in range(retries + 1):
+            try:
+                locator.fill(value, timeout=5_000)
+            except Exception as exc:
+                logger.warning("Could not fill %r[%d] (attempt %d): %s", id_suffix, index, attempt + 1, exc)
+                continue
+            page.wait_for_timeout(400)
+            try:
+                if locator.input_value().strip() == value.strip():
+                    return True
+            except Exception:
+                return False
+        return False
+
+    def fill_date_spinner(self, assistant, page: Page, section_key: str, date_key: str, index: int, month: str = "", year: str = ""
+    ) -> bool:
+        """Fills a Workday-style split-spinbutton date widget -- NOT a
+        single text input for 'MM/YYYY'. Each date part is its own ARIA
+        spinbutton input, and they carry stable ids of the form
+        '<section>-<n>--<dateKey>-dateSection<Part>-input' (e.g.
+        'workExperience-299--startDate-dateSectionMonth-input').
+
+        Selecting on those ids is far more reliable than walking from the
+        visible label text: a text match like 'From' hits several elements
+        per entry, so .nth(i) drifts across entries and dates land in the
+        wrong rows. Pass month="" to fill only the year (Education's date
+        fields have no month part).
+
+        section_key: 'workExperience' or 'education'
+        date_key:    'startDate' or 'endDate'
+        """
+        try:
+            def part(part_name: str):
+                return page.locator(
+                    f"input[data-automation-id='dateSection{part_name}-input']"
+                    f"[id*='{section_key}'][id*='{date_key}']"
+                ).nth(index)
+
+            year_input = part("Year")
+            if year_input.count() == 0:
+                logger.warning(
+                    "Date spinner %s/%s[%d]: year sub-input not found", section_key, date_key, index
+                )
+                return False
+            month_input = part("Month") if month else None
+
+            # These segments are NOT independent inputs -- they're parts of
+            # one composite date control that consumes a digit STREAM and
+            # auto-advances between parts. Setting a segment's value
+            # directly scrambles the others (filling the year with '2019'
+            # was observed leaving month='12', year='5'). So do what a
+            # person does: focus the first segment and type the whole date
+            # as digits, letting the widget advance on its own.
+            stream = (month.zfill(2) + year) if month else year
+            first_segment = month_input if (month and month_input is not None and month_input.count() > 0) else year_input
+            for attempt in range(3):
+                try:
+                    first_segment.focus(timeout=5_000)
+                    page.keyboard.press("Control+a")
+                    page.keyboard.type(stream, delay=120)
+                except Exception as exc:
+                    logger.warning("Date %s/%s[%d] typing failed: %s", section_key, date_key, index, exc)
+                    return False
+                page.wait_for_timeout(400)
+                try:
+                    got_year = (year_input.input_value() or "").strip()
+                    got_month = (month_input.input_value() or "").strip() if month_input is not None else ""
+                except Exception:
+                    return False
+                # The widget may render the month unpadded ('5') or padded ('05').
+                month_ok = (not month) or got_month.lstrip("0") == month.lstrip("0")
+                if got_year == year and month_ok:
+                    return True
+                logger.warning(
+                    "Date %s/%s[%d] attempt %d landed as %r/%r (wanted %r/%r) -- retrying",
+                    section_key, date_key, index, attempt + 1, got_month, got_year, month, year,
+                )
+            return False
+        except Exception as exc:
+            logger.warning("Could not fill date spinner %s/%s[%d]: %s", section_key, date_key, index, exc)
+            return False
+
+    def _set_spinner_value(self, assistant, locator, value: str) -> bool:
+        """Activates and sets a value on an ARIA spinbutton input. Uses
+        .focus() rather than .click() -- click() requires the element be
+        the topmost thing at its screen position, which fails (30s
+        timeout) when a decorative display element sits visually on top
+        of the real input; focus() only needs the element attached/
+        enabled, not un-occluded. Falls back to a forced click (bypasses
+        the same occlusion check) if focus itself doesn't work."""
+        try:
+            locator.focus(timeout=5_000)
+        except Exception:
+            try:
+                locator.click(force=True, timeout=5_000)
+            except Exception as exc:
+                logger.warning("Could not focus or force-click spinner input: %s", exc)
+                return False
+        try:
+            # Deliberately no clear-first step: an extra fill("") on these
+            # spinbuttons disturbs the widget's internal part-tracking and
+            # corrupts the value that follows.
+            locator.fill(value)
+        except Exception:
+            try:
+                locator.press_sequentially(value, delay=60)
+            except Exception as exc:
+                logger.warning("Could not set spinner value to %r: %s", value, exc)
+                return False
+        return True
+
+    def delete_all_entries(self, assistant, page: Page, section_heading: str, next_heading: str, max_deletes: int = 10) -> int:
+        """Repeatedly clicks the first Delete button within a section
+        (bounded so it can't wander into a later section once this one is
+        empty -- checked via vertical position against next_heading,
+        RECOMPUTED every iteration since deleting an entry shifts the
+        layout and a position captured once before the loop goes stale)
+        until none remain. Used to reset Work Experience/Education to a
+        clean slate before refilling."""
+        deleted = 0
+        for _ in range(max_deletes):
+            try:
+                next_box = page.get_by_text(next_heading, exact=True).first.bounding_box()
+            except Exception:
+                next_box = None
+            try:
+                heading = page.get_by_text(section_heading, exact=True).first
+                del_btn = heading.locator("xpath=following::button[contains(., 'Delete')][1]")
+                if del_btn.count() == 0:
+                    break
+                btn_box = del_btn.bounding_box()
+                if next_box and btn_box and btn_box["y"] >= next_box["y"]:
+                    break  # that Delete button belongs to a later section
+                del_btn.click(timeout=5_000)
+                page.wait_for_timeout(1_000)
+                deleted += 1
+            except Exception as exc:
+                logger.warning("Stopped deleting entries in %r after %d: %s", section_heading, deleted, exc)
+                break
+        logger.info("Deleted %d existing entries from %r", deleted, section_heading)
+        return deleted
+
+    def _ensure_entry_slot(self, assistant, page: Page, section_heading: str, probe_selector: str, index: int) -> None:
+        """Makes sure entry number `index` exists, adding one only if it
+        doesn't.
+
+        Clicking Add once per entry overshoots: these forms often already
+        show one blank entry (and re-add one after the last is deleted), so
+        N clicks for N entries leaves an N+1th, half-filled row whose
+        required fields block submission."""
+        try:
+            existing = page.locator(probe_selector).count()
+        except Exception:
+            existing = 0
+        if existing > index:
+            return
+        for _ in range(index + 1 - existing):
+            if not self.click_add_button(assistant, page, section_heading):
+                break
+
+    def click_add_button(self, assistant, page: Page, section_heading: str) -> bool:
+        """Clicks the 'Add' or 'Add Another' button belonging to a specific
+        section, found by walking forward from the section's heading text
+        (e.g. 'Work Experience', 'Education') to the next button whose text
+        contains 'Add'. Filtering on 'Add' (not just 'the next button') is
+        required once entries exist: each entry has its own Delete button
+        positioned closer to the heading than the actual Add/Add Another
+        button, and 'next button in document order' alone would grab that
+        Delete button instead -- which is exactly what happened before."""
+        try:
+            heading = page.get_by_text(section_heading, exact=True).first
+            btn = heading.locator("xpath=following::button[contains(., 'Add')][1]")
+            if btn.count() == 0 or not btn.is_visible():
+                return False
+            btn.click()
+            page.wait_for_timeout(1_500)
+            return True
+        except Exception as exc:
+            logger.warning("Could not click add button for section %r: %s", section_heading, exc)
+            return False
+        return False
+
+    def _reverify_and_fix(self, assistant, page: Page, hints: list[str], index: int, value: str) -> None:
+        """Re-checks the Nth field matching hints against the value we
+        intended, and re-fills it if something else changed it since. Used
+        as a delayed final pass: some sites asynchronously overwrite a
+        field a few seconds after creation/fill -- well past any short
+        settle window checked immediately after filling -- so catching
+        that requires coming back and checking again later."""
+        if not value:
+            return
+        matches = [
+            el for el in page.query_selector_all("textarea, input[type='text'], input:not([type])")
+            if el.is_visible() and any(h in assistant._label_for(page, el).lower() for h in hints)
+        ]
+        if index >= len(matches):
+            return
+        el = matches[index]
+        try:
+            current = el.input_value()
+        except Exception:
+            return
+        if current.strip() != value.strip():
+            logger.warning("Entry %d matching %s drifted to %r -- correcting", index, hints, current[:60])
+            try:
+                el.fill(value)
+            except Exception as exc:
+                logger.warning("Final correction failed for entry %d matching %s: %s", index, hints, exc)
+
+    def _repeated_correction_pass(self, assistant, page: Page, entries: list[dict], hints: list[str], key: str, wait_schedule_ms: list[int]) -> None:
+        """Some external process overwrites certain fields on a delay we
+        can't predict -- one fixed wait isn't reliable. This checks and
+        re-corrects at multiple points in time (e.g. 3s, 6s, 10s after the
+        initial fill) instead of just once, to catch a late overwrite that
+        an earlier check already missed."""
+        for wait_ms in wait_schedule_ms:
+            page.wait_for_timeout(wait_ms)
+            for i, entry in enumerate(entries):
+                self._reverify_and_fix(assistant, page, hints, i, entry.get(key, ""))
+
+    def fill_nth_matching(self, assistant, page: Page, hints: list[str], index: int, value: str, settle_ms: int = 500, retries: int = 2,
+    ) -> bool:
+        """Fills the Nth (0-indexed, by visual/DOM position) field matching
+        hints, REGARDLESS of its current content -- for fields that get
+        pre-populated with wrong or duplicated content by something other
+        than our own fill calls (so 'only fill if empty' doesn't help:
+        entry 2 might already be non-empty with entry 1's wrong text before
+        we ever get to it). Verifies the value stuck, retrying if not."""
+        if not value:
+            return False
+        matches = [
+            el for el in page.query_selector_all("textarea, input[type='text'], input:not([type])")
+            if el.is_visible() and any(h in assistant._label_for(page, el).lower() for h in hints)
+        ]
+        if index >= len(matches):
+            return False
+        el = matches[index]
+        for attempt in range(retries + 1):
+            try:
+                el.fill(value)
+            except Exception as exc:
+                logger.warning("Could not fill entry %d matching %s (attempt %d): %s", index, hints, attempt + 1, exc)
+                continue
+            page.wait_for_timeout(settle_ms)
+            try:
+                current = el.input_value()
+            except Exception:
+                current = None
+            if current is not None and current.strip() == value.strip():
+                return True
+        return False
+
+    def has_experience_section(self, assistant, page: Page) -> bool:
+        """True on the step offering Work Experience / Education entries."""
+        try:
+            return (
+                page.locator("input[id$='--jobTitle'], input[id$='--schoolName']").count() > 0
+                or page.get_by_text("Work Experience", exact=True).count() > 0
+            )
+        except Exception:
+            return False
+
+    def select_from_searchable_input(self, assistant, page: Page, id_suffix: str, candidates: list[str]) -> bool:
+        """Picks a value from a type-ahead combobox (an <input> that filters
+        a list as you type, e.g. 'How Did You Hear About Us?'). Types the
+        candidate, then clicks the matching option -- typing alone doesn't
+        register a selection on these widgets."""
+        try:
+            field = page.locator(f"input[id$='{id_suffix}']").first
+            if field.count() == 0:
+                logger.warning("Searchable input %r not found", id_suffix)
+                return False
+
+            multiselect_id = field.get_attribute("data-uxi-multiselect-id") or ""
+
+            # Never re-drive a widget that already holds a value: these
+            # retries toggle selections, so a second pass over a correctly
+            # filled field is how a good answer gets cleared.
+            existing = assistant._multiselect_selection(page, id_suffix, multiselect_id)
+            if existing:
+                logger.info("%s already holds %r; leaving it alone", id_suffix, existing)
+                return True
+
+            for cand in candidates:
+                # Keyboard first: typing already opens the list with the best
+                # match highlighted, so ArrowDown+Enter commits it. Clicking
+                # the option needs the list to still be open, and reopening it
+                # first closed the very list that had just been populated.
+                for strategy in ("suggestion_text", "keyboard", "prompt_option"):
+                    if strategy == "prompt_option":
+                        page.keyboard.press("Escape")
+                        page.wait_for_timeout(200)
+                    self._open_prompt(assistant, page, field, multiselect_id)
+                    field.fill("")
+                    # .type() sends real keystrokes; .fill() sets the value in
+                    # one shot and these widgets never run their filter, so the
+                    # option list stays stale or empty.
+                    field.type(cand, delay=40)
+                    page.wait_for_timeout(1_200)
+
+                    if strategy == "suggestion_text":
+                        if not assistant._click_visible_suggestion(page, field, cand):
+                            continue
+                    elif strategy == "keyboard":
+                        field.press("ArrowDown")
+                        field.press("Enter")
+                    else:
+                        clicked = self._click_matching_option(assistant, page, field, cand, id_suffix)
+                        if not clicked:
+                            continue
+
+                    page.wait_for_timeout(800)
+                    if self._searchable_value_committed(assistant, page, id_suffix, cand, multiselect_id):
+                        logger.info("Selected %r in %s (via %s)", cand, id_suffix, strategy)
+                        return True
+                    logger.info(
+                        "Option %r appeared to select in %s but did not commit; trying next strategy",
+                        cand, id_suffix,
+                    )
+
+            # None of our wordings matched this tenant's list. Read what it
+            # actually offers and let Claude pick the equivalent, so a new
+            # employer's vocabulary doesn't need a code change.
+            self._open_prompt(assistant, page, field, multiselect_id)
+            field.fill("")
+            page.wait_for_timeout(1_000)
+            available = assistant._visible_option_texts(page)
+            pick = assistant._match_option_semantically(
+                candidates, available, assistant._question_text_for(page, field)
+            )
+            if pick:
+                self._open_prompt(assistant, page, field, multiselect_id)
+                field.fill("")
+                field.type(pick, delay=40)
+                page.wait_for_timeout(1_200)
+                if self._click_matching_option(assistant, page, field, pick, id_suffix):
+                    page.wait_for_timeout(800)
+                    if self._searchable_value_committed(assistant, page, id_suffix, pick, multiselect_id):
+                        logger.info("Selected %r in %s (semantic)", pick, id_suffix)
+                        return True
+            return False
+        except Exception as exc:
+            logger.warning("Searchable selection failed for %s: %s", id_suffix, exc)
+            return False
+
+    def _open_prompt(self, assistant, page: Page, field, multiselect_id: str) -> None:
+        """Opens a Workday multiselect's option list. Clicking the input
+        alone doesn't always mount the list; the prompt icon beside it is
+        the element the widget actually listens to."""
+        if multiselect_id:
+            icon = page.locator(
+                f"[data-uxi-multiselect-id='{multiselect_id}'][data-uxi-selectinputicon-type='promptIcon']"
+            ).first
+            if icon.count() and assistant._click_resiliently(icon, timeout_ms=4_000):
+                page.wait_for_timeout(500)
+                return
+        try:
+            field.click(timeout=5_000)
+        except Exception as exc:
+            logger.warning("Could not focus multiselect input: %s", exc)
+
+    def _click_matching_option(self, assistant, page: Page, field, cand: str, id_suffix: str) -> bool:
+        """Clicks the dropdown option matching `cand`. Workday renders each
+        choice as [data-automation-id='promptOption'] carrying the exact
+        label in data-automation-label -- far safer than a page-wide
+        [role='option'] sweep, which also picks up whichever OTHER combobox
+        happens to be open (the phone-country list kept polluting this one)."""
+        exact = page.locator(
+            f"[data-automation-id='promptOption'][data-automation-label={json.dumps(cand)}]"
+        )
+        if exact.count() and assistant._click_resiliently(exact.first):
+            return True
+
+        # Scope to the listbox THIS input owns. A page-wide [role='option']
+        # sweep picks up whichever other combobox happens to be open -- on one
+        # form every lookup returned the phone country-dialling-code list, so a
+        # yes/no question was offered 'Afghanistan +93'.
+        scope = None
+        for attr in ("aria-controls", "aria-owns"):
+            try:
+                target_id = field.get_attribute(attr)
+            except Exception:
+                target_id = None
+            if target_id:
+                candidate_scope = page.locator(f"[id={json.dumps(target_id)}]")
+                if candidate_scope.count():
+                    scope = candidate_scope
+                    break
+        if scope is None:
+            nearest = field.locator("xpath=following::*[@role='listbox'][1]")
+            if nearest.count():
+                scope = nearest
+
+        root = scope if scope is not None else page
+        options = root.locator("[data-automation-id='promptOption']")
+        if options.count() == 0:
+            options = root.locator("[role='option']")
+
+        texts = []
+        for i in range(min(options.count(), 40)):
+            try:
+                texts.append((i, (options.nth(i).inner_text() or "").strip()))
+            except Exception:
+                continue
+
+        # Exact match before substring: 'Job Board' must not win a lookup for
+        # a candidate that merely contains it.
+        for want_exact in (True, False):
+            for i, text in texts:
+                hit = text.lower() == cand.lower() if want_exact else cand.lower() in text.lower()
+                if hit and assistant._click_resiliently(options.nth(i)):
+                    return True
+
+        logger.info("SEARCHABLE_OPTIONS[%s] for %r: %s", id_suffix, cand, [t for _, t in texts][:20])
+        return False
+
+    @staticmethod
+    def _multiselect_selection(page: Page, id_suffix: str, multiselect_id: str = "") -> str:
+        """The value a Workday multiselect currently holds, as the text of
+        its selected-item pill ('' when empty).
+
+        Anchors on the container's own id rather than walking up from the
+        input: while the prompt is open the input is relocated into the
+        popup, so its ancestors are the popup's, not the form field's. Reads
+        the pill rather than promptAriaInstruction, whose text is transient
+        ('Expanded' while the menu is opening)."""
+        try:
+            if multiselect_id:
+                box = page.locator(f"[data-uxi-element-id='{multiselect_id}']").first
+                if box.count() == 0:
+                    box = page.locator(f"[data-uxi-multiselect-id='{multiselect_id}']").first
+            else:
+                box = page.locator(f"input[id$='{id_suffix}']").first
+            if box.count() == 0:
+                return ""
+            return (
+                box.evaluate(
+                    """el => {
+                        const box = el.closest('[data-automation-id="multiSelectContainer"]') || el;
+                        const pills = [...box.querySelectorAll('[data-automation-id="selectedItem"]')];
+                        return pills.map(p => (p.innerText || '').trim()).filter(Boolean).join(', ');
+                    }"""
+                )
+                or ""
+            ).strip()
+        except Exception:
+            return ""
+
+    def _searchable_value_committed(self, assistant, page: Page, id_suffix: str, cand: str, multiselect_id: str = ""
+    ) -> bool:
+        """True when the widget actually holds the value. Clicking an option
+        can look successful -- no exception, no error -- while committing
+        nothing, which is how a required field reached Save still empty."""
+        # Escape only where it's needed (Workday, whose pill renders once the
+        # popup closes). On a React combobox Escape REVERTS the input, so
+        # pressing it here wiped the value that had just been selected -- the
+        # verification was destroying the thing it was verifying.
+        if multiselect_id:
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(600)
+        selection = assistant._multiselect_selection(page, id_suffix, multiselect_id)
+        if not selection:
+            # Not every combobox uses a pill; simpler ones leave the chosen
+            # text in the input. But raw text is NOT proof of a committed
+            # selection -- an autocomplete happily holds typed text while
+            # showing 'Please enter your location', and reporting that as
+            # filled is worse than reporting nothing, because it hides a
+            # required field that will block submission. So only count it when
+            # the widget isn't showing a validation error.
+            # Accept the input's own value when it reflects the chosen option.
+            # An earlier version also failed the check whenever nearby text
+            # said 'required' -- but that label lingers until the field
+            # revalidates, so a GOOD selection was judged a failure and the
+            # retry typed over it. Matching the value against what was asked
+            # for is the reliable signal; the human reviews before submitting.
+            try:
+                typed = (page.locator(f"input[id$='{id_suffix}']").first.input_value() or "").strip()
+            except Exception:
+                typed = ""
+            term = cand.split(",")[0].strip().lower()
+            selection = typed if (typed and term and term in typed.lower()) else ""
+        logger.info("COMMIT_CHECK[%s] selection=%r wanted=%r", id_suffix, selection, cand)
+        # Any committed selection counts: Workday often stores a canonical
+        # label ('Company Career Site') that differs from the search term.
+        return bool(selection)
+
+    @staticmethod
+    def _displayed_value(page: Page, id_suffix: str) -> str:
+        """What the control currently SHOWS.
+
+        react-select style widgets clear their search input once an option is
+        chosen and render the value in a sibling element, so reading the input
+        reports an empty field for a correctly answered question -- which then
+        triggers a retry that types over the good answer."""
+        try:
+            return (page.locator(f"input[id$='{id_suffix}'], button[id$='{id_suffix}']").first.evaluate(
+                """el => {
+                    const box = el.closest('[class*="control"], [class*="select"], div');
+                    if (!box) return '';
+                    const value = box.querySelector(
+                        '[class*="singleValue"], [class*="multiValue"], [class*="selected"]'
+                    );
+                    if (value) return (value.innerText || '').trim();
+                    const own = (el.value || '').trim();
+                    if (own) return own;
+                    const text = (box.innerText || '').trim();
+                    return /^(select\\.\\.\\.|select one|choose)$/i.test(text) ? '' : text;
+                }"""
+            ) or "").strip()
+        except Exception:
+            return ""
+
+    def select_one_option(self, assistant, page: Page, id_suffix: str, candidates: list[str]) -> bool:
+        """Picks exactly ONE of the options a dropdown offers.
+
+        The rule this enforces: a dropdown is answered by CHOOSING from its
+        list, never by typing a value into it. Treating one as a text box is
+        what broke the earlier attempts -- typed text sits in the search input
+        looking plausible while the widget holds no value at all.
+
+        Typing here is only ever used to filter the list; the answer is always
+        a click on an offered option. Verification reads what the control
+        DISPLAYS, because these widgets keep the committed value in a rendered
+        element while their input clears itself after selection."""
+        field = page.locator(f"input[id$='{id_suffix}'], button[id$='{id_suffix}']").first
+        if field.count() == 0:
+            logger.warning("Dropdown %r not found", id_suffix)
+            return False
+
+        # Only leave it alone when what's showing is actually one of the
+        # answers wanted. Skipping on ANY displayed text let stale leftovers
+        # ('Fairfax' typed into the search box) pass as a committed answer, so
+        # a required field was never filled at all.
+        # Only leave it alone when what's showing IS one of the wanted answers,
+        # matched exactly. Skipping on any displayed text let a stale leftover
+        # ('Fairfax' still sitting in the search box) pass as a committed
+        # answer, so a required field went unfilled while looking done.
+        already = assistant._displayed_value(page, id_suffix)
+        if already and any(already.lower() == c.strip().lower() for c in candidates if c):
+            logger.info("%s already shows %r; leaving it alone", id_suffix, already)
+            return True
+
+        for cand in candidates:
+            try:
+                assistant._click_resiliently(field, timeout_ms=4_000)
+                page.wait_for_timeout(600)
+                # Filter only -- this narrows the list, it is not the answer.
+                if field.get_attribute("type") not in (None, "button"):
+                    try:
+                        field.fill("")
+                        field.type(cand.split(",")[0].strip(), delay=40)
+                        page.wait_for_timeout(1_000)
+                    except Exception:
+                        pass
+
+                options = assistant._open_option_texts(page)
+                if not options:
+                    continue
+                choice = self._choose_from(assistant, options, cand, id_suffix)
+                if not choice:
+                    continue
+                if not self._click_option_by_text(assistant, page, choice):
+                    continue
+
+                page.wait_for_timeout(700)
+                shown = assistant._displayed_value(page, id_suffix)
+                if shown:
+                    logger.info("Chose %r for %s", shown[:60], id_suffix)
+                    return True
+                logger.info("Clicked %r for %s but the control shows nothing", choice[:40], id_suffix)
+            except Exception as exc:
+                logger.warning("Could not choose an option for %s: %s", id_suffix, exc)
+        return False
+
+    def _choose_from(self, assistant, options: list[str], cand: str, id_suffix: str) -> str:
+        """Exact match, then prefix, then a semantic match -- never a guess."""
+        for opt in options:
+            if opt.lower() == cand.lower():
+                return opt
+        term = cand.split(",")[0].strip().lower()
+        for opt in options:
+            if term and opt.lower().startswith(term):
+                return opt
+        return assistant._match_option_semantically([cand], options, id_suffix)
+
+    def _click_option_by_text(self, assistant, page: Page, text: str) -> bool:
+        for selector in ("[role='option']", "[role='listbox'] li", "[class*='option']"):
+            loc = page.locator(selector)
+            for i in range(min(loc.count(), 40)):
+                el = loc.nth(i)
+                try:
+                    if el.is_visible() and (el.inner_text() or "").strip() == text:
+                        return assistant._click_resiliently(el, timeout_ms=4_000)
+                except Exception:
+                    continue
+        return False
+
+    @staticmethod
+    def _open_option_texts(page: Page, limit: int = 40) -> list[str]:
+        """Visible option labels of whichever list is currently open."""
+        texts: list[str] = []
+        for selector in ("[role='option']", "[role='listbox'] li", "[class*='option']"):
+            loc = page.locator(selector)
+            for i in range(min(loc.count(), limit)):
+                try:
+                    el = loc.nth(i)
+                    if not el.is_visible():
+                        continue
+                    text = (el.inner_text() or "").strip()
+                    if text and len(text) < 120 and text not in texts:
+                        texts.append(text)
+                except Exception:
+                    continue
+            if texts:
+                break
+        return texts
+
+    def select_from_button_dropdown(self, assistant, page: Page, id_suffix: str, index: int, candidates: list[str], locator=None
+    ) -> bool:
+        """Picks an option from a button-triggered dropdown (a <button>
+        that opens a listbox, not a <select> -- so select_option() doesn't
+        apply). Clicks the Nth button whose id ends with id_suffix, then
+        clicks the first option whose text matches any of `candidates`
+        (case-insensitive substring). Logs the available options when
+        nothing matches, so the candidate list can be corrected."""
+        try:
+            btn = locator if locator is not None else page.locator(f"button[id$='{id_suffix}']").nth(index)
+            if btn.count() == 0:
+                logger.warning("No dropdown button with id suffix %r at index %d", id_suffix, index)
+                return False
+            question_text = assistant._question_text_for(page, btn)
+            btn.click(timeout=5_000)
+            page.wait_for_timeout(700)
+
+            options = page.locator("[role='option']")
+            texts = []
+            for i in range(min(options.count(), 60)):
+                try:
+                    texts.append((i, (options.nth(i).inner_text() or "").strip()))
+                except Exception:
+                    continue
+            logger.info("DROPDOWN_OPTIONS[%s][%d]: %s", id_suffix, index, [t for _, t in texts])
+            # Exact match first, then substring -- a loose substring match
+            # picked 'Masters of Arts' for 'Master', which would put a
+            # factually wrong degree on a real application.
+            for cand in candidates:
+                for i, text in texts:
+                    if cand.strip().lower() == text.strip().lower():
+                        options.nth(i).click(timeout=5_000)
+                        page.wait_for_timeout(500)
+                        logger.info("Selected %r (exact) for %s[%d]", text, id_suffix, index)
+                        return True
+            for cand in candidates:
+                for i, text in texts:
+                    if cand.lower() in text.lower():
+                        options.nth(i).click(timeout=5_000)
+                        page.wait_for_timeout(500)
+                        logger.info("Selected %r (substring) for %s[%d]", text, id_suffix, index)
+                        return True
+            # Literal matching failed, so this tenant words its options
+            # differently ('Masters' where we hold 'Masters of Science').
+            # Ask Claude which of the options on THIS page means the same
+            # thing, rather than requiring a code change per employer.
+            available = [t for _, t in texts]
+            pick = assistant._match_option_semantically(candidates, available, question_text)
+            if pick:
+                for i, text in texts:
+                    if text == pick:
+                        options.nth(i).click(timeout=5_000)
+                        page.wait_for_timeout(500)
+                        logger.info("Selected %r (semantic) for %s[%d]", text, id_suffix, index)
+                        return True
+
+            logger.warning(
+                "No option matched %s for %s[%d]. Available: %s",
+                candidates, id_suffix, index, available[:25],
+            )
+            page.keyboard.press("Escape")
+            return False
+        except Exception as exc:
+            logger.warning("Dropdown selection failed for %s[%d]: %s", id_suffix, index, exc)
+            return False
+

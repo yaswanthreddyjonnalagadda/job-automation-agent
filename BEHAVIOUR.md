@@ -1,7 +1,9 @@
 # What the assistant does, and what it never does
 
 The agent prepares a job application end to end and then **stops before the
-final Submit button**. Clicking Submit is the user's, always.
+final Submit button**. Clicking Submit is the user's — unless the user turns on
+verified auto-submit (below), which is off by default and refuses on any
+uncertainty.
 
 ## What it may do
 
@@ -49,6 +51,34 @@ If the application leaves the screen without any of that — the window is
 closed, or the form is abandoned for 10 minutes — the status becomes
 **needs_user_review**, never "submitted". Success is never assumed.
 
+## Verified auto-submit (opt in, off by default)
+
+Set `AUTO_SUBMIT_VERIFIED_ONLY=true` in `.env` to allow it. Even then, the
+agent submits only when `safety.evaluate_auto_submit()` returns an eligible
+`AutoSubmitDecision`, which requires **all** of:
+
+* the job title, company and canonical URL match the tracked application
+  (tracking parameters are not a difference);
+* the attached resume and cover letter are the documents generated for this
+  application, verified by SHA-256 against the stored copies, not by file name;
+* every required field on the form **exactly** matches approved data — a value
+  the agent wrote from your profile/resume, an explicitly approved answer from
+  `data/_approved_answers.json`, or an existing value that equals a profile
+  value. Near-misses are refusals: "Fairfax County" never matches "Fairfax";
+* nothing uncertain is present: no blanks, form errors or warnings, no
+  ambiguous dropdown choice, no unsupported custom question, no attestation,
+  e-signature or consent checkbox, no CAPTCHA, no identity check.
+
+Before submitting it writes, into `output/<Company>_<Title>/evidence_<time>/`:
+a full-page screenshot, the page HTML, `comparison.json` (the field-by-field
+report and every reason), and an audit row in `application_events`. The click
+itself is re-checked for a CAPTCHA or attestation that appeared in between.
+Afterwards the application is recorded **submitted** only once a confirmation
+page, portal entry or confirmation email is found — clicking is not evidence.
+
+Every decision, eligible or not, is written to the audit trail and shown on the
+dashboard with its reasons.
+
 ## Statuses
 
 `prepared` → `form_filled` → `ready_to_submit` → `submitted`,
@@ -61,14 +91,27 @@ job that was declined.
 |---|---|
 | `safety.py` | the rules above, in one place |
 | `browser_automation.py` | reusable browser and form handling; no company names |
-| `sites/` | per-platform selectors and workarounds (SuccessFactors, Workday, Eightfold, generic) |
+| `sites/` | per-platform selectors and workarounds: Workday (its whole repeated-entry wizard), SuccessFactors, Eightfold, Greenhouse, Lever, Ashby, generic fallback |
 | `job_sources.py` | reading a posting (Workday, Greenhouse, Lever, Ashby, Eightfold, schema.org, plain page) |
 | `apply_flow.py` | one application from start to hand-over |
 | `apply.py` / `web_ui.py` | entry points |
 | `db.py` / `job_tracker.py` | tracker (Postgres, SQLite fallback) |
 | `tests/` | the rules as tests: `venv\Scripts\python -m pytest tests -q` |
 
-Legacy Workday wizard helpers (`fill_experience_section`, the searchable-input
-and spinner helpers) still live in `browser_automation.py` and use Workday's
-`data-automation-id` selectors through `sites/workday.py`. Moving them fully
-into that adapter is the next cleanup.
+Workday's repeated-entry wizard (`fill_experience_section`, the date spinners,
+searchable inputs and button dropdowns — about 760 lines) now lives in
+`sites/workday.py`; `browser_automation.py` keeps thin wrappers that delegate
+to whichever adapter handles the page. A few shared selector constants are
+imported from the adapter module by generic code, which is intentional.
+
+## Operational detail
+
+* **Retries** — flaky page actions are retried (`with_retries`, `action_retries`).
+* **Progress is saved** — the form's own Save button is clicked before handing
+  over, so a part-finished application survives a reload.
+* **Structured logs** — each run also writes `logs/run_<timestamp>.jsonl`.
+* **No secrets in logs** — every log line passes through `safety.redact()`,
+  which masks API keys, passwords, email addresses and phone numbers.
+* **Dashboard** — each application's page shows progress, what is still
+  outstanding, the field-by-field comparison, evidence links and the full event
+  history. It is served on 127.0.0.1 only.

@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 import psycopg
+from psycopg.types.json import Json
 from psycopg.rows import dict_row
 
 logger = logging.getLogger(__name__)
@@ -147,6 +148,67 @@ class PostgresTracker:
             raise
         finally:
             conn.close()
+
+    # ------------------------------------------------------------------
+    # Run history: events, evidence and auto-submit audits
+    # ------------------------------------------------------------------
+    _EVENTS_DDL = """
+        CREATE TABLE IF NOT EXISTS application_events (
+            id             BIGSERIAL PRIMARY KEY,
+            application_id BIGINT REFERENCES applications(id) ON DELETE CASCADE,
+            kind           TEXT NOT NULL,      -- status | error | evidence | note | auto_submit
+            message        TEXT,
+            screenshot_path TEXT,
+            html_path      TEXT,
+            payload        JSONB,
+            created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS idx_events_application ON application_events(application_id);
+    """
+
+    def record_event(self, dedup_key: str, kind: str, message: str = "",
+                     screenshot_path: str = "", html_path: str = "", payload: Optional[dict] = None) -> None:
+        """Appends to an application's history: a status change, an error, a
+        screenshot/HTML snapshot, or an auto-submit decision. This is the audit
+        trail the dashboard reads."""
+        with self._connect() as conn:
+            conn.execute(self._EVENTS_DDL)
+            app = conn.execute("SELECT id FROM applications WHERE dedup_key = %s", (dedup_key,)).fetchone()
+            if not app:
+                return
+            conn.execute(
+                """INSERT INTO application_events
+                       (application_id, kind, message, screenshot_path, html_path, payload)
+                   VALUES (%s, %s, %s, %s, %s, %s)""",
+                (app["id"], kind, message[:4000] if message else "", screenshot_path or None,
+                 html_path or None, Json(payload) if payload is not None else None),
+            )
+
+    def events(self, dedup_key: str, limit: int = 100) -> list[dict]:
+        with self._connect() as conn:
+            conn.execute(self._EVENTS_DDL)
+            rows = conn.execute(
+                """SELECT e.* FROM application_events e JOIN applications a ON a.id = e.application_id
+                   WHERE a.dedup_key = %s ORDER BY e.created_at DESC LIMIT %s""",
+                (dedup_key, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def document_matches(self, dedup_key: str, kind: str, file_path) -> bool:
+        """True when the local file is byte-for-byte a document stored for this
+        application. Verified auto-submit requires this before it accepts that
+        the right resume/cover letter is attached."""
+        path = Path(file_path)
+        if not path.is_file():
+            return False
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT 1 FROM documents d JOIN applications a ON a.id = d.application_id
+                   WHERE a.dedup_key = %s AND d.kind = %s AND d.sha256 = %s LIMIT 1""",
+                (dedup_key, kind, digest),
+            ).fetchone()
+        return row is not None
 
     # ------------------------------------------------------------------
     # Employer accounts

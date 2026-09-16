@@ -10,8 +10,11 @@ to one platform's markup lives in these adapters.
 
 from __future__ import annotations
 
+from .ashby import AshbyAdapter
 from .base import SiteAdapter, merge_placeholders
 from .eightfold import EightfoldAdapter
+from .greenhouse import GreenhouseAdapter
+from .lever import LeverAdapter
 from .successfactors import SuccessFactorsAdapter
 from .workday import WorkdayAdapter
 
@@ -19,7 +22,10 @@ from .workday import WorkdayAdapter
 ADAPTERS: tuple[type[SiteAdapter], ...] = (
     SuccessFactorsAdapter,
     WorkdayAdapter,
-    EightfoldAdapter,
+    GreenhouseAdapter,
+    LeverAdapter,
+    AshbyAdapter,
+    EightfoldAdapter,   # last: it also matches employer-hosted /careers/ paths
 )
 
 _CACHE: dict[str, SiteAdapter] = {}
