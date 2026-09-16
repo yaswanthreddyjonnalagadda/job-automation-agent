@@ -119,6 +119,18 @@ searchable inputs and button dropdowns — about 760 lines) now lives in
 to whichever adapter handles the page. A few shared selector constants are
 imported from the adapter module by generic code, which is intentional.
 
+## The browser it uses
+
+Real Google Chrome (`BROWSER_CHANNEL=chrome`), not a test build, so a form
+renders and behaves as it does for you; the agent falls back to Playwright's
+bundled browser if Chrome is missing. It runs in its own profile
+(`./browser_profile`) rather than your everyday one, which keeps your normal
+browsing, cookies and extensions out of an application run -- and lets you
+carry on using Chrome while an application is open. Point
+`BROWSER_PROFILE_DIR` at your own Chrome profile to reuse its logins instead;
+Chrome must then be closed while the agent runs, since one profile cannot be
+open in two browsers.
+
 ## Operational detail
 
 * **Retries** — flaky page actions are retried (`with_retries`, `action_retries`).

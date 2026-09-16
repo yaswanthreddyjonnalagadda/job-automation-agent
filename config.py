@@ -128,7 +128,13 @@ class AppConfig:
     db_path: Path = DB_PATH
     output_dir: Path = OUTPUT_DIR
     log_dir: Path = LOG_DIR
-    browser_profile_dir: Path = BROWSER_PROFILE_DIR
+    browser_profile_dir: Path = field(
+        default_factory=lambda: Path(os.getenv("BROWSER_PROFILE_DIR", "") or BROWSER_PROFILE_DIR))
+    # Which browser to drive. "chrome" is real Google Chrome as installed --
+    # same build, same rendering, same fonts as the one in the taskbar -- so an
+    # employer's form behaves as it does for the user. "chromium" falls back to
+    # the build Playwright ships. Empty means: Chrome if it is installed.
+    browser_channel: str = field(default_factory=lambda: os.getenv("BROWSER_CHANNEL", "chrome").strip())
     # Headless=False on purpose: the human must see the browser to log in
     # and to review/submit each application themselves.
     browser_headless: bool = False

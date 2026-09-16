@@ -140,9 +140,47 @@ class JobApplicationAssistant:
 
     def __enter__(self) -> "JobApplicationAssistant":
         self._playwright = sync_playwright().start()
-        self._context = self._playwright.chromium.launch_persistent_context(
-            user_data_dir=str(self._config.browser_profile_dir),
+        profile_dir = Path(self._config.browser_profile_dir)
+        channel = (getattr(self._config, "browser_channel", "") or "").strip()
+        if channel and channel != "chromium":
+            logger.info("Using %s with the profile at %s", channel, profile_dir)
+        self._guard_profile_in_use(profile_dir)
+        try:
+            self._context = self._launch(channel, profile_dir)
+        except Exception as exc:
+            if not channel or channel == "chromium":
+                raise
+            # Chrome is not installed, or this channel is unavailable: the
+            # bundled build still runs the application.
+            logger.warning("Could not start %s (%s) -- falling back to the bundled browser",
+                           channel, str(exc).splitlines()[0][:120])
+            self._context = self._launch("", profile_dir)
+        return self
+
+    @staticmethod
+    def _guard_profile_in_use(profile_dir: Path) -> None:
+        """A profile can only be open in one browser at a time.
+
+        Pointed at the user's own Chrome profile while Chrome is running, the
+        launch fails with a message about the profile being in use; saying so
+        plainly beats letting Playwright's error surface.
+        """
+        lock = profile_dir / "lockfile"
+        if not lock.exists():
+            return
+        try:
+            lock.rename(lock)  # a held lock cannot be renamed on Windows
+        except OSError:
+            logger.warning(
+                "The browser profile at %s is already open in another window. "
+                "Close that browser and start this run again.", profile_dir)
+
+    def _launch(self, channel: str, profile_dir: Path):
+        kwargs = {"channel": channel} if channel and channel != "chromium" else {}
+        return self._playwright.chromium.launch_persistent_context(
+            user_data_dir=str(profile_dir),
             headless=self._config.browser_headless,
+            **kwargs,
             # Size the page to the real, maximized window. Playwright's default
             # fixed 1280x720 page is taller than the window can be on a
             # 1280x720 screen, so the bottom of every page sat below the
@@ -151,7 +189,6 @@ class JobApplicationAssistant:
             no_viewport=True,
             args=["--start-maximized"],
         )
-        return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         # Teardown must not raise. Closing a browser the user already closed
