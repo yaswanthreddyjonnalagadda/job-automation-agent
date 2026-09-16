@@ -3980,7 +3980,17 @@ class JobApplicationAssistant:
         if btn is None:
             return False
         before = self._page_fingerprint(page)
-        btn.click()
+        try:
+            btn.click(timeout=10_000)
+        except Exception as exc:
+            # A forward button that never becomes clickable is a form that
+            # cannot be advanced -- which is something to hand over, with the
+            # browser still open and the part-filled application in it. Letting
+            # the timeout escape closed the window and threw away a Google
+            # application the agent had already filled two steps of.
+            logger.warning("Could not advance the form: %s", str(exc).splitlines()[0][:120])
+            self._stuck_on = before
+            return False
         # Workday-style wizards swap content client-side without a real
         # navigation, so wait_for_load_state resolves instantly here and
         # detecting fields immediately would catch the OLD step's stale DOM.

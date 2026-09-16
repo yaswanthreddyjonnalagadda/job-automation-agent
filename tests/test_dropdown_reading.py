@@ -330,3 +330,18 @@ def test_an_enabled_next_button_is_used(page, agent):
         <button aria-label="Next" style="width:90px;height:32px">Next</button>
       </body></html>""")
     assert agent._wizard_button(page) is not None
+
+
+def test_a_click_that_never_lands_does_not_end_the_run(page, agent):
+    """A Playwright click timeout escaped click_next_step and killed the whole
+    run: the browser closed and a Google application the agent had already
+    filled two steps of went with it. A form that cannot be advanced is a
+    hand-over, with the window left open."""
+    page.set_content("""<html><body>
+        <input id="answered" value="something">
+        <button id="next" aria-label="Next" style="width:90px;height:32px">Next</button>
+        <div id="cover" style="position:fixed;inset:0;background:rgba(0,0,0,.2)"></div>
+      </body></html>""")
+    assert agent.click_next_step(page) is False  # the overlay swallows every click
+    assert not page.is_closed()
+    assert page.input_value("#answered") == "something"
