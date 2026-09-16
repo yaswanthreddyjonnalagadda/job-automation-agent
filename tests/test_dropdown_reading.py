@@ -513,3 +513,22 @@ def test_an_ant_design_picker_offers_its_options(page, agent):
     options = page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden) "
                            "[class*=ant-select-item-option]:visible")
     assert [t.strip() for t in options.all_inner_texts()] == ["Canada", "United States"]
+
+
+def test_a_picker_whose_input_cannot_be_clicked_is_opened_by_its_wrapper(page, agent):
+    """Ant Design puts a zero-width search input inside the control and covers
+    it with the selector div: clicking the input waited the full thirty-second
+    timeout and gave up, leaving Country, State and 'How did you hear' blank on
+    every pass."""
+    page.set_content("""<html><body>
+        <div class="ant-select">
+          <div class="ant-select-selector" style="width:220px;height:34px"
+               onmousedown="document.title='opened'">
+            <input type="search" id="country" role="combobox"
+                   class="ant-select-selection-search-input"
+                   style="width:0;height:0;opacity:0;pointer-events:none">
+          </div>
+        </div>
+      </body></html>""")
+    assert agent.open_picker_control(page, page.locator("#country").first)
+    assert page.title() == "opened"

@@ -1259,6 +1259,45 @@ class JobApplicationAssistant:
         except Exception:
             return ""
 
+    def open_picker_control(self, page: Page, field) -> bool:
+        """Clicks whatever opens this picker.
+
+        Ant Design (Dayforce) puts a zero-width type=search input inside the
+        control and covers it with the selector div: clicking the input waited
+        the full thirty seconds and then gave up, so Country, State and "How
+        did you hear" were left blank on every pass. The wrapper is what a
+        person clicks, and Ant opens on mousedown rather than click.
+        """
+        try:
+            field.click(timeout=4_000)
+            return True
+        except Exception:
+            pass
+        for wrapper in ("xpath=ancestor::*[contains(@class,'ant-select-selector')][1]",
+                        "xpath=ancestor::*[contains(@class,'select-selector')][1]",
+                        "xpath=ancestor::*[contains(@class,'select')][1]",
+                        "xpath=.."):
+            try:
+                target = field.locator(wrapper).first
+                if not target.count():
+                    continue
+                target.click(timeout=4_000)
+                return True
+            except Exception:
+                continue
+        try:
+            field.evaluate("""e => {
+                const box = e.closest('[class*=select-selector], [class*=select], [role=combobox]') || e.parentElement;
+                for (const type of ['mousedown', 'mouseup', 'click']) {
+                    box.dispatchEvent(new MouseEvent(type, {bubbles: true}));
+                }
+                e.focus();
+            }""")
+            return True
+        except Exception as exc:
+            logger.warning("Could not open a picker: %s", str(exc).splitlines()[0][:100])
+            return False
+
     def _answer_combobox_from_profile(self, page: Page, control: dict, candidates: list[str]) -> None:
         field = page.locator(f"[id={json.dumps(control['id'])}]")
         wants_dial_code = bool(re.search(r"country code|dial|phone|^\s*\*?\s*country",
@@ -1310,7 +1349,7 @@ class JobApplicationAssistant:
             field.evaluate("e => e.scrollIntoView({block: 'center'})")
         except Exception:
             pass
-        field.click()
+        self.open_picker_control(page, field)
         page.wait_for_timeout(700)
         if self.adapter(page).open_picker(page, control) and control.get("listbox"):
             scope = page.locator(f"[id={json.dumps(control['listbox'])}]")
@@ -1734,7 +1773,7 @@ class JobApplicationAssistant:
         if (field.input_value() or "").strip():
             logger.info("%r already holds %r; leaving it alone", label_fragment, field.input_value())
             return True
-        field.click()
+        self.open_picker_control(page, field)
         field.type(value, delay=40)
         page.wait_for_timeout(1_500)
         if not self._click_visible_suggestion(page, field, value):
