@@ -73,6 +73,8 @@ def _load_runs() -> None:
         if not _RUNS_FILE.is_file():
             return
         for url, r in json.loads(_RUNS_FILE.read_text(encoding="utf-8")).items():
+            if not url.startswith("http"):
+                continue  # not a posting: a row an older copy of this file left
             state = r.get("state", "")
             if state == "running" and not _process_alive(r.get("pid")):
                 state = "ended while the dashboard was restarting"
@@ -508,10 +510,28 @@ button { background:var(--accent); color:#fff; border:0; border-radius:8px;
          padding:10px 16px; font-size:14px; cursor:pointer; }
 button.ghost { background:#eef1f5; color:var(--ink); }
 table { width:100%; border-collapse:collapse; }
-th,td { text-align:left; padding:9px 8px; border-bottom:1px solid var(--line);
+th,td { text-align:left; padding:10px 10px; border-bottom:1px solid var(--line);
         vertical-align:top; }
-th { color:var(--muted); font-weight:600; font-size:12px;
+th { color:var(--muted); font-weight:600; font-size:12px; white-space:nowrap;
      text-transform:uppercase; letter-spacing:.04em; }
+tr:last-child td { border-bottom:0; }
+/* Dates broke across two lines in the middle of a row, so nothing lined up. */
+td.when, th.when { white-space:nowrap; width:1%; color:var(--muted); }
+td.status, th.status { width:1%; white-space:nowrap; }
+/* The row's buttons wrapped, leaving Delete on a line of its own. */
+td.actions, th.actions { width:1%; white-space:nowrap; text-align:right; }
+.row-actions { display:flex; gap:6px; align-items:center; justify-content:flex-end; }
+.row-actions form { margin:0; display:inline-flex; }
+.row-actions a { margin-right:2px; }
+button.ghost { background:#eef1f5; color:var(--ink); border:1px solid var(--line);
+               padding:6px 12px; line-height:1.4; }
+button.ghost:hover { background:#e3e8ef; }
+/* The label column of a detail table wrapped "Applied via" onto two lines. */
+td.label, th.label { width:130px; white-space:nowrap; color:var(--muted);
+                     font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+td.num, th.num { text-align:right; white-space:nowrap; width:1%; }
+.links a { white-space:nowrap; }
+.links a + a::before { content:" · "; color:var(--muted); }
 a { color:var(--accent); }
 .pill { display:inline-block; padding:2px 9px; border-radius:99px; font-size:12px;
         font-weight:600; }
@@ -577,24 +597,24 @@ INDEX_HTML = """
     <h2>Runs this session</h2>
     <div class="card">
       <table>
-        <tr><th>URL</th><th>State</th><th>Log</th><th></th></tr>
+        <tr><th>URL</th><th>State</th><th>Log</th><th class="actions">Controls</th></tr>
         {% for url, r in runs.items() %}
         <tr>
           <td style="word-break:break-all">{{ url[:90] }}</td>
-          <td>{{ r.state }}<br><span class="muted">started {{ r.started|local }}</span></td>
-          <td><a href="/log?path={{ r.log }}" target="_blank">view</a></td>
-          <td>
+          <td>{{ r.state }}{% if r.started %}<span class="muted"> &middot; started {{ r.started|local }}</span>{% endif %}</td>
+          <td class="label">{% if r.log %}<a href="/log?path={{ r.log }}" target="_blank">view</a>{% else %}<span class="muted">&mdash;</span>{% endif %}</td>
+          <td class="actions"><div class="row-actions">
             {% if r.state == 'running' %}
-            <form method="post" action="/reload-agent" style="display:inline">
+            <form method="post" action="/reload-agent">
               <button class="ghost" title="Load edited agent code into this run without restarting it">Reload agent code</button>
             </form>
-            <form method="post" action="/stop" style="display:inline"
+            <form method="post" action="/stop"
                   onsubmit="return confirm('Stop this application and close its browser? Nothing will be submitted, and you can start it again.')">
               <input type="hidden" name="url" value="{{ url }}">
               <button class="ghost">Stop</button>
             </form>
             {% endif %}
-          </td>
+          </div></td>
         </tr>
         {% endfor %}
       </table>
@@ -622,26 +642,29 @@ INDEX_HTML = """
   <h2>Tracked applications ({{ apps|length }})</h2>
   <div class="card">
     <table>
-      <tr><th>Company</th><th>Role</th><th>Status</th><th>Updated</th><th></th></tr>
+      <tr><th>Company</th><th>Role</th><th class="status">Status</th>
+          <th class="when">Updated</th><th class="actions">Controls</th></tr>
       {% for a in apps %}
       <tr>
         <td><strong>{{ a.company }}</strong><br><span class="muted">{{ a.location or '' }}</span></td>
         <td>{{ a.title }}</td>
-        <td><span class="pill {{ a.status }}">{{ a.status.replace('_',' ') }}</span></td>
-        <td class="muted">{{ a.updated_at|local }}</td>
-        <td><a href="/application/{{ a.id }}">details</a>
+        <td class="status"><span class="pill {{ a.status }}">{{ a.status.replace('_',' ') }}</span></td>
+        <td class="when">{{ a.updated_at|local }}</td>
+        <td class="actions"><div class="row-actions">
+          <a href="/application/{{ a.id }}">details</a>
           {% if a.status != 'submitted' %}
-            <form method="post" action="/resume/{{ a.id }}" style="display:inline">
+            <form method="post" action="/resume/{{ a.id }}">
               <button class="ghost" title="{{ 'Reopen the part-filled form at ' + a.last_page_url[:80] if a.last_page_url else 'Start this application again from the posting' }} -- the resume and answers already stored are reused">Resume</button>
             </form>
-            <form method="post" action="/stop-application/{{ a.id }}" style="display:inline">
+            <form method="post" action="/stop-application/{{ a.id }}">
               <button class="ghost" title="Stop the run working on this application and close its browser. Nothing is submitted and the application is kept.">Stop</button>
             </form>
           {% endif %}
-          <form method="post" action="/delete/{{ a.id }}" style="display:inline"
+          <form method="post" action="/delete/{{ a.id }}"
                 onsubmit="return confirm('Delete {{ a.company }} -- {{ a.title[:60] }}?\n\nThis removes the application, its documents, its answers and its history. It cannot be undone.');">
             <button class="ghost" title="Remove this application and everything filed under it">Delete</button>
           </form>
+        </div>
           {% if a.status in ('ready_to_submit', 'needs_user_review') %}
             <div class="muted" style="max-width:420px">{{ (a.notes or '')[:180] }}</div>
           {% endif %}
@@ -666,23 +689,24 @@ DETAIL_HTML = """
 
   <div class="card">
     <table>
-      <tr><th>Applied via</th><td><a href="{{ a.url }}" target="_blank">{{ a.url[:80] }}</a></td></tr>
-      <tr><th>Created</th><td>{{ a.created_at|local('%d %b %Y %I:%M %p') }}</td></tr>
-      <tr><th>Updated</th><td>{{ a.updated_at|local('%d %b %Y %I:%M %p') }}</td></tr>
-      {% if a.notes %}<tr><th>Notes</th><td>{{ a.notes }}</td></tr>{% endif %}
+      <tr><th class="label">Applied via</th><td><a href="{{ a.url }}" target="_blank">{{ a.url[:80] }}</a></td></tr>
+      <tr><th class="label">Created</th><td class="when">{{ a.created_at|local('%d %b %Y %I:%M %p') }}</td></tr>
+      <tr><th class="label">Updated</th><td class="when">{{ a.updated_at|local('%d %b %Y %I:%M %p') }}</td></tr>
+      {% if a.notes %}<tr><th class="label">Notes</th><td>{{ a.notes }}</td></tr>{% endif %}
     </table>
   </div>
 
   <h2>Documents sent</h2>
   <div class="card">
     <table>
-      <tr><th>Kind</th><th>File</th><th>Size</th><th>Stored</th></tr>
+      <tr><th class="label">Kind</th><th>File</th><th class="num">Size</th>
+          <th class="when">Stored</th></tr>
       {% for d in docs %}
       <tr>
-        <td>{{ d.kind.replace('_',' ') }}</td>
+        <td class="label">{{ d.kind.replace('_',' ') }}</td>
         <td><a href="/document/{{ d.id }}" target="_blank">{{ d.filename }}</a></td>
-        <td class="muted">{{ '%.1f'|format(d.byte_size/1024) }} KB</td>
-        <td class="muted">{{ d.created_at|local }}</td>
+        <td class="num muted">{{ '%.1f'|format(d.byte_size/1024) }} KB</td>
+        <td class="when">{{ d.created_at|local }}</td>
       </tr>
       {% else %}
       <tr><td colspan="4" class="muted">No documents stored.</td></tr>
@@ -723,7 +747,8 @@ DETAIL_HTML = """
       {% endif %}
       {% if decision.field_comparisons %}
         <table>
-          <tr><th>Field</th><th>On the form</th><th>Approved value</th><th>Source</th><th></th></tr>
+          <tr><th>Field</th><th>On the form</th><th>Approved value</th>
+          <th class="label">Source</th><th class="status">Match</th></tr>
           {% for c in decision.field_comparisons %}
             <tr>
               <td>{{ c.label }}</td><td>{{ c.on_form }}</td><td>{{ c.approved }}</td>
@@ -750,16 +775,17 @@ DETAIL_HTML = """
   <h2>History</h2>
   <div class="card">
     <table>
-      <tr><th>When</th><th>Kind</th><th>What happened</th><th>Evidence</th></tr>
+      <tr><th class="when">When</th><th class="label">Kind</th><th>What happened</th>
+          <th class="actions">Evidence</th></tr>
       {% for e in events %}
         <tr>
-          <td class="muted">{{ e.created_at|local }}</td>
-          <td>{{ e.kind }}</td>
+          <td class="when">{{ e.created_at|local }}</td>
+          <td class="muted">{{ e.kind }}</td>
           <td>{{ (e.message or '')[:160] }}</td>
-          <td>
-            {% if e.screenshot_path %}<a href="/evidence?path={{ e.screenshot_path }}" target="_blank">screenshot</a>{% endif %}
-            {% if e.html_path %} <a href="/evidence?path={{ e.html_path }}" target="_blank">html</a>{% endif %}
-          </td>
+          <td class="actions"><span class="links">
+            {%- if e.screenshot_path %}<a href="/evidence?path={{ e.screenshot_path }}" target="_blank">screenshot</a>{% endif -%}
+            {%- if e.html_path %}<a href="/evidence?path={{ e.html_path }}" target="_blank">html</a>{% endif -%}
+          </span></td>
         </tr>
       {% else %}
         <tr><td colspan="4" class="muted">No events recorded yet.</td></tr>
@@ -770,9 +796,9 @@ DETAIL_HTML = """
   <h2>Answers given</h2>
   <div class="card">
     <table>
-      <tr><th>Question</th><th>Answer</th><th>By</th></tr>
+      <tr><th>Question</th><th>Answer</th><th class="label">By</th></tr>
       {% for q in answers %}
-      <tr><td>{{ q.question }}</td><td>{{ q.answer }}</td><td class="muted">{{ q.answered_by }}</td></tr>
+      <tr><td>{{ q.question }}</td><td>{{ q.answer }}</td><td class="label">{{ q.answered_by }}</td></tr>
       {% else %}
       <tr><td colspan="3" class="muted">No answers recorded for this application.</td></tr>
       {% endfor %}
