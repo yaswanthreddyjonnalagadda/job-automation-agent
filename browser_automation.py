@@ -1445,27 +1445,41 @@ class JobApplicationAssistant:
             return page.evaluate("""() => {
                 const visible = e => !!(e.offsetParent || e.getClientRects().length);
                 const clean = s => (s || '').replace(/SPACE/g, ' ').trim();
-                const labelOf = c => {
-                    const byFor = c.id && document.querySelector(`label[for="${CSS.escape(c.id)}"]`);
-                    return clean((byFor && byFor.innerText) || (c.closest('label') || {}).innerText
-                                 || c.getAttribute('aria-label') || c.value);
+                const countBoxes = e => e.querySelectorAll('input[type=checkbox]').length;
+                // Each option on Google's form sits in its own wrapper with an
+                // aria-label of its own ("Asian"), so the first labelled
+                // ancestor is the option, not the question. The question is the
+                // nearest ancestor holding more than one of them.
+                const labelOf = box => {
+                    const byFor = box.id && document.querySelector(`label[for="${CSS.escape(box.id)}"]`);
+                    if (byFor && clean(byFor.innerText)) return clean(byFor.innerText);
+                    if (box.getAttribute('aria-label')) return clean(box.getAttribute('aria-label'));
+                    let n = box.parentElement;
+                    for (let i = 0; i < 4 && n && countBoxes(n) <= 1; i++, n = n.parentElement) {
+                        const own = n.getAttribute('aria-label') || (n.tagName === 'LABEL' ? n.innerText : '');
+                        if (clean(own)) return clean(own);
+                    }
+                    return clean(box.value);
                 };
+                const groupOf = box => {
+                    let n = box.parentElement;
+                    for (let i = 0; i < 8 && n; i++, n = n.parentElement) {
+                        if (countBoxes(n) < 2) continue;
+                        if (n.matches('[role=group], fieldset') || n.getAttribute('aria-label')
+                            || n.querySelector('legend')) return n;
+                    }
+                    return null;
+                };
+
                 const groups = [];
+                const seen = new Set();
                 let counter = 0;
-                const containers = new Set();
                 for (const box of document.querySelectorAll('input[type=checkbox]')) {
                     if (!visible(box)) continue;
-                    let n = box.parentElement, container = null;
-                    for (let i = 0; i < 6 && n; i++, n = n.parentElement) {
-                        if (n.matches('[role=group], fieldset') || n.getAttribute('aria-label')) {
-                            container = n;
-                            break;
-                        }
-                    }
-                    if (!container || containers.has(container)) continue;
-                    containers.add(container);
+                    const container = groupOf(box);
+                    if (!container || seen.has(container)) continue;
+                    seen.add(container);
                     const boxes = [...container.querySelectorAll('input[type=checkbox]')].filter(visible);
-                    if (!boxes.length) continue;
                     boxes.forEach(b => { if (!b.id) b.id = 'agent-box-' + (counter++); });
                     const legend = container.querySelector('legend');
                     groups.push({
