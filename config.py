@@ -56,7 +56,7 @@ class UserProfile:
     open_to_relocation: bool = True  # anywhere in the US -- remote, hybrid, or fully onsite all fine
     salary_min: int = 125_000
     salary_max: int = 185_000
-    years_experience: int = 5
+    years_experience: int = 6
     requires_visa_sponsorship: bool = True  # on H-1B; a transfer counts as sponsorship
     linkedin_url: str = "https://www.linkedin.com/in/yaswanthreddyjonnalagadda"
     portfolio_url: str = ""
