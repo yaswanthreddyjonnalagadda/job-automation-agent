@@ -1013,6 +1013,19 @@ class JobApplicationAssistant:
                         .filter(e => e.id && visible(e) && !e.disabled)
                         .map(e => {
                             let value = (e.tagName === 'SELECT' ? (e.selectedIndex > 0 ? e.value : '') : e.value || '').trim();
+                            if (!value && e.tagName !== 'SELECT') {
+                                // A picker shows its choice beside the input,
+                                // whose own value stays empty: every pass read
+                                // Country and State as blank and chose them
+                                // again, so a run never finished a page.
+                                let n = e.parentElement;
+                                for (let i = 0; i < 4 && n && !value; i++, n = n.parentElement) {
+                                    if (n.querySelectorAll('input, select, textarea').length > 1) break;
+                                    const shown = n.querySelector('[class*=singleValue], [class*=single-value],'
+                                                                + '[class*=selection-item]:not([class*=search])');
+                                    if (shown) value = (shown.innerText || '').trim();
+                                }
+                            }
                             // SuccessFactors pickers show their placeholder as the value.
                             if (/^(-+\\s*)?(no selection|select|please select|choose one)(\\s*-+)?$/i.test(value)) value = '';
                             return {id: e.id, kind: e.tagName === 'SELECT' ? 'select' : 'combobox',

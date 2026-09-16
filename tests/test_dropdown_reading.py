@@ -564,3 +564,27 @@ def test_an_unlisted_referral_source_is_answered_as_other(page, agent):
 def test_a_listed_source_is_preferred_over_other(page, agent):
     texts = ["Indeed", "Company Website", "Other"]
     assert agent._best_option(texts, ["Company Career Site", "Company Website"]) == 1
+
+
+def test_a_picker_that_already_holds_a_choice_is_left_alone(page, agent):
+    """The control scan read an Ant picker's own input, which stays empty, so
+    Country, State and Preferred contact were chosen again on every pass and a
+    run never finished the page -- five passes, twenty seconds apart."""
+    from config import get_user_profile
+
+    page.set_content("""<html><body>
+        <label for="country">Country</label>
+        <div class="ant-select"><div class="ant-select-selector">
+          <span class="ant-select-selection-item">United States of America</span>
+          <span class="ant-select-selection-search">
+            <input id="country" role="combobox" class="ant-select-selection-search-input" value="">
+          </span>
+        </div></div>
+      </body></html>""")
+    agent._profile = get_user_profile()
+    answered = []
+    agent._answer_combobox_from_profile = lambda *a, **k: answered.append(a)
+    from sites import SiteAdapter
+    agent.adapter = lambda _page: SiteAdapter()
+    agent.answer_standard_questions(page, get_user_profile())
+    assert answered == []
