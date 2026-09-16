@@ -358,9 +358,17 @@ class PostgresTracker:
             if not row:
                 return False
             application_id = row["id"]
-            for table in ("documents", "form_answers"):
-                conn.execute(f"DELETE FROM {table} WHERE application_id = %s", (application_id,))
-            conn.execute("DELETE FROM application_events WHERE dedup_key = %s", (dedup_key,))
+            # application_events keys on application_id like the rest, not on
+            # dedup_key -- deleting by the wrong column failed the whole
+            # request with an Internal Server Error.
+            for table in ("documents", "form_answers", "application_events"):
+                try:
+                    conn.execute(f"DELETE FROM {table} WHERE application_id = %s", (application_id,))
+                except Exception as exc:
+                    # A table a given install has never created is not a reason
+                    # to refuse to delete the application itself.
+                    logger.debug("Nothing to remove from %s: %s", table, exc)
+                    conn.rollback()
             conn.execute("DELETE FROM applications WHERE id = %s", (application_id,))
         return True
 
