@@ -1771,8 +1771,17 @@ class JobApplicationAssistant:
                 try:
                     if safety.is_submit_label(el.inner_text()):
                         continue  # that button sends the application
-                    if el.is_visible() and not self._in_popup(el):
-                        return el
+                    if not el.is_visible() or self._in_popup(el):
+                        continue
+                    if not el.is_enabled():
+                        # Google's Next stays disabled until the step is
+                        # complete. Clicking it anyway spent the full 30s
+                        # timeout per attempt and told the user nothing.
+                        logger.info("The form's %r is disabled -- this step is not complete yet",
+                                    (el.get_attribute("aria-label") or el.inner_text() or "Next").strip()[:30])
+                        self._disabled_next = True
+                        continue
+                    return el
                 except Exception:
                     continue
         return None

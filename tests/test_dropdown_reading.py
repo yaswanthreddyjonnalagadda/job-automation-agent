@@ -312,3 +312,21 @@ def test_only_browsers_holding_the_agents_own_profile_are_closed(monkeypatch):
     monkeypatch.setattr("browser_automation.os.name", "nt")
     closed = JobApplicationAssistant._close_leftover_browsers(Path(r"C:\agent\browser_profile"))
     assert closed == 1 and killed == ["11"]
+
+
+def test_a_disabled_next_button_is_not_clicked(page, agent):
+    """Google's Next stays disabled until the step is complete. Clicking it
+    anyway spent a 30-second timeout per attempt, and the run looked busy
+    while telling the user nothing about what was missing."""
+    page.set_content("""<html><body>
+        <button disabled aria-label="Next" style="width:90px;height:32px">Next</button>
+      </body></html>""")
+    assert agent._wizard_button(page) is None
+    assert getattr(agent, "_disabled_next", False) is True
+
+
+def test_an_enabled_next_button_is_used(page, agent):
+    page.set_content("""<html><body>
+        <button aria-label="Next" style="width:90px;height:32px">Next</button>
+      </body></html>""")
+    assert agent._wizard_button(page) is not None
