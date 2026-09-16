@@ -89,8 +89,11 @@ _load_runs()
 # ----------------------------------------------------------------------
 # Launching an application
 # ----------------------------------------------------------------------
-def _run_apply(url: str) -> None:
-    """Runs apply.py for one URL, capturing output for the UI to display."""
+def _run_apply(url: str, open_url: str = "") -> None:
+    """Runs apply.py for one URL, capturing output for the UI to display.
+
+    open_url: the page a previous run reached, reopened instead of the posting.
+    """
     log_path = BASE_DIR / "logs" / f"ui_run_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -103,8 +106,11 @@ def _run_apply(url: str) -> None:
         with open(log_path, "w", encoding="utf-8") as fh:
             # Popen rather than run() so /stop can reach the process. On POSIX
             # it gets its own session so the whole group can be signalled.
+            command = [sys.executable, "apply.py", url]
+            if open_url:
+                command += ["--open-url", open_url]
             proc = subprocess.Popen(
-                [sys.executable, "apply.py", url],
+                command,
                 cwd=str(BASE_DIR), stdout=fh, stderr=subprocess.STDOUT, text=True,
                 start_new_session=(os.name != "nt"),
             )
@@ -176,21 +182,52 @@ def stop_apply():
     url = (request.form.get("url") or "").strip()
     with _RUNS_LOCK:
         run = _RUNS.get(url)
-        if not run or run["state"] != "running":
-            return redirect(url_for("index", error="That run is not running."))
-        run["stopping"] = True
-        proc, pid = run.get("proc"), run.get("pid")
+        if run:
+            run["stopping"] = True
+        proc, pid = (run or {}).get("proc"), (run or {}).get("pid")
     if proc is not None:
         _kill_tree(proc)
-    else:
+    elif pid:
         _kill_pid_tree(pid)
+    # Whatever this server thinks it knows, the run is a process on this
+    # machine: stop it. Its bookkeeping has been lost before -- to a reload, or
+    # to a state file written by an older copy -- and the button then refused
+    # to work on a run the user could see in their browser.
+    ended = _end_any_run()
     with _RUNS_LOCK:
-        run["state"] = "stopped by you"
-        _save_runs()
+        if run:
+            run["state"] = "stopped by you"
+            run["proc"] = run["pid"] = None
+            _save_runs()
+    if proc is None and not pid and not ended:
+        return redirect(url_for("index", error="Nothing was running."))
     # Leftover signal files would otherwise sit in "Waiting for a decision".
     for leftover in (BASE_DIR / "data").glob("_signal_*.txt"):
         leftover.unlink(missing_ok=True)
     return redirect(url_for("index"))
+
+
+def _end_any_run() -> int:
+    """Ends the application process and its browser, by what they are rather
+    than by what this server recorded about them."""
+    if os.name != "nt":
+        return 0
+    try:
+        listing = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"],
+            capture_output=True, text=True, timeout=45).stdout
+        rows = json.loads(listing or "[]")
+    except Exception:
+        return 0
+    marks = ("apply.py", "apply_flow.py", str(BASE_DIR / "browser_profile").lower())
+    pids = [str(r.get("ProcessId")) for r in rows
+            if any(m in (r.get("CommandLine") or "").lower() for m in marks)]
+    for pid in pids:
+        subprocess.run(["taskkill", "/PID", pid, "/T", "/F"], capture_output=True, check=False)
+    for leftover in (BASE_DIR / "data").glob("_signal_*.txt"):
+        leftover.unlink(missing_ok=True)
+    return len(pids)
 
 
 @app.post("/resume/<int:app_id>")
@@ -212,8 +249,60 @@ def resume_application(app_id: int):
     with _RUNS_LOCK:
         if any(r["state"] == "running" for r in _RUNS.values()):
             return redirect(url_for("index", error="An application is already running."))
-    threading.Thread(target=_run_apply, args=(record.url,), daemon=True).start()
+    # The page the application actually reached, so the agent picks the form
+    # back up rather than walking the posting from the start again.
+    open_url = getattr(record, "last_page_url", "") or ""
+    threading.Thread(target=_run_apply, args=(record.url, open_url), daemon=True).start()
     return redirect(url_for("application", app_id=app_id))
+
+
+@app.post("/stop-application/<int:app_id>")
+def stop_application(app_id: int):
+    """Stops whatever run is working on this application.
+
+    Offered per application, because that is how the user thinks about it --
+    they stop an application, not "the run keyed by its posting URL", which is
+    the bookkeeping that had gone stale when the button last refused to work.
+    """
+    tracker = get_tracker()
+    record = next((a for a in tracker.list_all() if a.id == app_id), None)
+    if not record:
+        return redirect(url_for("index", error="That application is gone."))
+    ended = _end_any_run()
+    with _RUNS_LOCK:
+        run = _RUNS.get(record.url or "")
+        if run:
+            run["state"] = "stopped by you"
+            run["proc"] = run["pid"] = None
+            _save_runs()
+    if not ended:
+        return redirect(url_for("index", error="Nothing was running for that application."))
+    return redirect(url_for("index"))
+
+
+@app.post("/delete/<int:app_id>")
+def delete_application(app_id: int):
+    """Removes an application and everything filed under it.
+
+    The user asks for this explicitly, from the row itself; nothing deletes an
+    application on its own. A run still working on it is stopped first, so its
+    browser is not left holding a job that no longer exists.
+    """
+    tracker = get_tracker()
+    record = next((a for a in tracker.list_all() if a.id == app_id), None)
+    if not record:
+        return redirect(url_for("index", error="That application is already gone."))
+    with _RUNS_LOCK:
+        running = _RUNS.get(record.url or "", {}).get("state") == "running"
+    if running:
+        _end_any_run()
+        with _RUNS_LOCK:
+            _RUNS[record.url]["state"] = "stopped -- the application was deleted"
+            _save_runs()
+    if not hasattr(tracker, "delete"):
+        return redirect(url_for("index", error="This tracker cannot delete applications."))
+    tracker.delete(record.dedup_key)
+    return redirect(url_for("index"))
 
 
 @app.post("/reload-agent")
@@ -543,9 +632,16 @@ INDEX_HTML = """
         <td><a href="/application/{{ a.id }}">details</a>
           {% if a.status != 'submitted' %}
             <form method="post" action="/resume/{{ a.id }}" style="display:inline">
-              <button class="ghost" title="Start this application again -- documents and answers already stored are reused">Resume</button>
+              <button class="ghost" title="{{ 'Reopen the part-filled form at ' + a.last_page_url[:80] if a.last_page_url else 'Start this application again from the posting' }} -- the resume and answers already stored are reused">Resume</button>
+            </form>
+            <form method="post" action="/stop-application/{{ a.id }}" style="display:inline">
+              <button class="ghost" title="Stop the run working on this application and close its browser. Nothing is submitted and the application is kept.">Stop</button>
             </form>
           {% endif %}
+          <form method="post" action="/delete/{{ a.id }}" style="display:inline"
+                onsubmit="return confirm('Delete {{ a.company }} -- {{ a.title[:60] }}?\n\nThis removes the application, its documents, its answers and its history. It cannot be undone.');">
+            <button class="ghost" title="Remove this application and everything filed under it">Delete</button>
+          </form>
           {% if a.status in ('ready_to_submit', 'needs_user_review') %}
             <div class="muted" style="max-width:420px">{{ (a.notes or '')[:180] }}</div>
           {% endif %}

@@ -62,9 +62,11 @@ CREATE TABLE IF NOT EXISTS applications (
     cover_letter_path TEXT,
     notes             TEXT,
     job_description   TEXT,
+    last_page_url     TEXT,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS last_page_url TEXT;
 CREATE INDEX IF NOT EXISTS idx_applications_status  ON applications(status);
 CREATE INDEX IF NOT EXISTS idx_applications_company ON applications(company);
 
@@ -125,6 +127,7 @@ class ApplicationRecord:
     cover_letter_path: Optional[str]
     notes: Optional[str]
     job_description: Optional[str]
+    last_page_url: Optional[str]
     created_at: datetime
     updated_at: datetime
 
@@ -329,6 +332,37 @@ class PostgresTracker:
                 """,
                 (resume_path, cover_letter_path, dedup_key),
             )
+
+    def update_last_page(self, dedup_key: str, url: str) -> None:
+        """Where the application actually is in the employer's site.
+
+        Resuming from the posting meant walking the whole wizard again; this is
+        the page to reopen instead -- the part-filled form itself.
+        """
+        if not url:
+            return
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE applications SET last_page_url = %s, updated_at = now() WHERE dedup_key = %s",
+                (url, dedup_key),
+            )
+
+    def delete(self, dedup_key: str) -> bool:
+        """Removes an application and everything filed under it: its documents,
+        answers and event history. Used only from the dashboard, where the user
+        asks for it explicitly."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id FROM applications WHERE dedup_key = %s", (dedup_key,)
+            ).fetchone()
+            if not row:
+                return False
+            application_id = row["id"]
+            for table in ("documents", "form_answers"):
+                conn.execute(f"DELETE FROM {table} WHERE application_id = %s", (application_id,))
+            conn.execute("DELETE FROM application_events WHERE dedup_key = %s", (dedup_key,))
+            conn.execute("DELETE FROM applications WHERE id = %s", (application_id,))
+        return True
 
     def update_status(self, dedup_key: str, status: str, notes: Optional[str] = None) -> None:
         with self._connect() as conn:

@@ -27,7 +27,8 @@ class Record:
 @pytest.fixture
 def client(monkeypatch):
     started = []
-    monkeypatch.setattr(web_ui, "_run_apply", lambda url: started.append(url))
+    monkeypatch.setattr(web_ui, "_run_apply",
+                        lambda url, open_url="": started.append((url, open_url)))
     monkeypatch.setattr(web_ui.threading, "Thread",
                         lambda target, args=(), daemon=None: type("T", (), {"start": lambda s: target(*args)})())
     web_ui._RUNS.clear()
@@ -41,7 +42,41 @@ def test_resume_starts_the_application_again(client, monkeypatch):
     monkeypatch.setattr(web_ui, "get_tracker", lambda: type("T", (), {"list_all": lambda s: [record]})())
     response = client.post("/resume/1")
     assert response.status_code == 302
-    assert client.started == [record.url]
+    assert client.started == [(record.url, "")]  # no page recorded: start from the posting
+
+
+def test_resume_reopens_the_page_the_application_reached(client, monkeypatch):
+    """Resuming from the posting meant walking the whole wizard again. The
+    page the last run reached is reopened instead -- the part-filled form."""
+    record = Record()
+    record.last_page_url = "https://careers.example.com/apply/42/step/3"
+    monkeypatch.setattr(web_ui, "get_tracker", lambda: type("T", (), {"list_all": lambda s: [record]})())
+    client.post("/resume/1")
+    assert client.started == [(record.url, record.last_page_url)]
+
+
+def test_deleting_an_application_removes_it(client, monkeypatch):
+    """The user asks for this from the row itself; nothing deletes on its own."""
+    record, deleted = Record(), []
+    tracker = type("T", (), {"list_all": lambda s: [record],
+                             "delete": lambda s, key: deleted.append(key) or True})()
+    monkeypatch.setattr(web_ui, "get_tracker", lambda: tracker)
+    response = client.post("/delete/1")
+    assert response.status_code == 302
+    assert deleted == [record.dedup_key]
+
+
+def test_stopping_one_application_does_not_need_the_run_bookkeeping(client, monkeypatch):
+    """The Stop button refused to work on a run the user could see, because
+    this server's record of it had been lost to a reload. Stopping now acts on
+    the processes themselves."""
+    record, ended = Record(), []
+    monkeypatch.setattr(web_ui, "get_tracker", lambda: type("T", (), {"list_all": lambda s: [record]})())
+    monkeypatch.setattr(web_ui, "_end_any_run", lambda: ended.append(True) or 1)
+    web_ui._RUNS.clear()  # nothing recorded here at all
+    response = client.post("/stop-application/1")
+    assert response.status_code == 302
+    assert ended == [True]
 
 
 def test_resume_refuses_an_application_already_submitted(client, monkeypatch):

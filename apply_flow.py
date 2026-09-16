@@ -678,6 +678,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("job_json", help="Path to a JSON file with title/company/location/url/raw_text")
     parser.add_argument("--signal-file", required=True)
+    parser.add_argument(
+        "--open-url",
+        help="Open this page instead of the posting -- the application form a "
+             "previous run had already reached.",
+    )
     parser.add_argument("--timeout", type=float, default=1800.0)
     parser.add_argument(
         "--auto",
@@ -747,9 +752,17 @@ def main() -> None:
     with JobApplicationAssistant(config) as assistant:
         # Lets the assistant check and record which employers have accounts.
         assistant.tracker, assistant.employer, assistant._profile = tracker, job.company, profile
-        page = assistant.open_job_page(job.url)
-        page = assistant.click_apply_button(page)
-        page = assistant.dismiss_apply_chooser(page)
+        resume_at = getattr(args, "open_url", "") or ""
+        if resume_at:
+            # Resuming: the application form itself, not the posting. Walking
+            # the posting again would re-enter a wizard the last run had
+            # already worked through.
+            logger.info("RESUMING at %s", resume_at)
+            page = assistant.open_job_page(resume_at)
+        else:
+            page = assistant.open_job_page(job.url)
+            page = assistant.click_apply_button(page)
+            page = assistant.dismiss_apply_chooser(page)
 
         try:
             # ATS_EMAIL is optional in .env -- the ATS account is always
@@ -853,6 +866,13 @@ def main() -> None:
                     except Exception as exc:
                         logger.warning("Could not record answer: %s", exc)
             logger.info("REVIEW_READY step=%d page=%s: %s", step, page.url, summary_path)
+            # Where this application actually is, so Resume reopens the
+            # part-filled form rather than starting from the posting again.
+            if hasattr(tracker, "update_last_page"):
+                try:
+                    tracker.update_last_page(key, page.url)
+                except Exception as exc:
+                    logger.debug("Could not record the page: %s", exc)
 
             if args.auto:
                 decision = decide_next_step(assistant, page, step, experience_data, filled_experience)

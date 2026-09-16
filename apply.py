@@ -56,7 +56,7 @@ def slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_")[:40] or "job"
 
 
-def run_one(url: str, auto: bool = True) -> int:
+def run_one(url: str, auto: bool = True, open_url: str = "") -> int:
     job = resolve_job(url)
     if not job:
         logger.error("Could not read a job description from %s", url)
@@ -79,6 +79,8 @@ def run_one(url: str, auto: bool = True) -> int:
         "--signal-file", str(signal_path),
         "--timeout", "3600",
     ]
+    if open_url:
+        cmd += ["--open-url", open_url]
     experience = DATA_DIR / "_experience.json"
     if experience.is_file():
         cmd += ["--experience-json", str(experience)]
@@ -108,9 +110,17 @@ def main() -> int:
             logger.error("No URLs in %s", queue)
             return 2
 
+    # --open-url <address>: resume an application on the page it reached,
+    # rather than walking the posting again from the start.
+    open_url = ""
+    if "--open-url" in urls:
+        at = urls.index("--open-url")
+        open_url = urls[at + 1] if at + 1 < len(urls) else ""
+        urls = urls[:at] + urls[at + 2:]
+
     failures = 0
     for url in urls:
-        if run_one(unquote(url) if "%" not in url else url) != 0:
+        if run_one(unquote(url) if "%" not in url else url, open_url=open_url) != 0:
             failures += 1
     return 1 if failures else 0
 
