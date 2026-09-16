@@ -692,3 +692,44 @@ def test_a_questionnaires_employment_questions_are_answered(page, agent):
     assert page.input_value("#q3") == "February 2025 - Present"
     assert page.input_value("#q4") == "Senior Network and Security Engineer"
     assert page.input_value("#q5") == "Currently employed"
+
+
+BAMBOO_MENU = """
+<html><body>
+  <button data-menu-id="fab-menu46" aria-haspopup="true" aria-expanded="false"
+          aria-label="State &#8249;Select&#8250;" style="width:180px;height:32px">State</button>
+  <button data-menu-id="fab-menu28" aria-haspopup="true" aria-expanded="false"
+          aria-label="Country United States" style="width:180px;height:32px">Country</button>
+  <select aria-hidden="true" name="state.value" style="height:0;opacity:0"><option value=""></option></select>
+  <label for="addr">Address *</label><input id="addr" type="text" value="">
+</body></html>
+"""
+
+
+def test_a_menu_button_is_read_as_the_question_and_its_answer(page, agent):
+    """BambooHR builds State and Country as menu buttons over a hidden select
+    of zero height, so the agent read the select, found one empty option --
+    "no option for 'State' among ['']" -- and left two required fields."""
+    page.set_content(BAMBOO_MENU)
+    from config import get_user_profile
+
+    agent._profile = get_user_profile()
+    seen = []
+    agent._answer_combobox_from_profile = lambda page, control, candidates: seen.append(
+        (control["question"], control["value"], candidates[0]))
+    agent.adapter = lambda _page: __import__("sites").SiteAdapter()
+    agent.answer_standard_questions(page, get_user_profile())
+
+    asked = {q for q, _value, _c in seen}
+    assert "State" in asked                      # unanswered, so it is answered
+    assert "Country" not in asked                # already says United States
+
+
+def test_an_address_field_is_filled_from_the_profile(page, agent):
+    from config import get_user_profile
+
+    page.set_content(BAMBOO_MENU)
+    agent._profile = get_user_profile()
+    agent.adapter = lambda _page: __import__("sites").SiteAdapter()
+    agent._answer_text_questions(page, get_user_profile())
+    assert page.input_value("#addr") == "9365 Lee Hwy"

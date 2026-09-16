@@ -964,6 +964,10 @@ class JobApplicationAssistant:
             (r"sponsor", ["Yes" if sponsorship else "No"]),
             (r"at least 18|18 years of age|over (the age of )?18", [g("at_least_18")]),
             (r"full legal name", [g("full_name")]),
+            # "Address *" on its own means the street address. Email Address
+            # and Address Line 2 must not match it.
+            (r"^\s*\*?\s*(street |home |mailing )?address(\s*line\s*1)?\s*\*?\s*$",
+             [g("address_line1")]),
             # A questionnaire's employment block. The narrow wordings come
             # first: a rule for the employer's name matched every one of these
             # questions and wrote "Capital One" into all five.
@@ -1124,8 +1128,17 @@ class JobApplicationAssistant:
                         return '';
                     };
                     const visible = e => !!(e.offsetParent || e.getClientRects().length);
-                    return [...document.querySelectorAll("select, input[role=combobox]")]
-                        .filter(e => e.id && visible(e) && !e.disabled)
+                    // BambooHR builds its State and Country pickers as menu
+                    // buttons over a hidden select of zero height, so reading
+                    // the select gave one empty option and nothing could be
+                    // chosen. The button is the control; its aria-label
+                    // carries both the question and the current answer
+                    // ("Country United States", "State \u2039Select\u203a").
+                    const menuButtons = [...document.querySelectorAll(
+                        'button[aria-haspopup][aria-expanded]')].filter(visible);
+                    return [...document.querySelectorAll("select, input[role=combobox]"),
+                            ...menuButtons]
+                        .filter(e => (e.id || e.getAttribute('data-menu-id')) && visible(e) && !e.disabled)
                         .map(e => {
                             let value = (e.tagName === 'SELECT' ? (e.selectedIndex > 0 ? e.value : '') : e.value || '').trim();
                             if (!value && e.tagName !== 'SELECT') {
@@ -1143,6 +1156,16 @@ class JobApplicationAssistant:
                             }
                             // SuccessFactors pickers show their placeholder as the value.
                             if (/^(-+\\s*)?(no selection|select|please select|choose one)(\\s*-+)?$/i.test(value)) value = '';
+                            if (e.tagName === 'BUTTON') {
+                                // "State \u2039Select\u203a" is unanswered;
+                                // "Country United States" is answered.
+                                const whole = (e.getAttribute('aria-label') || '').trim();
+                                const label = (whole.split(/\\u2039|\\u203a|\\s{2,}/)[0] || whole).trim();
+                                const rest = whole.slice(label.length).replace(/[\\u2039\\u203a]/g, '').trim();
+                                return {id: e.id || e.getAttribute('data-menu-id'),
+                                        kind: 'menu', question: label,
+                                        value: /^select$/i.test(rest) ? '' : rest, listbox: ''};
+                            }
                             return {id: e.id, kind: e.tagName === 'SELECT' ? 'select' : 'combobox',
                                     question: textOf(e).trim(), value,
                                     listbox: e.getAttribute('aria-controls') || e.getAttribute('aria-owns') || ''};
@@ -1440,6 +1463,8 @@ class JobApplicationAssistant:
 
     def _answer_combobox_from_profile(self, page: Page, control: dict, candidates: list[str]) -> None:
         field = page.locator(f"[id={json.dumps(control['id'])}]")
+        if field.count() == 0:
+            field = page.locator(f"[data-menu-id={json.dumps(control['id'])}]")
         wants_dial_code = bool(re.search(r"country code|dial|phone|^\s*\*?\s*country",
                                          control.get("question", ""), re.I))
         scope = page.locator(f"[id={json.dumps(control['listbox'])}]") if control["listbox"] else page
@@ -1465,7 +1490,8 @@ class JobApplicationAssistant:
             # The field owns no named list: prefer a react-select menu
             # (Greenhouse renders it outside the field, with no aria link
             # back), then any open list that isn't the dialling-code one.
-            for selector in ("[class*=select__option]:visible",
+            for selector in ("[role=menuitem]:visible, [class*=MenuItem]:visible",
+                             "[class*=select__option]:visible",
                              # Ant Design (Dayforce) renders its menu in a
                              # portal at the end of the body, with the options
                              # as divs rather than option elements.
