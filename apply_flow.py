@@ -509,6 +509,14 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
         learn_user_answers(assistant, page, tracker, key, profile)
     report = assistant.validate_application(page, resume_name)
     form_fields = assistant.read_back_fields(page)
+    # Did the agent actually do anything here? A status of "ready to submit"
+    # has to mean a filled form, not an empty page with no errors on it.
+    report["form_reached"] = bool(getattr(assistant, "_seen_application_form", False)) or bool(form_fields)
+    report["fields_filled"] = sum(1 for f in form_fields if (f.get("value") or "").strip())
+    report["documents_attached"] = len(
+        assistant.attached_document_names(page)
+        if hasattr(assistant, "attached_document_names") else []
+    )
     evidence = collect_evidence(assistant, page, job_dir, step)
 
     # Which documents on the form are ours, verified by content, not by name.

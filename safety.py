@@ -297,6 +297,20 @@ def handover_status(report: dict) -> tuple[str, str]:
 
     if problems:
         return "needs_user_review", " | ".join(problems)
+
+    # An empty page has no blanks and no errors, so "nothing outstanding" used
+    # to mean "ready to submit" even where the agent never reached a form at
+    # all. On a Google posting that needed a sign-in the agent will not make,
+    # it filled nothing, attached nothing, and reported the application ready.
+    if not report.get("form_reached", True):
+        return ("needs_user_review",
+                "The application form was never reached -- nothing has been filled in. "
+                "Open it in the browser, sign in if it asks, and start the application again.")
+    if not (report.get("fields_filled") or report.get("documents_attached")):
+        return ("needs_user_review",
+                "Nothing on this page was filled in or attached, so there is nothing to submit yet. "
+                "Check that the application form is open and start it again.")
+
     return "ready_to_submit", "Every required field is filled and the form shows no errors."
 
 

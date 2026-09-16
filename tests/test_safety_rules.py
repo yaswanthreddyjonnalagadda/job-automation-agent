@@ -183,9 +183,10 @@ def test_invented_numbers_and_certifications_are_caught():
 
 # ---------------------------------------------------------------- hand-over and verification
 def test_a_clean_form_is_ready_to_submit_and_a_dirty_one_is_not():
-    assert safety.handover_status({})[0] == "ready_to_submit"
-    assert safety.handover_status({"required_still_blank": ["State"]})[0] == "needs_user_review"
-    assert safety.handover_status({"attestations_pending": ["Typed Signature"]})[0] == "needs_user_review"
+    filled = {"fields_filled": 9, "documents_attached": 1, "form_reached": True}
+    assert safety.handover_status(filled)[0] == "ready_to_submit"
+    assert safety.handover_status({**filled, "required_still_blank": ["State"]})[0] == "needs_user_review"
+    assert safety.handover_status({**filled, "attestations_pending": ["Typed Signature"]})[0] == "needs_user_review"
 
 
 def test_an_unverified_submission_is_never_recorded_as_submitted():
@@ -302,3 +303,32 @@ def test_no_underscore_name_is_used_before_it_exists():
             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
             and n.id.startswith("_") and not n.id.startswith("__")}
     assert not (used - defined), f"used but never defined: {sorted(used - defined)}"
+
+
+def test_an_untouched_application_is_never_ready_to_submit():
+    """A Google posting needed a sign-in the agent will not do, so it reached
+    no form, filled nothing and attached nothing -- and reported the
+    application ready to submit. An empty page has no blanks and no errors,
+    which is not the same as being finished."""
+    status, message = safety.handover_status(
+        {"required_still_blank": [], "errors_shown": [], "form_reached": False,
+         "fields_filled": 0, "documents_attached": 0}
+    )
+    assert status == "needs_user_review"
+    assert "never reached" in message
+
+
+def test_a_form_with_nothing_filled_in_is_never_ready_to_submit():
+    status, _ = safety.handover_status(
+        {"required_still_blank": [], "errors_shown": [], "form_reached": True,
+         "fields_filled": 0, "documents_attached": 0}
+    )
+    assert status == "needs_user_review"
+
+
+def test_a_filled_form_with_nothing_outstanding_is_ready():
+    status, _ = safety.handover_status(
+        {"required_still_blank": [], "errors_shown": [], "form_reached": True,
+         "fields_filled": 12, "documents_attached": 1}
+    )
+    assert status == "ready_to_submit"
