@@ -673,6 +673,18 @@ def reload_browser_automation(assistant: JobApplicationAssistant) -> JobApplicat
         return assistant
 
     try:
+        # The profile too: the answers in config.py are data the run uses, and
+        # a fix to them was reaching the code but not the values -- the run
+        # went on offering the answer it had started with.
+        try:
+            importlib.reload(config_module)
+            fresh = config_module.get_user_profile()
+            if getattr(assistant, "_profile", None) is not None:
+                assistant._profile = fresh
+            logger.info("Reloaded the profile as well")
+        except Exception as exc:
+            logger.warning("Could not reload config.py: %s", exc)
+
         # The site adapters first: browser_automation calls hooks on them, and
         # reloading only one half left a new call meeting an old adapter --
         # which killed a live Amazon application with AttributeError.
