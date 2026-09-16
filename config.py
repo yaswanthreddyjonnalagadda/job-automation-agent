@@ -82,7 +82,8 @@ class UserProfile:
     gender: str = "Male"
     work_arrangements: tuple[str, ...] = ("In Person Office", "Remote Virtual", "Hybrid")
     work_type: str = "Full-Time"
-    how_did_you_hear: str = "Company Career Site"
+    # Where the user actually finds these postings (their answer, 2026-09-16).
+    how_did_you_hear: str = "LinkedIn"
     # How an employer should reach you first. Dayforce asks it outright.
     preferred_contact_method: str = "Email"
     # How an employer should reach you first. Dayforce asks it outright.
