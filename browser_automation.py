@@ -1044,6 +1044,7 @@ class JobApplicationAssistant:
             return
 
         self._answer_radio_groups_from_profile(page, rules)
+        self._answer_checkbox_groups_from_profile(page, rules)
         self._answer_text_questions(page, profile)
         self._repair_rejected_phone(page, profile)
 
@@ -1431,6 +1432,86 @@ class JobApplicationAssistant:
                 logger.info("PROFILE_ANSWER: %r -> %r", group["question"][:60], group["labels"][index][:60])
             else:
                 logger.warning("Could not answer %r", group["question"][:60])
+
+    def checkbox_groups(self, page: Page) -> list[dict]:
+        """Every "choose all that apply" question: its text, its options, and
+        which are ticked.
+
+        A group is the container that labels the checkboxes -- role="group",
+        a fieldset, or an element carrying its own aria-label, as Google's
+        race/ethnicity question does.
+        """
+        try:
+            return page.evaluate("""() => {
+                const visible = e => !!(e.offsetParent || e.getClientRects().length);
+                const clean = s => (s || '').replace(/SPACE/g, ' ').trim();
+                const labelOf = c => {
+                    const byFor = c.id && document.querySelector(`label[for="${CSS.escape(c.id)}"]`);
+                    return clean((byFor && byFor.innerText) || (c.closest('label') || {}).innerText
+                                 || c.getAttribute('aria-label') || c.value);
+                };
+                const groups = [];
+                let counter = 0;
+                const containers = new Set();
+                for (const box of document.querySelectorAll('input[type=checkbox]')) {
+                    if (!visible(box)) continue;
+                    let n = box.parentElement, container = null;
+                    for (let i = 0; i < 6 && n; i++, n = n.parentElement) {
+                        if (n.matches('[role=group], fieldset') || n.getAttribute('aria-label')) {
+                            container = n;
+                            break;
+                        }
+                    }
+                    if (!container || containers.has(container)) continue;
+                    containers.add(container);
+                    const boxes = [...container.querySelectorAll('input[type=checkbox]')].filter(visible);
+                    if (!boxes.length) continue;
+                    boxes.forEach(b => { if (!b.id) b.id = 'agent-box-' + (counter++); });
+                    const legend = container.querySelector('legend');
+                    groups.push({
+                        key: 'boxes-' + groups.length,
+                        question: clean(container.getAttribute('aria-label') || (legend && legend.innerText)
+                                        || container.innerText).slice(0, 200),
+                        labels: boxes.map(labelOf),
+                        ids: boxes.map(b => b.id),
+                        checked: boxes.some(b => b.checked),
+                    });
+                }
+                return groups;
+            }""".replace("SPACE", r"\s+"))
+        except Exception as exc:
+            logger.warning("Checkbox-group scan failed: %s", str(exc).splitlines()[0][:120])
+            return []
+
+    def _answer_checkbox_groups_from_profile(self, page: Page, rules) -> None:
+        """Ticks the option a profile answer names, and only that one.
+
+        An answer has to come from a profile rule, so a consent or attestation
+        box -- which no rule matches -- is never ticked here.
+        """
+        for group in self.checkbox_groups(page):
+            question = group.get("question") or ""
+            if group["checked"] or not question or safety.is_attestation(question):
+                continue
+            candidates = self._rule_for(question, rules)
+            if not candidates:
+                continue
+            index = self._best_option(group["labels"], candidates)
+            if index is None:
+                self.note_ambiguous_choice(question, group["labels"], candidates[0])
+                continue
+            selector = f"[id={json.dumps(group['ids'][index])}]"
+            element = page.query_selector(selector)
+            if element is None:
+                continue
+            try:
+                if not self.select_radio(page, element):  # same label-covers-input problem
+                    continue
+            except Exception as exc:
+                logger.warning("Could not tick %r: %s", question[:50], str(exc).splitlines()[0][:100])
+                continue
+            self.values.record(page, selector, group["labels"][index], "profile:standard answer")
+            logger.info("PROFILE_ANSWER: %r -> %r", question[:60], group["labels"][index][:50])
 
     def _answer_text_questions(self, page: Page, profile) -> None:
         """Free-text questions with a known answer: salary expectations (the

@@ -400,3 +400,39 @@ def test_a_question_is_found_again_after_the_page_rebuilds(page, agent):
     assert agent.answer_radio_group(page, veteran, "I am not a protected veteran")
     checked = page.eval_on_selector_all("input[type=radio]", "els => els.map(e => e.checked)")
     assert checked == [False, False, False, False, True, False]
+
+
+RACE_CHECKBOXES = """
+<html><body>
+  <div aria-label="Race/Ethnic group">
+    <label><input type="checkbox" name="c206" value="1" aria-label="Black or African American">Black or African American</label>
+    <label><input type="checkbox" name="c206" value="2" aria-label="Asian">Asian</label>
+    <label><input type="checkbox" name="c206" value="3" aria-label="Hispanic or Latino">Hispanic or Latino</label>
+  </div>
+  <div aria-label="Consent">
+    <label><input type="checkbox" id="agree">I certify that the information given is true and complete</label>
+  </div>
+</body></html>
+"""
+
+
+def test_a_choose_all_that_apply_question_is_answered_from_the_profile(page, agent):
+    """Google requires "Please indicate your race / ethnic group (choose all
+    that apply)" as checkboxes. Nothing answered a checkbox group, so its Next
+    button stayed disabled with no sign of why."""
+    from config import get_user_profile
+
+    page.set_content(RACE_CHECKBOXES)
+    agent._answer_checkbox_groups_from_profile(page, agent._standard_answer_rules(get_user_profile()))
+    assert page.is_checked("input[value='2']")          # Asian, from the profile
+    assert not page.is_checked("input[value='1']")
+
+
+def test_an_attestation_checkbox_is_never_ticked_by_that_pass(page, agent):
+    """The certification box is a legal declaration: it is the user's to give,
+    and no profile answer names it."""
+    from config import get_user_profile
+
+    page.set_content(RACE_CHECKBOXES)
+    agent._answer_checkbox_groups_from_profile(page, agent._standard_answer_rules(get_user_profile()))
+    assert not page.is_checked("#agree")
