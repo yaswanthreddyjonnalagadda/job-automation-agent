@@ -262,11 +262,28 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
         )
         unsupported = safety.unsupported_claims(resume.raw_text, tailored)
         if unsupported:
-            # Tailoring may rewrite wording, never add facts. Send the real
-            # resume rather than a claim the candidate cannot back up.
-            logger.error("TAILORING_REJECTED: it claimed %s, which isn't in the resume -- "
-                         "attaching the original resume instead", ", ".join(unsupported[:6]))
-            return generic
+            # Tailoring may rewrite wording, never add facts. Give it one more
+            # go with the offending claims named -- a single invented model
+            # number shouldn't cost the whole tailored resume -- and fall back
+            # to the real resume if it does it again.
+            logger.warning("TAILORING_RETRY: it claimed %s, which isn't in the resume",
+                           ", ".join(unsupported[:6]))
+            retry = claude.tailor_resume(
+                resume, job, profile,
+                extra_instruction=(
+                    "Your previous draft claimed these, which do NOT appear in the candidate's "
+                    f"resume: {', '.join(unsupported[:10])}. Write it again using only what the "
+                    "resume actually says. Do not name specific product models, versions, metrics "
+                    "or certifications unless the resume names them."
+                ),
+            )
+            tailored = ensure_resume_header(
+                normalise_contact_details(strip_model_preamble(retry, profile), profile), profile, job)
+            unsupported = safety.unsupported_claims(resume.raw_text, tailored)
+            if unsupported:
+                logger.error("TAILORING_REJECTED: it still claimed %s -- attaching the original resume",
+                             ", ".join(unsupported[:6]))
+                return generic
         resume_txt.write_text(tailored, encoding="utf-8")
         build_resume_pdf(resume_txt, resume_pdf)
         logger.info("Tailored resume written to %s", resume_pdf.name)

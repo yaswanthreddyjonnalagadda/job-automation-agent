@@ -150,6 +150,10 @@ class ClaudeClient:
             f"JOB DESCRIPTION:\n{job.raw_text}\n\n"
             "Produce a tailored version of the resume's summary and bullet points."
         )
+        if extra_instruction:
+            # A second attempt after unsupported claims were found: name them
+            # so the rewrite drops them rather than inventing new ones.
+            user_message += f"\n\nIMPORTANT CORRECTION:\n{extra_instruction}"
         return self._call(system=system, user_message=user_message, max_tokens=6000)
 
     # ------------------------------------------------------------------

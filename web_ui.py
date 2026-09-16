@@ -34,9 +34,56 @@ BASE_DIR = Path(__file__).resolve().parent
 app = Flask(__name__)
 
 # Applications launched from this UI, so their progress can be shown. Keyed by
-# the URL that started them.
+# the URL that started them, and written to disk so restarting this server --
+# or letting it reload after a code change -- doesn't lose track of a run that
+# is still going in its own process.
 _RUNS: dict[str, dict] = {}
 _RUNS_LOCK = threading.Lock()
+_RUNS_FILE = BASE_DIR / "data" / "_runs.json"
+
+
+def _save_runs() -> None:
+    try:
+        _RUNS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _RUNS_FILE.write_text(json.dumps({
+            url: {"state": r["state"], "log": r["log"], "pid": r.get("pid"),
+                  "started": r["started"].isoformat() if hasattr(r["started"], "isoformat") else r["started"]}
+            for url, r in _RUNS.items()
+        }, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _process_alive(pid) -> bool:
+    if not pid:
+        return False
+    try:
+        if os.name == "nt":
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True).stdout
+            return str(pid) in out
+        os.kill(int(pid), 0)
+        return True
+    except Exception:
+        return False
+
+
+def _load_runs() -> None:
+    """Restores what was running before this server started."""
+    try:
+        if not _RUNS_FILE.is_file():
+            return
+        for url, r in json.loads(_RUNS_FILE.read_text(encoding="utf-8")).items():
+            state = r.get("state", "")
+            if state == "running" and not _process_alive(r.get("pid")):
+                state = "ended while the dashboard was restarting"
+            _RUNS[url] = {"state": state, "log": r.get("log", ""), "pid": r.get("pid"),
+                          "started": datetime.fromisoformat(r["started"]) if r.get("started") else None,
+                          "proc": None, "stopping": False}
+    except Exception:
+        pass
+
+
+_load_runs()
 
 
 # ----------------------------------------------------------------------
@@ -49,7 +96,8 @@ def _run_apply(url: str) -> None:
 
     with _RUNS_LOCK:
         _RUNS[url] = {"state": "running", "log": str(log_path), "started": datetime.now(timezone.utc),
-                      "proc": None, "stopping": False}
+                      "proc": None, "pid": None, "stopping": False}
+        _save_runs()
 
     try:
         with open(log_path, "w", encoding="utf-8") as fh:
@@ -62,6 +110,8 @@ def _run_apply(url: str) -> None:
             )
             with _RUNS_LOCK:
                 _RUNS[url]["proc"] = proc
+                _RUNS[url]["pid"] = proc.pid
+                _save_runs()
             proc.wait()
         state = "finished" if proc.returncode == 0 else f"failed (exit {proc.returncode})"
     except Exception as exc:
@@ -72,6 +122,22 @@ def _run_apply(url: str) -> None:
             state = "stopped by you"
         _RUNS[url]["state"] = state
         _RUNS[url]["proc"] = None
+        _RUNS[url]["pid"] = None
+        _save_runs()
+
+
+def _kill_pid_tree(pid: int) -> None:
+    """Ends a run by process id: the dashboard may have restarted since it
+    started, so the Popen object is gone but the run is still going."""
+    if not pid:
+        return
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, check=False)
+    else:
+        try:
+            os.killpg(int(pid), signal.SIGTERM)
+        except Exception:
+            pass
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
@@ -110,14 +176,58 @@ def stop_apply():
     url = (request.form.get("url") or "").strip()
     with _RUNS_LOCK:
         run = _RUNS.get(url)
-        if not run or run["state"] != "running" or run["proc"] is None:
+        if not run or run["state"] != "running":
             return redirect(url_for("index", error="That run is not running."))
         run["stopping"] = True
-        proc = run["proc"]
-    _kill_tree(proc)
+        proc, pid = run.get("proc"), run.get("pid")
+    if proc is not None:
+        _kill_tree(proc)
+    else:
+        _kill_pid_tree(pid)
+    with _RUNS_LOCK:
+        run["state"] = "stopped by you"
+        _save_runs()
     # Leftover signal files would otherwise sit in "Waiting for a decision".
     for leftover in (BASE_DIR / "data").glob("_signal_*.txt"):
         leftover.unlink(missing_ok=True)
+    return redirect(url_for("index"))
+
+
+@app.post("/resume/<int:app_id>")
+def resume_application(app_id: int):
+    """Picks an application back up where it stopped.
+
+    Used after a run ended with an error, was stopped, or was left needing
+    attention. It starts the flow again for the same posting: the tailored
+    resume and cover letter already stored are reused, answers already on the
+    employer's form are left alone, and a job that is already submitted is
+    refused as a duplicate.
+    """
+    tracker = get_tracker()
+    record = next((a for a in tracker.list_all() if a.id == app_id), None)
+    if not record or not record.url:
+        return redirect(url_for("index", error="That application has no URL to resume."))
+    if record.status == "submitted":
+        return redirect(url_for("index", error=f"{record.title} was already submitted."))
+    with _RUNS_LOCK:
+        if any(r["state"] == "running" for r in _RUNS.values()):
+            return redirect(url_for("index", error="An application is already running."))
+    threading.Thread(target=_run_apply, args=(record.url,), daemon=True).start()
+    return redirect(url_for("application", app_id=app_id))
+
+
+@app.post("/reload-agent")
+def reload_agent():
+    """Loads edited agent code into the run that is already going, without
+    closing its browser or losing the part-filled form (the flow's
+    'reload_code' signal)."""
+    written = 0
+    for signal_file in (BASE_DIR / "data").glob("_signal_*.txt"):
+        signal_file.write_text("reload_code", encoding="utf-8")
+        written += 1
+    if not written:
+        # No flow is waiting on a signal right now; leave one for when it is.
+        return redirect(url_for("index", error="No run is waiting -- nothing to reload."))
     return redirect(url_for("index"))
 
 
@@ -362,6 +472,9 @@ INDEX_HTML = """
           <td><a href="/log?path={{ r.log }}" target="_blank">view</a></td>
           <td>
             {% if r.state == 'running' %}
+            <form method="post" action="/reload-agent" style="display:inline">
+              <button class="ghost" title="Load edited agent code into this run without restarting it">Reload agent code</button>
+            </form>
             <form method="post" action="/stop" style="display:inline"
                   onsubmit="return confirm('Stop this application and close its browser? Nothing will be submitted, and you can start it again.')">
               <input type="hidden" name="url" value="{{ url }}">
@@ -404,6 +517,11 @@ INDEX_HTML = """
         <td><span class="pill {{ a.status }}">{{ a.status.replace('_',' ') }}</span></td>
         <td class="muted">{{ a.updated_at|local }}</td>
         <td><a href="/application/{{ a.id }}">details</a>
+          {% if a.status != 'submitted' %}
+            <form method="post" action="/resume/{{ a.id }}" style="display:inline">
+              <button class="ghost" title="Start this application again -- documents and answers already stored are reused">Resume</button>
+            </form>
+          {% endif %}
           {% if a.status in ('ready_to_submit', 'needs_user_review') %}
             <div class="muted" style="max-width:420px">{{ (a.notes or '')[:180] }}</div>
           {% endif %}
@@ -547,4 +665,12 @@ DETAIL_HTML = """
 if __name__ == "__main__":
     print("Job application UI:  http://127.0.0.1:5000")
     # Loopback only, on purpose -- see the module docstring.
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    #
+    # use_reloader: editing the code restarts this server by itself, so a
+    # change doesn't mean stopping and starting it by hand. Run state lives in
+    # data/_runs.json, so a reload keeps track of a run that is still going,
+    # and an application already in the browser is unaffected -- it runs in its
+    # own process. (Set WEB_UI_NO_RELOAD=1 to switch it off.)
+    app.run(host="127.0.0.1", port=5000, debug=False,
+            use_reloader=os.getenv("WEB_UI_NO_RELOAD", "") not in {"1", "true", "yes"})
+
