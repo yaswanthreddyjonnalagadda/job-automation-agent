@@ -44,6 +44,57 @@ class BlockedLoginDomainError(RuntimeError):
     pass
 
 
+# Maps our known profile fields to likely form field identifiers (name/id/
+# placeholder/label substrings, lowercased). Extend as you encounter new ATS
+# platforms (Workday, Greenhouse, Lever, iCIMS, etc.).
+# Order matters: _match_field returns the FIRST match, so more specific
+# hints (first/middle/last name, exact "phone number") must come before
+# broader ones (bare "name", bare "phone") or they'll shadow each other --
+# e.g. a generic "name" hint would wrongly match "First Name" too.
+_FIELD_HINTS: dict[str, list[str]] = {
+    "prefix": ["prefix", "title (mr", "salutation"],
+    "first_name": ["first name", "firstname", "fname"],
+    "middle_name": ["middle name", "middlename"],
+    # NOTE: no bare "lname" here -- it collides as a substring with
+    # "schoolName" (schoo-LNAME), which put the candidate's surname into
+    # Education's School field.
+    "last_name": ["last name", "lastname", "surname"],
+    "email": ["email"],
+    # Bare "phone" is needed as well as the longer forms: Greenhouse labels the
+    # field simply "Phone", and requiring "phone number" left it blank.
+    "phone": ["phone number", "mobile number", "telephone number", "phone", "mobile"],
+    "address_line1": ["address line 1", "street address", "address 1"],
+    "city": ["city"],
+    # "county" is safe alongside "country" -- neither contains the other.
+    "county": ["county", "regionsubdivision"],
+    "state": ["state", "province"],
+    "postal_code": ["postal code", "zip code", "zipcode", "zip"],
+    "location": ["location", "current location"],
+    "linkedin_url": ["linkedin"],
+    "portfolio_url": ["portfolio", "website", "personal site"],
+    # Deliberately NO bare "name" hint here: internal field identifiers like
+    # "companyName" or "schoolName" contain "name" as a substring, and a
+    # bare hint wrongly matches those and overwrites them with the
+    # candidate's own name instead of leaving them alone.
+    # "_systemfield_name" is Ashby's fixed id for its plain "Name" field --
+    # specific enough to be safe where a bare "name" is not.
+    "full_name": ["full name", "your name", "applicant name", "_systemfield_name"],
+}
+
+# Word-boundary matching, not raw substring: a bare "state" hint matched
+# inside "united states" ("are you legally authorized to work in the united
+# states?") and nearly filled a work-authorization question with "Virginia".
+# \bstate\b requires 'state' as a whole word, which "states" is not -- and
+# this still correctly misses camelCase ids like "companyName" (lowercased to
+# "companyname"), since there's no word boundary between "company" and "name"
+# with no separator between them. One general fix for the whole bug class
+# instead of removing hints one collision at a time.
+_FIELD_HINT_PATTERNS: dict[str, list[re.Pattern]] = {
+    key: [re.compile(rf"\b{re.escape(hint)}\b") for hint in hints]
+    for key, hints in _FIELD_HINTS.items()
+}
+
+
 @dataclass
 class DetectedField:
     selector: str

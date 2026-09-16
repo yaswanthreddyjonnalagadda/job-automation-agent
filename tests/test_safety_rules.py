@@ -255,3 +255,50 @@ def test_the_same_posting_with_tracking_parameters_is_the_same_job():
 
 # ---------------------------------------------------------------- the hand-over itself
 # (the hand-over is covered in detail by tests/test_auto_submit.py)
+
+
+# ---------------------------------------------------------------- the basics still work
+def test_field_detection_matches_profile_fields(agent, page):
+    """Catches a refactor that removes the field-hint tables: a real run died
+    with NameError: _FIELD_HINT_PATTERNS on a live Greenhouse form."""
+    page.set_content("""<label for=fn>First Name</label><input id=fn>
+        <label for=em>Email</label><input id=em>
+        <label for=ci>City</label><input id=ci>
+        <label for=pz>Zip Code</label><input id=pz>""")
+    matched = {f.matched_profile_key for f in agent.detect_form_fields(page)}
+    assert {"first_name", "email", "city", "postal_code"} <= matched
+
+
+def test_every_module_imports_cleanly():
+    """A missing name anywhere in the package fails here, not mid-application."""
+    import importlib
+    for name in ("apply", "apply_flow", "browser_automation", "job_sources", "safety",
+                 "web_ui", "db", "job_tracker", "sites", "sites.workday", "sites.successfactors",
+                 "sites.eightfold", "sites.greenhouse", "sites.lever", "sites.ashby"):
+        importlib.import_module(name)
+
+
+def test_no_underscore_name_is_used_before_it_exists():
+    """Every private name browser_automation.py uses is actually defined
+    somewhere in it (module level, nested, or imported). A refactor that
+    deletes a helper table fails here instead of mid-application: a live
+    Greenhouse run died with NameError: _FIELD_HINT_PATTERNS."""
+    import ast
+    import browser_automation as ba
+
+    tree = ast.parse(Path(ba.__file__).read_text(encoding="utf-8"))
+    defined = set(dir(ba))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            defined.add(node.name)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                defined.update(a.arg for a in node.args.args + node.args.kwonlyargs)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            defined.add(node.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            defined.update((a.asname or a.name).split(".")[0] for a in node.names)
+
+    used = {n.id for n in ast.walk(tree)
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+            and n.id.startswith("_") and not n.id.startswith("__")}
+    assert not (used - defined), f"used but never defined: {sorted(used - defined)}"
