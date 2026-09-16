@@ -63,7 +63,13 @@ _FIELD_HINTS: dict[str, list[str]] = {
     "email": ["email"],
     # Bare "phone" is needed as well as the longer forms: Greenhouse labels the
     # field simply "Phone", and requiring "phone number" left it blank.
-    "phone": ["phone number", "mobile number", "telephone number", "phone", "mobile"],
+    # Phone fields with type detection: mobile/cell, home, work
+    # These must come BEFORE the generic "phone" fallback
+    "phone_mobile": ["mobile phone", "mobile number", "cell phone", "cellular phone", "cell number",
+                     "mobilephone", "cellphone", "mobile (phone)?number"],
+    "phone_home": ["home phone", "home number", "home telephone", "residential phone", "homephone"],
+    "phone_work": ["work phone", "work number", "office phone", "business phone", "workphone"],
+    "phone": ["phone number", "mobile number", "telephone number", "phone", "telephone"],
     "address_line1": ["address line 1", "street address", "address 1"],
     "city": ["city"],
     # "county" is safe alongside "country" -- neither contains the other.
@@ -164,23 +170,27 @@ class JobApplicationAssistant:
         return self
 
     def _choose_channel(self) -> str:
-        """Real Chrome when it can be used, the bundled build when it cannot.
+        """Force the configured browser channel (always use real Chrome, never fallback).
 
-        Chrome refuses to start a second instance while one is already
-        running, even against a separate profile: it hands the command to the
-        running copy and exits ("Opening in existing browser session"). Using
-        it unconditionally would mean the user cannot browse while an
-        application is open, so a run started alongside their Chrome uses the
-        bundled build instead.
+        IMPORTANT: This means real Chrome will be locked to the agent while 
+        applications run. The user explicitly chose this behavior for better 
+        rendering fidelity (real Chrome matches the browser they test with).
+        
+        Previous versions would fall back to bundled chromium if real Chrome
+        was already running, to allow simultaneous browsing. That fallback
+        is now disabled per user request.
         """
+        # Always use the configured browser channel (e.g., "chrome")
+        # Do NOT fall back to chromium even if Chrome is already running.
+        # User wants real Chrome only for this use case.
         channel = (getattr(self._config, "browser_channel", "") or "").strip()
+        
+        # If no channel is configured, use real Chrome by default
         if not channel or channel == "chromium":
-            return ""
-        if self._chrome_is_running():
-            logger.info("Chrome is already open, so this run uses the bundled browser "
-                        "instead of %s -- carry on browsing.", channel)
-            return ""
-        logger.info("Using %s with the profile at %s", channel, self._config.browser_profile_dir)
+            return "chrome"
+        
+        logger.info("Using %s with the profile at %s (Chrome already running is OK)",
+                   channel, self._config.browser_profile_dir)
         return channel
 
     @staticmethod
@@ -729,6 +739,9 @@ class JobApplicationAssistant:
             "last_name": p("full_name").split()[-1] if p("full_name") else "",
             "email": p("email"),
             "phone": p("phone"),
+            "phone_mobile": p("phone_mobile") or p("phone"),  # Use phone_mobile if set, fallback to phone
+            "phone_home": p("phone_home") or p("phone"),  # Use phone_home if set, fallback to phone
+            "phone_work": p("phone_work") or p("phone"),  # Use phone_work if set, fallback to phone
             "address_line1": p("address_line1"),
             "city": p("city"),
             "county": p("county"),
@@ -952,6 +965,9 @@ class JobApplicationAssistant:
              [self._job_source_name(), g("how_did_you_hear"), "Company Website",
               "Careers Website", "Corporate Website", "Employer Website", "Company Site"]),
             (r"preferred language", [g("preferred_language")]),
+            # Employment status: multi-select checkboxes or radio buttons
+            (r"employment status|type of (employment|position|work)|work arrangement|employment (type|arrangement)|desired (employment|position) type|interested in",
+             list(getattr(profile, "employment_statuses", ("Full-Time",))) if hasattr(profile, "employment_statuses") else []),
             # Only ever matches a disability list: the candidates are disability answers.
             (r"please select one of the options below", [g("disability_status"), "No, I do not have a disability"]),
             (r"disabilit", [g("disability_status"), "No, I do not have a disability"]),

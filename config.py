@@ -40,6 +40,9 @@ class UserProfile:
     full_name: str = "Yaswanth Reddy Jonnalagadda"
     email: str = "jonnalagaddayaswanth06@gmail.com"
     phone: str = "(571) 354-5212"  # from your resume -- correct this if it's wrong/outdated
+    phone_mobile: str = "(571) 354-5212"  # mobile/cell phone
+    phone_home: str = ""  # home phone (optional)
+    phone_work: str = ""  # work phone (optional)
     target_titles: tuple[str, ...] = (
         "Network Engineer",
         "Cloud Network Engineer",
@@ -82,6 +85,7 @@ class UserProfile:
     gender: str = "Male"
     work_arrangements: tuple[str, ...] = ("In Person Office", "Remote Virtual", "Hybrid")
     work_type: str = "Full-Time"
+    employment_statuses: tuple[str, ...] = ("Full-Time",)  # Text field or checkboxes: select all that apply
     # Where the user actually finds these postings (their answer, 2026-09-16).
     how_did_you_hear: str = "LinkedIn"
     # How an employer should reach you first. Dayforce asks it outright.
