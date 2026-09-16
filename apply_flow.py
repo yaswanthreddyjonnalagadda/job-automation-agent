@@ -18,6 +18,9 @@ summary and writes one of these to the signal file:
                      clicking anything (e.g. after a manual edit)
   "fill_experience" -- run fill_experience_section/fill_education_section
                      using --experience-json
+  "goto:<url>"    -- send the browser back to a page it has wandered off
+                     (a sign-in redirect, or the user navigating), keeping
+                     the run and its part-filled form
   "reload_code"   -- hot-reload browser_automation.py's code into this
                      already-running process (see reload_browser_automation
                      below) instead of restarting the whole script -- keeps
@@ -401,6 +404,16 @@ def collect_evidence(assistant, page, job_dir: Path, step: int) -> dict:
     except Exception as exc:
         logger.warning("Could not capture the page HTML: %s", exc)
     return paths
+
+
+def on_form_resume(assistant, prepared):
+    """The resume actually on the employer's form.
+
+    An updated resume can be swapped into a run that is already open (via
+    data/_resume_override.txt), and checking the prepared file's name against
+    the form then reported the right resume as "not attached".
+    """
+    return getattr(assistant, "attached_resume", None) or prepared
 
 
 def remembered_answers(tracker, questions) -> dict:
@@ -807,8 +820,9 @@ def main() -> None:
                 if decision == "stop":
                     assistant.save_progress(page)
                     hand_over(assistant, page, tracker, key, job, job_dir,
-                              Path(attach_resume).name, summary_path, config=config, profile=profile,
-                              documents={"resume": attach_resume,
+                              Path(on_form_resume(assistant, attach_resume)).name, summary_path,
+                              config=config, profile=profile,
+                              documents={"resume": on_form_resume(assistant, attach_resume),
                                          **({"cover_letter": letter[1]} if letter else {})},
                               step=step)
                     try:

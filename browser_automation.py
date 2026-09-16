@@ -2153,7 +2153,9 @@ class JobApplicationAssistant:
             # Signed in on CBTS, the chosen resume shows as a dropdown's value
             # rather than as text, and each pass uploaded another copy.
             return bool(page.evaluate(
-                "name => [...document.querySelectorAll('input, select')].some(e => (e.value || '').includes(name))",
+                "name => [...document.querySelectorAll('input, select')]"
+                "          .some(e => (e.value || '').includes(name))"
+                "     || (document.body ? document.body.textContent.includes(name) : false)",
                 filename,
             ))
         except Exception:
@@ -2384,10 +2386,15 @@ class JobApplicationAssistant:
                             blanks.push(text(l, row));
                         }
                     }
+                    // A success notice often shares the alert role with real
+                    // errors; reporting "Your resume was uploaded successfully"
+                    // as a problem held up an application with nothing wrong.
+                    const ok = /\\b(success|successfully|uploaded|saved|complete[d]?)\\b/i;
+                    const bad = /\\b(error|invalid|required|must|cannot|failed|unable|select an option)\\b/i;
                     const errors = [...document.querySelectorAll('[role=alert], [aria-invalid=true], [class*=error i]')]
                         .filter(visible)
                         .map(e => (e.innerText || '').trim())
-                        .filter(t => t && t.length < 200);
+                        .filter(t => t && t.length < 200 && (bad.test(t) || !ok.test(t)));
                     return {required_still_blank: [...new Set(blanks)], errors_shown: [...new Set(errors)]};
                 }"""
             )
@@ -2515,6 +2522,7 @@ class JobApplicationAssistant:
         except Exception:
             attached, labels = 0, []
 
+        self.attached_resume = target  # what the rest of the run should expect
         if attached == 1 and target.name in labels[0]:
             return True  # already exactly the file we want
 
@@ -4115,6 +4123,17 @@ class JobApplicationAssistant:
                 const text = document.body ? document.body.innerText : '';
                 const fileRe = new RegExp("[\\\\w.\\\\-()]+\\\\.(pdf|docx?|txt|rtf)\\\\b", "gi");
                 for (const m of text.matchAll(fileRe)) names.add(m[0]);
+                // Amazon lists the attachment as "Download <name>.pdf" inside a
+                // panel innerText does not reach, so the resume it had just
+                // taken was reported as not attached -- and uploaded again at
+                // every step. textContent and the download link both see it.
+                for (const el of document.querySelectorAll(
+                        'a[href], [class*=document], [class*=file], [class*=attach], [data-filename]')) {
+                    const seen = (el.textContent || '') + ' ' +
+                                 (el.getAttribute('data-filename') || '') + ' ' +
+                                 (el.getAttribute('href') || '');
+                    for (const m of seen.matchAll(fileRe)) names.add(m[0]);
+                }
                 return [...names].slice(0, 20);
             }""")
         except Exception:
@@ -4426,9 +4445,28 @@ class JobApplicationAssistant:
         # utf-8-sig, not utf-8: PowerShell's Set-Content -Encoding utf8 writes
         # a BOM, and a leading BOM made 'reload_code' miss every branch and
         # fall through to "skip", silently abandoning a live application.
-        decision = signal_path.read_text(encoding="utf-8-sig").strip().strip("﻿").lower()
+        raw = signal_path.read_text(encoding="utf-8-sig").strip().strip("﻿")
+        # "goto:<url>" keeps its capitals: an Amazon application path is
+        # /en-US/..., and lowercasing it leads somewhere else.
+        decision = raw if raw.lower().startswith("goto:") else raw.lower()
         signal_path.unlink()
         logger.info("Received review signal: %s", decision)
+        if decision.lower().startswith("goto:"):
+            # The tab wandered off the application -- a sign-in redirect, or
+            # the user browsing. This puts it back without restarting the run
+            # and losing the part-filled form. Handled here rather than in the
+            # flow so it reaches a run that is already open, via reload_code.
+            destination = decision[len("goto:"):].strip()
+            if page is None:
+                logger.warning("GOTO: no browser page to navigate")
+                return "refresh"
+            logger.info("GOTO: returning the browser to %s", destination)
+            try:
+                page.goto(destination, wait_until="domcontentloaded", timeout=60_000)
+                page.wait_for_timeout(2_000)
+            except Exception as exc:
+                logger.warning("Could not return to %s: %s", destination, exc)
+            return "refresh"  # re-detect whatever is on the page now
         return decision
 
     def pause_for_human_review(self, page: Page, job_title: str = "", company: str = "") -> None:
