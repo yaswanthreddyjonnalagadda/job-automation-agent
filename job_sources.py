@@ -364,6 +364,46 @@ def fetch_schema_org_job(url: str) -> dict | None:
     }
 
 
+def fetch_amazon_job(url: str) -> dict | None:
+    """amazon.jobs.
+
+    Its pages carry no JSON-LD, and the <title> is the posting's title with
+    " - Job ID: N | Amazon.jobs" appended -- which the generic reader recorded
+    as the job title, under the company "Www" (the host's first label). The
+    title comes from og:title instead, and the employer is simply Amazon.
+    """
+    if "amazon.jobs" not in urlparse(url).netloc.lower():
+        return None
+    try:
+        resp = requests.get(
+            url, timeout=30,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; job-application-assistant)"},
+        )
+        resp.raise_for_status()
+    except Exception as exc:
+        logger.warning("Could not fetch %s: %s", url, exc)
+        return None
+
+    def meta(prop: str) -> str:
+        match = re.search(rf'<meta property="{prop}" content="([^"]*)"', resp.text)
+        return html.unescape(match.group(1)).strip() if match else ""
+
+    title = meta("og:title")
+    locations = re.findall(r"USA, [A-Z]{2}, [A-Za-z .-]{3,30}", resp.text)
+    # Several postings share one page; the first is the one linked to.
+    location = locations[0].strip(" -–") if locations else ""
+
+    text = re.sub(r"<script.*?</script>|<style.*?</style>", " ", resp.text, flags=re.S | re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(re.sub(r"\s+", " ", text)).strip()
+    if not title or len(text) < 400:
+        return None
+
+    logger.info("Read the posting from amazon.jobs")
+    return {"title": title, "company": "Amazon", "location": location,
+            "url": url, "raw_text": text[:20000]}
+
+
 def fetch_generic_job(url: str) -> dict | None:
     """Best-effort fetch for non-Workday pages."""
     try:
@@ -387,7 +427,11 @@ def fetch_generic_job(url: str) -> dict | None:
     if m:
         title = re.sub(r"\s+", " ", m.group(1)).strip()
 
-    host = urlparse(url).netloc
+    # "Support Engineer ... - Job ID: 10539098 | Amazon.jobs" is a page title,
+    # not a job title; and the company is the site, not its "www" label.
+    title = re.split(r"\s+[|–—]\s+", title)[0]
+    title = re.sub(r"\s*[-–]\s*Job ID:?\s*\d+\s*$", "", title).strip()
+    host = re.sub(r"^(www|jobs|careers|apply)\.", "", urlparse(url).netloc)
     return {
         "title": title or "Unknown Role",
         "company": host.split(".")[0].replace("-", " ").title(),
@@ -419,6 +463,7 @@ def resolve_job(url: str) -> dict | None:
         or fetch_lever_job(url)
         or fetch_ashby_job(url)
         or fetch_eightfold_job(url)
+        or fetch_amazon_job(url)
         or fetch_schema_org_job(url)
         or fetch_generic_job(url)
     )

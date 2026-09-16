@@ -147,3 +147,34 @@ def test_an_empty_field_beside_an_answered_one_is_still_reported_blank(page, age
                                                  'id="preferred_name" class="input" type="text" required'))
     blanks = agent.find_required_blanks(page)["required_still_blank"]
     assert any("Preferred First Name" in b for b in blanks)
+
+
+def test_the_tailored_resume_is_always_asked_for():
+    """The tailoring call must work with no correction instruction.
+
+    A leftover reference to a removed parameter made every first attempt raise
+    NameError, and the run quietly attached the generic resume instead -- an
+    Amazon application went out with it before this was noticed.
+    """
+    import inspect
+
+    from claude_integration import ClaudeClient
+
+    signature = inspect.signature(ClaudeClient.tailor_resume)
+    assert signature.parameters["extra_instruction"].default == ""
+
+    source = inspect.getsource(ClaudeClient.tailor_resume)
+    client = ClaudeClient.__new__(ClaudeClient)
+    asked = {}
+
+    def fake_call(system, user_message, max_tokens=0):
+        asked["user_message"] = user_message
+        return "TAILORED"
+
+    client._call = fake_call
+    job = type("J", (), {"title": "Support Engineer", "company": "Amazon", "raw_text": "networking"})()
+    resume = type("R", (), {"raw_text": "five years of networking"})()
+    profile = type("P", (), {"full_name": "Someone", "years_experience": 6})()
+    assert client.tailor_resume(resume, job, profile) == "TAILORED"
+    assert "networking" in asked["user_message"]
+    assert "IMPORTANT CORRECTION" in source  # the retry path still exists

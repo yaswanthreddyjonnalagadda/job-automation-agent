@@ -123,7 +123,8 @@ class ClaudeClient:
     # Resume tailoring
     # ------------------------------------------------------------------
     def tailor_resume(
-        self, resume: ResumeData, job: JobDescription, profile: UserProfile
+        self, resume: ResumeData, job: JobDescription, profile: UserProfile,
+        extra_instruction: str = "",
     ) -> str:
         system = (
             "You are an expert resume writer for network/cloud engineering roles. "
