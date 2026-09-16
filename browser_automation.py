@@ -724,6 +724,7 @@ class JobApplicationAssistant:
             (r"(authori[sz]ed|eligible) to work", [g("legally_eligible_to_work", "Yes")]),
             (r"sponsor", ["Yes" if sponsorship else "No"]),
             (r"at least 18|18 years of age|over (the age of )?18", [g("at_least_18")]),
+            (r"full legal name", [g("full_name")]),
             (r"u\.?s\.? citizen|united states citizen|citizen of the (u\.?s\.?|united states)",
              [g("us_citizen"), "No, I am not a U.S. Citizen"] if g("us_citizen").lower() == "no"
              else [g("us_citizen")]),
@@ -790,6 +791,24 @@ class JobApplicationAssistant:
                 if hits:
                     return min(hits, key=lambda i: len(opts[i]))
         return None
+
+    def _adapter_hook(self, page: Page, name: str, default, *args):
+        """Calls a hook on the page's adapter, tolerating its absence.
+
+        Hot-reloading brings in new code while the run holds adapter objects
+        built from the old; a hook that isn't there yet must cost the feature,
+        never the application. One AttributeError here closed a browser with a
+        part-filled Amazon application in it.
+        """
+        hook = getattr(self.adapter(page), name, None)
+        if hook is None:
+            logger.debug("Adapter has no %s yet", name)
+            return default
+        try:
+            return hook(*args)
+        except Exception as exc:
+            logger.warning("Adapter %s failed: %s", name, str(exc).splitlines()[0][:120])
+            return default
 
     def _rule_for(self, question: str, rules) -> Optional[list[str]]:
         q = (question or "").strip()
@@ -869,6 +888,26 @@ class JobApplicationAssistant:
                     self._answer_combobox_from_profile(page, c, candidates)
             except Exception as exc:
                 logger.warning("Could not answer %r: %s", c["question"][:60], exc)
+
+        # The same rules, applied to questions only the adapter can see.
+        adapter = self.adapter(page)
+        for question in self._adapter_hook(page, "platform_questions", [], page):
+            if (question.get("value") or "").strip() and                     not re.match(r"^\s*(select an option|select|choose one)\s*$", question["value"], re.I):
+                continue
+            candidates = self._rule_for(question.get("question", ""), rules)
+            if not candidates:
+                continue
+            options = question.get("options") or []
+            answer = candidates[0]
+            if options:
+                index = self._best_option(options, candidates)
+                if index is None:
+                    self.note_ambiguous_choice(question["question"], options, candidates[0])
+                    continue
+                answer = options[index]
+            if self._adapter_hook(page, "answer_platform_question", False,
+                                  self, page, question.get("qid", ""), answer):
+                logger.info("PROFILE_ANSWER: %r -> %r", question["question"][:60], answer[:40])
 
         # Answers can reveal new required fields (choosing Country adds State),
         # so scan once more for anything that has just appeared.
@@ -3081,6 +3120,18 @@ class JobApplicationAssistant:
                 question_text=question_text, input_type="radio", selector=name, options=options,
             ))
 
+        # Questions rendered in a shape this scan cannot see (Amazon drives a
+        # hidden select with no id through a span), asked of the adapter.
+        for platform_question in self._adapter_hook(page, "platform_questions", [], page):
+            text = platform_question.get("question") or ""
+            if not text or any(q.question_text == text for q in questions):
+                continue
+            questions.append(DetectedQuestion(
+                question_text=text, input_type="platform",
+                selector=platform_question.get("qid", ""),
+                options=list(platform_question.get("options") or []),
+            ))
+
         logger.info("Detected %d screening question(s)", len(questions))
         return questions
 
@@ -3095,7 +3146,14 @@ class JobApplicationAssistant:
             if not answer:
                 continue
             try:
-                if q.input_type == "textarea":
+                if q.input_type == "platform":
+                    if self._adapter_hook(page, "answer_platform_question", False,
+                                          self, page, q.selector, answer):
+                        self.values.record(page, f"[data-questionid={json.dumps(q.selector)}]",
+                                           answer, "screening answer")
+                        logger.info("PLATFORM_ANSWER: %r -> %r", q.question_text[:60], answer[:40])
+                        filled += 1
+                elif q.input_type == "textarea":
                     page.fill(q.selector, answer)
                     filled += 1
                 elif q.input_type == "select":

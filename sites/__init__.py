@@ -10,6 +10,7 @@ to one platform's markup lives in these adapters.
 
 from __future__ import annotations
 
+from .amazon import AmazonAdapter
 from .ashby import AshbyAdapter
 from .base import SiteAdapter, merge_placeholders
 from .eightfold import EightfoldAdapter
@@ -20,6 +21,7 @@ from .workday import WorkdayAdapter
 
 # Most specific first; the generic adapter is the fallback.
 ADAPTERS: tuple[type[SiteAdapter], ...] = (
+    AmazonAdapter,
     SuccessFactorsAdapter,
     WorkdayAdapter,
     GreenhouseAdapter,

@@ -53,6 +53,18 @@ class SiteAdapter:
         """Fill a platform's date widget. None = not handled."""
         return None
 
+    # -- questions the generic scan cannot see ----------------------------
+    def platform_questions(self, page) -> list[dict]:
+        """Screening questions this platform renders in a shape the generic
+        scan misses -- e.g. a widget driving a hidden control with no id.
+        Each is {qid, question, options, value, kind, required}."""
+        return []
+
+    def answer_platform_question(self, assistant, page, selector: str, answer: str) -> bool:
+        """Answer one of those questions, the way a person would. False = not
+        handled."""
+        return False
+
     # -- account creation --------------------------------------------------
     def create_account_extras(self, assistant, page) -> None:
         """Platform-specific required bits of a Create Account form."""

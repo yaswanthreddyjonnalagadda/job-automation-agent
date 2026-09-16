@@ -625,9 +625,25 @@ def reload_browser_automation(assistant: JobApplicationAssistant) -> JobApplicat
         return assistant
 
     try:
+        # The site adapters first: browser_automation calls hooks on them, and
+        # reloading only one half left a new call meeting an old adapter --
+        # which killed a live Amazon application with AttributeError.
+        import sites
+        for module in [sites.base] + [
+            importlib.import_module(f"sites.{name}") for name in
+            ("amazon", "ashby", "eightfold", "greenhouse", "lever", "successfactors", "workday")
+        ]:
+            try:
+                compile(Path(module.__file__).read_text(encoding="utf-8"), module.__file__, "exec")
+                importlib.reload(module)
+            except SyntaxError as exc:
+                logger.error("RELOAD_REJECTED: %s (line %s): %s", Path(module.__file__).name, exc.lineno, exc.msg)
+                return assistant
+        importlib.reload(sites)
+        sites._CACHE.clear()  # adapters are cached per run; drop the old objects
         importlib.reload(browser_automation)
         assistant.__class__ = browser_automation.JobApplicationAssistant
-        logger.info("Reloaded browser_automation.py in place")
+        logger.info("Reloaded browser_automation.py and the site adapters in place")
     except Exception as exc:
         logger.error("RELOAD_FAILED: %s -- keeping the running version", exc)
     return assistant

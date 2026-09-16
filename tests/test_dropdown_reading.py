@@ -178,3 +178,30 @@ def test_the_tailored_resume_is_always_asked_for():
     assert client.tailor_resume(resume, job, profile) == "TAILORED"
     assert "networking" in asked["user_message"]
     assert "IMPORTANT CORRECTION" in source  # the retry path still exists
+
+
+def test_a_missing_adapter_hook_does_not_end_the_run(page, agent):
+    """Hot-reloading brings in new code while the run still holds adapters
+    built from the old. A hook that isn't there yet cost a live Amazon
+    application its browser; it must cost only the feature."""
+    page.set_content("<html><body><p>a form</p></body></html>")
+
+    class OldAdapter:
+        name = "old"
+
+    agent.adapter = lambda _page: OldAdapter()
+    assert agent._adapter_hook(page, "platform_questions", []) == []
+    assert agent._adapter_hook(page, "answer_platform_question", False) is False
+
+
+def test_an_adapter_hook_that_raises_does_not_end_the_run(page, agent):
+    page.set_content("<html><body><p>a form</p></body></html>")
+
+    class BrokenAdapter:
+        name = "broken"
+
+        def platform_questions(self, _page):
+            raise RuntimeError("the page moved")
+
+    agent.adapter = lambda _page: BrokenAdapter()
+    assert agent._adapter_hook(page, "platform_questions", [], page) == []
