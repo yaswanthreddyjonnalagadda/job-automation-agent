@@ -68,6 +68,7 @@ class UserProfile:
     work_authorization: str = "H-1B"
     # Supplied by the user on 2026-09-15 so these are never asked again.
     us_citizen: str = "No"
+    country_of_citizenship: str = "India"  # confirmed by the user, not inferred
     security_clearance_level: str = "None"
     legally_eligible_to_work: str = "Yes"
     availability_to_start: str = "Immediately"

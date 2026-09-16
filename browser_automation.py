@@ -725,6 +725,10 @@ class JobApplicationAssistant:
             (r"sponsor", ["Yes" if sponsorship else "No"]),
             (r"at least 18|18 years of age|over (the age of )?18", [g("at_least_18")]),
             (r"full legal name", [g("full_name")]),
+            # Asked outright on export-control sections. The profile states it;
+            # the agent never works it out from a name or a visa status.
+            (r"(country|countries)(/region)?.{0,20}citizenship|citizenship.{0,20}(country|countries)",
+             [g("country_of_citizenship")] if g("country_of_citizenship") else []),
             (r"u\.?s\.? citizen|united states citizen|citizen of the (u\.?s\.?|united states)",
              [g("us_citizen"), "No, I am not a U.S. Citizen"] if g("us_citizen").lower() == "no"
              else [g("us_citizen")]),
