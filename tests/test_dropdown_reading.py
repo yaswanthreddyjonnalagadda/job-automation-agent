@@ -436,3 +436,30 @@ def test_an_attestation_checkbox_is_never_ticked_by_that_pass(page, agent):
     page.set_content(RACE_CHECKBOXES)
     agent._answer_checkbox_groups_from_profile(page, agent._standard_answer_rules(get_user_profile()))
     assert not page.is_checked("#agree")
+
+
+MATERIAL_CHECKBOX = """
+<html><body>
+  <div aria-label="Race/Ethnic group">
+    <span class="mdc-checkbox" onclick="this.querySelector('input').checked = true;
+         this.querySelector('input').dispatchEvent(new Event('change', {bubbles:true}))"
+         style="display:inline-block;width:40px;height:40px">
+      <input type="checkbox" aria-label="Asian" style="position:absolute;opacity:0;pointer-events:none">
+    </span>
+    <span class="mdc-checkbox" style="display:inline-block;width:40px;height:40px">
+      <input type="checkbox" aria-label="Hispanic or Latino" style="position:absolute;opacity:0;pointer-events:none">
+    </span>
+  </div>
+</body></html>
+"""
+
+
+def test_an_option_the_input_ignores_is_chosen_through_its_wrapper(page, agent):
+    """Google's Material checkbox ignores a click on the input itself --
+    "clicking the checkbox did not change its state" -- so the race/ethnicity
+    question stayed unanswered and its Next button stayed disabled."""
+    page.set_content(MATERIAL_CHECKBOX)
+    box = page.query_selector("input[aria-label='Asian']")
+    assert agent.select_radio(page, box)
+    assert page.eval_on_selector("input[aria-label='Asian']", "e => e.checked")
+    assert not page.eval_on_selector("input[aria-label='Hispanic or Latino']", "e => e.checked")

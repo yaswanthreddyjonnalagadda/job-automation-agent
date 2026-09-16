@@ -3654,35 +3654,65 @@ class JobApplicationAssistant:
         return False
 
     def select_radio(self, page: Page, element) -> bool:
-        """Selects a radio whose own label sits on top of it.
+        """Selects one radio or checkbox, whatever the page puts in the way.
 
-        Bootstrap-style forms (Amazon's) hide the input under a styled
-        label.custom-control-label, so a pointer click lands on the label and
-        Playwright retries the input for its full timeout -- turning one
-        question into a thirty-second wait and a pass into three minutes.
-        Clicking the label is what a person does anyway.
+        The real input is usually hidden under the styling: Bootstrap covers it
+        with its label, and Google's Material checkboxes ignore a click on the
+        input itself ("clicking the checkbox did not change its state"). So the
+        label is tried, then the wrapper a person actually clicks, and finally
+        the input is set directly and told the page about it.
         """
+        def is_set() -> bool:
+            try:
+                return bool(element.evaluate("e => e.checked"))
+            except Exception:
+                return False
+
         try:
             element.check(timeout=2_000)
-            return True
+            if is_set():
+                return True
         except Exception:
             pass
+
         try:
             element_id = element.get_attribute("id") or ""
             if element_id:
                 label = page.locator(f"label[for={json.dumps(element_id)}]").first
                 if label.count():
                     label.click(timeout=3_000)
-                    if element.is_checked():
+                    if is_set():
                         return True
         except Exception:
             pass
+
+        # The wrapper that carries the styling is what a person clicks.
         try:
-            element.check(timeout=2_000, force=True)
-            return bool(element.is_checked())
+            element.evaluate("""e => {
+                const target = e.closest('label, [role=checkbox], [role=radio], [class*=checkbox], [class*=radio]')
+                            || e.parentElement;
+                if (target) { target.scrollIntoView({block: 'center'}); target.click(); }
+            }""")
+            page.wait_for_timeout(300)
+            if is_set():
+                return True
+        except Exception:
+            pass
+
+        # Last resort: set it and tell the page, the way the widget would.
+        try:
+            element.evaluate("""e => {
+                e.checked = true;
+                e.dispatchEvent(new Event('input', {bubbles: true}));
+                e.dispatchEvent(new Event('change', {bubbles: true}));
+                e.dispatchEvent(new Event('click', {bubbles: true}));
+            }""")
+            page.wait_for_timeout(300)
+            if is_set():
+                return True
         except Exception as exc:
-            logger.warning("Could not select a radio option: %s", str(exc).splitlines()[0][:100])
-            return False
+            logger.warning("Could not select an option: %s", str(exc).splitlines()[0][:100])
+        return False
 
     def check_first_matching(self, page: Page, hints: list[str]) -> bool:
         for el in page.query_selector_all("input[type='checkbox']"):
