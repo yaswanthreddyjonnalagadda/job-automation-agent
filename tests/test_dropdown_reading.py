@@ -111,3 +111,39 @@ def test_a_band_outside_the_profile_range_is_left_for_the_user(agent):
     assistant = agent
     assistant._profile = type("P", (), {"salary_min": 125_000, "salary_max": 185_000})()
     assert assistant._salary_band(["$40,000 - $60,000", "$1 - $999"]) is None
+
+
+NEIGHBOURING_FIELDS = """
+<html><body>
+  <div class="field-wrapper"><div class="input-wrapper">
+    <label for="preferred_name">Preferred First Name</label>
+    <input id="preferred_name" class="input" type="text" value="">
+  </div></div>
+  <div class="field-wrapper"><div class="input-wrapper">
+    <label for="phone_country">Country*</label>
+    <div class="select__control"><div class="select__value-container">
+      <div class="select__single-value">+1</div>
+      <div class="select__input-container">
+        <input id="phone_country" class="select__input" role="combobox" required></div>
+    </div></div>
+  </div></div>
+</body></html>
+"""
+
+
+def test_a_value_is_never_read_from_the_field_next_door(page, agent):
+    """The phone widget's "+1" was reported as the answer to Preferred First
+    Name, which is empty. A value picked up from a neighbouring control would
+    be shown as answered, learned as the user's answer, and could let a blank
+    required field pass as filled."""
+    page.set_content(NEIGHBOURING_FIELDS)
+    by_label = {f["label"]: f["value"] for f in agent.read_back_fields(page)}
+    assert by_label["Preferred First Name"] == ""
+    assert by_label["Country*"] == "+1"
+
+
+def test_an_empty_field_beside_an_answered_one_is_still_reported_blank(page, agent):
+    page.set_content(NEIGHBOURING_FIELDS.replace('id="preferred_name" class="input" type="text"',
+                                                 'id="preferred_name" class="input" type="text" required'))
+    blanks = agent.find_required_blanks(page)["required_still_blank"]
+    assert any("Preferred First Name" in b for b in blanks)

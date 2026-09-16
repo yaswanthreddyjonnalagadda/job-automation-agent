@@ -1050,7 +1050,10 @@ class JobApplicationAssistant:
                 const shownIn = n => n && n.querySelector(
                     '[class*=singleValue], [class*=single-value], [class*=multiValue], [class*=multi-value]');
                 let n = e.parentElement;
-                for (let i = 0; i < 5 && n; i++, n = n.parentElement) {
+                for (let i = 0; i < 4 && n; i++, n = n.parentElement) {
+                    // Another field inside this ancestor means we have left
+                    // the control; its value is not ours to report.
+                    if (n.querySelectorAll('input, select, textarea').length > 1) break;
                     const shown = shownIn(n);
                     if (shown) return shown.innerText.trim();
                 }
@@ -2361,7 +2364,8 @@ class JobApplicationAssistant:
                             // A react-select combobox clears its search input
                             // once you choose; the choice sits beside it.
                             let n = el.parentElement;
-                            for (let i = 0; i < 5 && n && !value; i++, n = n.parentElement) {
+                            for (let i = 0; i < 4 && n && !value; i++, n = n.parentElement) {
+                                if (n.querySelectorAll('input, select, textarea').length > 1) break;
                                 const shown = n.querySelector('[class*=singleValue], [class*=single-value],'
                                                             + '[class*=multiValue], [class*=multi-value]');
                                 if (shown) value = shown.innerText.trim();
@@ -4067,7 +4071,8 @@ class JobApplicationAssistant:
                             // A react-select combobox clears its search input
                             // after a choice and shows the value alongside it.
                             let n = el.parentElement;
-                            for (let i = 0; i < 5 && n && !value; i++, n = n.parentElement) {
+                            for (let i = 0; i < 4 && n && !value; i++, n = n.parentElement) {
+                                if (n.querySelectorAll('input, select, textarea').length > 1) break;
                                 const shown = n.querySelector('[class*=singleValue], [class*=single-value],'
                                                             + '[class*=multiValue], [class*=multi-value]');
                                 if (shown) value = shown.innerText.trim();
