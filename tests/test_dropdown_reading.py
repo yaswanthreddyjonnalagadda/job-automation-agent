@@ -381,3 +381,22 @@ def test_an_answer_lands_on_its_own_question(page, agent):
     checked = page.eval_on_selector_all(
         "input[type=radio]", "els => els.map(e => e.checked)")
     assert checked == [False, False, False, False, True, False]
+
+
+def test_a_question_is_found_again_after_the_page_rebuilds(page, agent):
+    """Answering one question on Google's form re-renders the others, throwing
+    away the ids their options were given: the second and third questions then
+    had nothing left to click, and were reported unanswerable."""
+    page.set_content(SHARED_NAME_RADIOS)
+    groups = agent.radio_groups(page)
+    veteran = groups[1]
+
+    # the page rebuilds its radios, as Google's does after each answer
+    page.evaluate("""() => {
+        const groups = document.querySelectorAll('[role=radiogroup]');
+        for (const g of groups) g.innerHTML = g.innerHTML.replace(/id="[^"]*"/g, '');
+    }""")
+
+    assert agent.answer_radio_group(page, veteran, "I am not a protected veteran")
+    checked = page.eval_on_selector_all("input[type=radio]", "els => els.map(e => e.checked)")
+    assert checked == [False, False, False, False, True, False]

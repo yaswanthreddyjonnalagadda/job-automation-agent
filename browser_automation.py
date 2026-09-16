@@ -1394,14 +1394,25 @@ class JobApplicationAssistant:
             return []
 
     def answer_radio_group(self, page: Page, group: dict, answer: str) -> bool:
-        """Chooses one option of one radio question, by that option's own id."""
-        index = self._best_option(group.get("labels") or [], [answer])
-        if index is None:
-            return False
-        element = page.query_selector(f"[id={json.dumps(group['ids'][index])}]")
-        if element is None:
-            return False
-        return self.select_radio(page, element)
+        """Chooses one option of one radio question, by that option's own id.
+
+        Answering one question on Google's form re-renders the others, which
+        throws away the ids given to their options: the second and third
+        questions then had nothing left to click. So a group that has gone
+        stale is looked up again, by its question, before giving up.
+        """
+        for attempt in (group, None):
+            current = attempt if attempt is not None else next(
+                (g for g in self.radio_groups(page) if g["question"] == group["question"]), None)
+            if current is None:
+                continue
+            index = self._best_option(current.get("labels") or [], [answer])
+            if index is None:
+                continue
+            element = page.query_selector(f"[id={json.dumps(current['ids'][index])}]")
+            if element is not None and self.select_radio(page, element):
+                return True
+        return False
 
     def _answer_radio_groups_from_profile(self, page: Page, rules) -> None:
         for group in self.radio_groups(page):
