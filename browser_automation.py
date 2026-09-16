@@ -810,6 +810,13 @@ class JobApplicationAssistant:
             logger.warning("Adapter %s failed: %s", name, str(exc).splitlines()[0][:120])
             return default
 
+    @staticmethod
+    def _has_answer(value) -> bool:
+        """True when a control holds a real answer rather than a placeholder."""
+        text = (value or "").strip()
+        return bool(text) and not re.match(
+            r"^(select an option|select|select one|please select|choose one|-+)$", text, re.I)
+
     def _rule_for(self, question: str, rules) -> Optional[list[str]]:
         q = (question or "").strip()
         for pattern, candidates in rules:
@@ -892,8 +899,16 @@ class JobApplicationAssistant:
         # The same rules, applied to questions only the adapter can see.
         adapter = self.adapter(page)
         for question in self._adapter_hook(page, "platform_questions", [], page):
-            if (question.get("value") or "").strip() and                     not re.match(r"^\s*(select an option|select|choose one)\s*$", question["value"], re.I):
-                continue
+            selector = f"[data-questionid={json.dumps(question.get('qid', ''))}]"
+            if self._has_answer(question.get("value")):
+                wanted = self._rule_for(question.get("question", ""), rules)
+                ours = self.values.is_ours(page, selector, question.get("value", ""))
+                # Correct an answer the agent itself got wrong; an answer that
+                # came from the user or the site is left exactly as it is.
+                if not (wanted and ours and self._best_option([question["value"]], wanted) is None):
+                    continue
+                logger.warning("CORRECTING %r: %r is not what the profile says",
+                               question["question"][:50], question["value"][:40])
             candidates = self._rule_for(question.get("question", ""), rules)
             if not candidates:
                 continue
@@ -3126,6 +3141,11 @@ class JobApplicationAssistant:
             text = platform_question.get("question") or ""
             if not text or any(q.question_text == text for q in questions):
                 continue
+            # Already answered -- by the profile, the site or the user. Asking
+            # Claude again let a drafted "Yes" overwrite the profile's "No" on
+            # Amazon's export-control declaration.
+            if self._has_answer(platform_question.get("value")):
+                continue
             questions.append(DetectedQuestion(
                 question_text=text, input_type="platform",
                 selector=platform_question.get("qid", ""),
@@ -3165,8 +3185,7 @@ class JobApplicationAssistant:
                         if (self._label_for(page, ge) or ge.get_attribute("value") or "").strip().lower() == answer.strip().lower():
                             target = ge
                             break
-                    if target:
-                        target.check()
+                    if target and self.select_radio(page, target):
                         filled += 1
             except Exception as exc:
                 logger.warning("Could not fill screening answer for %r: %s", q.question_text, exc)
@@ -3316,6 +3335,37 @@ class JobApplicationAssistant:
                 hints, attempt + 1, (current or "")[:60],
             )
         return False
+
+    def select_radio(self, page: Page, element) -> bool:
+        """Selects a radio whose own label sits on top of it.
+
+        Bootstrap-style forms (Amazon's) hide the input under a styled
+        label.custom-control-label, so a pointer click lands on the label and
+        Playwright retries the input for its full timeout -- turning one
+        question into a thirty-second wait and a pass into three minutes.
+        Clicking the label is what a person does anyway.
+        """
+        try:
+            element.check(timeout=2_000)
+            return True
+        except Exception:
+            pass
+        try:
+            element_id = element.get_attribute("id") or ""
+            if element_id:
+                label = page.locator(f"label[for={json.dumps(element_id)}]").first
+                if label.count():
+                    label.click(timeout=3_000)
+                    if element.is_checked():
+                        return True
+        except Exception:
+            pass
+        try:
+            element.check(timeout=2_000, force=True)
+            return bool(element.is_checked())
+        except Exception as exc:
+            logger.warning("Could not select a radio option: %s", str(exc).splitlines()[0][:100])
+            return False
 
     def check_first_matching(self, page: Page, hints: list[str]) -> bool:
         for el in page.query_selector_all("input[type='checkbox']"):

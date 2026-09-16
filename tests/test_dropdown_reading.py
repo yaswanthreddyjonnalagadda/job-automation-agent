@@ -205,3 +205,31 @@ def test_an_adapter_hook_that_raises_does_not_end_the_run(page, agent):
 
     agent.adapter = lambda _page: BrokenAdapter()
     assert agent._adapter_hook(page, "platform_questions", [], page) == []
+
+
+BOOTSTRAP_RADIOS = """
+<html><head><style>
+  .custom-control-input { position: absolute; opacity: 0; z-index: -1; }
+  .custom-control-label { display: block; padding: 12px; background: #eee; }
+</style></head><body>
+  <div class="custom-control">
+    <input type="radio" class="custom-control-input" id="r-yes" name="gov" value="Yes">
+    <label class="custom-control-label" for="r-yes">Yes</label>
+  </div>
+  <div class="custom-control">
+    <input type="radio" class="custom-control-input" id="r-no" name="gov" value="No">
+    <label class="custom-control-label" for="r-no">No</label>
+  </div>
+</body></html>
+"""
+
+
+def test_a_radio_under_its_own_label_is_still_selected(page, agent):
+    """Amazon's radios sit under a styled label, so a pointer click lands on
+    the label and Playwright retries the input for its whole timeout: one
+    question became a thirty-second wait, and the run looped on the same pass
+    every three minutes without ever finishing."""
+    page.set_content(BOOTSTRAP_RADIOS)
+    target = page.query_selector("#r-no")
+    assert agent.select_radio(page, target)
+    assert page.query_selector("#r-no").is_checked()

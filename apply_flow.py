@@ -429,16 +429,29 @@ def remembered_answers(tracker, questions) -> dict:
         return {}
     recalled: dict[str, str] = {}
     for question in questions:
+        # Never reused, however it was answered before: an immigration,
+        # contractual or criminal-history question is the user's to answer on
+        # each form, and wording differences between employers change what is
+        # being asked.
+        if safety.is_legal_status_question(question.question_text) or \
+                safety.is_attestation(question.question_text):
+            continue
         try:
             matches = tracker.recall_answer(question.question_text, limit=5)
         except Exception as exc:
             logger.debug("Recall failed for %r: %s", question.question_text[:50], exc)
             continue
-        matches.sort(key=lambda m: m.get("answered_by") != "user")  # the user's own answer first
         for match in matches:
             answer = (match.get("answer") or "").strip()
             options = question.options or []
             if not answer or (options and answer not in options):
+                continue
+            # Only what the user answered themselves. An answer the agent
+            # drafted is a judgement made from what it had at the time;
+            # replaying it turns one guess into a fact repeated across
+            # applications -- that is how "Have you ever held J-1 status? Yes"
+            # was about to be filled in on a second employer's form.
+            if match.get("answered_by") != "user":
                 continue
             recalled[question.question_text] = answer
             logger.info("RECALLED: %r -> %r (answered by %s before)",
@@ -466,6 +479,10 @@ def learn_user_answers(assistant, page, tracker, key, profile) -> int:
             continue
         if value.lower() in known or safety.is_attestation(label) or safety.is_attestation(value):
             continue
+        if safety.is_legal_status_question(label):
+            continue  # the user answers these afresh every time
+        if assistant.values.wrote_value(page, value):
+            continue  # the agent's own answer, read back through another control
         try:
             tracker.record_answer(key, host, label, value, answered_by="user")
             learned += 1

@@ -71,6 +71,34 @@ def is_attestation(text: str) -> bool:
     return True
 
 
+_LEGAL_STATUS_RE = re.compile(
+    "(?<![A-Za-z0-9])("
+    "j-?1|h-?1-?b|l-?1|o-?1|f-?1|opt|ead|"
+    "i-?140|i-?485|i-?9|green card|permanent resident|lawful(?:ly)? admitted|"
+    "refugee|asylum|asylee|visa status|immigration status|"
+    "home residency requirement|export control|"
+    "non-?compet[a-z]*|non-?solicit[a-z]*|restrictive covenant|"
+    "government (?:employee|official)|public official|politically exposed|"
+    "convict[a-z]*|felony|criminal|arrest[a-z]*|"
+    "physically located in|lived or were physically"
+    ")(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+
+
+def is_legal_status_question(text: str) -> bool:
+    """True for a question about the candidate's legal, immigration or
+    contractual status.
+
+    These are answers only the candidate holds -- whether they once held J-1
+    status, whether an I-140 was approved, whether a non-compete binds them.
+    A drafted guess here is a false statement on a real application and, worse,
+    one that reads as authoritative afterwards, so the agent never writes one:
+    either the profile states it outright or the question is left for the user.
+    """
+    return bool(_LEGAL_STATUS_RE.search(" ".join((text or "").split())))
+
+
 def is_privacy_consent(text: str) -> bool:
     """True for a privacy/data-protection consent the agent may accept."""
     text = " ".join((text or "").split())
@@ -175,6 +203,24 @@ class AgentValues:
     def is_ours(self, page, ref: str, current_value: str) -> bool:
         stored = self._values.get(self._key(page, ref))
         return stored is not None and stored == (current_value or "").strip()
+
+    def wrote_value(self, page, value: str) -> bool:
+        """True when the agent put this exact value on this page, whichever
+        control it is read back through.
+
+        Platform widgets are written through one handle and read back through
+        another, so an answer the agent gave looked like the user's and was
+        remembered as theirs.
+        """
+        value = (value or "").strip()
+        if not value:
+            return False
+        try:
+            host = urlparse(page.url).netloc.lower()
+        except Exception:
+            host = ""
+        return any(stored == value for key, stored in self._values.items()
+                   if key.startswith(f"{host}|"))
 
     def may_write(self, page, ref: str, current_value: str) -> bool:
         """True when the field is empty, or holds a value the agent wrote."""

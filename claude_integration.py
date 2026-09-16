@@ -178,7 +178,9 @@ class ClaudeClient:
         # Legal declarations and signatures are never answered for the user --
         # not even truthfully. They are dropped before Claude sees them.
         import safety
-        questions = [q for q in questions if not safety.is_attestation(q.get("question_text", ""))]
+        questions = [q for q in questions
+                     if not safety.is_attestation(q.get("question_text", ""))
+                     and not safety.is_legal_status_question(q.get("question_text", ""))]
         if not questions:
             return {}
 
