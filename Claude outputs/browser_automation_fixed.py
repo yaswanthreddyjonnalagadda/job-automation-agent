@@ -61,15 +61,15 @@ _FIELD_HINTS: dict[str, list[str]] = {
     # Education's School field.
     "last_name": ["last name", "lastname", "surname"],
     "email": ["email"],
-    # Bare "phone" is needed as well as the longer forms: Greenhouse labels the
-    # field simply "Phone", and requiring "phone number" left it blank.
     # Phone fields with type detection: mobile/cell, home, work
     # These must come BEFORE the generic "phone" fallback
     "phone_mobile": ["mobile phone", "mobile number", "cell phone", "cellular phone", "cell number",
-                     "mobilephone", "cellphone", "mobile (phone)?number"],
+                     "mobilephone", "cellphone"],
     "phone_home": ["home phone", "home number", "home telephone", "residential phone", "homephone"],
     "phone_work": ["work phone", "work number", "office phone", "business phone", "workphone"],
-    "phone": ["phone number", "mobile number", "telephone number", "phone", "telephone"],
+    # Bare "phone" is needed as well as the longer forms: Greenhouse labels the
+    # field simply "Phone", and requiring "phone number" left it blank.
+    "phone": ["phone number", "mobile number", "telephone number", "phone", "mobile", "telephone"],
     "address_line1": ["address line 1", "street address", "address 1"],
     "city": ["city"],
     # "county" is safe alongside "country" -- neither contains the other.
@@ -172,10 +172,10 @@ class JobApplicationAssistant:
     def _choose_channel(self) -> str:
         """Force the configured browser channel (always use real Chrome, never fallback).
 
-        IMPORTANT: This means real Chrome will be locked to the agent while 
-        applications run. The user explicitly chose this behavior for better 
+        IMPORTANT: This means real Chrome will be locked to the agent while
+        applications run. The user explicitly chose this behavior for better
         rendering fidelity (real Chrome matches the browser they test with).
-        
+
         Previous versions would fall back to bundled chromium if real Chrome
         was already running, to allow simultaneous browsing. That fallback
         is now disabled per user request.
@@ -184,11 +184,11 @@ class JobApplicationAssistant:
         # Do NOT fall back to chromium even if Chrome is already running.
         # User wants real Chrome only for this use case.
         channel = (getattr(self._config, "browser_channel", "") or "").strip()
-        
+
         # If no channel is configured, use real Chrome by default
         if not channel or channel == "chromium":
             return "chrome"
-        
+
         logger.info("Using %s with the profile at %s (Chrome already running is OK)",
                    channel, self._config.browser_profile_dir)
         return channel
@@ -645,55 +645,10 @@ class JobApplicationAssistant:
             except Exception:
                 pass
             self.values.record(page, selector, value, source or "agent")
-            self.note_page_changed()
             return True
         except Exception as exc:
             logger.warning("Could not fill %s: %s", what or selector, str(exc).splitlines()[0][:120])
             return False
-
-    def fix_rejected_phone_numbers(self, page: Page) -> int:
-        """Rewrites a phone the form has just called invalid.
-
-        Dayforce keeps the country code in a control of its own and wants the
-        number as digits, so "(571) 354-5212" came back as "Home Phone number
-        is invalid" -- on a field the agent had filled from the profile, with
-        nothing on the page saying what shape it wanted.
-        """
-        try:
-            complaints = page.evaluate("""() => {
-                const visible = e => !!(e.offsetParent || e.getClientRects().length);
-                return [...document.querySelectorAll('[role=alert], [class*=error i], [aria-invalid=true]')]
-                    .filter(visible)
-                    .map(e => (e.innerText || '').trim())
-                    .filter(t => /phone/i.test(t) && /invalid|not valid|format/i.test(t));
-            }""")
-        except Exception:
-            return 0
-        if not complaints:
-            return 0
-
-        fixed = 0
-        for box in page.query_selector_all("input[type=tel], input[id*=hone], input[name*=hone]"):
-            try:
-                if not box.is_visible():
-                    continue
-                value = (box.get_attribute("value") or box.input_value() or "").strip()
-                digits = re.sub(r"\D", "", value)
-                if not digits or digits == value:
-                    continue
-                # A country code lives in its own control here, so the number
-                # goes in without one.
-                if len(digits) == 11 and digits.startswith("1"):
-                    digits = digits[1:]
-                box.fill("")
-                box.type(digits, delay=20)
-                box.evaluate("e => e.blur()")
-                page.wait_for_timeout(400)
-                logger.info("Rewrote a phone number the form rejected: %r -> %r", value, digits)
-                fixed += 1
-            except Exception as exc:
-                logger.debug("Could not rewrite a phone number: %s", str(exc).splitlines()[0][:100])
-        return fixed
 
     def _current_value(self, page: Page, selector: str) -> str:
         """What a control holds right now, picker or plain input."""
@@ -741,8 +696,8 @@ class JobApplicationAssistant:
             "email": p("email"),
             "phone": p("phone"),
             "phone_mobile": p("phone_mobile") or p("phone"),  # Use phone_mobile if set, fallback to phone
-            "phone_home": p("phone_home") or p("phone"),  # Use phone_home if set, fallback to phone
-            "phone_work": p("phone_work") or p("phone"),  # Use phone_work if set, fallback to phone
+            "phone_home": p("phone_home") or p("phone"),      # Use phone_home if set, fallback to phone
+            "phone_work": p("phone_work") or p("phone"),      # Use phone_work if set, fallback to phone
             "address_line1": p("address_line1"),
             "city": p("city"),
             "county": p("county"),
@@ -779,7 +734,6 @@ class JobApplicationAssistant:
             except Exception as exc:
                 logger.warning("Could not fill field %s: %s", field.selector, exc)
         logger.info("Auto-filled %d/%d detected fields", len(actually_filled), len(fields))
-        self.fix_rejected_phone_numbers(page)
 
         # A form that rebuilds itself after reading the resume (Dayforce) drops
         # what was typed into the version before it: address, postcode and
@@ -823,6 +777,18 @@ class JobApplicationAssistant:
                 return self.fill_detected_fields(page, self.detect_form_fields(page), profile)
             finally:
                 self._refilling_after_profile = False
+
+        # Auto-advance through multi-page forms by clicking Next/Continue/Proceed buttons
+        # and filling subsequent pages automatically
+        try:
+            if not getattr(self, "_auto_advancing", False):
+                self._auto_advancing = True
+                self.auto_advance_multipage_form(page, profile)
+        except Exception as exc:
+            logger.warning("Multi-page auto-advance failed: %s", str(exc).splitlines()[0][:160])
+        finally:
+            self._auto_advancing = False
+
         return actually_filled
 
     def complete_profile_dialog(self, page: Page) -> bool:
@@ -908,49 +874,11 @@ class JobApplicationAssistant:
                 pass
         return self._job_source
 
-    @staticmethod
-    def _with_latest_answers(profile):
-        """The profile as it is on disk, when the run's copy predates it.
-
-        A run builds its profile once at start-up. Answers added to config.py
-        afterwards -- the most recent employer, say -- were missing from that
-        object, so every rule built from them came out empty and five required
-        questions stayed blank with nothing logged.
-        """
-        try:
-            if all(hasattr(profile, name) for name in
-                   ("current_employer", "current_position_title", "preferred_contact_method")):
-                return profile
-            import importlib
-
-            import config as config_module
-            importlib.reload(config_module)
-            fresh = config_module.get_user_profile()
-            logger.info("Read the profile again: this run started before its newest answers")
-            return fresh
-        except Exception as exc:
-            logger.debug("Could not re-read the profile: %s", exc)
-            return profile
-
-    def note_page_changed(self) -> None:
-        """The agent has just written something, so a page that would not move
-        on may move now.
-
-        Next failing once marked the page as the last step for good: the
-        questionnaire was filled a moment later and the run never tried again,
-        reporting a form it was stuck on as ready to submit.
-        """
-        if getattr(self, "_stuck_on", None):
-            logger.info("Something was filled in since Next last failed; it is worth another try")
-        self._stuck_on = None
-
     def _standard_answer_rules(self, profile) -> list[tuple[re.Pattern, list[str]]]:
         """Questions most employers ask in some wording, mapped to the answers
         the user put in their profile. First match wins, so the narrower
         wording ('... for any employer') sits above the general one. Only
         ever fills an empty control -- an answer already there is left alone."""
-        profile = self._with_latest_answers(profile)
-
         def g(name: str, default: str = "") -> str:
             return str(getattr(profile, name, default) or default)
 
@@ -964,17 +892,6 @@ class JobApplicationAssistant:
             (r"sponsor", ["Yes" if sponsorship else "No"]),
             (r"at least 18|18 years of age|over (the age of )?18", [g("at_least_18")]),
             (r"full legal name", [g("full_name")]),
-            # A questionnaire's employment block. The narrow wordings come
-            # first: a rule for the employer's name matched every one of these
-            # questions and wrote "Capital One" into all five.
-            (r"type of business|industry|nature of business", [g("current_employer_type")]),
-            (r"dates? of employment|employment dates|period of employment|from\s*/\s*to",
-             [g("current_employment_dates")]),
-            (r"position title|job title|title held|your title|position held",
-             [g("current_position_title")]),
-            (r"reason for leaving|why (did|are) you leav", [g("reason_for_leaving")]),
-            (r"employer (address|location)|company location", [g("current_employer_location")]),
-            (r"(employer|company)(\s*name)?\s*$|company name", [g("current_employer")]),
             (r"preferred contact( method)?|how (would you like|do you prefer) (us )?to (contact|reach)",
              [g("preferred_contact_method", "Email"), "Email", "E-mail", "Email Address"]),
             (r"preferred contact( method)?|how (would you like|do you prefer) (us )?to (contact|reach)",
@@ -993,7 +910,7 @@ class JobApplicationAssistant:
             (r"years of (relevant |related |professional )?experience|how many years",
              [str(getattr(profile, "years_experience", "") or ""),
               f"{getattr(profile, 'years_experience', '')} years"]),
-            (r"country code|dial\w*\s*code|phone country|country dial",
+            (r"country code|dial(ling)? code|phone country",
              [f"{g('phone_country_code', '+1')} {country} of America",
               f"{country} of America ({g('phone_country_code', '+1')})",
               f"{country} ({g('phone_country_code', '+1')})",
@@ -1015,9 +932,6 @@ class JobApplicationAssistant:
              [self._job_source_name(), g("how_did_you_hear"), "Company Website",
               "Careers Website", "Corporate Website", "Employer Website", "Company Site"]),
             (r"preferred language", [g("preferred_language")]),
-            # Employment status: multi-select checkboxes or radio buttons
-            (r"employment status|type of (employment|position|work)|work arrangement|employment (type|arrangement)|desired (employment|position) type|interested in",
-             list(getattr(profile, "employment_statuses", ("Full-Time",))) if hasattr(profile, "employment_statuses") else []),
             # Only ever matches a disability list: the candidates are disability answers.
             (r"please select one of the options below", [g("disability_status"), "No, I do not have a disability"]),
             (r"disabilit", [g("disability_status"), "No, I do not have a disability"]),
@@ -1561,7 +1475,6 @@ class JobApplicationAssistant:
         shown = self.displayed_value(field)
         self.values.record(page, f"[id={json.dumps(control['id'])}]", shown or texts[idx],
                            "profile:standard answer")
-        self.note_page_changed()
         # An earlier pass may have filed this question as unanswerable (before
         # the right option list was found); it is answered now.
         self.clear_ambiguous(control["question"])
@@ -1663,7 +1576,6 @@ class JobApplicationAssistant:
                 continue
             element = page.query_selector(f"[id={json.dumps(current['ids'][index])}]")
             if element is not None and self.select_radio(page, element):
-                self.note_page_changed()
                 return True
         return False
 
@@ -1781,19 +1693,20 @@ class JobApplicationAssistant:
 
     def _answer_text_questions(self, page: Page, profile) -> None:
         """Free-text questions with a known answer: salary expectations (the
-        profile's range) and a plain "Today's Date". A signature date under a
-        legal statement is NOT filled here -- that stays with the user."""
+        profile’s range), employment status, and a plain "Today’s Date".
+        A signature date under a legal statement is NOT filled here -- that stays with the user."""
         from datetime import date
         lo, hi = getattr(profile, "salary_min", 0), getattr(profile, "salary_max", 0)
         answers = []
         if lo and hi:
             answers.append((re.compile(r"salary expectation|desired salary|expected salary|compensation expectation", re.I),
                             f"${lo:,} - ${hi:,} per year"))
-        answers.append((re.compile(r"^\s*\*?\s*today[’']?s date\s*:?\s*\*?\s*$", re.I), date.today().strftime("%m/%d/%Y")))
-        # Employment status as text field
+        # Employment status as text field: use first configured status or default
         emp_status = getattr(profile, "employment_statuses", ("Full-Time",))
         if emp_status and isinstance(emp_status, (tuple, list)):
-            answers.append((re.compile(r"employment status|type of.*?work|desired.*?type", re.I), str(emp_status[0])))
+            answers.append((re.compile(r"employment status|type of (employment|position|work)|work.{0,20}type|employment.{0,20}type|desired (employment|position).type", re.I),
+                            str(emp_status[0])))
+        answers.append((re.compile(r"^\s*\*?\s*today[‘’]?s date\s*:?\s*\*?\s*$", re.I), date.today().strftime("%m/%d/%Y")))
         try:
             boxes = page.evaluate("""() => [...document.querySelectorAll('input[type=text], input:not([type]), textarea')]
                 .filter(e => e.id && e.getClientRects().length && !e.value && !e.readOnly && !e.disabled
@@ -1819,104 +1732,118 @@ class JobApplicationAssistant:
         if self.adapter(page).set_date(self, page, r"today[’']?s date", today):
             logger.info("PROFILE_ANSWER: Today's Date -> %r", today)
 
-        # The same rules the pickers use. A questionnaire asks for the most
-        # recent employer, its type of business, the dates and the position as
-        # plain text boxes; those rules lived only on the picker path, so the
-        # fields were detected, matched nothing here, and stayed empty.
-        profile_rules = self._standard_answer_rules(profile)
-        logger.info("TEXTQ: %d empty text box(es) on this page: %s",
-                    len(boxes), [ (b.get('q') or '')[:34] for b in boxes ][:6])
         for box in boxes:
             question = " ".join((box["q"] or "").split())
-            if question:
-                from_profile = self._rule_for(question, profile_rules)
-                if from_profile and from_profile[0]:
-                    answers = answers + [(re.compile(re.escape(question), re.I), from_profile[0])]
             for pattern, value in answers:
                 if question and pattern.search(question):
                     if self.set_value(page, f"[id={json.dumps(box['id'])}]", value, question,
-                                      source="profile:standard answer"):
+                                      source="profile:salary/date"):
                         logger.info("PROFILE_ANSWER: %r -> %r", question[:60], value)
-                    else:
-                        # It used to break in silence here, so a question the
-                        # agent had an answer for looked untouched.
-                        logger.warning("Could not write %r into %r", value[:40], question[:60])
                     break
 
     def _repair_rejected_phone(self, page: Page, profile) -> None:
-        """Some forms accept only digits, dashes and parentheses -- the space in
-        '(571) 354-5212' made one reject it. Re-enter it as 571-354-5212, but
-        only where the form has actually flagged the field invalid. Also handles
-        phone_mobile, phone_home, and phone_work fields."""
-        # Extract base 10 digits from configured phone numbers
+        """Repair phone format validation errors by trying multiple formats.
+
+        Some forms are picky about phone number format:
+        - Some accept dashed: 571-354-5212
+        - Some accept parentheses: (571) 354-5212
+        - Some accept plain digits: 5713545212
+
+        This method detects phone field types (mobile/home/work) and tries
+        different formats until one is accepted by the form.
+        """
+        # Extract all configured phone numbers
         phone_numbers = {
-            "phone": getattr(profile, "phone", "") or "",
-            "phone_mobile": getattr(profile, "phone_mobile", "") or "",
-            "phone_home": getattr(profile, "phone_home", "") or "",
-            "phone_work": getattr(profile, "phone_work", "") or "",
+            "phone": re.sub(r"\D", "", getattr(profile, "phone", "") or "")[-10:],
+            "phone_mobile": re.sub(r"\D", "", getattr(profile, "phone_mobile", "") or "")[-10:],
+            "phone_home": re.sub(r"\D", "", getattr(profile, "phone_home", "") or "")[-10:],
+            "phone_work": re.sub(r"\D", "", getattr(profile, "phone_work", "") or "")[-10:],
         }
-        
-        # Convert to standard formats for retry
-        formats = {}
-        for key, phone in phone_numbers.items():
-            if phone:
-                digits = re.sub(r"\D", "", phone)[-10:]
-                if len(digits) == 10:
-                    formats[key] = {
-                        "dashed": f"{digits[:3]}-{digits[3:6]}-{digits[6:]}",
-                        "parens": f"({digits[:3]}) {digits[3:6]}-{digits[6:]}",
-                        "plain": digits
-                    }
-        
-        if not formats:
+
+        # Filter to only valid 10-digit numbers
+        phone_numbers = {k: v for k, v in phone_numbers.items() if len(v) == 10}
+        if not phone_numbers:
             return
-        
-        # Find all phone input fields (including those without aria-invalid)
+
+        def format_phone(digits: str) -> dict[str, str]:
+            """Convert 10-digit string to 3 formats"""
+            return {
+                "dashed": f"{digits[:3]}-{digits[3:6]}-{digits[6:]}",
+                "parentheses": f"({digits[:3]}) {digits[3:6]}-{digits[6:]}",
+                "plain": digits,
+            }
+
+        # Find all phone-like input fields (not just aria-invalid ones)
         phones = page.locator(
-            "input[type=tel], input[type=text][id*=phone i], input[type=text][name*=phone i], "
-            "input[type=text][placeholder*=phone i], input[type=text][id*=mobile i], "
-            "input[type=text][id*=home i]"
+            "input[type=tel], input[id*=phone i], input[name*=phone i], "
+            "input[placeholder*=phone i], input[aria-label*=phone i]"
         )
-        
+
         for i in range(phones.count()):
             field = phones.nth(i)
             try:
                 current = (field.input_value() or "").strip()
-                if not current:  # Already empty, skip
+                if not current:
+                    continue  # Skip empty fields
+
+                # Detect field type from label/placeholder/id/aria-label
+                field_id = field.get_attribute("id") or ""
+                field_name = field.get_attribute("name") or ""
+                field_placeholder = field.get_attribute("placeholder") or ""
+                field_aria_label = field.get_attribute("aria-label") or ""
+                field_text = f"{field_id} {field_name} {field_placeholder} {field_aria_label}".lower()
+
+                # Determine which phone number to use based on field type
+                phone_type = "phone"  # default
+                if any(x in field_text for x in ["mobile", "cell", "cellular"]):
+                    phone_type = "phone_mobile"
+                elif any(x in field_text for x in ["home", "residential"]):
+                    phone_type = "phone_home"
+                elif any(x in field_text for x in ["work", "office", "business"]):
+                    phone_type = "phone_work"
+
+                digits = phone_numbers.get(phone_type) or phone_numbers.get("phone")
+                if not digits:
                     continue
-                    
-                # Get field label to determine which phone type to use
-                label = (field.get_attribute("aria-label") or "").lower()
-                label += " " + (field.get_attribute("placeholder") or "").lower()
-                label += " " + (field.get_attribute("id") or "").lower()
-                
-                # Determine which phone type this field is
-                phone_key = "phone"  # default
-                if "mobile" in label or "cell" in label:
-                    phone_key = "phone_mobile"
-                elif "home" in label:
-                    phone_key = "phone_home"
-                elif "work" in label:
-                    phone_key = "phone_work"
-                
-                if phone_key not in formats:
-                    continue
-                
-                # Try different formats until one works
-                for format_name in ["dashed", "parens", "plain"]:
-                    new_val = formats[phone_key][format_name]
-                    if current != new_val:
-                        selector = f"[id={json.dumps(field.get_attribute('id') or '')}]" if field.get_attribute("id") else ""
-                        if selector and not self.values.may_write(page, selector, current):
-                            break  # User's own number, don't touch
-                        
-                        field.fill(new_val, timeout=4_000)
-                        field.press("Tab")
-                        page.wait_for_timeout(500)
-                        if selector:
-                            self.values.record(page, selector, new_val)
-                        logger.info("Re-entered %s phone as %s format: %s", phone_key, format_name, new_val)
-                        break  # Moved to next field
+
+                formats = format_phone(digits)
+                selector = f"[id={json.dumps(field_id)}]" if field_id else ""
+
+                # Check if we should write to this field
+                if selector and not self.values.may_write(page, selector, current):
+                    continue  # the user typed their own number
+
+                # Try formats in order: dashed, parentheses, plain
+                format_tried = None
+                for format_name in ["dashed", "parentheses", "plain"]:
+                    new_value = formats[format_name]
+                    if new_value == current:
+                        logger.info("Phone field already has %s format", format_name)
+                        break
+
+                    try:
+                        field.fill(new_value, timeout=4_000)
+                        field.press("Tab", delay=200)
+                        page.wait_for_timeout(400)  # Wait for validation
+
+                        # Check if field still shows as invalid
+                        is_invalid = field.get_attribute("aria-invalid") == "true"
+                        if not is_invalid:
+                            # Format was accepted!
+                            if selector:
+                                self.values.record(page, selector, new_value)
+                            logger.info("Phone field (%s) accepted %s format: %s", phone_type, format_name, new_value)
+                            format_tried = format_name
+                            break
+                    except Exception as exc:
+                        logger.debug("Tried %s format, got error: %s", format_name, exc)
+                        continue
+
+                if format_tried:
+                    logger.info("Successfully repaired phone field with %s format", format_tried)
+                else:
+                    logger.warning("Could not find accepted format for phone field (%s)", phone_type)
+
             except Exception as exc:
                 logger.warning("Could not repair phone field: %s", exc)
 
@@ -2214,8 +2141,12 @@ class JobApplicationAssistant:
         "button:has-text('Save and Continue')",
         "button:has-text('Continue')",
         "button:has-text('Next')",
+        "button:has-text('Proceed')",
+        "button:has-text('Submit')",  # For non-final submit buttons (page navigation)
         "a:has-text('Save and Continue')",
         "a:has-text('Continue')",
+        "a:has-text('Next')",
+        "a:has-text('Proceed')",
     )
 
     @staticmethod
@@ -2254,14 +2185,10 @@ class JobApplicationAssistant:
 
     def _page_fingerprint(self, page: Page) -> str:
         try:
-            # The values matter as much as the fields: a questionnaire filled
-            # in is a changed page, and without them a form that had refused to
-            # advance stayed marked as the last step however much was answered.
             return page.url + "|" + page.evaluate(
                 "() => [...document.querySelectorAll('h1, h2, h3, input, select, textarea')]"
-                ".filter(e => e.getClientRects().length)"
-                ".map(e => (e.id || e.name || e.innerText || e.tagName) + ':' + ((e.value || '').slice(0, 24)))"
-                ".join(',').slice(0, 6000)"
+                ".filter(e => e.getClientRects().length).map(e => e.id || e.name || e.innerText || e.tagName)"
+                ".join(',').slice(0, 4000)"
             )
         except Exception:
             return page.url
@@ -2270,17 +2197,18 @@ class JobApplicationAssistant:
         """True when there's a forward button to advance the wizard -- and the
         last click on one actually moved somewhere. A click that left the same
         page in place means it isn't a wizard step, so stop advancing."""
-        if getattr(self, "_stuck_on", None) == self._page_fingerprint(page):
-            # Before calling it the end: the page may be waiting for a section
-            # of its own to be saved, which is what Dayforce does. If one was
-            # open, saving it is the reason Next did nothing.
-            if self.commit_open_sections(page):
-                self._stuck_on = None
-                return self._wizard_button(page) is not None
-            logger.warning("NEXT_STUCK: clicking Next/Continue didn't change the page -- treating it as the last step")
+        # Check if we're on a review step (final page)
+        if self.is_on_review_step(page):
+            logger.info("has_next_step: On Review page - no next step available")
             return False
-        # 'Save and Submit' is deliberately NOT here: that button submits.
-        return self._wizard_button(page) is not None
+
+        # Simply check if a next button exists and is visible
+        # The old fingerprint check was too strict and caused false negatives
+        # The auto_advance_multipage_form() method will handle page change detection
+        has_button = self._wizard_button(page) is not None
+        if not has_button:
+            logger.info("has_next_step: No Next/Continue button found")
+        return has_button
 
     def has_experience_section(self, page):
         """Workday-specific; implemented in sites/workday.py."""
@@ -4501,41 +4429,81 @@ class JobApplicationAssistant:
         logger.info("DATE_FIELD_INSPECT[%d]: %s", index, info)
         return info
 
-    # A section of a form that is open for editing, with a save of its own.
-    # Dayforce will not let the wizard advance while one is open: the agent
-    # pressed Next, the page ignored it, and the run called that the last step.
-    _SECTION_SAVE_SELECTORS = (
-        "button:has-text('Update')",
-        "button:has-text('Save')",
-        "button:has-text('Done')",
-        "button:has-text('Apply Changes')",
-    )
+    def auto_advance_multipage_form(self, page: Page, profile: UserProfile) -> None:
+        """Automatically advances through multi-page forms by clicking Next/Continue/Proceed buttons.
 
-    def commit_open_sections(self, page: Page) -> int:
-        """Presses a section's own Save/Update/Done.
-
-        These commit part of a form; none of them sends an application --
-        safety.is_submit_label() is checked all the same, and anything that
-        reads as a submit is left alone.
+        After filling a page, this method:
+        1. Checks for a visible Next/Continue/Proceed button
+        2. If found, clicks it and waits for the next page to load
+        3. Automatically fills fields on the next page
+        4. Repeats until no more Next button is found or Review page is reached
         """
-        committed = 0
-        for selector in self._SECTION_SAVE_SELECTORS:
-            buttons = page.locator(selector)
-            for i in range(min(buttons.count(), 4)):
-                button = buttons.nth(i)
+        max_pages = 15  # Safety limit to prevent infinite loops
+        pages_processed = 0
+        consecutive_no_fields = 0
+
+        while pages_processed < max_pages:
+            # Check if we're on a Review page (final page before submission)
+            if self.is_on_review_step(page):
+                logger.info("Multipage_AutoAdvance: Reached Review step - stopping (you will submit manually)")
+                break
+
+            # Check if there's a next button visible
+            btn = self._wizard_button(page)
+            if btn is None:
+                logger.info("Multipage_AutoAdvance: No Next/Continue button found - form appears complete")
+                break
+
+            try:
+                btn_text = (btn.inner_text() or "").strip()
+                logger.info("Multipage_AutoAdvance: Clicking '%s' button to proceed to next page", btn_text)
+
+                # Take snapshot before click
+                before_fields = self.detect_form_fields(page)
+                before_field_count = len(before_fields)
+
+                # Click the next button
                 try:
-                    label = (button.inner_text() or "").strip()
-                    if safety.is_submit_label(label) or not button.is_visible():
-                        continue
-                    if not button.is_enabled() or self._in_popup(button):
-                        continue
-                    button.click(timeout=4_000)
-                    page.wait_for_timeout(1_200)
-                    logger.info("Saved an open section with %r", label[:30])
-                    committed += 1
-                except Exception as exc:
-                    logger.debug("Could not save a section: %s", str(exc).splitlines()[0][:100])
-        return committed
+                    btn.click(timeout=10_000)
+                except Exception as click_err:
+                    logger.warning("Multipage_AutoAdvance: Could not click '%s': %s", btn_text, str(click_err).splitlines()[0][:100])
+                    break
+
+                # Wait for page transition - be generous with timing
+                page.wait_for_timeout(3_500)  # Increased wait for SPA re-render
+                try:
+                    page.wait_for_load_state("networkidle", timeout=12_000)
+                except Exception:
+                    page.wait_for_timeout(2_000)
+
+                # Check if new page loaded by detecting fields
+                after_fields = self.detect_form_fields(page)
+                after_field_count = len(after_fields)
+
+                # If we have fields on this page, fill them
+                if after_fields:
+                    consecutive_no_fields = 0  # Reset counter
+                    logger.info("Multipage_AutoAdvance: Detected %d fillable fields on new page", after_field_count)
+                    filled = self.fill_detected_fields(page, after_fields, profile)
+                    logger.info("Multipage_AutoAdvance: Auto-filled %d/%d fields", len(filled), after_field_count)
+                    pages_processed += 1
+                else:
+                    # No fields detected - could be loading, error page, or final page
+                    consecutive_no_fields += 1
+                    logger.warning("Multipage_AutoAdvance: No fillable fields detected (attempt %d)", consecutive_no_fields)
+
+                    if consecutive_no_fields >= 3:
+                        logger.info("Multipage_AutoAdvance: No fields for 3 attempts - stopping")
+                        break
+
+                    # Wait and try again
+                    page.wait_for_timeout(2_000)
+
+            except Exception as exc:
+                logger.warning("Multipage_AutoAdvance: Error: %s", str(exc).splitlines()[0][:120])
+                break
+
+        logger.info("Multipage_AutoAdvance: Completed (processed %d pages)", pages_processed)
 
     def click_next_step(self, page: Page) -> bool:
         """Advances a multi-step application wizard (Workday etc.) by one
@@ -4543,9 +4511,6 @@ class JobApplicationAssistant:
         moving through the draft, not submitting anything; the real
         application is only ever submitted by the user themselves on the
         final Review step."""
-        # An open section first: its Save/Update is what the page is waiting
-        # for, and Next does nothing until it is pressed.
-        self.commit_open_sections(page)
         btn = self._wizard_button(page)
         if btn is None:
             return False
@@ -4570,48 +4535,7 @@ class JobApplicationAssistant:
             page.wait_for_load_state("networkidle", timeout=10_000)
         except Exception:
             page.wait_for_timeout(2_000)
-        if self._page_fingerprint(page) == before:
-            # The click was accepted and nothing happened. Some buttons in a
-            # single-page form only act on a real key press, so try the way a
-            # person using a keyboard would.
-            try:
-                btn.focus()
-                page.keyboard.press("Enter")
-                page.wait_for_timeout(2_500)
-                try:
-                    page.wait_for_load_state("networkidle", timeout=8_000)
-                except Exception:
-                    pass
-                if self._page_fingerprint(page) != before:
-                    logger.info("The form moved on when the button was pressed with the keyboard")
-            except Exception as exc:
-                logger.debug("Keyboard press failed: %s", str(exc).splitlines()[0][:100])
-
         self._stuck_on = before if self._page_fingerprint(page) == before else None
-        if self._stuck_on:
-            # The page stayed put. Whatever it is waiting for, it usually says
-            # so somewhere on screen -- worth reporting rather than calling
-            # this the last step in silence.
-            try:
-                said = page.evaluate("""() => {
-                    // Ant shows its complaints in a toast that fades, and in
-                    // a live region -- neither is an [role=alert] on a field.
-                    const toasts = [...document.querySelectorAll(
-                        '.ant-message, .ant-notification, [aria-live], [class*=toast], [class*=message-notice]')]
-                        .map(e => (e.innerText || '').replace(/\\s+/g, ' ').trim())
-                        .filter(t => t && t.length < 200);
-                    if (toasts.length) return toasts.slice(0, 4);
-                    const visible = e => !!(e.offsetParent || e.getClientRects().length);
-                    const box = e => e.getBoundingClientRect();
-                    return [...document.querySelectorAll('[role=alert], [class*=error i], [class*=explain], [class*=warning i]')]
-                        .filter(e => visible(e) && box(e).height > 1)
-                        .map(e => (e.innerText || '').replace(/\\s+/g, ' ').trim())
-                        .filter(t => t && t.length < 200).slice(0, 5);
-                }""")
-            except Exception:
-                said = []
-            logger.warning("The page did not move on%s",
-                           (": " + "; ".join(said)) if said else " and said nothing about why")
         return True
 
     _CONFIRMATION_PHRASES = (
@@ -5076,10 +5000,7 @@ class JobApplicationAssistant:
         report = {"required_still_blank": [], "errors_shown": [], "unanswered_questions": [],
                   "attestations_pending": [], "warnings_shown": [], "ambiguous_choices": [],
                   "unsupported_questions": [], "identity_checks": [], "attached_documents": [],
-                  "captcha": False, "resume_attached": None, "page_url": "",
-                  # True when Next did nothing: the page is waiting for
-                  # something the agent has not done, and this is not the end.
-                  "wizard_stuck": bool(getattr(self, "_stuck_on", None))}
+                  "captcha": False, "resume_attached": None, "page_url": ""}
         try:
             report["page_url"] = page.url
             blanks = self.find_required_blanks(page)

@@ -707,6 +707,13 @@ def reload_browser_automation(assistant: JobApplicationAssistant) -> JobApplicat
         # reloading only one half left a new call meeting an old adapter --
         # which killed a live Amazon application with AttributeError.
         import sites
+        # safety.py holds the rules the run applies -- a fix to them reached
+        # the code on disk but not the running process, which went on using
+        # the version it started with.
+        try:
+            importlib.reload(safety)
+        except Exception as exc:
+            logger.warning("Could not reload safety.py: %s", exc)
         for module in [sites.base] + [
             importlib.import_module(f"sites.{name}") for name in
             ("amazon", "ashby", "eightfold", "greenhouse", "lever", "successfactors", "workday")

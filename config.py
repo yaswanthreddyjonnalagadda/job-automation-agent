@@ -85,6 +85,14 @@ class UserProfile:
     gender: str = "Male"
     work_arrangements: tuple[str, ...] = ("In Person Office", "Remote Virtual", "Hybrid")
     work_type: str = "Full-Time"
+    # The most recent employer, as questionnaires ask for it. These match the
+    # resume word for word, so the form and the document say the same thing.
+    current_employer: str = "Capital One"
+    current_position_title: str = "Senior Network and Security Engineer"
+    current_employer_type: str = "Financial Services"
+    current_employment_dates: str = "February 2025 - Present"
+    reason_for_leaving: str = "Currently employed"
+    current_employer_location: str = "McLean, VA"
     employment_statuses: tuple[str, ...] = ("Full-Time",)  # Text field or checkboxes: select all that apply
     # Where the user actually finds these postings (their answer, 2026-09-16).
     how_did_you_hear: str = "LinkedIn"

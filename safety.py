@@ -283,11 +283,16 @@ def handover_status(report: dict) -> tuple[str, str]:
     ready_to_submit   -- nothing outstanding; the user reviews and clicks Submit
     needs_user_review -- blanks, form errors, a CAPTCHA or an attestation remain
     """
+    # The user's rule (2026-09-16): with every mandatory field filled, an
+    # application does not need reviewing. So only what genuinely stops it
+    # counts -- a required field still empty, an error the form itself is
+    # showing, and the two things the agent must never do: sign an attestation
+    # and answer a CAPTCHA. Anything else is said in the notes and does not
+    # hold the application up.
     problems: list[str] = []
     for label, items in (
         ("required fields still blank", report.get("required_still_blank") or []),
         ("errors shown by the form", report.get("errors_shown") or []),
-        ("questions the agent could not answer from your profile", report.get("unanswered_questions") or []),
         ("attestations or signatures for you to complete", report.get("attestations_pending") or []),
     ):
         if items:
@@ -297,6 +302,17 @@ def handover_status(report: dict) -> tuple[str, str]:
 
     if problems:
         return "needs_user_review", " | ".join(problems)
+
+    # Worth saying, not worth stopping for.
+    notes: list[str] = []
+    for label, items in (
+        ("left for you, with no answer in your profile", report.get("unanswered_questions") or []),
+        ("answered as closely as the options allowed", report.get("ambiguous_choices") or []),
+    ):
+        if items:
+            notes.append(f"{label}: " + "; ".join(str(i) for i in items[:3]))
+    if report.get("wizard_stuck"):
+        notes.append("the form did not move past this step on its own")
 
     # An empty page has no blanks and no errors, so "nothing outstanding" used
     # to mean "ready to submit" even where the agent never reached a form at
@@ -311,7 +327,8 @@ def handover_status(report: dict) -> tuple[str, str]:
                 "Nothing on this page was filled in or attached, so there is nothing to submit yet. "
                 "Check that the application form is open and start it again.")
 
-    return "ready_to_submit", "Every required field is filled and the form shows no errors."
+    message = "Every required field is filled and the form shows no errors."
+    return "ready_to_submit", " | ".join([message] + notes)
 
 
 def verification_status(evidence: Optional[str]) -> tuple[str, str]:

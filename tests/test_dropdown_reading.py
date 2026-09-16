@@ -159,6 +159,7 @@ def test_the_tailored_resume_is_always_asked_for():
     import inspect
 
     from claude_integration import ClaudeClient
+    from config import get_user_profile
 
     signature = inspect.signature(ClaudeClient.tailor_resume)
     assert signature.parameters["extra_instruction"].default == ""
@@ -174,7 +175,7 @@ def test_the_tailored_resume_is_always_asked_for():
     client._call = fake_call
     job = type("J", (), {"title": "Support Engineer", "company": "Amazon", "raw_text": "networking"})()
     resume = type("R", (), {"raw_text": "five years of networking"})()
-    profile = type("P", (), {"full_name": "Someone", "years_experience": 6})()
+    profile = get_user_profile()  # the prompt now names most of the profile
     assert client.tailor_resume(resume, job, profile) == "TAILORED"
     assert "networking" in asked["user_message"]
     assert "IMPORTANT CORRECTION" in source  # the retry path still exists
@@ -268,17 +269,21 @@ def test_a_posting_with_no_way_to_apply_reports_nothing(page, agent):
     assert agent.apply_destination(page) == ""
 
 
-def test_a_run_alongside_the_users_chrome_uses_the_bundled_browser(monkeypatch, agent):
-    """Chrome will not start a second instance while one is running, even
-    against a separate profile: it hands the command to the running copy and
-    exits. Insisting on it would mean the user cannot browse while an
-    application is open."""
+def test_the_configured_browser_is_used_even_while_chrome_is_open(monkeypatch, agent):
+    """The user asked for real Chrome always, for rendering fidelity, so the
+    fallback to the bundled browser is deliberately gone.
+
+    The cost is real and was measured: Chrome will not start a second instance
+    while one is running, even against a separate profile -- it hands the
+    command to the running copy and exits -- so a run started while their
+    Chrome is open fails to launch. Closing Chrome first is the price of this
+    setting."""
     from browser_automation import JobApplicationAssistant
 
     agent._config = type("C", (), {"browser_channel": "chrome",
                                    "browser_profile_dir": "C:/x/browser_profile"})()
     monkeypatch.setattr(JobApplicationAssistant, "_chrome_is_running", staticmethod(lambda: True))
-    assert agent._choose_channel() == ""
+    assert agent._choose_channel() == "chrome"
 
     monkeypatch.setattr(JobApplicationAssistant, "_chrome_is_running", staticmethod(lambda: False))
     assert agent._choose_channel() == "chrome"
@@ -609,3 +614,81 @@ def test_a_phone_the_form_accepts_is_left_as_it_is(page, agent):
       </body></html>""")
     assert agent.fix_rejected_phone_numbers(page) == 0
     assert page.input_value("#homePhone") == "(571) 354-5212"
+
+
+def test_a_section_is_saved_before_the_wizard_is_advanced(page, agent):
+    """Dayforce keeps Candidate Info open for editing with an Update button of
+    its own, and will not advance while it is open: the agent pressed Next, the
+    page ignored it, and the run called that the last step."""
+    page.set_content("""<html><body>
+        <button onclick="document.title='section saved'">Update</button>
+        <button onclick="document.title='advanced'">Next</button>
+      </body></html>""")
+    assert agent.commit_open_sections(page) == 1
+    assert page.title() == "section saved"
+
+
+def test_a_sections_save_is_never_a_submit(page, agent):
+    """'Save and Submit' sends the application; it is not a section's save."""
+    page.set_content("""<html><body>
+        <button onclick="document.title='SUBMITTED'">Save and Submit</button>
+      </body></html>""")
+    assert agent.commit_open_sections(page) == 0
+    assert page.title() != "SUBMITTED"
+
+
+def test_a_form_that_will_not_move_on_is_still_ready_once_everything_is_filled():
+    """The user's rule: with every mandatory field filled, an application does
+    not need reviewing. A wizard that would not advance is said in the notes,
+    not held against the application."""
+    status, message = safety.handover_status(
+        {"required_still_blank": [], "errors_shown": [], "form_reached": True,
+         "fields_filled": 12, "documents_attached": 2, "wizard_stuck": True}
+    )
+    assert status == "ready_to_submit"
+    assert "did not move past this step" in message
+
+
+def test_review_is_still_asked_for_what_only_the_user_can_do():
+    for report, expected in (
+        ({"required_still_blank": ["City"]}, "a required field"),
+        ({"errors_shown": ["Phone is invalid"]}, "an error the form shows"),
+        ({"attestations_pending": ["Typed signature"]}, "an attestation"),
+        ({"captcha": True}, "a CAPTCHA"),
+    ):
+        full = {"form_reached": True, "fields_filled": 12, "documents_attached": 1, **report}
+        assert safety.handover_status(full)[0] == "needs_user_review", expected
+
+
+EMPLOYMENT_QUESTIONNAIRE = """
+<html><body>
+  <label for="q1">Most Recent Employer: Company Name</label>
+  <input id="q1" type="text" value="">
+  <label for="q2">Type of Business</label>
+  <input id="q2" type="text" value="">
+  <label for="q3">Dates of Employment</label>
+  <input id="q3" type="text" value="">
+  <label for="q4">Position Title</label>
+  <input id="q4" type="text" value="">
+  <label for="q5">Reason for Leaving</label>
+  <input id="q5" type="text" value="">
+</body></html>
+"""
+
+
+def test_a_questionnaires_employment_questions_are_answered(page, agent):
+    """Dayforce's Questionnaire asks for the most recent employer as plain text
+    boxes. The profile held none of it, and those rules lived only on the
+    picker path, so five required fields were detected, matched nothing, and
+    stayed empty -- and the form would not move on."""
+    from config import get_user_profile
+
+    page.set_content(EMPLOYMENT_QUESTIONNAIRE)
+    agent._profile = get_user_profile()
+    agent.adapter = lambda _page: __import__("sites").SiteAdapter()
+    agent._answer_text_questions(page, get_user_profile())
+    assert page.input_value("#q1") == "Capital One"
+    assert page.input_value("#q2") == "Financial Services"
+    assert page.input_value("#q3") == "February 2025 - Present"
+    assert page.input_value("#q4") == "Senior Network and Security Engineer"
+    assert page.input_value("#q5") == "Currently employed"

@@ -166,12 +166,15 @@ Disability status: {profile.disability_status}
 Ethnicity: {profile.ethnicity}
 Gender: {profile.gender}
 Availability to start: {profile.availability_to_start}
+Employment statuses desired: {", ".join(profile.employment_statuses) if profile.employment_statuses else "Not specified"}
 """
         user_message = (
             f"{profile_summary}\n"
-            f"CANDIDATE RESUME:\n{resume.raw_text}\n\n"
-            f"JOB: {job.title} at {job.company}\n\n"
-            f"SCREENING QUESTIONS (JSON):\n{json.dumps(questions, indent=2)}"
+            f"CANDIDATE RESUME (source of truth -- do not invent anything beyond this):\n"
+            f"{resume.raw_text}\n\n"
+            f"TARGET JOB TITLE: {job.title} at {job.company}\n"
+            f"JOB DESCRIPTION:\n{job.raw_text}\n\n"
+            "Produce a tailored version of the resume's summary and bullet points."
         )
         if extra_instruction:
             # A second attempt after unsupported claims were found: name them
@@ -242,6 +245,7 @@ Disability status: {profile.disability_status}
 Ethnicity: {profile.ethnicity}
 Gender: {profile.gender}
 Availability to start: {profile.availability_to_start}
+Employment statuses desired: {", ".join(profile.employment_statuses) if profile.employment_statuses else "Not specified"}
 """
         user_message = (
             f"{profile_summary}\n"
