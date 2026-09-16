@@ -588,3 +588,24 @@ def test_a_picker_that_already_holds_a_choice_is_left_alone(page, agent):
     agent.adapter = lambda _page: SiteAdapter()
     agent.answer_standard_questions(page, get_user_profile())
     assert answered == []
+
+
+def test_a_rejected_phone_number_is_rewritten_as_digits(page, agent):
+    """Dayforce keeps the country code in a control of its own and wants the
+    number as digits, so the profile's "(571) 354-5212" came back as "Home
+    Phone number is invalid" on a field the agent had just filled."""
+    page.set_content("""<html><body>
+        <input id="homePhone" type="tel" value="(571) 354-5212">
+        <div role="alert">Home Phone number is invalid</div>
+      </body></html>""")
+    assert agent.fix_rejected_phone_numbers(page) == 1
+    assert page.input_value("#homePhone") == "5713545212"
+
+
+def test_a_phone_the_form_accepts_is_left_as_it_is(page, agent):
+    page.set_content("""<html><body>
+        <input id="homePhone" type="tel" value="(571) 354-5212">
+        <div role="alert">Please review your application</div>
+      </body></html>""")
+    assert agent.fix_rejected_phone_numbers(page) == 0
+    assert page.input_value("#homePhone") == "(571) 354-5212"

@@ -255,6 +255,10 @@ class JobApplicationAssistant:
             # which the user never saw.
             no_viewport=True,
             args=["--start-maximized"],
+            # Deny browser-level permission requests (push notifications, location, etc.)
+            # so they don't block the application mid-form
+            permissions=[],  # Empty list = deny all permissions
+            geolocation={"latitude": 0, "longitude": 0},  # If location is needed, provide dummy
         )
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -636,6 +640,50 @@ class JobApplicationAssistant:
             logger.warning("Could not fill %s: %s", what or selector, str(exc).splitlines()[0][:120])
             return False
 
+    def fix_rejected_phone_numbers(self, page: Page) -> int:
+        """Rewrites a phone the form has just called invalid.
+
+        Dayforce keeps the country code in a control of its own and wants the
+        number as digits, so "(571) 354-5212" came back as "Home Phone number
+        is invalid" -- on a field the agent had filled from the profile, with
+        nothing on the page saying what shape it wanted.
+        """
+        try:
+            complaints = page.evaluate("""() => {
+                const visible = e => !!(e.offsetParent || e.getClientRects().length);
+                return [...document.querySelectorAll('[role=alert], [class*=error i], [aria-invalid=true]')]
+                    .filter(visible)
+                    .map(e => (e.innerText || '').trim())
+                    .filter(t => /phone/i.test(t) && /invalid|not valid|format/i.test(t));
+            }""")
+        except Exception:
+            return 0
+        if not complaints:
+            return 0
+
+        fixed = 0
+        for box in page.query_selector_all("input[type=tel], input[id*=hone], input[name*=hone]"):
+            try:
+                if not box.is_visible():
+                    continue
+                value = (box.get_attribute("value") or box.input_value() or "").strip()
+                digits = re.sub(r"\D", "", value)
+                if not digits or digits == value:
+                    continue
+                # A country code lives in its own control here, so the number
+                # goes in without one.
+                if len(digits) == 11 and digits.startswith("1"):
+                    digits = digits[1:]
+                box.fill("")
+                box.type(digits, delay=20)
+                box.evaluate("e => e.blur()")
+                page.wait_for_timeout(400)
+                logger.info("Rewrote a phone number the form rejected: %r -> %r", value, digits)
+                fixed += 1
+            except Exception as exc:
+                logger.debug("Could not rewrite a phone number: %s", str(exc).splitlines()[0][:100])
+        return fixed
+
     def _current_value(self, page: Page, selector: str) -> str:
         """What a control holds right now, picker or plain input."""
         try:
@@ -717,6 +765,7 @@ class JobApplicationAssistant:
             except Exception as exc:
                 logger.warning("Could not fill field %s: %s", field.selector, exc)
         logger.info("Auto-filled %d/%d detected fields", len(actually_filled), len(fields))
+        self.fix_rejected_phone_numbers(page)
 
         # A form that rebuilds itself after reading the resume (Dayforce) drops
         # what was typed into the version before it: address, postcode and

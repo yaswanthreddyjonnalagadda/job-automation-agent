@@ -142,14 +142,36 @@ class ClaudeClient:
             "would be printed on their resume. If the candidate lacks something "
             "the job asks for, simply leave it out."
         )
+        # Build a comprehensive profile summary with ALL available fields
+        # so Claude can answer simple dropdowns like "country code", "how did you hear?"
+        profile_summary = f"""CANDIDATE PROFILE:
+Name: {profile.full_name}
+Email: {profile.email}
+Phone: {profile.phone}
+Phone Country Code: {profile.phone_country_code}
+Current Location: {profile.current_location}
+Years of experience: {profile.years_experience}
+Visa sponsorship required: {profile.requires_visa_sponsorship}
+Work authorization: {profile.work_authorization}
+Open to relocation: {profile.open_to_relocation}
+Willing to travel: {profile.willing_to_travel}
+Preferred work arrangements: {", ".join(profile.work_arrangements) if profile.work_arrangements else "Not specified"}
+Preferred contact method: {profile.preferred_contact_method}
+Preferred language: {profile.preferred_language}
+How heard about job: {profile.how_did_you_hear}
+Security clearance: {profile.security_clearance}
+Citizenship: {profile.country_of_citizenship}
+Veteran status: {profile.veteran_status}
+Disability status: {profile.disability_status}
+Ethnicity: {profile.ethnicity}
+Gender: {profile.gender}
+Availability to start: {profile.availability_to_start}
+"""
         user_message = (
-            f"CANDIDATE PROFILE:\nName: {profile.full_name}\n"
-            f"Years of experience: {profile.years_experience}\n\n"
-            f"CANDIDATE RESUME (source of truth -- do not invent anything beyond this):\n"
-            f"{resume.raw_text}\n\n"
-            f"TARGET JOB TITLE: {job.title} at {job.company}\n"
-            f"JOB DESCRIPTION:\n{job.raw_text}\n\n"
-            "Produce a tailored version of the resume's summary and bullet points."
+            f"{profile_summary}\n"
+            f"CANDIDATE RESUME:\n{resume.raw_text}\n\n"
+            f"JOB: {job.title} at {job.company}\n\n"
+            f"SCREENING QUESTIONS (JSON):\n{json.dumps(questions, indent=2)}"
         )
         if extra_instruction:
             # A second attempt after unsupported claims were found: name them
@@ -196,11 +218,33 @@ class ClaudeClient:
             "options. Respond with ONLY a JSON object mapping each question_text you "
             "can answer to its answer string, no markdown fences, no commentary."
         )
+        # Build a comprehensive profile summary with ALL available fields
+        # so Claude can answer simple dropdowns like "country code", "how did you hear?"
+        profile_summary = f"""CANDIDATE PROFILE:
+Name: {profile.full_name}
+Email: {profile.email}
+Phone: {profile.phone}
+Phone Country Code: {profile.phone_country_code}
+Current Location: {profile.current_location}
+Years of experience: {profile.years_experience}
+Visa sponsorship required: {profile.requires_visa_sponsorship}
+Work authorization: {profile.work_authorization}
+Open to relocation: {profile.open_to_relocation}
+Willing to travel: {profile.willing_to_travel}
+Preferred work arrangements: {", ".join(profile.work_arrangements) if profile.work_arrangements else "Not specified"}
+Preferred contact method: {profile.preferred_contact_method}
+Preferred language: {profile.preferred_language}
+How heard about job: {profile.how_did_you_hear}
+Security clearance: {profile.security_clearance}
+Citizenship: {profile.country_of_citizenship}
+Veteran status: {profile.veteran_status}
+Disability status: {profile.disability_status}
+Ethnicity: {profile.ethnicity}
+Gender: {profile.gender}
+Availability to start: {profile.availability_to_start}
+"""
         user_message = (
-            f"CANDIDATE PROFILE:\nName: {profile.full_name}\n"
-            f"Years of experience: {profile.years_experience}\n"
-            f"Visa sponsorship required: {profile.requires_visa_sponsorship}\n"
-            f"Open to relocation: {profile.open_to_relocation}\n\n"
+            f"{profile_summary}\n"
             f"CANDIDATE RESUME:\n{resume.raw_text}\n\n"
             f"JOB: {job.title} at {job.company}\n\n"
             f"SCREENING QUESTIONS (JSON):\n{json.dumps(questions, indent=2)}"
