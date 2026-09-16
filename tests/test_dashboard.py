@@ -154,3 +154,16 @@ def test_a_run_that_died_while_the_dashboard_was_down_is_not_shown_as_running(tm
     web_ui._RUNS.clear()
     web_ui._load_runs()
     assert web_ui._RUNS["https://jobs.example.com/apply/42"]["state"].startswith("ended")
+
+
+def test_an_error_page_is_not_recorded_as_progress():
+    """An API error page was recorded as where an application had got to, and
+    Resume walked the browser straight back into it."""
+    import apply_flow
+
+    assert not apply_flow.worth_returning_to(
+        "https://jobs.dayforcehcm.com/api/auth/error?error=Request%20failed")
+    assert not apply_flow.worth_returning_to("https://accounts.google.com/signin")
+    assert not apply_flow.worth_returning_to("about:blank")
+    assert apply_flow.worth_returning_to(
+        "https://jobs.dayforcehcm.com/en-US/lumos/CANDIDATEPORTAL/jobs/9416/apply/manualApplication")

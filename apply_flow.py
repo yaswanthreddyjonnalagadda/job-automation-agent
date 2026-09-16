@@ -416,6 +416,22 @@ def on_form_resume(assistant, prepared):
     return getattr(assistant, "attached_resume", None) or prepared
 
 
+def worth_returning_to(url: str) -> bool:
+    """Whether a page is one to reopen later.
+
+    An error page, an API endpoint or a sign-in redirect is where a run ended
+    up, not where it got to: one was recorded as the application's page and
+    Resume walked the browser straight back into it.
+    """
+    if not url or not url.startswith("http"):
+        return False
+    lowered = url.lower()
+    return not any(mark in lowered for mark in (
+        "/api/", "auth/error", "error=", "/error", "signin", "sign-in", "/login",
+        "accounts.google.com", "about:blank", "/logout",
+    ))
+
+
 def remember_progress(tracker, key: str, page, note: str = "") -> None:
     """Writes down where this application has got to.
 
@@ -426,6 +442,8 @@ def remember_progress(tracker, key: str, page, note: str = "") -> None:
     try:
         url = page.url
     except Exception:
+        return
+    if not worth_returning_to(url):
         return
     if hasattr(tracker, "update_last_page"):
         try:
@@ -800,7 +818,10 @@ def main() -> None:
                     logger.debug("Could not record the pick-up: %s", exc)
 
         resume_at = getattr(args, "open_url", "") or ""
-        if not resume_at and existing and getattr(existing, "last_page_url", ""):
+        if resume_at and not worth_returning_to(resume_at):
+            logger.info("The page recorded for this application is not one to return to; starting from the posting")
+            resume_at = ""
+        if not resume_at and existing and worth_returning_to(getattr(existing, "last_page_url", "") or ""):
             # Started from the posting, but this application is already open on
             # the employer's site: carry on from there rather than walking the
             # whole wizard again.
