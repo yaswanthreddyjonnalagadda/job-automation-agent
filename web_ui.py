@@ -265,11 +265,35 @@ def index():
     tracker = get_tracker()
     apps = tracker.list_all()
     signals = sorted(p.name for p in (BASE_DIR / "data").glob("_signal_*.txt"))
-    with _RUNS_LOCK:
-        runs = dict(_RUNS)
+    runs = _current_runs()
     return render_template_string(
         INDEX_HTML, apps=apps, runs=runs, signals=signals, error=request.args.get("error"),
     )
+
+
+def _current_runs() -> dict:
+    """The runs as they actually are.
+
+    A run ends in its own process, which cannot write back here if this server
+    was reloaded in the meantime -- so a finished application went on being
+    shown as "running" until the dashboard was restarted. Anything whose
+    process is gone is settled here instead, using the tracker's status when it
+    has one.
+    """
+    tracker = get_tracker()
+    by_url = {}
+    for record in tracker.list_all():
+        if record.url:
+            by_url[record.url] = record.status
+    with _RUNS_LOCK:
+        for url, run in _RUNS.items():
+            if run["state"] != "running" or _process_alive(run.get("pid")):
+                continue
+            status = by_url.get(url, "")
+            run["state"] = f"finished -- {status.replace('_', ' ')}" if status else "ended"
+            run["proc"], run["pid"] = None, None
+            _save_runs()
+        return dict(_RUNS)
 
 
 @app.get("/application/<int:app_id>")
