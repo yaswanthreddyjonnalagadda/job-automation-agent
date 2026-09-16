@@ -1020,7 +1020,7 @@ class JobApplicationAssistant:
                                 // again, so a run never finished a page.
                                 let n = e.parentElement;
                                 for (let i = 0; i < 4 && n && !value; i++, n = n.parentElement) {
-                                    if (n.querySelectorAll('input, select, textarea').length > 1) break;
+                                    if (n.querySelectorAll('input:not([type=hidden]), select, textarea').length > 1) break;
                                     const shown = n.querySelector('[class*=singleValue], [class*=single-value],'
                                                                 + '[class*=selection-item]:not([class*=search])');
                                     if (shown) value = (shown.innerText || '').trim();
@@ -1275,7 +1275,7 @@ class JobApplicationAssistant:
                 for (let i = 0; i < 4 && n; i++, n = n.parentElement) {
                     // Another field inside this ancestor means we have left
                     // the control; its value is not ours to report.
-                    if (n.querySelectorAll('input, select, textarea').length > 1) break;
+                    if (n.querySelectorAll('input:not([type=hidden]), select, textarea').length > 1) break;
                     const shown = shownIn(n);
                     if (shown) return shown.innerText.trim();
                 }
@@ -2820,7 +2820,7 @@ class JobApplicationAssistant:
                             // once you choose; the choice sits beside it.
                             let n = el.parentElement;
                             for (let i = 0; i < 4 && n && !value; i++, n = n.parentElement) {
-                                if (n.querySelectorAll('input, select, textarea').length > 1) break;
+                                if (n.querySelectorAll('input:not([type=hidden]), select, textarea').length > 1) break;
                                 const shown = n.querySelector('[class*=singleValue], [class*=single-value],'
                                                             + '[class*=multiValue], [class*=multi-value],'
                                                             + '[class*=selection-item]:not([class*=search])');
@@ -4708,7 +4708,7 @@ class JobApplicationAssistant:
                             // after a choice and shows the value alongside it.
                             let n = el.parentElement;
                             for (let i = 0; i < 4 && n && !value; i++, n = n.parentElement) {
-                                if (n.querySelectorAll('input, select, textarea').length > 1) break;
+                                if (n.querySelectorAll('input:not([type=hidden]), select, textarea').length > 1) break;
                                 const shown = n.querySelector('[class*=singleValue], [class*=single-value],'
                                                             + '[class*=multiValue], [class*=multi-value],'
                                                             + '[class*=selection-item]:not([class*=search])');
