@@ -180,6 +180,11 @@ class JobApplicationAssistant:
         return self._playwright.chromium.launch_persistent_context(
             user_data_dir=str(profile_dir),
             headless=self._config.browser_headless,
+            # Playwright leaves the sandbox off by default, which passes
+            # --no-sandbox. Real Chrome then shows the user a banner saying
+            # stability and security will suffer -- and it is right. The
+            # agent browses real employer sites, so the sandbox stays on.
+            chromium_sandbox=True,
             **kwargs,
             # Size the page to the real, maximized window. Playwright's default
             # fixed 1280x720 page is taller than the window can be on a
