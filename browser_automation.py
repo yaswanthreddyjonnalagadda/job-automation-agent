@@ -2709,8 +2709,18 @@ class JobApplicationAssistant:
                     // as a problem held up an application with nothing wrong.
                     const ok = /\\b(success|successfully|uploaded|saved|complete[d]?)\\b/i;
                     const bad = /\\b(error|invalid|required|must|cannot|failed|unable|select an option)\\b/i;
+                    // Next.js announces each route change in a clipped,
+                    // one-pixel role="alert" for screen readers. It holds the
+                    // page title, and was reported as a form error.
+                    const announcement = e => {
+                        const box = e.getBoundingClientRect();
+                        const style = getComputedStyle(e);
+                        return box.height <= 1 || box.width <= 1
+                            || (style.clip || '').startsWith('rect(0')
+                            || e.id === '__next-route-announcer__';
+                    };
                     const errors = [...document.querySelectorAll('[role=alert], [aria-invalid=true], [class*=error i]')]
-                        .filter(visible)
+                        .filter(e => visible(e) && !announcement(e))
                         .map(e => (e.innerText || '').trim())
                         .filter(t => t && t.length < 200 && (bad.test(t) || !ok.test(t)));
                     return {required_still_blank: [...new Set(blanks)], errors_shown: [...new Set(errors)]};
@@ -2969,10 +2979,27 @@ class JobApplicationAssistant:
         LinkedIn) before the real form. Always choose 'Apply Manually' --
         the plain path our own field detector/filler can handle, and it
         never touches the LinkedIn OAuth button."""
-        btn = page.query_selector("button:has-text('Apply Manually'), a:has-text('Apply Manually')")
-        if not btn or not btn.is_visible():
+        # In order of preference. "Without an account" comes first: it needs no
+        # credentials and creates nothing, where signing in or creating an
+        # account would. None of these is an identity provider's button --
+        # "Continue with LinkedIn" and its like are never chosen.
+        wordings = (
+            "Apply without an Account", "Apply Without An Account",
+            "Continue without an account", "Apply as a Guest", "Continue as Guest",
+            "Apply Manually",
+        )
+        btn = None
+        for wording in wordings:
+            for selector in (f"button:has-text({wording!r})", f"a:has-text({wording!r})"):
+                found = page.query_selector(selector)
+                if found and found.is_visible():
+                    btn = found
+                    break
+            if btn:
+                logger.info("Apply chooser detected; selecting %r", wording)
+                break
+        if not btn:
             return page
-        logger.info("Apply chooser detected; selecting 'Apply Manually'")
         btn.click()
         try:
             page.wait_for_load_state("domcontentloaded", timeout=10_000)

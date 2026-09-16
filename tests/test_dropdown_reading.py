@@ -463,3 +463,29 @@ def test_an_option_the_input_ignores_is_chosen_through_its_wrapper(page, agent):
     assert agent.select_radio(page, box)
     assert page.eval_on_selector("input[aria-label='Asian']", "e => e.checked")
     assert not page.eval_on_selector("input[aria-label='Hispanic or Latino']", "e => e.checked")
+
+
+def test_a_screen_reader_announcement_is_not_a_form_error(page, agent):
+    """Next.js announces each route change in a clipped one-pixel role=alert
+    holding the page title. It was collected as a form error, so an untouched
+    Dayforce page reported "form error: Apply | Dayforce Jobs"."""
+    page.set_content("""<html><body>
+        <p id="__next-route-announcer__" role="alert"
+           style="clip:rect(0px,0px,0px,0px);height:1px;width:1px;overflow:hidden">Apply | Dayforce Jobs</p>
+        <div role="alert">Enter a valid phone number</div>
+      </body></html>""")
+    errors = agent.find_required_blanks(page)["errors_shown"]
+    assert errors == ["Enter a valid phone number"]
+
+
+def test_the_chooser_applies_without_an_account(page, agent):
+    """Dayforce offers "Apply without an Account", "Sign In" and "Create one
+    now". Without an account needs no credentials and creates nothing, so it
+    is the one taken; the agent stopped at this page before."""
+    page.set_content("""<html><body>
+        <button onclick="document.title='chose guest'">Apply without an Account</button>
+        <button onclick="document.title='chose sign in'">Sign In</button>
+        <a href="#" onclick="document.title='chose create'">Create one now.</a>
+      </body></html>""")
+    agent.dismiss_apply_chooser(page)
+    assert page.title() == "chose guest"
