@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -141,39 +142,100 @@ class JobApplicationAssistant:
     def __enter__(self) -> "JobApplicationAssistant":
         self._playwright = sync_playwright().start()
         profile_dir = Path(self._config.browser_profile_dir)
-        channel = (getattr(self._config, "browser_channel", "") or "").strip()
-        if channel and channel != "chromium":
-            logger.info("Using %s with the profile at %s", channel, profile_dir)
-        self._guard_profile_in_use(profile_dir)
+        # A run whose process is killed leaves its browser running, and that
+        # browser keeps holding this profile: every later run then died at
+        # startup with "Opening in existing browser session". The leftover
+        # belongs to the agent -- it is identified by this profile directory,
+        # never by being a browser -- so it is closed here.
+        self._close_leftover_browsers(profile_dir)
+        channel = self._choose_channel()
         try:
             self._context = self._launch(channel, profile_dir)
         except Exception as exc:
-            if not channel or channel == "chromium":
+            if not channel:
                 raise
-            # Chrome is not installed, or this channel is unavailable: the
-            # bundled build still runs the application.
+            # Chrome is not installed, or it declined to start a second
+            # instance after all. Its stub claims the profile on the way out,
+            # so the leftovers go before the bundled build tries.
             logger.warning("Could not start %s (%s) -- falling back to the bundled browser",
                            channel, str(exc).splitlines()[0][:120])
+            self._release_profile(profile_dir)
             self._context = self._launch("", profile_dir)
         return self
 
-    @staticmethod
-    def _guard_profile_in_use(profile_dir: Path) -> None:
-        """A profile can only be open in one browser at a time.
+    def _choose_channel(self) -> str:
+        """Real Chrome when it can be used, the bundled build when it cannot.
 
-        Pointed at the user's own Chrome profile while Chrome is running, the
-        launch fails with a message about the profile being in use; saying so
-        plainly beats letting Playwright's error surface.
+        Chrome refuses to start a second instance while one is already
+        running, even against a separate profile: it hands the command to the
+        running copy and exits ("Opening in existing browser session"). Using
+        it unconditionally would mean the user cannot browse while an
+        application is open, so a run started alongside their Chrome uses the
+        bundled build instead.
         """
-        lock = profile_dir / "lockfile"
-        if not lock.exists():
-            return
+        channel = (getattr(self._config, "browser_channel", "") or "").strip()
+        if not channel or channel == "chromium":
+            return ""
+        if self._chrome_is_running():
+            logger.info("Chrome is already open, so this run uses the bundled browser "
+                        "instead of %s -- carry on browsing.", channel)
+            return ""
+        logger.info("Using %s with the profile at %s", channel, self._config.browser_profile_dir)
+        return channel
+
+    @staticmethod
+    def _chrome_is_running() -> bool:
         try:
-            lock.rename(lock)  # a held lock cannot be renamed on Windows
-        except OSError:
-            logger.warning(
-                "The browser profile at %s is already open in another window. "
-                "Close that browser and start this run again.", profile_dir)
+            if os.name != "nt":
+                return False
+            out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq chrome.exe"],
+                                 capture_output=True, text=True, timeout=20).stdout
+            return "chrome.exe" in out
+        except Exception:
+            return False
+
+    @staticmethod
+    def _close_leftover_browsers(profile_dir: Path) -> int:
+        """Ends browser processes still holding the agent's own profile.
+
+        Matched on the profile path, so the user's own Chrome windows -- which
+        use their own profile -- are never touched. The listing is done in the
+        shell and the matching here: wmic is gone from Windows 11, and quoting
+        a Windows path into a PowerShell filter is its own source of bugs.
+        """
+        if os.name != "nt":
+            return 0
+        try:
+            listing = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"],
+                capture_output=True, text=True, timeout=45).stdout
+            rows = json.loads(listing or "[]")
+        except Exception as exc:
+            logger.debug("Could not list processes: %s", exc)
+            return 0
+
+        marker = str(profile_dir).lower()
+        pids = [str(row.get("ProcessId")) for row in rows
+                if marker in (row.get("CommandLine") or "").lower()]
+        for pid in pids:
+            subprocess.run(["taskkill", "/PID", pid, "/T", "/F"], capture_output=True, check=False)
+        if pids:
+            logger.info("Closed %d browser process(es) left over from an earlier run", len(pids))
+        return len(pids)
+
+    @staticmethod
+    def _release_profile(profile_dir: Path) -> None:
+        """Clears the locks a failed launch leaves in the agent's own profile.
+
+        Only ever this profile -- never the user's, whose locks mean a browser
+        of theirs is genuinely open.
+        """
+        for name in ("SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"):
+            try:
+                (profile_dir / name).unlink(missing_ok=True)
+            except OSError as exc:
+                logger.debug("Could not clear %s: %s", name, exc)
 
     def _launch(self, channel: str, profile_dir: Path):
         kwargs = {"channel": channel} if channel and channel != "chromium" else {}
@@ -2657,15 +2719,71 @@ class JobApplicationAssistant:
         self.accept_consent_dialog(page)
         return True
 
+    def find_apply_control(self, page: Page):
+        """The control that opens the application form, whatever gives it its
+        name.
+
+        Google's careers page labels its Apply link with aria-label and leaves
+        the element's text empty, so matching on text alone found nothing: the
+        agent decided it was already on the form, filled nothing, and reported
+        an application it had never opened. Matching the accessible name (which
+        covers aria-label), then the href, finds it.
+        """
+        candidates = [
+            page.get_by_role("link", name=re.compile(r"^\s*apply\b", re.I)),
+            page.get_by_role("button", name=re.compile(r"^\s*apply\b", re.I)),
+            page.locator("a[href*='/apply'], a[href^='./apply'], a[href*='apply?']"),
+            page.locator("a:has-text('Apply'), button:has-text('Apply')"),
+        ]
+        for candidate in candidates:
+            try:
+                for i in range(min(candidate.count(), 5)):
+                    element = candidate.nth(i)
+                    if not element.is_visible():
+                        continue
+                    name = (element.get_attribute("aria-label") or element.inner_text() or "").strip()
+                    logger.info("Apply control found: %r", name[:40] or "(unnamed link)")
+                    element.scroll_into_view_if_needed(timeout=3_000)
+                    return element.element_handle(timeout=3_000)
+            except Exception as exc:
+                logger.debug("Apply lookup failed: %s", str(exc).splitlines()[0][:100])
+        return None
+
+    def apply_destination(self, page: Page) -> str:
+        """The address an unlabelled Apply link points at, absolute.
+
+        Google's posting renders the Apply button's label in script that had
+        not run when the agent looked, so the element carried no text and no
+        aria-label -- only href="./apply?jobId=...". Matching on the address
+        finds it whatever the label does.
+        """
+        try:
+            href = page.evaluate("""() => {
+                const links = [...document.querySelectorAll('a[href]')]
+                    .filter(a => /(^|\\/|\\.)apply(\\?|$|\\/)/i.test(a.getAttribute('href') || ''));
+                return links.length ? links[0].href : '';
+            }""")
+        except Exception as exc:
+            logger.debug("Apply address lookup failed: %s", str(exc).splitlines()[0][:100])
+            return ""
+        return href or ""
+
     def click_apply_button(self, page: Page) -> Page:
         """Many ATS postings (Workday, Greenhouse...) show a JD page with an
         'Apply' link/button that leads to the actual form -- sometimes in a
         new tab. This just navigates there; it submits nothing. Returns the
         page to keep working with (same page, or the new tab if one opened)."""
-        btn = page.query_selector(
-            "a:has-text('Apply'), button:has-text('Apply'), a:has-text('Apply Now'), button:has-text('Apply Now')"
-        )
-        if not btn or not btn.is_visible():
+        btn = self.find_apply_control(page)
+        if btn is None:
+            destination = self.apply_destination(page)
+            if destination:
+                # The control carries no label yet (Google renders it after the
+                # page settles), but its link is in the page. Following it is
+                # what clicking it would do.
+                logger.info("Apply link found by address: %s", destination[:90])
+                page.goto(destination, wait_until="domcontentloaded", timeout=60_000)
+                page.wait_for_timeout(2_000)
+                return page
             logger.info("No 'Apply' button found -- assuming already on the application form")
             return page
 

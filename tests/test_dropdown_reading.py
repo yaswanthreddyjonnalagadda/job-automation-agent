@@ -233,3 +233,82 @@ def test_a_radio_under_its_own_label_is_still_selected(page, agent):
     target = page.query_selector("#r-no")
     assert agent.select_radio(page, target)
     assert page.query_selector("#r-no").is_checked()
+
+
+GOOGLE_POSTING = """
+<html><body>
+  <h1>Network Implementation Engineer, Data Center Networking Delivery</h1>
+  <a href="/about/careers/applications/jobs/results/123" style="display:none">Apply to an older posting</a>
+  <a class="WpHeLc VfPpkd-mRLv6" href="./apply?jobId=CiUAL2Fck&loc=US" aria-label="Apply"><i class="icon"></i></a>
+</body></html>
+"""
+
+
+def test_an_unlabelled_apply_link_is_still_found(page, agent):
+    """Google's posting renders the Apply button's label in script that had
+    not run when the agent looked: the element carried no text and no
+    aria-label, only its href. Matching on text alone found nothing, so the
+    agent decided it was already on the application form, filled in nothing,
+    and reported an application it had never opened."""
+    page.set_content(GOOGLE_POSTING)
+    assert agent.find_apply_control(page) is None  # nothing visible to click
+    assert "apply?jobId" in agent.apply_destination(page)
+
+
+def test_a_labelled_apply_button_is_found_directly(page, agent):
+    page.set_content("""<html><body>
+        <button style="width:120px;height:40px" aria-label="Apply">Apply</button>
+      </body></html>""")
+    assert agent.find_apply_control(page) is not None
+
+
+def test_a_posting_with_no_way_to_apply_reports_nothing(page, agent):
+    page.set_content("<html><body><p>Just a description, no way to apply.</p></body></html>")
+    assert agent.find_apply_control(page) is None
+    assert agent.apply_destination(page) == ""
+
+
+def test_a_run_alongside_the_users_chrome_uses_the_bundled_browser(monkeypatch, agent):
+    """Chrome will not start a second instance while one is running, even
+    against a separate profile: it hands the command to the running copy and
+    exits. Insisting on it would mean the user cannot browse while an
+    application is open."""
+    from browser_automation import JobApplicationAssistant
+
+    agent._config = type("C", (), {"browser_channel": "chrome",
+                                   "browser_profile_dir": "C:/x/browser_profile"})()
+    monkeypatch.setattr(JobApplicationAssistant, "_chrome_is_running", staticmethod(lambda: True))
+    assert agent._choose_channel() == ""
+
+    monkeypatch.setattr(JobApplicationAssistant, "_chrome_is_running", staticmethod(lambda: False))
+    assert agent._choose_channel() == "chrome"
+
+
+def test_only_browsers_holding_the_agents_own_profile_are_closed(monkeypatch):
+    """A run whose process is killed leaves its browser running, still holding
+    the profile, and every later run then died at startup. The leftovers are
+    identified by the profile path, so the user's own windows are untouched."""
+    import json as _json
+    from pathlib import Path
+
+    from browser_automation import JobApplicationAssistant
+
+    processes = [
+        {"ProcessId": 11, "CommandLine": r"chrome.exe --user-data-dir=C:\agent\browser_profile"},
+        {"ProcessId": 22, "CommandLine": r"chrome.exe --user-data-dir=C:\Users\me\AppData\Chrome\User Data"},
+        {"ProcessId": 33, "CommandLine": None},
+    ]
+    killed = []
+
+    class _Result:
+        stdout = _json.dumps(processes)
+
+    def fake_run(args, **kwargs):
+        if args[0] == "taskkill":
+            killed.append(args[2])
+        return _Result()
+
+    monkeypatch.setattr("browser_automation.subprocess.run", fake_run)
+    monkeypatch.setattr("browser_automation.os.name", "nt")
+    closed = JobApplicationAssistant._close_leftover_browsers(Path(r"C:\agent\browser_profile"))
+    assert closed == 1 and killed == ["11"]
