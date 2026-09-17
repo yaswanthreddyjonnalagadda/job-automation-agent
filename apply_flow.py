@@ -401,6 +401,11 @@ def decide_next_step(assistant, page, step: int, experience_data: dict, filled_e
     Deliberately conservative about one thing: it never returns 'submit'.
     Advancing a wizard is reversible; submitting is not, and sending an
     application to a real employer stays the user's decision."""
+    # A CAPTCHA is the user's alone: stop and hand over, rather than pressing
+    # the button that raised it again.
+    if safety.captcha_visible(page):
+        logger.info("A CAPTCHA is showing -- stopping for you to complete it")
+        return "stop"
     if assistant.is_review_step(page):
         return "stop"
 
@@ -1093,6 +1098,7 @@ def main() -> None:
                 if decision == "fill_experience":
                     filled_experience = True
                 if decision == "stop" and looks_left > 0 and not assistant.is_review_step(page) \
+                        and not safety.captcha_visible(page) \
                         and (assistant.find_submit_button(page) is None or assistant.on_job_description(page)):
                     seen_before = assistant._page_fingerprint(page)
                     if seen_before not in looked_at:

@@ -147,6 +147,15 @@ CAPTCHA_FRAME_SELECTOR = (
     "iframe[title*='challenge' i], iframe[src*='hcaptcha'], iframe[src*='challenges.cloudflare.com'], "
     "iframe[src*='funcaptcha'], iframe[src*='arkoselabs']"
 )
+CAPTCHA_URL_RE = re.compile(
+    r"captcha|challenges\.cloudflare\.com|turnstile|arkoselabs|funcaptcha", re.IGNORECASE)
+
+
+def is_captcha_frame(url: str) -> bool:
+    """True for the address of a CAPTCHA's own frame: nothing in it is ever clicked."""
+    return bool(CAPTCHA_URL_RE.search(url or ""))
+
+
 CAPTCHA_TEXT_RE = re.compile(
     r"verify (that )?you are (a )?human|i'm not a robot|complete the (captcha|security check)|"
     r"security check|prove you('| a)re human|click the object that does not fit",

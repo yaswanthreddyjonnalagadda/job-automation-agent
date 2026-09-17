@@ -368,3 +368,66 @@ def test_a_legal_declaration_is_never_taken_for_a_privacy_acknowledgement(page, 
         'value="I acknowledge the privacy notice and certify my answers are true and complete"'))
     agent._profile = SimpleNamespace(accept_application_privacy_prompts=True)
     assert agent._wizard_button(page) is None
+
+
+# --- a CAPTCHA is never touched -------------------------------------------------
+# On Schwab's sign-in, pressing the privacy acknowledgement raised an hCaptcha
+# picture puzzle. The screenshot was read as a sign-in prompt and the puzzle's
+# own "Skip" was clicked.
+
+HCAPTCHA = ("https://newassets.hcaptcha.com/captcha/v1/static/hcaptcha.html#frame=challenge")
+PUZZLE = ("<html><body><div>Select all images with a ball</div>"
+          "<button onclick=\"parent.document.body.dataset.skipped='yes'\">Skip</button></body></html>")
+
+
+def serve_captcha(page, size: int):
+    page.route("https://newassets.hcaptcha.com/**",
+               lambda route: route.fulfill(status=200, content_type="text/html", body=PUZZLE))
+    page.route("https://career-schwab.icims.com/**", lambda route: route.fulfill(
+        status=200, content_type="text/html",
+        body=f'<html><body><h1>Privacy Notice and Sign-In</h1>'
+             f'<iframe src="{HCAPTCHA}" width="{size}" height="{size}"></iframe></body></html>'))
+    page.goto("https://career-schwab.icims.com/jobs/126880/login?in_iframe=1")
+    page.wait_for_timeout(300)
+
+
+def test_nothing_is_done_while_a_captcha_is_showing(page, agent):
+    serve_captcha(page, 400)
+    fake = FakeClaude({"page": "sign_in", "click": "Skip", "why": "skip the login prompt"})
+    assert agent.look_and_act(page, fake, "apply") == ("captcha", False)
+    assert fake.calls == 0  # not even looked at
+    assert page.evaluate("document.body.dataset.skipped") is None
+
+
+def test_nothing_inside_a_captcha_frame_is_ever_clicked(page, agent):
+    # Too small to count as showing -- its controls are still never clicked.
+    serve_captcha(page, 40)
+    fake = FakeClaude({"page": "sign_in", "click": "Skip", "why": "skip the login prompt"})
+    _, clicked = agent.look_and_act(page, fake, "apply")
+    assert not clicked
+    assert page.evaluate("document.body.dataset.skipped") is None
+
+
+def test_a_page_claude_calls_a_captcha_is_left_alone(page, agent):
+    page.set_content("<button onclick=\"document.body.dataset.skipped='yes'\">Skip</button>")
+    fake = FakeClaude({"page": "captcha", "click": "Skip", "why": "a puzzle"})
+    assert agent.look_and_act(page, fake, "apply") == ("captcha", False)
+    assert page.evaluate("document.body.dataset.skipped") is None
+
+
+def test_a_captcha_stops_the_wizard(page):
+    import apply_flow
+    serve_captcha(page, 400)
+
+    class Assistant:
+        def is_review_step(self, page):
+            raise AssertionError("a CAPTCHA decides before anything else")
+
+    assert apply_flow.decide_next_step(Assistant(), page, 1, {}, False) == "stop"
+
+
+def test_claude_is_told_to_leave_a_captcha_alone():
+    import inspect
+    from claude_integration import ClaudeClient
+    source = inspect.getsource(ClaudeClient.read_page)
+    assert '"captcha"' in source and "never " in source and "Skip" in source

@@ -1827,7 +1827,15 @@ class JobApplicationAssistant:
         -- unless it submits, signs, certifies, deletes or uses a LinkedIn,
         Indeed or Facebook sign-in, which is refused here whatever Claude says.
         Returns (what kind of page it is, whether something was clicked).
+
+        A CAPTCHA ends it: nothing is clicked while one is showing, and nothing
+        inside a CAPTCHA's frame is ever clicked. On Schwab's sign-in the
+        screenshot was read as a sign-in prompt and the puzzle's own "Skip"
+        was clicked before the usual CAPTCHA check had run.
         """
+        if safety.captcha_visible(page):
+            logger.info("LOOKED: a CAPTCHA is showing -- only you can complete it; the agent does nothing")
+            return "captcha", False
         try:
             shot = page.screenshot(full_page=False, timeout=15_000)
             seen = claude.read_page(shot, page.url, goal)
@@ -1837,6 +1845,9 @@ class JobApplicationAssistant:
         kind, label, why = seen.get("page", ""), seen.get("click", ""), seen.get("why", "")
         logger.info("LOOKED: %s -- %s%s", kind.replace("_", " ") or "a page", why[:140],
                     f" -> click {label[:40]!r}" if label else "")
+        if kind == "captcha" or safety.captcha_visible(page):
+            logger.info("LOOKED: a CAPTCHA is showing -- only you can complete it; the agent does nothing")
+            return "captcha", False
         if not label:
             return kind, False
         if not self.safe_to_click_for_claude(page, label):
@@ -1844,7 +1855,8 @@ class JobApplicationAssistant:
             return kind, False
         exact = re.compile(rf"^\s*{re.escape(label)}\s*$", re.IGNORECASE)
         loose = re.compile(re.escape(label), re.IGNORECASE)
-        scopes = [page] + [f for f in page.frames[1:] if (f.url or "").startswith("http")]
+        scopes = [page] + [f for f in page.frames[1:]
+                           if (f.url or "").startswith("http") and not safety.is_captcha_frame(f.url)]
         before = self._page_fingerprint(page)
         for scope in scopes:
             candidates = [scope.get_by_role("button", name=exact), scope.get_by_role("link", name=exact),
@@ -1861,6 +1873,9 @@ class JobApplicationAssistant:
                                           (el.get_attribute("aria-label") or "")).split())
                         if on_it and not self.safe_to_click_for_claude(page, on_it):
                             continue
+                        if safety.captcha_visible(page):
+                            logger.info("LOOKED: a CAPTCHA appeared -- only you can complete it; not clicking")
+                            return "captcha", False
                         el.scroll_into_view_if_needed(timeout=3_000)
                         el.click(timeout=5_000)
                         page.wait_for_timeout(2_500)

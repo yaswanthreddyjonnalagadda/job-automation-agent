@@ -346,11 +346,14 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
             "kind of page it is and the ONE control a person should click next to move the "
             "application forward. Respond with ONLY JSON: "
             '{"page": "job_description" | "application_form" | "sign_in" | "chooser" | '
-            '"confirmation" | "error" | "other", '
+            '"confirmation" | "error" | "captcha" | "other", '
             '"click": "<the exact visible text, or the label a screen reader would read, of the '
             'control to click; empty string if nothing should be clicked>", '
             '"why": "<one short sentence>"}. '
-            "Rules: never choose a control that submits or sends the application (Submit, Send "
+            "Rules: if a CAPTCHA, picture puzzle, 'verify you are human' check or any challenge "
+            "is showing anywhere on the page, return page 'captcha' and an empty click -- never "
+            "choose any of its controls (Skip, Verify, refresh, audio, the images); "
+            "never choose a control that submits or sends the application (Submit, Send "
             "application, Finish); never choose one that certifies, attests, signs or agrees to "
             "legal terms; never choose sign-in with LinkedIn, Indeed or Facebook; prefer Apply "
             "or Apply Now on a job description, Next or Continue on a form step, and 'Apply "
