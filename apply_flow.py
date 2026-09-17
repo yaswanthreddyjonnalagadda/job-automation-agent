@@ -325,8 +325,27 @@ def prepare_cover_letter(claude, resume, job, profile, job_dir: Path, tracker=No
         logger.info("Form has a cover letter field -- writing one for %s...", job.company)
         letter = normalise_contact_details(claude.generate_cover_letter(resume, job, profile), profile)
         unsupported = safety.unsupported_claims(resume.raw_text + " " + job.raw_text, letter)
+        # A letter naming something the resume doesn't used to be thrown away,
+        # so RZR Global's form went without one over a single "DSP". It is
+        # rewritten without those claims instead -- the resume is treated the
+        # same way -- and only dropped if the rewrites still overreach.
+        for attempt in range(2):
+            if not unsupported:
+                break
+            logger.warning("COVER_LETTER_RETRY: it claimed %s, which isn't in the resume -- rewriting",
+                           ", ".join(unsupported[:6]))
+            letter = normalise_contact_details(claude.generate_cover_letter(
+                resume, job, profile,
+                extra_instruction=(
+                    "Your previous draft mentioned these, which do NOT appear in the candidate's "
+                    f"resume: {', '.join(unsupported[:10])}. Write it again without them, using only "
+                    "what the resume actually says. Do not name technologies, products, figures or "
+                    "certifications the resume does not name."
+                ),
+            ), profile)
+            unsupported = safety.unsupported_claims(resume.raw_text + " " + job.raw_text, letter)
         if unsupported:
-            logger.error("COVER_LETTER_REJECTED: it claimed %s, which isn't in the resume -- no letter attached",
+            logger.error("COVER_LETTER_REJECTED: still claimed %s after rewriting -- no letter attached",
                          ", ".join(unsupported[:6]))
             return None
         letter_txt.write_text(letter, encoding="utf-8")

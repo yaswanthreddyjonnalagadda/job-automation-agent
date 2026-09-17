@@ -906,3 +906,17 @@ def test_a_users_own_answer_is_never_changed(page, agent):
     page.check("#rTwo")                       # the user chose it; nothing recorded by the agent
     agent._answer_radio_groups_from_profile(page, agent._standard_answer_rules(get_user_profile()))
     assert page.is_checked("#rTwo")
+
+
+def test_n_plus_years_of_experience_is_answered_yes_or_no_from_the_profile(agent):
+    """RZR Global asked "Do you have 3+ years of experience?" and the profile's
+    six years were never turned into an answer, so a required field stayed
+    blank."""
+    from config import get_user_profile
+
+    agent._profile = get_user_profile()
+    agent._job_source_name = lambda: ""
+    rules = agent._standard_answer_rules(get_user_profile())
+    assert agent._rule_for("Do you have 3+ years of experience?*", rules) == ["Yes"]
+    assert agent._rule_for("Do you have at least 5 years of experience?", rules) == ["Yes"]
+    assert agent._rule_for("Do you have 10+ years of network engineering experience?", rules) == ["No"]

@@ -328,7 +328,8 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
     # Cover letter generation
     # ------------------------------------------------------------------
     def generate_cover_letter(
-        self, resume: ResumeData, job: JobDescription, profile: UserProfile
+        self, resume: ResumeData, job: JobDescription, profile: UserProfile,
+        extra_instruction: str = "",
     ) -> str:
         system = (
             "You write concise, specific, non-generic cover letters (under 350 words) "
@@ -342,4 +343,6 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
             f"JOB DESCRIPTION:\n{job.raw_text}\n\n"
             "Write a cover letter for this candidate applying to this job."
         )
+        if extra_instruction:
+            user_message += f"\n\nIMPORTANT CORRECTION:\n{extra_instruction}"
         return self._call(system=system, user_message=user_message, max_tokens=1200)

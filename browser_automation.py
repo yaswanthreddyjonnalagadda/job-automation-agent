@@ -968,6 +968,10 @@ class JobApplicationAssistant:
             (r"sponsor", ["Yes" if sponsorship else "No"]),
             (r"at least 18|18 years of age|over (the age of )?18", [g("at_least_18")]),
             (r"full legal name", [g("full_name")]),
+            # "Do you have 3+ years of experience?" is a Yes/No question the
+            # profile answers: six years is Yes to three, No to ten.
+            (r"(?:at least |minimum of |more than )?(\d+)\s*\+?\s*(?:or more )?years? (?:of )?(?:\w+ ){0,3}experience\?",
+             self._years_yes_no),
             # "Address *" on its own means the street address. Email Address
             # and Address Line 2 must not match it.
             (r"^\s*\*?\s*(street |home |mailing )?address(\s*(line\s*)?1)?\s*\*?\s*$",
@@ -1033,7 +1037,8 @@ class JobApplicationAssistant:
             (r"\brace\b|ethnicit", [g("ethnicity")]),
             (r"^\s*(gender|sex)\b", [g("gender")]),
         ]
-        return [(re.compile(p, re.IGNORECASE), [c for c in cands if c]) for p, cands in rules]
+        return [(re.compile(p, re.IGNORECASE), cands if callable(cands) else [c for c in cands if c])
+                for p, cands in rules]
 
     @staticmethod
     def _best_option(options: list[str], candidates: list[str]) -> Optional[int]:
@@ -1100,10 +1105,24 @@ class JobApplicationAssistant:
         return bool(text) and not re.match(
             r"^(select an option|select|select one|please select|choose one|-+)$", text, re.I)
 
+    def _years_yes_no(self, question: str) -> list[str]:
+        """Yes or No to "N+ years of experience?", from the profile's years."""
+        match = re.search(r"(\d+)\s*\+?\s*(?:or more )?years?", question or "", re.IGNORECASE)
+        profile = self._with_latest_answers(getattr(self, "_profile", None))
+        have = int(getattr(profile, "years_experience", 0) or 0)
+        if not match or not have:
+            return []
+        return ["Yes"] if have >= int(match.group(1)) else ["No"]
+
     def _rule_for(self, question: str, rules) -> Optional[list[str]]:
         q = (question or "").strip()
         for pattern, candidates in rules:
             if q and pattern.search(q) and candidates:
+                # A rule may work its answer out from the question itself.
+                if callable(candidates):
+                    candidates = candidates(q)
+                    if not candidates:
+                        continue
                 return candidates
         return None
 
