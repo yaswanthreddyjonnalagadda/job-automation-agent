@@ -52,6 +52,34 @@ def already_submitted(job: dict) -> bool:
     return bool(found)
 
 
+def skipped_for_sponsorship(job: dict) -> bool:
+    """True when the posting says it will not sponsor a visa and the user
+    needs one: nothing is opened, and the job is tracked as skipped with
+    the posting's own words as the reason."""
+    import safety
+
+    profile = get_user_profile()
+    if not getattr(profile, "requires_visa_sponsorship", False):
+        return False
+    said = safety.no_sponsorship_statement(job.get("raw_text", ""))
+    if not said:
+        return False
+    logger.warning("SKIPPED: %s at %s does not sponsor visas -- %r", job.get("title"), job.get("company"), said)
+    try:
+        from db import get_tracker
+        from jd_analyzer import dedup_key_for_url
+
+        tracker = get_tracker()
+        key = dedup_key_for_url(job.get("url", ""))
+        tracker.create(dedup_key=key, title=job.get("title") or "Unknown role",
+                       company=job.get("company") or "Unknown", location=job.get("location") or "",
+                       url=job.get("url", ""))
+        tracker.update_status(key, "skipped", notes=f"Skipped: no visa sponsorship -- {said}")
+    except Exception as exc:
+        logger.warning("Could not record the skip (%s)", str(exc).splitlines()[0][:100])
+    return True
+
+
 def slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_")[:40] or "job"
 
@@ -66,6 +94,9 @@ def run_one(url: str, auto: bool = True, open_url: str = "") -> int:
 
     if already_submitted(job):
         return 3
+
+    if skipped_for_sponsorship(job):
+        return 4
 
     key = slug(f"{job['company']}_{job['title']}")
     job_path = DATA_DIR / f"_job_{key}.json"

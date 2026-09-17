@@ -871,6 +871,20 @@ def main() -> None:
             # and so the next application can use it.
             learn_user_answers(assistant, page, tracker, key, profile)
             remember_progress(tracker, key, page)
+
+            # A job may say it will not sponsor a visa only inside its form --
+            # Casey's did, on page nine. The user needs sponsorship, so the
+            # application stops there and is recorded as skipped, with the
+            # employer's own words as the reason.
+            if getattr(profile, "requires_visa_sponsorship", False):
+                try:
+                    said = safety.no_sponsorship_statement(page.inner_text("body", timeout=5_000))
+                except Exception:
+                    said = ""
+                if said:
+                    tracker.update_status(key, STATUS_SKIPPED, notes=f"Skipped: no visa sponsorship -- {said}")
+                    logger.warning("SKIPPED: %s at %s does not sponsor visas -- %r", job.title, job.company, said)
+                    return
             fields = assistant.detect_form_fields(page)
             if not fields:
                 # Nothing to fill here: the page may be a chooser (Dayforce

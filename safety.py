@@ -331,6 +331,34 @@ def handover_status(report: dict) -> tuple[str, str]:
     return "ready_to_submit", " | ".join([message] + notes)
 
 
+_NO_SPONSORSHIP = re.compile(
+    r"[^.!?\n]*(?:"
+    r"without (?:the )?(?:need (?:for|of) )?(?:current or future )?(?:employment[- ]based )?"
+    r"(?:visa |immigration )?sponsorship"
+    r"|(?:not|unable to|cannot|can't|will not|won't|does not|do not|are not able to|is not able to)"
+    r" (?:currently )?(?:able to )?(?:offer|provide|support|sponsor)\w*[^.!?\n]{0,40}(?:sponsorship|visas?\b)"
+    r"|no (?:visa |employment[- ]based |immigration )?sponsorship"
+    r"|sponsorship (?:is |will )?(?:not|n't) (?:be )?(?:available|offered|provided|considered)"
+    r"|(?:u\.?s\.? citizens?|green card holders?|permanent residents?) only"
+    r"|must be a u\.?s\.? citizen"
+    r")[^.!?\n]*",
+    re.IGNORECASE,
+)
+
+
+def no_sponsorship_statement(text: str) -> str:
+    """The sentence in which a posting or form says it will not sponsor a visa,
+    or is open only to citizens -- empty when it says nothing of the kind.
+
+    Casey's said it only inside the application ("This position requires
+    authorization to work in the U.S. without the need for employment-based
+    visa sponsorship"), and the agent worked through nine pages of a job the
+    user, on an H-1B, cannot take.
+    """
+    match = _NO_SPONSORSHIP.search(" ".join((text or "").split()))
+    return match.group(0).strip()[:240] if match else ""
+
+
 def verification_status(evidence: Optional[str]) -> tuple[str, str]:
     """(status, note) after the user has submitted.
 

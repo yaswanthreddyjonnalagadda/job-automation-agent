@@ -332,3 +332,27 @@ def test_a_filled_form_with_nothing_outstanding_is_ready():
          "fields_filled": 12, "documents_attached": 1}
     )
     assert status == "ready_to_submit"
+
+
+def test_a_job_that_will_not_sponsor_a_visa_is_recognised():
+    """Casey's said it only inside its application, on page nine: "This
+    position requires authorization to work in the U.S. without the need for
+    employment-based visa sponsorship". The user is on an H-1B."""
+    for said in (
+        "This position requires authorization to work in the U.S. without the need for "
+        "employment-based visa sponsorship.",
+        "We are unable to sponsor visas for this role.",
+        "Sponsorship is not available.",
+        "No visa sponsorship is offered.",
+        "U.S. citizens only.",
+    ):
+        assert safety.no_sponsorship_statement(said), said
+
+
+def test_a_job_that_sponsors_or_says_nothing_is_not_skipped():
+    for said in (
+        "Visa sponsorship is available for the right candidate.",
+        "Must be authorized to work in the United States.",
+        "We offer competitive pay and benefits.",
+    ):
+        assert not safety.no_sponsorship_statement(said), said
