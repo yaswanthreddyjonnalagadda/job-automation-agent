@@ -2349,6 +2349,30 @@ class JobApplicationAssistant:
                     return el
                 except Exception:
                     continue
+
+        # A Next drawn by script into a plain box. Casey's older ADP pages put
+        # it in a <div class="appGo"> filled in after load, so a search for
+        # buttons and links found nothing and the run took the first step for
+        # the last. Only the default search, and only something clickable.
+        if selectors is None:
+            exact = re.compile(r"^\s*(next|continue|save and continue|save & continue|next step)\s*$",
+                               re.IGNORECASE)
+            for candidate in (page.get_by_role("button", name=exact), page.get_by_text(exact)):
+                try:
+                    for i in range(min(candidate.count(), 6)):
+                        el = candidate.nth(i)
+                        if not el.is_visible() or self._in_popup(el) or not el.is_enabled():
+                            continue  # a disabled Next means the step is not finished
+                        if safety.is_submit_label(el.inner_text()):
+                            continue
+                        clickable = el.evaluate(
+                            "e => { const s = getComputedStyle(e); return s.cursor === 'pointer'"
+                            " || !!e.closest('[onclick], [role=button], a, button, input,"
+                            " [class*=btn i], [class*=button i], [class*=Go]'); }")
+                        if clickable:
+                            return el
+                except Exception:
+                    continue
         return None
 
     def _page_fingerprint(self, page: Page) -> str:

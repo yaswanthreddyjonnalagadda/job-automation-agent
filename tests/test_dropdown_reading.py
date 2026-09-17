@@ -810,3 +810,23 @@ def test_a_pop_up_asking_to_certify_is_still_left_alone(page, agent):
         "I certify under penalty of perjury that my privacy information is true. Casey's needs to collect"))
     assert not agent.accept_consent_dialog(page)
     assert page.title() != "agreed"
+
+
+def test_a_next_drawn_as_a_plain_box_is_found(page, agent):
+    """Casey's older ADP pages draw Next into a <div class="appGo"> after the
+    page loads. A search for buttons and links found nothing, so the run took
+    step one of two for the end and called the application ready."""
+    page.set_content("""<html><body>
+        <input type="text" value="filled">
+        <div class="appGo center" style="cursor:pointer;width:90px;height:30px"
+             onclick="document.title='next step'">Next</div>
+      </body></html>""")
+    control = agent._wizard_button(page)
+    assert control is not None
+    control.click()
+    assert page.title() == "next step"
+
+
+def test_plain_text_saying_next_is_not_mistaken_for_a_button(page, agent):
+    page.set_content("""<html><body><p>Next</p></body></html>""")
+    assert agent._wizard_button(page) is None
