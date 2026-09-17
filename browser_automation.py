@@ -1407,7 +1407,20 @@ class JobApplicationAssistant:
                                      && e.getAttribute('aria-hidden') !== 'true'
                                      && e.getBoundingClientRect().height > 1)
                         .map(e => {
-                            let value = (e.tagName === 'SELECT' ? (e.selectedIndex > 0 ? e.value : '') : e.value || '').trim();
+                            // A select is answered when its chosen option is a real
+                            // one. Not "past the first option": Schwab's (iCIMS)
+                            // Country list holds only the chosen "United States",
+                            // so it read as blank and was chosen again every pass.
+                            const chosen = e.tagName === 'SELECT' ? e.options[e.selectedIndex] : null;
+                            // The first option counts only when the site chose it
+                            // (or it is the only one): a browser's default is not
+                            // an answer.
+                            let value = (e.tagName === 'SELECT'
+                                ? (chosen && (chosen.value || '').trim()
+                                   && (e.selectedIndex > 0 || chosen.defaultSelected || e.options.length === 1)
+                                   && !/^[\\s\\-–—]*(no selection|select( one| an option)?|please select|choose( one)?|make a selection|none selected)?[\\s\\-–—.]*$/i.test(chosen.text)
+                                   ? chosen.text : '')
+                                : e.value || '').trim();
                             if (!value && e.tagName !== 'SELECT') {
                                 // A picker shows its choice beside the input,
                                 // whose own value stays empty: every pass read
@@ -1622,7 +1635,7 @@ class JobApplicationAssistant:
             self.note_ambiguous_choice(control["question"], options, candidates[0] if candidates else "")
             logger.info("PROFILE_ANSWER: no option for %r among %s", control["question"][:60], options[:6])
             return
-        select.select_option(label=options[idx])
+        select.select_option(label=options[idx], timeout=5_000)
         self.values.record(page, f"[id={json.dumps(control['id'])}]", options[idx], "profile:standard answer")
         logger.info("PROFILE_ANSWER: %r -> %r", control["question"][:60], options[idx])
 
@@ -2856,7 +2869,9 @@ class JobApplicationAssistant:
         # buttons and links found nothing and the run took the first step for
         # the last. Only the default search, and only something clickable.
         if selectors is None:
-            exact = re.compile(r"^\s*(next|continue|save and continue|save & continue|next step)\s*$",
+            # "Update Profile" is how Schwab's (iCIMS) application leaves its
+            # Candidate Profile step (1 of 5); its "Finish Later" is never used.
+            exact = re.compile(r"^\s*(next|continue|save and continue|save & continue|next step|update profile)\s*$",
                                re.IGNORECASE)
             for candidate in (page.get_by_role("button", name=exact), page.get_by_text(exact)):
                 try:
@@ -5982,7 +5997,11 @@ class JobApplicationAssistant:
                     if (!el.getClientRects().length) continue;
                     const req = el.required || el.getAttribute('aria-required') === 'true';
                     const lab = (el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.innerText) || '';
-                    if (el.tagName === 'SELECT' && el.selectedIndex <= 0) {
+                    const chosen = el.tagName === 'SELECT' ? el.options[el.selectedIndex] : null;
+                    const blank = !chosen || !(chosen.value || '').trim()
+                        || !(el.selectedIndex > 0 || chosen.defaultSelected || el.options.length === 1)
+                        || /^[\\s\\-–—]*(no selection|select( one| an option)?|please select|choose( one)?|make a selection|none selected)?[\\s\\-–—.]*$/i.test(chosen.text);
+                    if (el.tagName === 'SELECT' && blank) {
                         out.push({q: lab || el.getAttribute('aria-label') || el.name, options: [...el.options].map(o => o.text.trim()).slice(0, 12)});
                     }
                 }

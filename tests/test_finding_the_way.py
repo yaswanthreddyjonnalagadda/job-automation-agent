@@ -496,3 +496,50 @@ def test_a_rejected_password_is_tried_only_once(page, agent):
     page.locator("[name=password]").fill("")
     assert agent.attempt_auto_login(page, "applicant@example.com", "s3cret-ATS") is False
     assert page.locator("[name=password]").input_value() == ""  # not typed a second time
+
+
+# --- Schwab's Candidate Profile step (iCIMS) ------------------------------------
+
+ICIMS_PROFILE = """
+<html><body><form onsubmit="document.body.dataset.went = event.submitter.value; return false;">
+  <label for="country">Country</label>
+  <select id="country" name="country" class="dropdown-hide" role="combobox" required
+          style="position:absolute; left:-9999px; height:20px">
+    <option value="12781" selected="selected">United States</option></select>
+  <a id="country_icimsDropdown" class="dropdown-select" role="combobox" aria-label="Country">
+    <span class="dropdown-text">United States</span></a>
+  <label for="prefix">Prefix</label>
+  <select id="prefix" name="prefix"><option value="">-- Make a Selection --</option>
+    <option value="1">Mr.</option><option value="2">Ms.</option></select>
+  <label for="adult">Are you at least 18?</label>
+  <select id="adult" name="adult"><option value="y">Yes</option><option value="n">No</option></select>
+  <input type="submit" value="Finish Later">
+  <input type="submit" value="Update Profile">
+</form></body></html>
+"""
+
+
+def test_a_list_holding_only_its_chosen_entry_counts_as_answered(page, agent, monkeypatch):
+    """Schwab's Country list holds only the chosen "United States": it was
+    read as blank and the agent spent 30 seconds trying to choose it again,
+    on every pass."""
+    import config
+    page.set_content(ICIMS_PROFILE)
+    asked = []
+    monkeypatch.setattr(agent, "_answer_select_from_profile",
+                        lambda page, control, candidates: asked.append(control["question"].strip()))
+    monkeypatch.setattr(agent, "_answer_combobox_from_profile", lambda *a, **k: None)
+    monkeypatch.setattr(agent, "_answer_radio_groups_from_profile", lambda *a, **k: None, raising=False)
+    try:
+        agent.answer_standard_questions(page, config.get_user_profile())
+    except Exception:
+        pass  # later steps need a full page; the choice of what to answer is made first
+    assert "Country" not in asked
+    assert "Are you at least 18?" in asked  # the browser's default "Yes" is not an answer
+
+
+def test_update_profile_moves_on_and_finish_later_never_does(page, agent):
+    page.set_content(ICIMS_PROFILE)
+    button = agent._wizard_button(page)
+    assert button is not None and button.get_attribute("value") == "Update Profile"
+    assert not agent.safe_to_click_for_claude(page, "Finish Later")
