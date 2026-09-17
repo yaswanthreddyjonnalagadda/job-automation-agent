@@ -2373,6 +2373,36 @@ class JobApplicationAssistant:
                             return el
                 except Exception:
                     continue
+            # A next-page arrow with no words at all. Casey's ADP pages draw
+            # their Next as a box whose only label is a right-arrow icon from
+            # an icon font (drawn with CSS, not text), so nothing reading
+            # "Next" existed and the run stopped on step three of five.
+            try:
+                arrow = page.evaluate("""() => {
+                    const arrows = ['\\uf061', '\\uf054', '\\uf105', '\\uf138', '\\u2192', '\\u203a', '\\u00bb', '\\u276f'];
+                    const glyph = s => (s || '').replace(/["']/g, '');
+                    const hits = [...document.querySelectorAll('div, span, a, button, i')].filter(e => {
+                        if (!e.getClientRects().length) return false;
+                        if ((e.innerText || '').trim().replace(/[\\u2192\\u203a\\u00bb\\u276f>]/g, '')) return false;
+                        const marks = [glyph(getComputedStyle(e, '::after').content),
+                                       glyph(getComputedStyle(e, '::before').content),
+                                       (e.innerText || '').trim()];
+                        if (!marks.some(m => arrows.includes(m))) return false;
+                        const box = e.closest('[onclick], a, button, [role=button]') || e;
+                        return getComputedStyle(box).cursor === 'pointer' || box !== e;
+                    });
+                    if (!hits.length) return null;
+                    const target = hits[hits.length - 1];
+                    target.setAttribute('data-agent-next-arrow', '1');
+                    return true;
+                }""")
+                if arrow:
+                    el = page.locator("[data-agent-next-arrow='1']").last
+                    if el.count() and el.is_visible() and not self._in_popup(el):
+                        logger.info("Next page: using the form's arrow button")
+                        return el
+            except Exception as exc:
+                logger.debug("Arrow search failed: %s", str(exc).splitlines()[0][:100])
         return None
 
     def _page_fingerprint(self, page: Page) -> str:

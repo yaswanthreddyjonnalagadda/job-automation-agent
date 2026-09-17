@@ -830,3 +830,20 @@ def test_a_next_drawn_as_a_plain_box_is_found(page, agent):
 def test_plain_text_saying_next_is_not_mistaken_for_a_button(page, agent):
     page.set_content("""<html><body><p>Next</p></body></html>""")
     assert agent._wizard_button(page) is None
+
+
+def test_a_next_page_arrow_with_no_words_is_found(page, agent):
+    """Casey's ADP pages draw Next as a box whose only label is a right-arrow
+    icon, put there with CSS. Nothing on the page read "Next", so the run
+    stopped on step three of five."""
+    page.set_content("""<html><head><style>
+        .appGo { cursor:pointer; width:60px; height:40px; display:inline-block; }
+        .appGo::after { content: "\\f061"; font-family: FontAwesome; }
+      </style></head><body>
+        <input type="text" value="filled">
+        <div class="appGo center" onclick="document.title='next page'"></div>
+      </body></html>""")
+    control = agent._wizard_button(page)
+    assert control is not None
+    control.click()
+    assert page.title() == "next page"
