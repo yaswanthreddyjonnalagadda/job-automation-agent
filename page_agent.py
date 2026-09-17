@@ -771,6 +771,7 @@ class PageAgent:
                 chooser.value.set_files(str(path))
             if answer.action == "upload_resume":
                 self.resume_uploaded = True
+                self._record_resume_attached()
                 if hasattr(self.assistant, "attached_resume"):
                     self.assistant.attached_resume = str(path)
             self.settle(page, 1_500)
@@ -973,7 +974,8 @@ class PageAgent:
         if pending:
             return f"your declaration or signature is needed: {pending[0][:90]}"
         if last_step and self.resume_file and not (self.resume_uploaded or getattr(self, "resume_seen", False)
-                                                    or self._resume_on_page(page)):
+                                                    or self._resume_on_page(page)
+                                                    or self._resume_attached_before()):
             return "the tailored resume is not attached"
         return ""
 
@@ -1004,6 +1006,25 @@ class PageAgent:
         try:
             return self.resume_file.name.lower() in self.snapshot(page).lower() or \
                 self.resume_file.stem.lower() in self.tab(page).inner_text("body", timeout=5_000).lower()
+        except Exception:
+            return False
+
+    def _record_resume_attached(self) -> None:
+        if self.tracker is not None and self.key and self.resume_file and hasattr(self.tracker, "record_event"):
+            try:
+                self.tracker.record_event(self.key, "resume_attached", self.resume_file.name)
+            except Exception as exc:
+                logger.debug("Could not record the upload: %s", exc)
+
+    def _resume_attached_before(self) -> bool:
+        """This tailored resume was attached to this application in an earlier
+        run. Schwab's resume went on at step 1; the run that reached the last
+        step started at step 4 and never saw it."""
+        if self.tracker is None or not self.key or not self.resume_file or not hasattr(self.tracker, "events"):
+            return False
+        try:
+            return any(e.get("kind") == "resume_attached" and e.get("message") == self.resume_file.name
+                       for e in self.tracker.events(self.key, limit=300))
         except Exception:
             return False
 

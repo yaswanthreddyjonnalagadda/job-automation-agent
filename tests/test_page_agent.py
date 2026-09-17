@@ -419,3 +419,46 @@ def test_an_answer_that_cannot_be_given_is_reported_not_dropped(page, resume_fil
     assert outcome.kind == "owner_needed"
     assert any("could not set" in r and "Atlantis" in r for r in outcome.reasons)
     assert page.url.endswith("/apply/1")
+
+
+class Tracker:
+    def __init__(self, events=()):
+        self._events = list(events)
+
+    def record_event(self, key, kind, message="", **kw):
+        self._events.append({"kind": kind, "message": message})
+
+    def events(self, key, limit=100):
+        return list(self._events)
+
+
+def test_a_resume_attached_in_an_earlier_run_counts_at_the_last_step(page, resume_file):
+    """Schwab's resume went on at step 1; the run that reached the last step
+    started later and was held for "the tailored resume is not attached"."""
+    serve(page)
+    page.goto("https://jobs.example.com/apply/2")
+    planner = Planner()
+    original = planner.plan_page
+
+    def no_upload(snapshot, facts, feedback=""):
+        plan = original(snapshot, facts, feedback)
+        plan["answers"] = [a for a in plan.get("answers", []) if a["action"] != "upload_resume"]
+        return plan
+    agent = make_agent(SimpleNamespace(plan_page=no_upload), resume_file)
+    agent.key = "k"
+    agent.tracker = Tracker()
+    assert "resume is not attached" in agent.run(page).summary
+
+    page.goto("https://jobs.example.com/apply/2")
+    agent = make_agent(SimpleNamespace(plan_page=no_upload), resume_file)
+    agent.key = "k"
+    agent.tracker = Tracker([{"kind": "resume_attached", "message": resume_file.name}])
+    assert agent.run(page).kind == "submitted"
+
+
+def test_an_upload_is_recorded_for_later_runs(page, resume_file):
+    serve(page)
+    agent = make_agent(Planner(), resume_file)
+    agent.key, agent.tracker = "k", Tracker()
+    assert agent.run(page).kind == "submitted"
+    assert {"kind": "resume_attached", "message": resume_file.name} in agent.tracker._events

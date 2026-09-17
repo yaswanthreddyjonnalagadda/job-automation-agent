@@ -982,6 +982,7 @@ def main() -> None:
     with JobApplicationAssistant(config) as assistant:
         # Lets the assistant check and record which employers have accounts.
         assistant.tracker, assistant.employer, assistant._profile = tracker, job.company, profile
+        assistant.application_key = key
         existing = tracker.get(key) if hasattr(tracker, "get") else None
         if existing and existing.status not in ("prepared",):
             logger.info("PICKING UP: %s was last %s%s", existing.title[:50],

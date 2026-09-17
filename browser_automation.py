@@ -3963,6 +3963,12 @@ class JobApplicationAssistant:
         file_input.set_input_files(str(target))
         page.wait_for_timeout(1_500)
         logger.info("Uploaded resume: %s (replaced %d existing)", target.name, attached)
+        tracker, key = getattr(self, "tracker", None), getattr(self, "application_key", "")
+        if tracker is not None and key and hasattr(tracker, "record_event"):
+            try:
+                tracker.record_event(key, "resume_attached", target.name)
+            except Exception as exc:
+                logger.debug("Could not record the upload: %s", exc)
         # Some sites (Eightfold) pop a privacy agreement over the form as soon
         # as a resume is uploaded.
         self.accept_consent_dialog(page)
