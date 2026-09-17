@@ -1010,7 +1010,8 @@ class JobApplicationAssistant:
             (r"^\s*country(/region)?( of residence)?\s*:?\s*\*?\s*$", [country, "United States of America"]),
             (r"^\s*\*?\s*(state|province)(/province)?(/region)?\s*:?\s*\*?\s*$", [g("state"), "VA", "Virginia (VA)"]),
             (r"veteran", [g("veteran_status"), "I am not a protected veteran", "not a protected veteran"]),
-            (r"hispanic or latino", ["Not Hispanic/Latino", "Not Hispanic or Latino", "Not Hispanic"]
+            (r"hispanic or latino", ["Not Hispanic/Latino", "Not Hispanic or Latino", "Not Hispanic",
+                                     g("hispanic_or_latino", "No")]
                                      if g("hispanic_or_latino").lower() in {"no", "not hispanic or latino"} else []),
             (r"non-?compete", [g("bound_by_non_compete")]),
             (r"(been|previously|ever been) employed (with|by)|worked for .{0,40}before",
@@ -1062,10 +1063,16 @@ class JobApplicationAssistant:
             # Among partial matches take the SHORTEST option: '(+1) United
             # States' must pick '... United States of America', not the
             # earlier-listed '... United States Minor Outlying Islands'.
-            for test in (lambda o: bool(o) and o.startswith(c), lambda o: bool(o) and c in o):
-                hits = [i for i, o in enumerate(opts) if test(o)]
-                if hits:
-                    return min(hits, key=lambda i: len(opts[i]))
+            hits = [i for i, o in enumerate(opts) if o and o.startswith(c)]
+            if hits:
+                return min(hits, key=lambda i: len(opts[i]))
+            # Contained somewhere inside: only when it is inside exactly one
+            # option. Casey's race list repeats "Not Hispanic or Latino" under
+            # every race, and taking the shortest of them answered "Two or
+            # More Races" for a candidate whose profile says Asian.
+            hits = [i for i, o in enumerate(opts) if o and c in o]
+            if len(hits) == 1:
+                return hits[0]
         return None
 
     def _adapter_hook(self, page: Page, name: str, default, *args):
@@ -1670,6 +1677,7 @@ class JobApplicationAssistant:
                         labels,
                         ids: radios.map(r => r.id),
                         checked: radios.some((r, i) => r.checked && !placeholder.test(labels[i])),
+                        chosen: radios.findIndex(r => r.checked),
                         required: !!(container && (container.getAttribute('aria-required') === 'true'
                                                    || container.querySelector('[required]'))),
                     });
@@ -1714,13 +1722,36 @@ class JobApplicationAssistant:
         return False
 
     def _answer_radio_groups_from_profile(self, page: Page, rules) -> None:
+        self.close_error_message(page)
         for group in self.radio_groups(page):
-            if group["checked"] or not group["question"]:
+            if not group["question"]:
                 continue
+            if group["checked"]:
+                # Leave the user's answer alone -- but put right one the agent
+                # chose itself when the profile says otherwise. It had ticked
+                # "Two or More Races" on Casey's form for a profile saying Asian.
+                chosen = group.get("chosen", -1)
+                chosen_id = group["ids"][chosen] if 0 <= chosen < len(group["ids"]) else ""
+                if not chosen_id or not self.values.is_ours(
+                        page, f"[id={json.dumps(chosen_id)}]", group["labels"][chosen]):
+                    continue
             candidates = self._rule_for(group["question"], rules)
+            index = self._best_option(group["labels"], candidates) if candidates else None
+            # A list of races carries the race question's answer even when the
+            # page labels it with the question before it -- Casey's put its race
+            # list under "Are you Hispanic or Latino?".
+            races = sum(bool(re.match(r"\s*(white|black|asian|native|pacific|two or more|american indian)",
+                                      label, re.IGNORECASE)) for label in group["labels"])
+            if index is None and races >= 3:
+                candidates = self._rule_for("race", rules)
+                index = self._best_option(group["labels"], candidates) if candidates else None
             if not candidates:
                 continue
-            index = self._best_option(group["labels"], candidates)
+            if group["checked"] and index == group.get("chosen"):
+                continue  # already the right answer
+            if group["checked"] and index is not None:
+                logger.warning("CORRECTING %r: %r is not what your profile says",
+                               group["question"][:50], group["labels"][group["chosen"]][:40])
             if index is None:
                 self.note_ambiguous_choice(group["question"], group["labels"], candidates[0])
                 continue
@@ -1965,6 +1996,32 @@ class JobApplicationAssistant:
                         break  # Moved to next field
             except Exception as exc:
                 logger.warning("Could not repair phone field: %s", exc)
+
+    def close_error_message(self, page: Page) -> bool:
+        """Closes a message box that only reports errors -- "Errors Found:
+        Either Self-Identify or Decline to Identify" -- so the fields it
+        complains about can be answered. Its text is logged; nothing in it is
+        agreed to."""
+        try:
+            boxes = page.locator("[role=dialog], [role=alertdialog], .dijitDialog, [class*=modal i]")
+            for i in range(min(boxes.count(), 6)):
+                box = boxes.nth(i)
+                if not box.is_visible():
+                    continue
+                said = " ".join((box.inner_text() or "").split())
+                if not re.search(r"\berrors? found\b|\bplease correct\b|\berror\b", said, re.IGNORECASE):
+                    continue
+                closer = box.locator(
+                    "[aria-label*=close i], [title*=close i], .dijitDialogCloseIcon, [class*=close i], "
+                    "button:has-text('OK'), button:has-text('Close')").first
+                if closer.count():
+                    closer.click(timeout=3_000)
+                    page.wait_for_timeout(600)
+                    logger.info("Closed the form's error message: %r", said[:120])
+                    return True
+        except Exception as exc:
+            logger.debug("Could not close an error message: %s", str(exc).splitlines()[0][:100])
+        return False
 
     def accept_consent_dialog(self, page: Page) -> bool:
         """Accepts an application-form pop-up such as 'Data Privacy Agreement'

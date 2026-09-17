@@ -847,3 +847,62 @@ def test_a_next_page_arrow_with_no_words_is_found(page, agent):
     assert control is not None
     control.click()
     assert page.title() == "next page"
+
+
+CASEYS_EEO = """
+<html><body>
+  <div id="hispanic">
+    <p>Are you Hispanic or Latino? A person of Cuban, Mexican, Puerto Rican origin regardless of race.</p>
+    <label><input type="radio" name="_latino" id="_latinoYes" value="true"> <span>Yes</span></label>
+    <label><input type="radio" name="_latino" id="_latinoNo" value="false"> <span>No</span></label>
+    <label><input type="radio" name="_latino" id="_latinoDecline" value="false"> <span>Decline To Identify</span></label>
+  </div>
+  <div id="race">
+    <p>If you answered 'no', please select one of the following categories that best describes your race:</p>
+    <label><input type="radio" name="race" id="rWhite"> White Not Hispanic or Latino. Origins in Europe.</label>
+    <label><input type="radio" name="race" id="rAsian"> Asian Not Hispanic or Latino. Origins in the Far East.</label>
+    <label><input type="radio" name="race" id="rTwo"> Two or More Races Not Hispanic or Latino. More than one.</label>
+  </div>
+</body></html>
+"""
+
+
+def test_an_answer_found_inside_every_option_identifies_none_of_them(agent):
+    """Casey's race list repeats "Not Hispanic or Latino" under every race, and
+    taking the shortest option answered "Two or More Races" for a profile that
+    says Asian."""
+    options = ["White Not Hispanic or Latino. Origins in Europe.",
+               "Asian Not Hispanic or Latino. Origins in the Far East.",
+               "Two or More Races Not Hispanic or Latino. More than one."]
+    assert agent._best_option(options, ["Not Hispanic or Latino"]) is None
+    assert agent._best_option(options, ["Asian"]) == 1
+
+
+def test_caseys_equal_opportunity_questions_are_answered_from_the_profile(page, agent):
+    from config import get_user_profile
+
+    page.set_content(CASEYS_EEO)
+    agent._answer_radio_groups_from_profile(page, agent._standard_answer_rules(get_user_profile()))
+    assert page.is_checked("#_latinoNo")
+    assert page.is_checked("#rAsian")
+    assert not page.is_checked("#rTwo")
+
+
+def test_a_wrong_answer_the_agent_gave_is_corrected(page, agent):
+    from config import get_user_profile
+
+    page.set_content(CASEYS_EEO)
+    page.check("#rTwo")
+    agent.values.record(page, "[id=\"rTwo\"]", page.evaluate(
+        "() => document.querySelector('#rTwo').parentElement.innerText.trim()"), "profile:standard answer")
+    agent._answer_radio_groups_from_profile(page, agent._standard_answer_rules(get_user_profile()))
+    assert page.is_checked("#rAsian")
+
+
+def test_a_users_own_answer_is_never_changed(page, agent):
+    from config import get_user_profile
+
+    page.set_content(CASEYS_EEO)
+    page.check("#rTwo")                       # the user chose it; nothing recorded by the agent
+    agent._answer_radio_groups_from_profile(page, agent._standard_answer_rules(get_user_profile()))
+    assert page.is_checked("#rTwo")
