@@ -651,6 +651,103 @@ class JobApplicationAssistant:
             logger.warning("Could not fill %s: %s", what or selector, str(exc).splitlines()[0][:120])
             return False
 
+    # The two-letter code a phone widget uses for the profile's country.
+    _DIAL_COUNTRY = {"+1": ("us", "United States"), "+44": ("gb", "United Kingdom"),
+                     "+91": ("in", "India"), "+61": ("au", "Australia")}
+
+    def set_phone_country(self, page: Page, profile) -> int:
+        """Chooses the phone number's country wherever a form asks for it.
+
+        RZR Global's form (Greenhouse) asks twice: a "Country" dropdown beside
+        the number, and a flag button inside the number box. Both were left
+        unset -- the dropdown showed no options until something was typed, and
+        the flag button was never recognised -- so the form refused with
+        "Select a country". Only a country not yet chosen is set.
+        """
+        code = (getattr(profile, "phone_country_code", "") or "+1").strip()
+        iso, country = self._DIAL_COUNTRY.get(code, ("us", getattr(profile, "country", "United States")))
+        done = 0
+
+        # 1. intl-tel-input: a flag button that opens a searchable list.
+        buttons = page.locator("button.iti__selected-country, .iti__selected-flag[role=combobox]")
+        for i in range(min(buttons.count(), 4)):
+            button = buttons.nth(i)
+            try:
+                if not button.is_visible():
+                    continue
+                current = (button.get_attribute("title") or button.get_attribute("aria-label") or "").lower()
+                if country.lower() in current:
+                    continue  # already the right country
+                button.click(timeout=4_000)
+                page.wait_for_timeout(500)
+                panel_id = button.get_attribute("aria-controls") or ""
+                scope = page.locator(f"[id={json.dumps(panel_id)}]") if panel_id else page
+                search = scope.locator("input.iti__search-input, input[type=search]").first
+                if search.count():
+                    search.fill(country)
+                    page.wait_for_timeout(500)
+                option = scope.locator(f".iti__country[data-country-code={json.dumps(iso)}]").first
+                if option.count():
+                    option.scroll_into_view_if_needed(timeout=3_000)
+                    option.click(timeout=4_000)
+                    page.wait_for_timeout(400)
+                    try:
+                        page.keyboard.press("Tab")
+                    except Exception:
+                        pass
+                    now = (button.get_attribute("title") or button.get_attribute("aria-label") or "")
+                    if country.lower() in now.lower():
+                        logger.info("PROFILE_ANSWER: phone country -> %r", now.strip()[:40])
+                        done += 1
+                else:
+                    page.keyboard.press("Escape")
+            except Exception as exc:
+                logger.debug("Phone flag picker failed: %s", str(exc).splitlines()[0][:100])
+
+        # 2. a searchable "Country" dropdown that belongs to the phone number.
+        pickers = page.locator(".phone-input__country input[role=combobox], "
+                               "fieldset.phone-input input[role=combobox]")
+        for i in range(min(pickers.count(), 3)):
+            field = pickers.nth(i)
+            try:
+                if not field.is_visible():
+                    continue
+                # Shown but not taken: the form still marks the field invalid
+                # ("Select a country" under a dropdown showing +1), so the
+                # choice is made again rather than trusted.
+                invalid = (field.get_attribute("aria-invalid") or "").lower() == "true"
+                if self.displayed_value(field) and not invalid:
+                    continue
+                self.open_picker_control(page, field)
+                if invalid:
+                    for _ in range(3):
+                        field.press("Backspace")
+                field.type(country, delay=30, timeout=5_000)
+                page.wait_for_timeout(900)
+                options = page.locator("[class*=select__option]:visible, [role=option]:visible")
+                texts = [t.strip() for t in options.all_inner_texts()]
+                index = self._best_option(texts, [country, f"{country} of America", f"{country} {code}"])
+                if index is None:
+                    page.keyboard.press("Escape")
+                    continue
+                options.nth(index).click(timeout=4_000)
+                page.wait_for_timeout(400)
+                # The form re-checks a field when you leave it; until then it
+                # went on saying "Select a country" under a chosen country.
+                try:
+                    field.press("Tab")
+                    page.wait_for_timeout(400)
+                except Exception:
+                    pass
+                chosen = self.displayed_value(field)
+                if chosen:
+                    self.note_page_changed()
+                    logger.info("PROFILE_ANSWER: phone country -> %r", chosen[:40])
+                    done += 1
+            except Exception as exc:
+                logger.debug("Phone country dropdown failed: %s", str(exc).splitlines()[0][:100])
+        return done
+
     def fix_rejected_phone_numbers(self, page: Page) -> int:
         """Rewrites a phone the form has just called invalid.
 
@@ -784,6 +881,7 @@ class JobApplicationAssistant:
                 logger.warning("Could not fill field %s: %s", field.selector, exc)
         logger.info("Auto-filled %d/%d detected fields", len(actually_filled), len(fields))
         self.fix_rejected_phone_numbers(page)
+        self.set_phone_country(page, profile)
 
         # A form that rebuilds itself after reading the resume (Dayforce) drops
         # what was typed into the version before it: address, postcode and

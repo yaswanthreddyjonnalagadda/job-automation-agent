@@ -98,8 +98,6 @@ class UserProfile:
     how_did_you_hear: str = "LinkedIn"
     # How an employer should reach you first. Dayforce asks it outright.
     preferred_contact_method: str = "Email"
-    # How an employer should reach you first. Dayforce asks it outright.
-    preferred_contact_method: str = "Email"
     # Supplied by the user on 2026-09-15 (IGT application).
     bound_by_non_compete: str = "No"
     # Answers the agent may give only because the user stated them. Leave a
@@ -166,6 +164,13 @@ class AppConfig:
     auto_submit_verified_only: bool = field(
         default_factory=lambda: os.getenv("AUTO_SUBMIT_VERIFIED_ONLY", "").strip().lower()
         in {"1", "true", "yes", "on"}
+    )
+    # The owner's decision (2026-09-17): submit an application automatically
+    # once it is complete. AUTO_SUBMIT=true in .env; set it to false to go back
+    # to clicking Submit yourself. See safety.ready_to_auto_submit() for what
+    # "complete" means -- and what still always waits for a person.
+    auto_submit: bool = field(
+        default_factory=lambda: os.getenv("AUTO_SUBMIT", "").strip().lower() in {"1", "true", "yes", "on"}
     )
     # How many times a flaky page action is retried before it is reported.
     action_retries: int = 3

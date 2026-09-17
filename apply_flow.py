@@ -120,6 +120,21 @@ def open_tracker(config):
         return JobTracker(config.db_path)
 
 
+def phone_for_documents(profile) -> str:
+    """The phone number as it appears on the resume and cover letter.
+
+    With the country code in front -- "+1 (571) 354-5212" -- so a site that
+    fills its form from the resume takes the country along with the number.
+    The owner's decision (2026-09-17). Forms themselves still get the number
+    as the profile holds it.
+    """
+    phone = (getattr(profile, "phone", "") or "").strip()
+    code = (getattr(profile, "phone_country_code", "") or "").strip()
+    if not phone or not code or phone.startswith("+"):
+        return phone
+    return f"{code} {phone}"
+
+
 def normalise_contact_details(text: str, profile) -> str:
     """Forces the profile's email and phone into generated documents.
 
@@ -133,7 +148,10 @@ def normalise_contact_details(text: str, profile) -> str:
         # Only rewrite phone numbers in the header block: the body legitimately
         # contains figures like '99.5%' and '$280K' that must not be touched.
         head, sep, body = text.partition("\n\n")
-        head = re.sub(r"\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}", profile.phone, head)
+        # Any country code already written in front is replaced along with
+        # the number, so it is never doubled ("+1 +1 (571)...").
+        head = re.sub(r"(?:\+\d{1,3}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}",
+                      phone_for_documents(profile), head)
         text = head + sep + body
     return text
 
@@ -201,7 +219,7 @@ def ensure_resume_header(text: str, profile, job) -> str:
         logger.warning("Tailored resume began with %r rather than a name -- adding a header", lines[0][:40])
 
     location = f"{profile.city}, {profile.state}" if profile.city else ""
-    contact = " | ".join(p for p in (location, profile.phone, profile.email) if p)
+    contact = " | ".join(p for p in (location, phone_for_documents(profile), profile.email) if p)
     header = f"{profile.full_name.upper()}\n{job.title}\n{contact}\n"
     return header + "\n" + text.lstrip()
 
@@ -624,6 +642,32 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
         if submitted:
             return STATUS_SUBMITTED
         status, message = STATUS_NEEDS_USER_REVIEW, "verified auto-submit did not complete -- please check the form"
+    elif getattr(config, "auto_submit", False) and status == STATUS_READY_TO_SUBMIT:
+        resume_on_form = bool(getattr(assistant, "attached_resume", None)) or report.get("resume_attached") is True
+        go, why = safety.ready_to_auto_submit(report, resume_on_form,
+                                               assistant.find_submit_button(page) is not None)
+        if go:
+            logger.info("AUTO_SUBMIT: %s -- submitting %s at %s", why, job.title, job.company)
+            if hasattr(tracker, "record_event"):
+                tracker.record_event(key, "auto_submit", f"submitting: {why}",
+                                     screenshot_path=evidence.get("screenshot", ""),
+                                     html_path=evidence.get("html", ""))
+            if assistant.click_verified_submit(page):
+                found = assistant.wait_for_submission_evidence(page, job.title)
+                status, note = safety.verification_status(found)
+                tracker.update_status(key, status, notes=note)
+                try:
+                    page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
+                except Exception:
+                    pass
+                logger.info("AUTO_SUBMIT result: %s -- %s", status, note)
+                if status == STATUS_SUBMITTED:
+                    return STATUS_SUBMITTED
+                message = note
+            else:
+                status, message = STATUS_NEEDS_USER_REVIEW, "the agent could not press Submit -- please check the form"
+        else:
+            logger.info("AUTO_SUBMIT: not yet -- %s", why)
 
     tracker.update_status(key, status, notes=message)
     assistant.raise_window(page)

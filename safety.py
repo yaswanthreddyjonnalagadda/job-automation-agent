@@ -359,6 +359,33 @@ def no_sponsorship_statement(text: str) -> str:
     return match.group(0).strip()[:240] if match else ""
 
 
+def ready_to_auto_submit(report: dict, resume_on_form: bool, submit_button_found: bool) -> tuple[bool, str]:
+    """(submit?, why) for an application the agent has filled.
+
+    Submitted only when all of these hold:
+      * every mandatory field is filled and the form shows no errors
+        (handover_status says ready_to_submit);
+      * no attestation, acknowledgement or signature is waiting -- the agent
+        never gives one of those, so a form that needs one waits for you;
+      * no CAPTCHA is showing;
+      * the resume the agent prepared is on the form;
+      * this is the last page: the form's own Submit button is there.
+    Duplicates and jobs that will not sponsor a visa never reach this point.
+    """
+    status, message = handover_status(report)
+    if status != "ready_to_submit":
+        return False, message
+    if report.get("attestations_pending"):
+        return False, "an acknowledgement or signature is waiting for you"
+    if report.get("captcha"):
+        return False, "a CAPTCHA is showing -- only you can complete it"
+    if not resume_on_form:
+        return False, "the resume is not on the form"
+    if not submit_button_found:
+        return False, "this is not the last page yet -- there is no Submit button"
+    return True, "complete: every required field filled, no errors, resume attached, on the last page"
+
+
 def verification_status(evidence: Optional[str]) -> tuple[str, str]:
     """(status, note) after the user has submitted.
 

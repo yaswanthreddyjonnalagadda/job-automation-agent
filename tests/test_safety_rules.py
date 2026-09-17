@@ -356,3 +356,33 @@ def test_a_job_that_sponsors_or_says_nothing_is_not_skipped():
         "We offer competitive pay and benefits.",
     ):
         assert not safety.no_sponsorship_statement(said), said
+
+
+def _complete_report(**overrides):
+    report = {"required_still_blank": [], "errors_shown": [], "attestations_pending": [],
+              "captcha": False, "form_reached": True, "fields_filled": 12, "documents_attached": 1}
+    report.update(overrides)
+    return report
+
+
+def test_a_complete_application_on_its_last_page_is_submitted():
+    go, _why = safety.ready_to_auto_submit(_complete_report(), resume_on_form=True, submit_button_found=True)
+    assert go
+
+
+def test_auto_submit_waits_for_anything_only_the_user_can_do():
+    """The owner turned automatic submission on; the agent still never signs an
+    acknowledgement, never answers a CAPTCHA, and never sends an incomplete
+    form or one without the resume."""
+    cases = [
+        (_complete_report(required_still_blank=["City"]), True, True),
+        (_complete_report(errors_shown=["Phone number is invalid"]), True, True),
+        (_complete_report(attestations_pending=["I certify the above is true"]), True, True),
+        (_complete_report(captcha=True), True, True),
+        (_complete_report(), False, True),
+        (_complete_report(), True, False),
+        (_complete_report(fields_filled=0, documents_attached=0), True, True),
+    ]
+    for report, resume, submit_button in cases:
+        go, why = safety.ready_to_auto_submit(report, resume, submit_button)
+        assert not go, why

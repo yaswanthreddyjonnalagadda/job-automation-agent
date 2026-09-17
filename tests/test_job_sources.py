@@ -89,3 +89,17 @@ def test_the_employer_is_read_from_its_equal_opportunity_statement():
         "Legal links Casey’s Is an Equal Opportunity Employer Family and Medical") == "Casey’s"
     assert job_sources._employer_named_in("Capital One is an equal opportunity employer.") == "Capital One"
     assert job_sources._employer_named_in("We are an equal opportunity employer.") == ""
+
+
+def test_the_resume_shows_the_phone_with_its_country_code():
+    """The owner's decision: +1 in front of the number on the resume, so a site
+    filling its form from the resume takes the country along -- and never twice."""
+    import apply_flow
+    from config import get_user_profile
+
+    profile = get_user_profile()
+    for written in ("(571) 354-5212", "+1 (571) 354-5212"):
+        header = f"NAME\nTitle\nFairfax, VA | {written} | x@y.com\n\nSUMMARY"
+        line = apply_flow.normalise_contact_details(header, profile).splitlines()[2]
+        assert "+1 (571) 354-5212" in line
+        assert "+1 +1" not in line
