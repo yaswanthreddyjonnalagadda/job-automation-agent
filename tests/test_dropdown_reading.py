@@ -770,3 +770,43 @@ def test_no_google_option_means_nothing_is_clicked(page, agent):
     page.set_content(ADP_SOCIAL.replace('id="google" label="google"', 'id="x"')
                      .replace('google.svg', 'x.svg').replace('alt="Google"', 'alt="X"'))
     assert agent.find_google_sign_in(page) is None
+
+
+SHADOW_PRIVACY_DIALOG = """
+<html><body>
+  <sdf-dialog id="host">
+    <h2>Employer Privacy Policy</h2>
+    <p>Applicant Data Privacy Statement. Casey's needs to collect, use, retain and share
+       your personal information to administer the employment relationship.</p>
+  </sdf-dialog>
+  <script>
+    const host = document.getElementById('host');
+    const root = host.attachShadow({mode: 'open'});
+    root.innerHTML = `
+      <div role="dialog" aria-modal="true" style="width:400px;height:200px">
+        <slot></slot>
+        <div role="button" tabindex="0" id="disagree">Disagree</div>
+        <div role="button" tabindex="0" id="agree"
+             onclick="document.title='agreed'">Agree</div>
+      </div>`;
+  </script>
+</body></html>
+"""
+
+
+def test_a_privacy_pop_up_drawn_in_shadow_dom_is_agreed_to(page, agent):
+    """ADP draws its Employer Privacy Policy pop-up inside a web component: the
+    words are slotted in from outside the shadow root and Agree is not a
+    <button>. The agent read the dialog as just "Disagree Agree", never saw a
+    privacy prompt, and left it for the user though the profile allows it."""
+    page.set_content(SHADOW_PRIVACY_DIALOG)
+    assert agent.accept_consent_dialog(page)
+    assert page.title() == "agreed"
+
+
+def test_a_pop_up_asking_to_certify_is_still_left_alone(page, agent):
+    page.set_content(SHADOW_PRIVACY_DIALOG.replace(
+        "Casey's needs to collect",
+        "I certify under penalty of perjury that my privacy information is true. Casey's needs to collect"))
+    assert not agent.accept_consent_dialog(page)
+    assert page.title() != "agreed"

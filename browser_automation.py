@@ -719,6 +719,10 @@ class JobApplicationAssistant:
         # A cookie banner left open covers the bottom of the page -- on IGT it
         # blocked the upload tiles and the last dropdown on every pass.
         self.dismiss_cookie_banner(page)
+        # A privacy pop-up can arrive at any point -- ADP's appeared only after
+        # Google sign-in finished -- and the form underneath cannot be used
+        # until it is answered. Checked on every pass, not only after an upload.
+        self.accept_consent_dialog(page)
         try:
             if self.complete_emailed_passcode(page):
                 fields = self.detect_form_fields(page)
@@ -1971,12 +1975,35 @@ class JobApplicationAssistant:
         if profile is not None and not getattr(profile, "accept_application_privacy_prompts", True):
             return False
         try:
-            dialogs = page.locator("[role=dialog], [aria-modal=true]")
-            for i in range(dialogs.count()):
-                dialog = dialogs.nth(i)
+            # By role as well as by attribute: ADP draws its privacy pop-up
+            # inside a web component's shadow DOM, where it is on screen but
+            # absent from the page source. Role-based lookup reaches it.
+            candidates = [page.get_by_role("dialog"), page.get_by_role("alertdialog"),
+                          page.locator("[role=dialog], [aria-modal=true]")]
+            dialogs_seen = []
+            for group in candidates:
+                try:
+                    dialogs_seen += [group.nth(i) for i in range(group.count())]
+                except Exception:
+                    continue
+            logger.debug("CONSENT_SCAN: %d dialog(s) on the page: %s", len(dialogs_seen),
+                        [(d.inner_text(timeout=1_000) or '')[:50].replace(chr(10), ' ')
+                         for d in dialogs_seen[:4] if d.is_visible()])
+            for dialog in dialogs_seen:
                 if not dialog.is_visible():
                     continue
-                text = dialog.inner_text() or ""
+                # A web component's dialog shows its buttons from inside its
+                # shadow DOM and its words from outside it: ADP's read as just
+                # "Disagree Agree", so it never looked like a privacy prompt.
+                # The component's own text, name and heading say what it is.
+                text = dialog.evaluate("""e => {
+                    const host = e.getRootNode && e.getRootNode().host;
+                    const by = (e.getAttribute('aria-labelledby') || '').split(/ +/)
+                        .map(id => (document.getElementById(id) || {}).textContent || '').join(' ');
+                    return [e.getAttribute('aria-label') || '', by,
+                            (host && host.textContent) || '', e.textContent || ''].join(' ');
+                }""") or dialog.inner_text() or ""
+                logger.debug("CONSENT_TEXT: %r", " ".join(text.split())[:160])
                 if not re.search(r"privacy|consent|data protection", text, re.IGNORECASE):
                     continue
                 if re.search(r"cookie", text, re.IGNORECASE):
@@ -1984,10 +2011,13 @@ class JobApplicationAssistant:
                 if safety.is_attestation(text):
                     logger.info("LEFT_FOR_YOU: this pop-up asks you to certify something -- not accepting it")
                     continue
-                button = dialog.locator("button").filter(
-                    has_text=re.compile(r"^\s*(i agree|agree|i accept|accept|agree and continue|accept and continue)\s*$",
-                                        re.IGNORECASE)
-                ).first
+                # By role, not tag: ADP's Agree is an <sdf-button> web
+                # component, and a search for <button> elements found none.
+                agree = re.compile(r"^\s*(i agree|agree|i accept|accept|agree and continue|accept and continue)\s*$",
+                                   re.IGNORECASE)
+                button = dialog.get_by_role("button", name=agree).first
+                if not button.count():
+                    button = dialog.locator("button, [role=button], sdf-button").filter(has_text=agree).first
                 if button.count() and self._click_resiliently(button, timeout_ms=4_000):
                     page.wait_for_timeout(800)
                     logger.info("CONSENT: accepted %r", text.strip().splitlines()[0][:60])
