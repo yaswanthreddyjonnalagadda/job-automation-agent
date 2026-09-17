@@ -4400,10 +4400,22 @@ class JobApplicationAssistant:
 
         email_locator = self._find_login_email_input(root)
         if email_locator is None:
-            logger.warning("Password field present but no email/username field found on %s", domain)
-            return False
-
-        email_locator.fill(email)
+            # The second page of a two-step sign-in: iCIMS (login.icims.com)
+            # asks for the email on one page and the password on the next, so
+            # there is no email box here -- only the email shown as already
+            # given. Without this the run stopped at a lone password box.
+            if not self._email_already_given(page, email):
+                logger.warning("Password field present but no email/username field found on %s", domain)
+                return False
+            tried = self.__dict__.setdefault("_password_steps_tried", set())
+            if domain in tried:
+                logger.warning("LOGIN_HELD: the password was already tried once on %s -- not retrying", domain)
+                return False
+            tried.add(domain)
+            logger.info("Two-step sign-in on %s: the email was given on the page before; entering the password",
+                        domain)
+        else:
+            email_locator.fill(email)
         pw_locator.fill(password)
 
         # Sign-in buttons are often duplicated (one hidden) or covered by a
@@ -4430,6 +4442,25 @@ class JobApplicationAssistant:
         logger.info("Attempted auto-login on %s via Enter key", domain)
         return self._after_login_attempt(page, email)
 
+    @staticmethod
+    def _email_already_given(page: Page, email: str) -> bool:
+        """True when the page shows this email as the account being signed in
+        to -- as text ("jonna...@gmail.com  Edit") or in a read-only or hidden
+        box -- which is how the password step of a two-step sign-in looks."""
+        if not email:
+            return False
+        try:
+            return bool(page.evaluate(
+                """email => {
+                    email = email.toLowerCase();
+                    const boxes = [...document.querySelectorAll('input')].filter(i =>
+                        i.type === 'hidden' || i.readOnly || i.disabled || !i.getClientRects().length);
+                    return boxes.some(i => (i.value || '').trim().toLowerCase() === email)
+                        || (document.body.innerText || '').toLowerCase().includes(email);
+                }""", email))
+        except Exception:
+            return False
+
     def _after_login_attempt(self, page: Page, email: str) -> bool:
         """Records a successful sign-in; on a rejected one, stops retrying and
         creates the account if the page offers that."""
@@ -4438,7 +4469,7 @@ class JobApplicationAssistant:
             body = (page.locator("body").inner_text(timeout=5_000) or "").lower()
         except Exception:
             pass
-        rejected = re.search(r"invalid (email|user|login|password|credentials)|incorrect (email|password)|"
+        rejected = re.search(r"invalid (email|user|login|password|credentials)|incorrect (email|password)|wrong (email|username|password)|"
                              r"don't recognize|not recognized|no account", body)
         pw_visible = page.locator("input[type='password']").first
         still_login = pw_visible.count() > 0 and pw_visible.is_visible()
@@ -4473,7 +4504,9 @@ class JobApplicationAssistant:
             "input[aria-label*='email' i]",
             "input[autocomplete='username']",
         ):
-            loc = root.locator(selector).first
+            # Not a read-only box: on the password step of a two-step sign-in
+            # it only shows the email already given, and can't be typed in.
+            loc = root.locator(f"{selector}:not([readonly]):not([disabled])").first
             try:
                 if loc.count() and loc.is_visible():
                     return loc
@@ -4488,7 +4521,7 @@ class JobApplicationAssistant:
         for i in range(min(inputs.count(), 40)):
             el = inputs.nth(i)
             try:
-                if not el.is_visible():
+                if not el.is_visible() or not el.is_editable():
                     continue
                 itype = (el.get_attribute("type") or "text").lower()
             except Exception:
@@ -6040,6 +6073,18 @@ class JobApplicationAssistant:
         away_since: Optional[float] = None
         last_list_reload = 0.0
         last_mail_check: Optional[float] = None
+        # Stopped for a CAPTCHA: once the user has completed it, carry on by
+        # itself. On Schwab's sign-in the user solved the puzzle, the site moved
+        # to its next step, and the run went on waiting for an instruction.
+        waiting_on_captcha = False
+        captcha_gone_polls = 0
+        if page is not None:
+            try:
+                waiting_on_captcha = safety.captcha_visible(page)
+            except Exception:
+                waiting_on_captcha = False
+            if waiting_on_captcha:
+                logger.info("Waiting for you to complete the CAPTCHA; the agent carries on once it is done")
         while not signal_path.exists():
             time.sleep(poll_seconds)
             waited += poll_seconds
@@ -6050,6 +6095,16 @@ class JobApplicationAssistant:
             if page is not None:
                 if page.is_closed():
                     return "browser_closed"
+                if waiting_on_captcha:
+                    try:
+                        captcha_gone_polls = 0 if safety.captcha_visible(page) else captcha_gone_polls + 1
+                    except Exception:
+                        captcha_gone_polls = 0  # mid-navigation: look again next poll
+                    if captcha_gone_polls >= 2:
+                        logger.info("The CAPTCHA is done -- carrying on with the application")
+                        page.wait_for_timeout(2_000)  # let the site's next step finish loading
+                        return "refresh"
+                    continue
                 try:
                     on_form = self.find_submit_button(page) is not None
                     if on_form:

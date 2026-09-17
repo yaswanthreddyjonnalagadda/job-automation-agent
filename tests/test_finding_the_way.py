@@ -431,3 +431,68 @@ def test_claude_is_told_to_leave_a_captcha_alone():
     from claude_integration import ClaudeClient
     source = inspect.getsource(ClaudeClient.read_page)
     assert '"captcha"' in source and "never " in source and "Skip" in source
+
+
+def test_the_agent_carries_on_once_the_user_has_completed_the_captcha(page, agent, tmp_path):
+    serve_captcha(page, 400)
+    # The user solves the puzzle a moment later and the site moves on.
+    page.evaluate("setTimeout(() => { document.querySelector('iframe').remove();"
+                  " document.body.insertAdjacentHTML('beforeend', '<h2>Create your account</h2>'); }, 1200)")
+    decision = agent.wait_for_signal(tmp_path / "_signal_x.txt", poll_seconds=0.3, timeout_seconds=20, page=page)
+    assert decision == "refresh"
+
+
+def test_the_agent_keeps_waiting_while_the_captcha_is_unsolved(page, agent, tmp_path):
+    serve_captcha(page, 400)
+    with pytest.raises(TimeoutError):
+        agent.wait_for_signal(tmp_path / "_signal_x.txt", poll_seconds=0.3, timeout_seconds=2, page=page)
+
+
+# --- two-step sign-in (iCIMS: email on one page, password on the next) ----------
+
+ICIMS_PASSWORD_STEP = """
+<html><body>
+<h1>Log in to Charles Schwab</h1><p>Enter Your Password</p>
+<form onsubmit="document.body.dataset.pw = document.querySelector('[name=password]').value;
+                document.body.innerHTML = '<h1>Welcome</h1>'; return false;">
+  <input type="hidden" name="state" value="abc">
+  <label>Username or email address</label>
+  <input type="text" autocomplete="username" readonly name="username" value="applicant@example.com">
+  <a href="#">Edit</a>
+  <label for="password">Password *</label>
+  <input type="password" id="password" name="password" autocomplete="current-password">
+  <a href="#">Reset your password</a>
+  <button type="submit" name="action">LOG IN</button>
+</form>
+</body></html>
+"""
+
+
+def serve_login(page, body):
+    page.route("https://login.icims.com/**",
+               lambda route: route.fulfill(status=200, content_type="text/html", body=body))
+    page.goto("https://login.icims.com/u/login/password?state=abc")
+
+
+def test_the_password_step_of_a_two_step_sign_in_is_completed(page, agent):
+    serve_login(page, ICIMS_PASSWORD_STEP)
+    assert agent.attempt_auto_login(page, "applicant@example.com", "s3cret-ATS") is True
+    assert page.evaluate("document.body.dataset.pw") == "s3cret-ATS"
+
+
+def test_a_password_box_for_some_other_account_is_left_alone(page, agent):
+    serve_login(page, ICIMS_PASSWORD_STEP.replace("applicant@example.com", "someone.else@example.com"))
+    assert agent.attempt_auto_login(page, "applicant@example.com", "s3cret-ATS") is False
+    assert page.locator("[name=password]").input_value() == ""
+
+
+def test_a_rejected_password_is_tried_only_once(page, agent):
+    rejecting = ICIMS_PASSWORD_STEP.replace(
+        "document.body.innerHTML = '<h1>Welcome</h1>'; return false;",
+        "document.querySelector('h1').insertAdjacentHTML('afterend', '<p>Wrong email or password</p>');"
+        " return false;")
+    serve_login(page, rejecting)
+    assert agent.attempt_auto_login(page, "applicant@example.com", "s3cret-ATS") is False
+    page.locator("[name=password]").fill("")
+    assert agent.attempt_auto_login(page, "applicant@example.com", "s3cret-ATS") is False
+    assert page.locator("[name=password]").input_value() == ""  # not typed a second time
