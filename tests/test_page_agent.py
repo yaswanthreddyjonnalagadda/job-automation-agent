@@ -481,3 +481,57 @@ def test_a_dropdown_that_shows_its_choice_beside_it_is_read_as_answered():
   - text: Do you require sponsorship? *
   - combobox "Do you require sponsorship? *" [ref=e3]''')
     assert next(c for c in empty if c.role == "combobox").answer == ""
+
+
+# --- signing in: Google first, always (the owner's standing instruction) ----------
+
+SIGN_IN = """<html><body><h2>Sign In</h2>
+  <button>Sign in with Google</button>
+  <button>Sign in with LinkedIn</button>
+  <button>Sign in with email</button>
+</body></html>"""
+
+
+def agent_with_fake_login(resume_file, **kw):
+    agent = make_agent(Planner(), resume_file, **kw)
+    calls = []
+    agent.assistant._sign_in_with_google = lambda page, button, email, host, header: calls.append(("google", email)) or True
+    agent.assistant.handle_auth_gate = lambda page, email: calls.append(("password", email)) or False
+    return agent, calls
+
+
+def test_google_sign_in_is_chosen_over_email_and_linkedin(page, resume_file):
+    page.set_content(SIGN_IN)
+    agent, calls = agent_with_fake_login(resume_file)
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    assert agent.sign_in_step(page, controls) is True
+    assert [c[0] for c in calls] == ["google"]
+
+
+def test_google_sign_in_inside_a_frame_is_used(page, resume_file):
+    page.set_content(f'<iframe srcdoc=\'{SIGN_IN}\' width="600" height="400"></iframe>')
+    page.wait_for_timeout(300)
+    agent, calls = agent_with_fake_login(resume_file)
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    assert agent.sign_in_step(page, controls) is True
+    assert [c[0] for c in calls] == ["google"]
+
+
+def test_a_password_sign_in_that_typed_nothing_is_not_counted_as_tried(page, resume_file):
+    page.set_content('<h2>Sign In</h2><label>Email <input type="email"></label>'
+                     '<label>Password <input type="password"></label><button>Sign In</button>')
+    agent, calls = agent_with_fake_login(resume_file)
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    assert agent.sign_in_step(page, controls) is False       # nothing done: the page is planned instead
+    assert [c[0] for c in calls] == ["password"]
+
+
+def test_linkedin_sign_in_is_never_used(page, resume_file):
+    page.set_content(SIGN_IN)
+    agent = make_agent(Planner(), resume_file)
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    plan = page_agent.PagePlan(page_kind="sign_in", next_kind="sign_in",
+                               next_ref=next(c.ref for c in controls if "LinkedIn" in c.name),
+                               next_label="Sign in with LinkedIn")
+    moved, _page, why = agent.press_next(page, plan, controls)
+    assert moved == "stop" and ("never uses" in why or "never presses" in why)

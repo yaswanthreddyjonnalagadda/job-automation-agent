@@ -380,7 +380,8 @@ Rules -- follow every one:
    "open_application" for Apply on a job posting or an apply-method chooser (prefer applying manually /
    without an account); "consent" for accepting a privacy notice dialog. NEVER choose Finish Later, Save for
    later, Cancel, Back, Withdraw, Log out, or sign-in with LinkedIn/Indeed/Facebook/Apple/Microsoft.
-   Sign in with Google is allowed (kind "sign_in"). "none" when nothing should be pressed.
+   Where a page offers "Sign in with Google" (or "Continue with Google"), that is always the sign-in to
+   choose, ahead of email/password or any other provider (kind "sign_in"). "none" when nothing should be pressed.
 11. A confirmation that the application was received: page_kind "confirmation", next kind "none".
 """
 

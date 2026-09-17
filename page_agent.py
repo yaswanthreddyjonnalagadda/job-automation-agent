@@ -310,6 +310,7 @@ class PageAgent:
         self.written: dict[str, str] = {}          # question -> value the agent put there
         self._letter: Optional[tuple[Path, Path]] = None
         self._signed_in_at: set[str] = set()
+        self._google_tried: set[str] = set()
         self.notes: list[str] = []                 # worth telling the owner, not worth stopping for
         self.corrected: set[str] = set()           # questions the agent put right from the profile
         self.owner_answers: dict[str, str] = {}    # answers the owner set while the agent waited
@@ -319,6 +320,7 @@ class PageAgent:
         """Code reloaded into a run that is already going keeps its old object:
         anything added since starts empty rather than failing."""
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
+                              ("_google_tried", set),
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict)):
             if not hasattr(self, name):
                 setattr(self, name, default())
@@ -356,6 +358,44 @@ class PageAgent:
         except Exception:
             pass
         return tab
+
+    # -- signing in ------------------------------------------------------------------
+    GOOGLE_SIGN_IN = re.compile(r"(sign|log) ?in with google|continue with google|google sign[- ]?in", re.IGNORECASE)
+
+    def sign_in_step(self, page, controls: list[Control]) -> bool:
+        """Signs in where the page asks for it. True when something was done.
+
+        Google first, always, when the site offers it -- the owner's standing
+        instruction. NVIDIA's (Workday) page offered "Sign in with Google",
+        "Sign in with LinkedIn" and "Sign in with email"; the agent took email
+        and got nowhere. LinkedIn, Indeed, Facebook, Apple and Microsoft are
+        never used. Otherwise the employer-account password, once per site.
+        """
+        tab = self.tab(page)
+        email = getattr(self.config, "ats_email", "") or getattr(self.profile, "email", "")
+        host = urlparse(tab.url).netloc
+        google = next((c for c in controls if c.role in PRESS_ROLES and self.GOOGLE_SIGN_IN.search(c.name or "")), None)
+        if google is not None and host not in self._google_tried and email:
+            self._google_tried.add(host)
+            logger.info("LOGIN: this site offers Google sign-in -- using it")
+            try:
+                # Through the snapshot's reference, so a sign-in box inside a
+                # frame is reached as well.
+                button = self.locate(page, google.ref).element_handle(timeout=5_000)
+                if self.assistant._sign_in_with_google(tab, button, email, host, lambda: None):
+                    logger.info("LOGIN: signed in with Google")
+                return True
+            except Exception as exc:
+                logger.warning("LOGIN: Google sign-in did not go through (%s)", str(exc).splitlines()[0][:100])
+                return True   # the page has changed; read it again
+        if self._password_box(tab) and host not in self._signed_in_at:
+            self._signed_in_at.add(host)
+            try:
+                if self.assistant.handle_auth_gate(tab, email):
+                    return True
+            except Exception as exc:
+                logger.warning("LOGIN: %s", str(exc).splitlines()[0][:120])
+        return False
 
     # -- facts Claude may answer from ---------------------------------------------
     def facts(self, controls: list[Control]) -> dict:
@@ -415,21 +455,6 @@ class PageAgent:
                 if said:
                     return Outcome("no_sponsorship", page, [said])
 
-            # A password box is the sign-in code's: it types only the employer
-            # account password, and never a Google one.
-            if self._password_box(tab):
-                email = getattr(self.config, "ats_email", "") or getattr(self.profile, "email", "")
-                host = urlparse(tab.url).netloc
-                if host in self._signed_in_at:
-                    return Outcome("owner_needed", page, ["the sign-in did not go through -- it needs you"])
-                self._signed_in_at.add(host)
-                if self.assistant.handle_auth_gate(tab, email):
-                    self.settle(page)
-                    continue
-                if self._password_box(tab):
-                    return Outcome("owner_needed", page, ["a sign-in needs you (the password was not accepted "
-                                                          "or there is no employer account password set)"])
-
             snapshot = self.read_when_loaded(page)
             fingerprint = re.sub(r"\[ref=[\w-]+\]|\[active\]", "", snapshot)
             if fingerprint == last_fingerprint:
@@ -445,6 +470,9 @@ class PageAgent:
 
             controls = parse_snapshot(snapshot)
             self._save(snapshot)
+            if self.sign_in_step(page, controls):
+                self.settle(page)
+                continue
             try:
                 plan = PagePlan.from_json(self.claude.plan_page(compact_snapshot(snapshot), self.facts(controls),
                                                                feedback))
@@ -932,11 +960,6 @@ class PageAgent:
             return "retry", page, f"{label!r} is not enabled yet"
         if NEVER_PRESS.search(label):
             return "stop", page, f"the way forward looked like {label!r}, which the agent never presses"
-        if plan.next_kind == "sign_in" and re.search(r"google", label, re.IGNORECASE):
-            email = getattr(self.profile, "email", "")
-            self.assistant.sign_in_with_google_if_offered(tab, email)
-            self.settle(page)
-            return "moved", page, ""
         if re.search(r"linked ?in|indeed|facebook|apple|microsoft", label, re.IGNORECASE):
             return "stop", page, f"{label!r} is a sign-in the agent never uses"
         if plan.next_kind == "consent" or re.search(r"(i )?(agree|accept|acknowledge|consent)", label, re.IGNORECASE):
