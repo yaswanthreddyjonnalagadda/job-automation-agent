@@ -63,6 +63,13 @@ CONFIRMATION_TEXT = re.compile(
     r"you('ve| have) (successfully )?applied",
     re.IGNORECASE)
 
+# What a site says when the account behind a sign-in cannot be used.
+ACCOUNT_ERROR = re.compile(
+    r"account is inactive|account (has been |is )?(inactive|disabled|locked|deactivated|suspended)|"
+    r"no account (was )?found|user not found|we (could not|couldn't) find (an )?account|"
+    r"sign[- ]?in (failed|unsuccessful)|unable to sign you in",
+    re.IGNORECASE)
+
 PLACEHOLDER = re.compile(
     r"^[\s\-–—]*(no selection|select( one| an option)?|please select|choose( one)?|make a selection|"
     r"none selected)?[\s\-–—.]*$", re.IGNORECASE)
@@ -177,6 +184,10 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         else:
             stack.append((indent, "", None))
     return controls
+
+
+def host_of(url: str) -> str:
+    return urlparse(url or "").netloc
 
 
 def _plain(text: str) -> str:
@@ -311,21 +322,31 @@ class PageAgent:
         self._letter: Optional[tuple[Path, Path]] = None
         self._signed_in_at: set[str] = set()
         self._google_tried: set[str] = set()
+        self._retried_after_error = False
+        self._google_failed: set[str] = set()   # sites whose Google account they will not accept
+        self._emailed_in: set[str] = set()      # sites where the email has been given on its own page
+        self._created_at: set[str] = set()      # sites where an account has been created
         self.notes: list[str] = []                 # worth telling the owner, not worth stopping for
         self.corrected: set[str] = set()           # questions the agent put right from the profile
         self.owner_answers: dict[str, str] = {}    # answers the owner set while the agent waited
         self._paused_state: dict[str, str] = {}
 
     def forget_sign_in_attempts(self) -> None:
+        """Google stays refused where the site itself rejected the account."""
         """A resumed run tries signing in again: the owner has had a hand in it,
         and the page may now offer something the last attempt never saw."""
-        self._signed_in_at, self._google_tried = set(), set()
+        # What the site rejected is remembered; only the password attempts are
+        # forgiven, so a resumed run can try them again.
+        self._signed_in_at = set()
+        self._emailed_in = set()
+        self._retried_after_error = False
 
     def _ensure_state(self) -> None:
         """Code reloaded into a run that is already going keeps its old object:
         anything added since starts empty rather than failing."""
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
-                              ("_google_tried", set),
+                              ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
+                              ("_emailed_in", set), ("_created_at", set),
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict)):
             if not hasattr(self, name):
                 setattr(self, name, default())
@@ -380,7 +401,7 @@ class PageAgent:
         email = getattr(self.config, "ats_email", "") or getattr(self.profile, "email", "")
         host = urlparse(tab.url).netloc
         google = next((c for c in controls if c.role in PRESS_ROLES and self.GOOGLE_SIGN_IN.search(c.name or "")), None)
-        if google is not None and host not in self._google_tried and email:
+        if google is not None and host not in self._google_tried and host not in self._google_failed and email:
             self._google_tried.add(host)
             logger.info("LOGIN: this site offers Google sign-in -- using it")
             try:
@@ -389,12 +410,47 @@ class PageAgent:
                 button = self.locate(page, google.ref).element_handle(timeout=5_000)
                 if self.assistant._sign_in_with_google(tab, button, email, host, lambda: None):
                     logger.info("LOGIN: signed in with Google")
+                else:
+                    # The site would not take it (NVIDIA: "Account is Inactive").
+                    # Its own sign-in is used from here on.
+                    self._google_failed.add(host)
+                    self.assistant.google_refused_on = set(self._google_failed)
+                    logger.info("LOGIN: %s did not accept the Google account -- using its own sign-in", host)
                 return True
             except Exception as exc:
                 logger.warning("LOGIN: Google sign-in did not go through (%s)", str(exc).splitlines()[0][:100])
                 return True   # the page has changed; read it again
-        if self._password_box(tab) and host not in self._signed_in_at:
-            self._signed_in_at.add(host)
+        # A sign-in that asks for the email on its own page first (Workday's
+        # does, after "Sign in with email"): give it, and press on. The password
+        # is never typed here -- that is the sign-in code's, below.
+        if not self._password_box(tab) and email and host not in self._emailed_in:
+            box = next((c for c in controls
+                        if c.role in ("textbox", "searchbox") and not c.answer
+                        and re.search(r"e-?mail|user ?name", f"{c.name} {c.question}", re.IGNORECASE)), None)
+            if box is not None:
+                self._emailed_in.add(host)
+                logger.info("LOGIN: this sign-in asks for the email first -- giving it")
+                try:
+                    self.locate(page, box.ref).fill(email, timeout=8_000)
+                    go = next((c for c in controls if c.role in PRESS_ROLES and re.match(
+                        r"^(sign ?in|log ?in|continue|next|submit)$",
+                        " ".join((c.name or "").split()), re.IGNORECASE)), None)
+                    if go is not None:
+                        self.locate(page, go.ref).click(timeout=8_000)
+                    else:
+                        self.locate(page, box.ref).press("Enter", timeout=5_000)
+                    return True
+                except Exception as exc:
+                    logger.warning("LOGIN: could not give the email (%s)", str(exc).splitlines()[0][:100])
+        # Two password boxes mean "create an account": its own step, which the
+        # sign-in code fills (password, repeat, the site's terms), and not a
+        # repeat of a sign-in already tried here.
+        making_account = self._password_boxes(tab) >= 2
+        if making_account and host in self._created_at:
+            return False
+        if self._password_box(tab) and (making_account or host not in self._signed_in_at):
+            (self._created_at if making_account else self._signed_in_at).add(host)
+            logger.info("LOGIN: %s on %s", "creating the account" if making_account else "signing in", host)
             try:
                 if self.assistant.handle_auth_gate(tab, email):
                     return True
@@ -490,6 +546,29 @@ class PageAgent:
                         f" ({plan.step})" if plan.step else "", len(plan.answers), len(plan.for_owner),
                         plan.next_kind.replace("_", " "), plan.next_label[:40])
 
+            said = ACCOUNT_ERROR.search(snapshot)
+            if said or (plan.page_kind == "error" and not controls):
+                message = " ".join((said.group(0) if said else "the site showed an error").split())
+                if self._google_tried - self._google_failed:
+                    # The site will not take the Google account (the error may
+                    # show on Google's own address, so every site just tried
+                    # with it is marked): use the site's own sign-in from now
+                    # on, and that is worth another go at the application.
+                    self._google_failed |= set(self._google_tried)
+                    self.assistant.google_refused_on = set(self._google_failed)
+                    self._retried_after_error = False
+                if not self._retried_after_error:
+                    # The Google account the site holds cannot be used (NVIDIA:
+                    # "Account is Inactive"). Start again from the posting and
+                    # take the site's own sign-in, which Google is now past.
+                    self._retried_after_error = True
+                    logger.info("The site says %r after signing in -- starting again from the posting "
+                                "and using its own sign-in", message[:60])
+                    tab.goto(getattr(self.job, "url", "") or tab.url, wait_until="domcontentloaded", timeout=60_000)
+                    self.settle(page)
+                    continue
+                return Outcome("owner_needed", page, [f"the site says: {message[:120]} -- the account it holds "
+                                                      f"for you cannot be used, so it needs you"])
             if plan.page_kind == "captcha":
                 return Outcome("captcha", page, ["a CAPTCHA is showing -- only you can complete it"])
             if plan.page_kind == "confirmation" and self._site_confirms(tab):
@@ -966,6 +1045,18 @@ class PageAgent:
         label = " ".join((control.name or plan.next_label).split())
         if control.disabled:
             return "retry", page, f"{label!r} is not enabled yet"
+        if self.GOOGLE_SIGN_IN.search(label) and host_of(tab.url) in self._google_failed:
+            # NVIDIA answered "Account is Inactive" to this Google account. Its
+            # own sign-in is taken instead, whoever proposed the Google one.
+            instead = next((c for c in controls if c.role in PRESS_ROLES and re.search(
+                r"sign ?in with email|use email|continue with email|create (an )?account|sign up|register",
+                c.name or "", re.IGNORECASE)), None)
+            if instead is None:
+                return "stop", page, ("this site will not accept the Google account and offers no other way "
+                                      "to sign in")
+            logger.info("NEXT: Google was refused here -- using %r instead", (instead.name or "")[:40])
+            control = instead
+            label = " ".join((control.name or "").split())
         if NEVER_PRESS.search(label):
             return "stop", page, f"the way forward looked like {label!r}, which the agent never presses"
         if re.search(r"linked ?in|indeed|facebook|apple|microsoft", label, re.IGNORECASE):
@@ -1042,6 +1133,18 @@ class PageAgent:
         return ""
 
     # -- small helpers --------------------------------------------------------------------
+    @staticmethod
+    def _password_boxes(tab) -> int:
+        """How many password boxes the page shows, frames included."""
+        try:
+            count = tab.locator("input[type=password]:visible").count()
+            for frame in tab.frames[1:]:
+                if not safety.is_captcha_frame(frame.url):
+                    count += frame.locator("input[type=password]:visible").count()
+            return count
+        except Exception:
+            return 0
+
     @staticmethod
     def _password_box(tab) -> bool:
         try:

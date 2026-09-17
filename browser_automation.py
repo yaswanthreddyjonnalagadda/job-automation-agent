@@ -4408,7 +4408,9 @@ class JobApplicationAssistant:
 
         pw_locator = root.locator("input[type='password']").first
         if pw_locator.count() == 0 or not pw_locator.is_visible():
-            if self.sign_in_with_google_if_offered(page, email):
+            # Not Google where the site has already refused that account.
+            refused = domain in getattr(self, "google_refused_on", set())
+            if not refused and self.sign_in_with_google_if_offered(page, email):
                 return True
             logger.info("No visible password field on %s; assuming no login is required", domain)
             return False
