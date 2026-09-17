@@ -181,14 +181,40 @@ def test_a_whole_application_is_read_answered_and_submitted(page, resume_file):
     assert stored(page, "resume") == resume_file.name
 
 
-def test_a_carried_over_no_to_sponsorship_stops_before_anything_is_sent(page, resume_file):
+def test_a_carried_over_no_to_sponsorship_is_corrected_from_the_profile(page, resume_file):
+    """Schwab's page came with "No" already chosen, from an old application. The
+    owner's rule: the agent puts it right from the profile and carries on."""
     serve(page, sponsor_options='<option value="">-- Make a Selection --</option><option>Yes</option>'
                                 '<option selected="selected">No</option>')
-    outcome = make_agent(Planner(), resume_file).run(page)
+    agent = make_agent(Planner(), resume_file)
+    outcome = agent.run(page)
+    assert outcome.kind == "submitted", outcome.reasons
+    assert stored(page, "sponsor") == "Yes"
+    assert any("corrected" in n and "sponsorship" in n for n in agent.notes)
+
+
+def test_an_answer_the_owner_set_is_never_corrected(page, resume_file):
+    serve(page, sponsor_options='<option value="">-- Make a Selection --</option><option>Yes</option>'
+                                '<option>No</option>')
+    agent = make_agent(Planner(), resume_file)
+    agent.remember_page_state(page)
+    page.locator("#sponsor").select_option("No")          # the owner, while the agent waited
+    agent.note_owner_changes(page)
+    outcome = agent.run(page)
     assert outcome.kind == "owner_needed"
-    assert any("sponsorship" in r for r in outcome.reasons)
-    assert page.url.endswith("/apply/1")                # never pressed Next with it
-    assert page.locator("#sponsor").input_value() == "No"  # and never changed it
+    assert page.locator("#sponsor").input_value() == "No"
+    assert page.url.endswith("/apply/1")
+
+
+def test_a_legal_answer_is_corrected_only_from_a_profile_field(page, resume_file):
+    page.set_content('<label for="f">Have you ever been convicted of a felony? *</label>'
+                     '<select id="f"><option>Yes</option><option selected>No</option></select>')
+    agent = make_agent(Planner(), resume_file)
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    plan = page_agent.PagePlan(mismatches=[{"question": "Have you ever been convicted of a felony? *",
+                                            "on_page": "No", "correct_value": "Yes", "source": "resume"}])
+    assert agent.correct_from_profile(page, plan, controls) == []
+    assert page.locator("#f").input_value() == "No"
 
 
 def test_nothing_is_sent_when_automatic_submission_is_off(page, resume_file):

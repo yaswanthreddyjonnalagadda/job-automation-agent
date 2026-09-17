@@ -781,11 +781,14 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                     "the agent reads the page again and carries on.")
         logger.info(banner)
         assistant.raise_window(page)
+        agent.remember_page_state(page)
         try:
             decision = assistant.wait_for_signal(signal_path, timeout_seconds=args.timeout, page=page)
         except TimeoutError:
             logger.info("No instruction received; the application is left as it is, unsubmitted.")
             return
+        if not page.is_closed():
+            agent.note_owner_changes(page)
         if decision == "submitted_by_user":
             evidence = getattr(assistant, "_confirmation_evidence", "") or "the page confirmed it"
             status, note = safety.verification_status(evidence)

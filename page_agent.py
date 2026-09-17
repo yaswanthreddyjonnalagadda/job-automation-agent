@@ -16,7 +16,9 @@ What it may never do is decided here, in code, whatever Claude proposes:
     required question is left for the owner
   * never tick a legal declaration or signature
   * never type a password (the sign-in code handles employer accounts)
-  * never change an answer the agent did not write
+  * never change an answer the owner gave; an answer the site pre-filled that
+    contradicts the profile is corrected from the profile (the owner's rule,
+    2026-09-17: the agent does the work, not the owner)
   * never answer an immigration, criminal or contract question except from a
     profile field that states it
   * never press Finish Later, Withdraw, Log out, Cancel, Back or a social sign-in
@@ -159,6 +161,23 @@ def parse_snapshot(snapshot: str) -> list[Control]:
     return controls
 
 
+def _plain(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def _same_question(a: str, b: str) -> bool:
+    """The same question, whatever asterisks, punctuation or truncation differ."""
+    a, b = _plain(a), _plain(b)
+    if not a or not b:
+        return False
+    return a == b or (min(len(a), len(b)) >= 25 and (a.startswith(b[:60]) or b.startswith(a[:60])))
+
+
+def _same_answer(a: str, b: str) -> bool:
+    a, b = _plain(a), _plain(b)
+    return bool(a) and bool(b) and (a == b or a.startswith(b + " ") or b.startswith(a + " "))
+
+
 def compact_snapshot(snapshot: str, limit: int = 60_000) -> str:
     """The snapshot without its empty containers and link addresses, which
     carry no meaning for answering a form and cost most of the space."""
@@ -256,6 +275,17 @@ class PageAgent:
         self._letter: Optional[tuple[Path, Path]] = None
         self._signed_in_at: set[str] = set()
         self.notes: list[str] = []                 # worth telling the owner, not worth stopping for
+        self.corrected: set[str] = set()           # questions the agent put right from the profile
+        self.owner_answers: dict[str, str] = {}    # answers the owner set while the agent waited
+        self._paused_state: dict[str, str] = {}
+
+    def _ensure_state(self) -> None:
+        """Code reloaded into a run that is already going keeps its old object:
+        anything added since starts empty rather than failing."""
+        for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict),
+                              ("_paused_state", dict), ("_signed_in_at", set), ("written", dict)):
+            if not hasattr(self, name):
+                setattr(self, name, default())
 
     # -- the page --------------------------------------------------------------
     @staticmethod
@@ -326,6 +356,7 @@ class PageAgent:
     # -- one page -----------------------------------------------------------------
     def run(self, page) -> Outcome:
         """Works through the application until it is submitted or needs the owner."""
+        self._ensure_state()
         tries = 0
         stick_tries = 0      # re-reads of one page because an answer did not stay
         last_fingerprint = ""
@@ -394,7 +425,7 @@ class PageAgent:
                     return Outcome("submitted", page, ["the site confirmed the application"])
                 return Outcome("owner_needed", page, ["the site says this application was already sent"])
 
-            given = self.apply_answers(page, plan, controls)
+            given = self.correct_from_profile(page, plan, controls) + self.apply_answers(page, plan, controls)
 
             # Read back what is on the page now, whoever filled it, and check
             # every answer the agent gave is really there.
@@ -481,7 +512,8 @@ class PageAgent:
                 missing.append(f"{before.question[:60]} = {answer.value[:40]!r}")
         return missing
 
-    def refusal(self, page, answer: Answer, control: Control, controls: list[Control] = ()) -> str:
+    def refusal(self, page, answer: Answer, control: Control, controls: list[Control] = (),
+                correcting: bool = False) -> str:
         """Why this answer must not be given, or "" when it may."""
         question = control.question or answer.question
         action = answer.action
@@ -506,6 +538,10 @@ class PageAgent:
             if not field_name or not str(getattr(self.profile, field_name, "") or "").strip():
                 return "a legal or immigration question your profile doesn't state"
         current = control.answer
+        if self._owner_gave(question):
+            return "you answered this yourself -- left as you set it"
+        if correcting:
+            return ""
         if action in ("fill", "choose") and current and not self._ours(question, current):
             return f"already answered {current[:40]!r} -- not changing an answer the agent didn't give"
         if control.role == "radio" and action == "check" and control.group:
@@ -515,6 +551,106 @@ class PageAgent:
         if control.role in ("checkbox", "switch") and action == "uncheck" and control.checked                 and not self._ours(question, answer.value or "checked"):
             return "ticked by someone else -- not unticking it"
         return ""
+
+    # -- putting pre-filled answers right ---------------------------------------------
+    def correct_from_profile(self, page, plan: PagePlan, controls: list[Control]) -> list[tuple[Answer, Control]]:
+        """Answers already on the page that contradict the owner's profile, put
+        right from the profile.
+
+        Schwab's questions page came with "No" to "will you require sponsorship"
+        carried over from an old application. The owner's rule: the agent fixes
+        it from the profile and carries on -- it is not left for the owner.
+        Sponsorship and work authorization are corrected from their profile
+        fields whatever Claude noticed; anything else Claude found contradicting
+        a named profile field is corrected too. An answer the owner set is never
+        touched.
+        """
+        fixes: list[tuple[str, str, str]] = []   # (question, right answer, profile field)
+        for item in answered_fields(controls):
+            question = item["label"]
+            if not question or not safety.legal_answer_conflicts([item], self.profile):
+                continue
+            if safety._SPONSORSHIP_Q.search(question):
+                needs = bool(getattr(self.profile, "requires_visa_sponsorship", False))
+                fixes.append((question, "Yes" if needs else "No", "profile.requires_visa_sponsorship"))
+            elif safety._AUTHORIZED_Q.search(question):
+                allowed = str(getattr(self.profile, "legally_eligible_to_work", "") or "").lower().startswith("y")
+                fixes.append((question, "Yes" if allowed else "No", "profile.legally_eligible_to_work"))
+        for mismatch in plan.mismatches:
+            question = " ".join(str(mismatch.get("question") or "").split())
+            value = str(mismatch.get("correct_value") or "").strip()
+            source = str(mismatch.get("source") or "").strip()
+            field_name = source.split(".", 1)[1] if source.startswith("profile.") else ""
+            if not question or not value or not field_name or not str(getattr(self.profile, field_name, "") or "").strip():
+                continue
+            if any(_same_question(question, q) for q, _v, _s in fixes):
+                continue
+            fixes.append((question, value, source))
+
+        given: list[tuple[Answer, Control]] = []
+        for question, value, source in fixes:
+            control = self._control_for(question, value, controls)
+            if control is None:
+                continue
+            was = self._shown_answer(control, controls)
+            if was and _same_answer(was, value):
+                continue
+            action = ("check" if control.role in ("radio", "checkbox", "switch")
+                      else "choose" if control.role in ("combobox", "listbox") else "fill")
+            answer = Answer(control.ref, control.question, action, value, source)
+            refusal = self.refusal(page, answer, control, controls, correcting=True)
+            if refusal:
+                logger.info("NOT CORRECTED: %r -- %s", control.question[:70], refusal)
+                continue
+            try:
+                done = self.do(page, answer, control)
+            except Exception as exc:
+                done = False
+                logger.info("Could not correct %r: %s", control.question[:60], str(exc).splitlines()[0][:100])
+            if done:
+                given.append((answer, control))
+                self.written[control.question] = value
+                self.corrected.add(control.question)
+                note = f"corrected {control.question[:70]!r} from {was[:40]!r} to {value[:40]!r} (from your {source})"
+                self.notes.append(note)
+                logger.info("CORRECTED: %s", note)
+        return given
+
+    def _control_for(self, question: str, value: str, controls: list[Control]) -> Optional[Control]:
+        matches = [c for c in controls if c.role in ANSWER_ROLES and _same_question(c.question, question)]
+        radios = [c for c in matches if c.role == "radio"]
+        if radios:
+            index = self.assistant._best_option([c.name for c in radios], [value])
+            return radios[index] if index is not None else None
+        return matches[0] if matches else None
+
+    @staticmethod
+    def _shown_answer(control: Control, controls: list[Control]) -> str:
+        if control.role == "radio":
+            return next((c.name for c in controls if c.role == "radio" and c.group == control.group and c.checked), "")
+        return control.answer
+
+    # -- the owner's own answers ----------------------------------------------------------
+    def remember_page_state(self, page) -> None:
+        """What the page shows as the agent stops to wait, so anything the owner
+        changes meanwhile is known to be theirs."""
+        try:
+            self._paused_state = {f["label"]: f["value"] for f in answered_fields(parse_snapshot(self.snapshot(page)))}
+        except Exception:
+            self._paused_state = {}
+
+    def note_owner_changes(self, page) -> None:
+        try:
+            now = {f["label"]: f["value"] for f in answered_fields(parse_snapshot(self.snapshot(page)))}
+        except Exception:
+            return
+        for question, value in now.items():
+            if question in self._paused_state and value != self._paused_state[question]:
+                self.owner_answers[question] = value
+                logger.info("YOURS: %r is now %r -- the agent leaves it as you set it", question[:60], value[:40])
+
+    def _owner_gave(self, question: str) -> bool:
+        return any(_same_question(question, q) for q in self.owner_answers)
 
     def _ours(self, question: str, current: str) -> bool:
         wrote = self.written.get(question)
@@ -628,6 +764,8 @@ class PageAgent:
         for mismatch in plan.mismatches:
             question = " ".join(str(mismatch.get("question") or "").split())
             said = str(mismatch.get("on_page") or "")[:60]
+            if any(_same_question(question, q) for q in self.corrected):
+                continue   # already put right from the profile, and checked since
             if safety.is_legal_status_question(question) or safety._SPONSORSHIP_Q.search(question)                     or safety._AUTHORIZED_Q.search(question):
                 reason = f"doesn't match your profile: {question[:90]} -- the page says {said!r}"
                 if not any(question[:60] in r for r in reasons):

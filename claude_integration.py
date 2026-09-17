@@ -340,7 +340,9 @@ Respond with ONLY JSON:
               "value": "<text to type, or the choice to pick, exactly as offered when there are choices>",
               "source": "profile.<field name> | resume | owner_earlier_answer | job | consent | document"}],
  "leave_for_owner": [{"question": "...", "reason": "...", "required": true | false}],
- "mismatches": [{"question": "...", "on_page": "...", "facts_say": "..."}],
+ "mismatches": [{"question": "...", "on_page": "...", "facts_say": "...",
+                 "correct_value": "<the right answer, exactly as offered, or '' if FACTS don't give it>",
+                 "source": "profile.<field name the right answer comes from>"}],
  "next": {"ref": "<ref of the control that moves the application on>", "label": "<its name>",
           "kind": "next_step" | "final_submit" | "open_application" | "sign_in" | "consent" | "none"}
 }
@@ -357,7 +359,9 @@ Rules -- follow every one:
    complete", signature, e-signature). Put those in leave_for_owner. A plain privacy-notice consent may be
    checked with source "consent".
 4. Skip any control that already shows an answer (a value, a [selected] real option, a [checked] radio).
-   If an existing answer contradicts FACTS, report it in mismatches -- do not change it.
+   If an existing answer contradicts FACTS, don't put it in answers: report it in mismatches with the
+   right answer (exactly as one of the offered choices) and the profile field it comes from -- the agent
+   corrects it from there. Report it only when a profile field clearly gives the right answer.
 5. Never touch password boxes. On a sign-in page, return page_kind "sign_in" with no answers.
 6. If a CAPTCHA or "verify you are human" challenge is anywhere on the page, return page_kind "captcha",
    no answers, next kind "none".
