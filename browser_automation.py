@@ -740,6 +740,19 @@ class JobApplicationAssistant:
                 except Exception:
                     pass
                 chosen = self.displayed_value(field)
+                # The phone block is checked as a whole when its number field is
+                # left: a chosen country went on showing "Select a country"
+                # until then.
+                try:
+                    number = page.locator("fieldset.phone-input input[type=tel], fieldset.phone-input "
+                                          "input:not([role=combobox]), input#phone").first
+                    if number.count():
+                        number.click(timeout=3_000)
+                        number.press("End")
+                        number.press("Tab")
+                        page.wait_for_timeout(500)
+                except Exception:
+                    pass
                 if chosen:
                     self.note_page_changed()
                     logger.info("PROFILE_ANSWER: phone country -> %r", chosen[:40])
