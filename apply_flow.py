@@ -789,6 +789,8 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             return
         if not page.is_closed():
             agent.note_owner_changes(page)
+        agent._ensure_state()
+        agent.forget_sign_in_attempts()
         if decision == "submitted_by_user":
             evidence = getattr(assistant, "_confirmation_evidence", "") or "the page confirmed it"
             status, note = safety.verification_status(evidence)

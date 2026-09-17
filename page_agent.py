@@ -316,6 +316,11 @@ class PageAgent:
         self.owner_answers: dict[str, str] = {}    # answers the owner set while the agent waited
         self._paused_state: dict[str, str] = {}
 
+    def forget_sign_in_attempts(self) -> None:
+        """A resumed run tries signing in again: the owner has had a hand in it,
+        and the page may now offer something the last attempt never saw."""
+        self._signed_in_at, self._google_tried = set(), set()
+
     def _ensure_state(self) -> None:
         """Code reloaded into a run that is already going keeps its old object:
         anything added since starts empty rather than failing."""
