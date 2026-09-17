@@ -297,6 +297,36 @@ def fetch_eightfold_job(url: str) -> dict | None:
     }
 
 
+def icims_frame_url(url: str) -> str:
+    """The address of the frame an iCIMS posting is shown in, or ""."""
+    parsed = urlparse(url)
+    if "icims.com" not in parsed.netloc.lower() or not re.search(r"/jobs/\d+", parsed.path):
+        return ""
+    return parsed._replace(query="in_iframe=1", fragment="").geturl()
+
+
+def fetch_icims_job(url: str) -> dict | None:
+    """Reads a posting on an iCIMS career site.
+
+    The page at the posting's address is only a frame around the posting, so
+    the plain reader took the browser tab's title: Schwab's Senior Site
+    Reliability Engineer was recorded as "Finance, Service, Engineering, &
+    Developer Jobs" at "Career Schwab". The frame's own address carries the
+    posting, marked up as a schema.org JobPosting.
+    """
+    frame = icims_frame_url(url)
+    if not frame:
+        return None
+    job = fetch_schema_org_job(frame)
+    if not job:
+        return None
+    job["url"] = url
+    job["company"] = re.sub(r",?\s+(Inc|LLC|Corp|Corporation|Co|Ltd)\.?$", "", job.get("company") or "").strip() \
+        or _company_from_url(url)
+    logger.info("Read the posting from its iCIMS frame")
+    return job
+
+
 def fetch_schema_org_job(url: str) -> dict | None:
     """Reads a posting marked up as a schema.org JobPosting -- JSON-LD or
     itemprop microdata. SAP SuccessFactors career sites (jobs.igt.com) and
@@ -599,6 +629,7 @@ def resolve_job(url: str) -> dict | None:
         or fetch_ashby_job(url)
         or fetch_eightfold_job(url)
         or fetch_amazon_job(url)
+        or fetch_icims_job(url)
         or fetch_schema_org_job(url)
         or fetch_generic_job(url)
         or fetch_rendered_job(url)  # a posting that only exists once its script runs

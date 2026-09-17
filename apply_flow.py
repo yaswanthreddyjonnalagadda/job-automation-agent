@@ -903,10 +903,19 @@ def main() -> None:
             # already worked through.
             logger.info("RESUMING at %s", resume_at)
             page = assistant.open_job_page(resume_at)
+            page = assistant.open_embedded_form(page)
+            if assistant.on_job_description(page):
+                # The address kept for this application was its posting (Schwab's
+                # was), so the form still has to be opened from it.
+                logger.info("This is the job posting, not the application; opening the application")
+                page = assistant.click_apply_button(page)
+                page = assistant.dismiss_apply_chooser(page)
         else:
             page = assistant.open_job_page(job.url)
+            page = assistant.open_embedded_form(page)
             page = assistant.click_apply_button(page)
             page = assistant.dismiss_apply_chooser(page)
+        page = assistant.open_embedded_form(page)
 
         try:
             # ATS_EMAIL is optional in .env -- the ATS account is always
@@ -923,8 +932,23 @@ def main() -> None:
         step = 0
         materials_stored = False
         filled_experience = False
+        # Looking at a screenshot costs a Claude call, so a run gets a handful,
+        # and never two for the same unchanged page.
+        looks_left = 6
+        looked_at: set[str] = set()
+        apply_opened = 0
+        goal = (f"Apply for the job '{job.title}' at {job.company}: reach the application form and move "
+                f"through its steps. The agent fills in the applicant's details itself.")
         while True:
             step += 1
+            if apply_opened < 2:
+                page = assistant.open_embedded_form(page)
+                if assistant.on_job_description(page):
+                    apply_opened += 1
+                    logger.info("Still on the job posting; opening the application")
+                    page = assistant.click_apply_button(page)
+                    page = assistant.dismiss_apply_chooser(page)
+                    page = assistant.open_embedded_form(page)
             # Let the site's own resume parser fill what it can first; the
             # agent then only corrects and completes the rest.
             if hasattr(assistant, "autofill_from_resume"):
@@ -950,6 +974,14 @@ def main() -> None:
                     return
             fields = assistant.detect_form_fields(page)
             if not fields:
+                # Dayforce shows grey placeholder bars for several seconds
+                # before its form appears: give a slow form time to arrive.
+                for _ in range(15):
+                    if assistant.visible_input_count(page):
+                        fields = assistant.detect_form_fields(page)
+                        break
+                    page.wait_for_timeout(1_000)
+            if not fields:
                 # Nothing to fill here: the page may be a chooser (Dayforce
                 # offers to apply with or without an account) or a banner over
                 # the form. Clearing it costs a moment and recovers a run that
@@ -958,6 +990,10 @@ def main() -> None:
                 assistant.accept_consent_dialog(page)
                 fields = assistant.detect_form_fields(page)
             filled_fields = assistant.fill_detected_fields(page, fields, profile)
+            if filled_fields or len(fields) >= 4:
+                # On the application now: from here no page counts as the
+                # posting, so an "Apply" that submits is never pressed as one.
+                assistant._form_filled_this_run = True
 
             questions = assistant.detect_screening_questions(page, fields)
             answers: dict[str, str] = remembered_answers(tracker, questions)
@@ -1045,6 +1081,24 @@ def main() -> None:
                 decision = decide_next_step(assistant, page, step, experience_data, filled_experience)
                 if decision == "fill_experience":
                     filled_experience = True
+                if decision == "stop" and looks_left > 0 and not assistant.is_review_step(page) \
+                        and (assistant.find_submit_button(page) is None or assistant.on_job_description(page)):
+                    seen_before = assistant._page_fingerprint(page)
+                    if seen_before not in looked_at:
+                        looked_at.add(seen_before)
+                        looks_left -= 1
+                        logger.info("No way forward found by reading the page; looking at it instead")
+                        tabs_before = len(page.context.pages)
+                        kind, clicked = assistant.look_and_act(page, claude, goal)
+                        if clicked:
+                            if len(page.context.pages) > tabs_before:
+                                page = page.context.pages[-1]  # it opened in a new tab
+                                try:
+                                    page.wait_for_load_state("domcontentloaded", timeout=30_000)
+                                except Exception:
+                                    pass
+                            page = assistant.dismiss_apply_chooser(page)
+                            continue
                 if decision == "stop":
                     assistant.save_progress(page)
                     hand_over(assistant, page, tracker, key, job, job_dir,

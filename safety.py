@@ -157,6 +157,9 @@ CAPTCHA_TEXT_RE = re.compile(
 def captcha_visible(page) -> bool:
     """True when a CAPTCHA challenge is on screen. The agent then stops and
     hands over -- it never attempts to solve or bypass one."""
+    top = getattr(page, "top", None)  # an application inside a frame: check the tab too
+    if top is not None and captcha_visible(top):
+        return True
     try:
         frames = page.locator(CAPTCHA_FRAME_SELECTOR)
         for i in range(min(frames.count(), 8)):

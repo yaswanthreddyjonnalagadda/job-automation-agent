@@ -120,6 +120,72 @@ class DetectedQuestion:
     options: list[str] = field(default_factory=list)
 
 
+class FramedPage:
+    """A browser tab whose application lives inside one of its frames.
+
+    iCIMS (Charles Schwab) shows the posting, the sign-in and every step of the
+    form inside a frame on its own page, and sends a frame opened on its own
+    straight back to that outer page. So the agent works inside the frame:
+    reading, typing and clicking go to the frame; the keyboard, screenshots,
+    tabs and file choosers belong to the tab. The frame is looked up again
+    whenever the site replaces it, as it does on every step.
+    """
+
+    _TAB_ONLY = frozenset({
+        "keyboard", "mouse", "context", "screenshot", "is_closed", "bring_to_front", "reload", "frames",
+        "main_frame", "on", "once", "remove_listener", "expect_file_chooser", "expect_popup",
+        "expect_navigation", "expect_event", "close", "video", "viewport_size", "set_viewport_size",
+        "route", "unroute", "pdf", "emulate_media", "add_init_script", "set_default_timeout",
+    })
+
+    def __init__(self, page, frame):
+        self.top = page
+        self._frame = frame
+        self._name = frame.name or ""
+        try:
+            self._element_id = frame.frame_element().get_attribute("id") or ""
+        except Exception:
+            self._element_id = ""
+
+    def frame(self):
+        frame = self._frame
+        try:
+            if frame is not None and not frame.is_detached():
+                return frame
+        except Exception:
+            pass
+        try:
+            for candidate in self.top.frames[1:]:
+                if self._name and candidate.name == self._name:
+                    self._frame = candidate
+                    return candidate
+            if self._element_id:
+                handle = self.top.query_selector(f"iframe[id={json.dumps(self._element_id)}]")
+                candidate = handle.content_frame() if handle else None
+                if candidate is not None:
+                    self._frame = candidate
+                    return candidate
+        except Exception:
+            pass
+        return self.top.main_frame  # the site has left the frame (a Google sign-in, say)
+
+    @property
+    def url(self) -> str:
+        frame = self.frame()
+        return self.top.url if frame == self.top.main_frame else frame.url
+
+    def goto(self, url, **kwargs):
+        return self.top.goto(url, **kwargs)
+
+    def __getattr__(self, name):
+        if name in FramedPage._TAB_ONLY:
+            return getattr(self.top, name)
+        frame = self.frame()
+        if hasattr(frame, name):
+            return getattr(frame, name)
+        return getattr(self.top, name)
+
+
 class JobApplicationAssistant:
     """One instance = one long-lived, visible browser session that persists
     login cookies between runs via a local user-data directory."""
@@ -1579,6 +1645,185 @@ class JobApplicationAssistant:
         except Exception:
             return ""
 
+    def visible_input_count(self, page: Page) -> int:
+        try:
+            return page.locator(
+                "input:not([type=hidden]):not([type=search]):visible, select:visible, textarea:visible").count()
+        except Exception:
+            return 0
+
+    _JOB_DESCRIPTION_WORDS = re.compile(
+        r"responsibilities|qualifications|requirements|job description|about the (role|job|position)|"
+        r"what you('ll| will) do|who you are|job (id|number|requisition)|posted",
+        re.IGNORECASE)
+
+    def on_job_description(self, page: Page) -> bool:
+        """True when the page is a job posting rather than the application.
+
+        A posting has an Apply control, reads like a job description and has
+        no form of its own. Schwab's run was resumed at its posting's address
+        and stopped there, taking the posting for the form.
+        """
+        # Some sites label the final Submit "Apply": once the agent has filled
+        # anything on the application, no page counts as the posting again.
+        if getattr(self, "_form_filled_this_run", False):
+            return False
+        if self.visible_input_count(page) > 3 or self.is_review_step(page):
+            return False
+        try:
+            body = page.inner_text("body", timeout=5_000)
+        except Exception:
+            return False
+        if not self._JOB_DESCRIPTION_WORDS.search(body) or re.search(
+                r"review (your|and submit)|submit (your|this) application", body, re.IGNORECASE):
+            return False
+        control = self.find_apply_control(page)
+        if control is not None:
+            try:
+                if (control.get_attribute("type") or "").lower() == "submit":
+                    return False
+            except Exception:
+                pass
+            return True
+        return bool(self.apply_destination(page))
+
+    def open_embedded_form(self, page: Page):
+        """The page to work on when a site shows its job inside a frame.
+
+        Returns the page itself when its own document is the form (or when no
+        frame holds anything to apply with). A frame from an application system
+        on another site is opened as a page of its own. A frame from the site
+        itself -- iCIMS, which sends a frame opened on its own straight back --
+        is worked inside, through FramedPage.
+        """
+        # Not isinstance: reloading the code mid-run makes a new FramedPage class.
+        if getattr(page, "top", None) is not None:
+            if page.frame() != page.top.main_frame:
+                return page
+            page = page.top  # the site has left its frame
+        try:
+            if self.visible_input_count(page) > 3:
+                return page  # the outer page is the form
+
+            def site(url: str) -> str:
+                return ".".join((urlparse(url).hostname or "").split(".")[-2:])
+
+            best, best_count = None, 0
+            for frame in page.frames[1:]:
+                url = frame.url or ""
+                if not url.startswith("http") or re.search(
+                        r"recaptcha|hcaptcha|captcha|google\.com/maps|youtube|doubleclick|onetrust|cookielaw|"
+                        r"googletagmanager|facebook|linkedin|twitter|chat|paradox|olivia|drift|intercom|"
+                        r"newsletter|talent-?community", url, re.IGNORECASE):
+                    continue
+                # Only the employer's own site or an application system: a
+                # frame from anywhere else is an advert or a widget.
+                if site(url) != site(page.url) and not re.search(
+                        r"icims|myworkday|workday|taleo|greenhouse|lever\.co|ashby|successfactors|jobvite|"
+                        r"smartrecruiters|brassring|ultipro|ukg|dayforce|adp\.com|oraclecloud|eightfold|"
+                        r"phenom|avature|bamboohr|recruitee|workable|applytojob", url, re.IGNORECASE):
+                    continue
+                try:
+                    count = frame.locator("input:not([type=hidden]), select, textarea, "
+                                          "a:has-text('Apply'), button:has-text('Apply')").count()
+                except Exception:
+                    continue
+                if count > best_count:
+                    best, best_count = frame, count
+            if best is None:
+                return page
+            if site(best.url) == site(page.url):
+                logger.info("The job is shown inside a frame of the site's own; working inside it")
+                self.note_page_changed()
+                return FramedPage(page, best)
+            logger.info("The job is shown inside a frame; opening the frame on its own: %s", best.url[:90])
+            page.goto(best.url, wait_until="domcontentloaded", timeout=60_000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=10_000)
+            except Exception:
+                page.wait_for_timeout(2_000)
+            self.note_page_changed()
+        except Exception as exc:
+            logger.debug("Frame check failed: %s", str(exc).splitlines()[0][:100])
+        return page
+
+    # Never clicked on Claude's say-so, whatever it reads on the screen. The
+    # Apply that opens a form from a posting is allowed separately below.
+    _NEVER_CLICK = re.compile(
+        r"\bsubmit|send (my |your |the |this )?application|\bfinish\b|certify|attest|\bsignature\b|"
+        r"\be-?sign\b|sign (here|below)|agree to the terms|linked ?in|\bindeed\b|facebook|"
+        r"log ?out|sign ?out|withdraw|delete|remove",
+        re.IGNORECASE)
+
+    def safe_to_click_for_claude(self, page: Page, label: str) -> bool:
+        label = " ".join((label or "").split())
+        if not label or self._NEVER_CLICK.search(label) or safety.is_attestation(label):
+            return False
+        if safety.is_submit_label(label):
+            # "Apply" sends the application on some final pages; it only opens
+            # the form from a posting that has no form of its own.
+            return bool(re.match(r"^\s*apply\b", label, re.IGNORECASE)) and self.on_job_description(page)
+        return True
+
+    def look_and_act(self, page: Page, claude, goal: str) -> tuple[str, bool]:
+        """Looks at the page the way a person would and takes the next step.
+
+        Used when the usual reading finds nothing to fill and nothing to press.
+        Claude names the control; the agent finds it on the page and clicks it
+        -- unless it submits, signs, certifies, deletes or uses a LinkedIn,
+        Indeed or Facebook sign-in, which is refused here whatever Claude says.
+        Returns (what kind of page it is, whether something was clicked).
+        """
+        try:
+            shot = page.screenshot(full_page=False, timeout=15_000)
+            seen = claude.read_page(shot, page.url, goal)
+        except Exception as exc:
+            logger.warning("LOOKED: could not read the page (%s)", str(exc).splitlines()[0][:100])
+            return "", False
+        kind, label, why = seen.get("page", ""), seen.get("click", ""), seen.get("why", "")
+        logger.info("LOOKED: %s -- %s%s", kind.replace("_", " ") or "a page", why[:140],
+                    f" -> click {label[:40]!r}" if label else "")
+        if not label:
+            return kind, False
+        if not self.safe_to_click_for_claude(page, label):
+            logger.info("LOOKED: not clicking %r -- the agent never presses that on its own", label[:40])
+            return kind, False
+        exact = re.compile(rf"^\s*{re.escape(label)}\s*$", re.IGNORECASE)
+        loose = re.compile(re.escape(label), re.IGNORECASE)
+        scopes = [page] + [f for f in page.frames[1:] if (f.url or "").startswith("http")]
+        before = self._page_fingerprint(page)
+        for scope in scopes:
+            candidates = [scope.get_by_role("button", name=exact), scope.get_by_role("link", name=exact),
+                          scope.get_by_role("button", name=loose), scope.get_by_role("link", name=loose),
+                          scope.get_by_role("menuitem", name=loose), scope.get_by_role("tab", name=loose),
+                          scope.get_by_text(exact), scope.get_by_label(exact)]
+            for candidate in candidates:
+                try:
+                    for i in range(min(candidate.count(), 4)):
+                        el = candidate.nth(i)
+                        if not el.is_visible():
+                            continue
+                        on_it = " ".join(((el.inner_text(timeout=1_000) or "") + " " +
+                                          (el.get_attribute("aria-label") or "")).split())
+                        if on_it and not self.safe_to_click_for_claude(page, on_it):
+                            continue
+                        el.scroll_into_view_if_needed(timeout=3_000)
+                        el.click(timeout=5_000)
+                        page.wait_for_timeout(2_500)
+                        try:
+                            page.wait_for_load_state("networkidle", timeout=10_000)
+                        except Exception:
+                            pass
+                        self.note_page_changed()
+                        moved = self._page_fingerprint(page) != before
+                        logger.info("LOOKED: clicked %r%s", label[:40], "" if moved else " (the page looks the same)")
+                        return kind, True
+                except Exception as exc:
+                    logger.debug("Vision click failed: %s", str(exc).splitlines()[0][:100])
+                    continue
+        logger.info("LOOKED: could not find %r on the page to click", label[:40])
+        return kind, False
+
     def open_picker_control(self, page: Page, field) -> bool:
         """Clicks whatever opens this picker.
 
@@ -2916,7 +3161,7 @@ class JobApplicationAssistant:
         deadline = time.time() + 180
         warned = False
         while time.time() < deadline:
-            google_done = google is page or google.is_closed()
+            google_done = google is page or google is getattr(page, "top", None) or google.is_closed()
             if not page.is_closed() and host in page.url and google_done:
                 # Signing in reloads the site; let it settle before judging.
                 try:

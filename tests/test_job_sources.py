@@ -103,3 +103,46 @@ def test_the_resume_shows_the_phone_with_its_country_code():
         line = apply_flow.normalise_contact_details(header, profile).splitlines()[2]
         assert "+1 (571) 354-5212" in line
         assert "+1 +1" not in line
+
+
+ICIMS_OUTER = """
+<html><head><title>Finance, Service, Engineering, &amp; Developer Jobs at Career Schwab</title></head>
+<body><iframe id="icims_content_iframe" src="?in_iframe=1"></iframe>%s</body></html>
+""" % ("Explore careers in finance, service and engineering. " * 20)
+
+ICIMS_FRAME = """
+<html><head><script type="application/ld+json">{"@type": "JobPosting",
+  "title": "Senior Site Reliability Engineer",
+  "hiringOrganization": {"@type": "Organization", "name": "Charles Schwab Inc."},
+  "jobLocation": [{"address": {"addressLocality": "Southlake", "addressRegion": "TX"}}],
+  "description": "<p>Keep the trading platform running.</p>"}</script></head><body></body></html>
+"""
+
+
+class _Page(_Response):
+    status_code = 200
+
+
+def test_an_icims_posting_is_read_from_its_frame(monkeypatch):
+    """Schwab's posting was recorded as "Finance, Service, Engineering, &
+    Developer Jobs" at "Career Schwab": the outer page is only a frame."""
+    asked = []
+
+    def get(url, *a, **k):
+        asked.append(url)
+        return _Page(ICIMS_FRAME if "in_iframe=1" in url else ICIMS_OUTER)
+
+    monkeypatch.setattr(job_sources.requests, "get", get)
+    url = ("https://career-schwab.icims.com/jobs/126880/senior-site-reliability-engineer/job"
+           "?mobile=false&width=1150&needsRedirect=false")
+    job = job_sources.resolve_job(url)
+    assert job["title"] == "Senior Site Reliability Engineer"
+    assert job["company"] == "Charles Schwab"
+    assert job["location"] == "Southlake, TX"
+    assert job["url"] == url  # the application still starts from the address given
+    assert asked[0].endswith("/job?in_iframe=1")
+
+
+def test_only_icims_postings_are_read_through_a_frame():
+    assert job_sources.icims_frame_url("https://careers.example.com/jobs/12/job") == ""
+    assert job_sources.icims_frame_url("https://career-schwab.icims.com/jobs/search") == ""

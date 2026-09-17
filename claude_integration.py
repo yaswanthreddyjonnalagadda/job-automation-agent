@@ -325,6 +325,65 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
         }
 
     # ------------------------------------------------------------------
+    # Looking at the page
+    # ------------------------------------------------------------------
+    def read_page(self, screenshot_png: bytes, page_url: str, goal: str) -> dict[str, Any]:
+        """What a person would see on this page, and what they would click next.
+
+        The agent's usual reading works from the page's code, and misses what is
+        obvious on screen: a form inside a frame, a Next that is only an arrow,
+        a sign-in that is only a logo. This looks at the screenshot instead.
+
+        Returns {"page": kind, "click": visible text or label of the one thing
+        to click next ("" for none), "why": short reason}. It never proposes
+        submitting an application, signing or certifying anything, typing a
+        password, or signing in with LinkedIn, Indeed or Facebook.
+        """
+        import base64
+
+        system = (
+            "You look at a screenshot of a web page during a job application and say what "
+            "kind of page it is and the ONE control a person should click next to move the "
+            "application forward. Respond with ONLY JSON: "
+            '{"page": "job_description" | "application_form" | "sign_in" | "chooser" | '
+            '"confirmation" | "error" | "other", '
+            '"click": "<the exact visible text, or the label a screen reader would read, of the '
+            'control to click; empty string if nothing should be clicked>", '
+            '"why": "<one short sentence>"}. '
+            "Rules: never choose a control that submits or sends the application (Submit, Send "
+            "application, Finish); never choose one that certifies, attests, signs or agrees to "
+            "legal terms; never choose sign-in with LinkedIn, Indeed or Facebook; prefer Apply "
+            "or Apply Now on a job description, Next or Continue on a form step, and 'Apply "
+            "without an account' or 'Sign in with Google' where offered. If the page is an "
+            "application form whose fields are simply waiting to be filled, return an empty click."
+        )
+        user_content = [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                         "data": base64.b64encode(screenshot_png).decode("ascii")}},
+            {"type": "text", "text": f"Page address: {page_url}\nGoal: {goal}"},
+        ]
+        last_error: Exception | None = None
+        for attempt in range(1, self._config.claude_max_retries + 1):
+            try:
+                response = self._client.messages.create(
+                    model=self._config.anthropic_model, max_tokens=400, system=system,
+                    messages=[{"role": "user", "content": user_content}],
+                    timeout=self._config.claude_request_timeout,
+                )
+                raw = "".join(block.text for block in response.content if block.type == "text")
+                result = self._extract_json(raw)
+                return {"page": str(result.get("page") or "other"),
+                        "click": str(result.get("click") or "").strip(),
+                        "why": str(result.get("why") or "").strip()}
+            except (anthropic.RateLimitError, anthropic.APIConnectionError) as exc:
+                last_error = exc
+                time.sleep(2 ** attempt)
+            except Exception as exc:
+                last_error = exc
+                break
+        raise ClaudeIntegrationError(f"Could not read the page: {last_error}")
+
+    # ------------------------------------------------------------------
     # Cover letter generation
     # ------------------------------------------------------------------
     def generate_cover_letter(
