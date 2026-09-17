@@ -462,3 +462,22 @@ def test_an_upload_is_recorded_for_later_runs(page, resume_file):
     agent.key, agent.tracker = "k", Tracker()
     assert agent.run(page).kind == "submitted"
     assert {"kind": "resume_attached", "message": resume_file.name} in agent.tracker._events
+
+
+def test_a_dropdown_that_shows_its_choice_beside_it_is_read_as_answered():
+    """ICE's form (a widget kit) puts the chosen value in a box next to the
+    control: four answers that were really there were read as missing, and a
+    finished application stopped instead of being sent."""
+    chosen = page_agent.parse_snapshot('''- generic [ref=e205]:
+  - generic [ref=e206]:
+    - generic [ref=e776]: Yes.
+    - combobox "Would you be willing to relocate to London?" [ref=e209]
+  - button "Toggle flyout" [ref=e211]''')
+    box = next(c for c in chosen if c.role == "combobox")
+    assert box.answer == "Yes." and box.question == "Would you be willing to relocate to London?"
+
+    # The question's own label beside an empty dropdown is not an answer.
+    empty = page_agent.parse_snapshot('''- generic [ref=e1]:
+  - text: Do you require sponsorship? *
+  - combobox "Do you require sponsorship? *" [ref=e3]''')
+    assert next(c for c in empty if c.role == "combobox").answer == ""

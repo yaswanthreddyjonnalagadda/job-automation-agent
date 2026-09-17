@@ -115,6 +115,7 @@ def parse_snapshot(snapshot: str) -> list[Control]:
     controls: list[Control] = []
     stack: list[tuple[int, str, Optional[Control]]] = []   # (indent, role/name, control)
     last_text = ""
+    last_text_indent = -1
     radio_context = ""   # the question above a run of radio buttons with no group of their own
     for raw in (snapshot or "").splitlines():
         # A line whose text holds a colon comes wrapped in quotes:
@@ -139,6 +140,7 @@ def parse_snapshot(snapshot: str) -> list[Control]:
 
         if role in ("text", "paragraph", "heading", "strong", "emphasis", "generic") and (value or name):
             last_text = (value or name).strip()[:200]
+            last_text_indent = indent
             # Schwab's veteran question draws its radio buttons with no label of
             # their own: each is followed by its text ("I AM NOT A PROTECTED
             # VETERAN"). That text is the button's name.
@@ -154,8 +156,16 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         if ref_m and (role in ANSWER_ROLES or role in PRESS_ROLES or role in OPTION_ROLES):
             if role == "radio" and not (controls and controls[-1].role == "radio"):
                 radio_context = last_text
+            shown = value if value and not value.endswith(":") else ""
+            # Some widgets put the chosen value in a box beside the control
+            # rather than in it ("Yes." next to "Would you relocate to London?",
+            # "+1" next to "Country"). The text right beside it, at the same
+            # level, is that choice -- unless it is the question's own label.
+            if not shown and role in ("combobox", "listbox") and last_text and last_text_indent == indent \
+                    and not _same_question(last_text, name):
+                shown = last_text
             control = Control(
-                ref=ref_m.group(1), role=role, name=name, value=value if value and not value.endswith(":") else "",
+                ref=ref_m.group(1), role=role, name=name, value=shown,
                 checked="[checked]" in attrs or "[checked=true]" in attrs, selected="[selected]" in attrs,
                 disabled="[disabled]" in attrs, group=(parent_group or radio_context) if role == "radio" else "",
                 context="" if name else last_text)
@@ -184,6 +194,24 @@ def _same_question(a: str, b: str) -> bool:
 def _same_answer(a: str, b: str) -> bool:
     a, b = _plain(a), _plain(b)
     return bool(a) and bool(b) and (a == b or a.startswith(b + " ") or b.startswith(a + " "))
+
+
+def frames_loading(snapshot: str) -> bool:
+    """True when a frame on the page has nothing in it yet."""
+    lines = [l for l in (snapshot or "").splitlines() if l.strip()]
+    for i, line in enumerate(lines):
+        m = re.match(r"^(\s*)- iframe\b[^\n]*:\s*$", line)
+        if not m:
+            continue
+        indent = len(m.group(1))
+        children = []
+        for later in lines[i + 1:]:
+            if len(later) - len(later.lstrip()) <= indent:
+                break
+            children.append(later.strip())
+        if not [c for c in children if re.sub(r"^- (text|generic)(\s*\[[^\]]*\])*:?\s*$", "", c)]:
+            return True
+    return False
 
 
 def compact_snapshot(snapshot: str, limit: int = 60_000) -> str:
@@ -402,7 +430,7 @@ class PageAgent:
                     return Outcome("owner_needed", page, ["a sign-in needs you (the password was not accepted "
                                                           "or there is no employer account password set)"])
 
-            snapshot = self.snapshot(page)
+            snapshot = self.read_when_loaded(page)
             fingerprint = re.sub(r"\[ref=[\w-]+\]|\[active\]", "", snapshot)
             if fingerprint == last_fingerprint:
                 tries += 1
@@ -895,7 +923,10 @@ class PageAgent:
         by_ref = {c.ref: c for c in controls}
         control = by_ref.get(plan.next_ref)
         if plan.next_kind == "none" or control is None:
-            return "stop", page, "no way forward was found on this page"
+            # Nothing to press may only mean the page is still arriving: read it
+            # again (the same page counts towards the tries) before giving up.
+            self.settle(page, 3_000)
+            return "retry", page, "no way forward was found on this page"
         label = " ".join((control.name or plan.next_label).split())
         if control.disabled:
             return "retry", page, f"{label!r} is not enabled yet"
@@ -1027,6 +1058,20 @@ class PageAgent:
                        for e in self.tracker.events(self.key, limit=300))
         except Exception:
             return False
+
+    def read_when_loaded(self, page, wait_seconds: float = 15.0) -> str:
+        """The page's snapshot once the frames on it have content.
+
+        After Schwab's step-4 Submit the next form was still loading inside an
+        inner frame; the agent read the empty frame, found no way forward and
+        stopped. A frame with nothing in it is waited for, up to a limit.
+        """
+        deadline = time.time() + wait_seconds
+        snapshot = self.snapshot(page)
+        while frames_loading(snapshot) and time.time() < deadline:
+            self.tab(page).wait_for_timeout(1_000)
+            snapshot = self.snapshot(page)
+        return snapshot
 
     def _save(self, snapshot: str) -> None:
         """Every page read is kept: it is what a failure is replayed from."""
