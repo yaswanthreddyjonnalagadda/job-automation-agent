@@ -445,12 +445,21 @@ def fetch_rendered_job(url: str) -> dict | None:
                             }
                         } catch (e) { /* not this one */ }
                     }
+                    // Not a heading inside a pop-up or a cookie banner: a Casey's
+                    // posting was recorded as "Set your cookie preferences",
+                    // the banner's heading, because it came first on the page.
+                    const inBanner = h => !!h.closest(
+                        '[role=dialog], [aria-modal=true], [id*=onetrust i], [class*=onetrust i],'
+                        + ' [id*=cookie i], [class*=cookie i], [class*=consent i]');
                     const heading = [...document.querySelectorAll('h1, h2')]
-                        .map(h => clean(h.innerText)).find(t => t.length > 3) || '';
+                        .filter(h => !inBanner(h) && h.getClientRects().length)
+                        .map(h => clean(h.innerText))
+                        .find(t => t.length > 3 && !/cookie|privacy|consent/i.test(t)) || '';
                     const main = document.querySelector('main, [role=main], article, #content, .job-details');
                     return {
                         title: clean((posting && posting.title) || heading || meta('og:title') || document.title),
-                        company: clean((posting && posting.hiringOrganization && posting.hiringOrganization.name) || ''),
+                        company: clean((posting && posting.hiringOrganization && posting.hiringOrganization.name)
+                                       || meta('og:site_name')),
                         location: clean((posting && posting.jobLocation && posting.jobLocation.address
                                          && posting.jobLocation.address.addressLocality) || ''),
                         text: clean((main || document.body).innerText),
@@ -467,10 +476,40 @@ def fetch_rendered_job(url: str) -> dict | None:
     if not title or len(body) < 400:
         return None
 
-    company = data.get("company") or _company_from_url(url)
+    company = data.get("company") or _employer_named_in(body) or _company_from_url(url)
     logger.info("Read the posting by rendering the page (%s)", urlparse(url).netloc)
     return {"title": title, "company": company, "location": data.get("location") or "",
             "url": url, "raw_text": body[:20000]}
+
+
+def _employer_named_in(text: str) -> str:
+    """The employer as its own equal-opportunity statement names it.
+
+    Casey's ADP page is titled "Career Site", its logo is labelled "Corporate
+    Positions" and its address says "caseysstoresupportcenter" -- but its
+    footer says "Casey's Is an Equal Opportunity Employer". Nearly every
+    employer publishes a sentence like it.
+    """
+    match = re.search(
+        r"([\w'’&.\- ]{2,60}?)\s+(?:is|are)\s+an?\s+equal\s+(?:employment\s+)?opportunity",
+        text or "", re.IGNORECASE)
+    if not match:
+        return ""
+    # Only the name itself: the capitalised words right before "is".
+    # "Legal links Casey's Is an Equal Opportunity" -> "Casey's".
+    words = match.group(1).split()
+    name_words = []
+    for word in reversed(words):
+        if word[:1].isupper() or word[:1].isdigit() or word in ("&", "of"):
+            name_words.insert(0, word)
+        else:
+            break
+    while name_words and name_words[0] in ("&", "of"):
+        name_words.pop(0)
+    name = " ".join(name_words)
+    if not name or name.lower() in ("we", "our company", "the company", "company"):
+        return ""
+    return name[:40]
 
 
 def _clean_page_title(title: str) -> str:
@@ -489,7 +528,8 @@ def _company_from_url(url: str) -> str:
     parsed = urlparse(url)
     host = re.sub(r"^(www|jobs|careers|apply|recruiting)\.", "", parsed.netloc)
     vendors = ("dayforcehcm", "myworkdayjobs", "icims", "greenhouse", "lever",
-               "ashbyhq", "smartrecruiters", "successfactors", "taleo", "paylocity")
+               "ashbyhq", "smartrecruiters", "successfactors", "taleo", "paylocity",
+               "adp.com", "bamboohr")
     if any(v in host for v in vendors):
         for part in parsed.path.strip("/").split("/"):
             token = part.strip().lower()

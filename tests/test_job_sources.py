@@ -79,3 +79,13 @@ def test_a_posting_that_needs_rendering_is_not_read_from_the_served_html(monkeyp
     assert job_sources.fetch_generic_job("https://jobs.dayforcehcm.com/en-US/lumos/CANDIDATEPORTAL/jobs/9416") is None
     assert job_sources.resolve_job(
         "https://jobs.dayforcehcm.com/en-US/lumos/CANDIDATEPORTAL/jobs/9416") == {"title": "rendered"}
+
+
+def test_the_employer_is_read_from_its_equal_opportunity_statement():
+    """Casey's ADP page is titled "Career Site", its logo is labelled
+    "Corporate Positions" and its address says "caseysstoresupportcenter";
+    its footer says "Casey's Is an Equal Opportunity Employer"."""
+    assert job_sources._employer_named_in(
+        "Legal links Casey’s Is an Equal Opportunity Employer Family and Medical") == "Casey’s"
+    assert job_sources._employer_named_in("Capital One is an equal opportunity employer.") == "Capital One"
+    assert job_sources._employer_named_in("We are an equal opportunity employer.") == ""

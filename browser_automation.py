@@ -970,7 +970,7 @@ class JobApplicationAssistant:
             (r"full legal name", [g("full_name")]),
             # "Address *" on its own means the street address. Email Address
             # and Address Line 2 must not match it.
-            (r"^\s*\*?\s*(street |home |mailing )?address(\s*line\s*1)?\s*\*?\s*$",
+            (r"^\s*\*?\s*(street |home |mailing )?address(\s*(line\s*)?1)?\s*\*?\s*$",
              [g("address_line1")]),
             # A questionnaire's employment block. The narrow wordings come
             # first: a rule for the employer's name matched every one of these
