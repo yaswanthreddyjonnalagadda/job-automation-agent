@@ -2018,10 +2018,37 @@ class JobApplicationAssistant:
                 button = dialog.get_by_role("button", name=agree).first
                 if not button.count():
                     button = dialog.locator("button, [role=button], sdf-button").filter(has_text=agree).first
-                if button.count() and self._click_resiliently(button, timeout_ms=4_000):
-                    page.wait_for_timeout(800)
-                    logger.info("CONSENT: accepted %r", text.strip().splitlines()[0][:60])
-                    return True
+                if not button.count():
+                    continue
+                # Pressed until the pop-up is actually gone. ADP's Agree took
+                # a pointer click without closing, and the run reported the
+                # pop-up accepted while it still covered the form.
+                heading = " ".join(text.split())[:60]
+                attempts = (
+                    lambda: self._click_resiliently(button, timeout_ms=4_000),
+                    lambda: button.evaluate(
+                        "e => { const inner = (e.shadowRoot && e.shadowRoot.querySelector('button')) || e;"
+                        " inner.click(); }"),
+                    lambda: (button.focus(), page.keyboard.press("Enter")),
+                    lambda: page.get_by_role("button", name=agree).last.click(timeout=4_000, force=True),
+                )
+                for attempt in attempts:
+                    try:
+                        attempt()
+                    except Exception:
+                        continue
+                    page.wait_for_timeout(1_500)
+                    try:
+                        still_there = dialog.is_visible() and bool(re.search(
+                            r"privacy|consent|data protection", dialog.evaluate(
+                                "e => ((e.getRootNode && e.getRootNode().host) || e).textContent || ''") or "",
+                            re.IGNORECASE))
+                    except Exception:
+                        still_there = False  # the dialog was removed from the page
+                    if not still_there:
+                        logger.info("CONSENT: accepted %r", heading)
+                        return True
+                logger.warning("CONSENT: pressed Agree on %r but the pop-up is still showing", heading)
         except Exception as exc:
             logger.warning("Consent dialog check failed: %s", exc)
         return False

@@ -787,7 +787,7 @@ SHADOW_PRIVACY_DIALOG = """
         <slot></slot>
         <div role="button" tabindex="0" id="disagree">Disagree</div>
         <div role="button" tabindex="0" id="agree"
-             onclick="document.title='agreed'">Agree</div>
+             onclick="document.title='agreed'; this.getRootNode().host.remove()">Agree</div>
       </div>`;
   </script>
 </body></html>
