@@ -696,10 +696,16 @@ def test_a_questionnaires_employment_questions_are_answered(page, agent):
 
 BAMBOO_MENU = """
 <html><body>
-  <button data-menu-id="fab-menu46" aria-haspopup="true" aria-expanded="false"
-          aria-label="State &#8249;Select&#8250;" style="width:180px;height:32px">State</button>
-  <button data-menu-id="fab-menu28" aria-haspopup="true" aria-expanded="false"
-          aria-label="Country United States" style="width:180px;height:32px">Country</button>
+  <div class="fab-FormField">
+    <label>State&#8201;*</label>
+    <button data-menu-id="fab-menu46" aria-haspopup="true" aria-expanded="false"
+            aria-label="State &#8211;Select&#8211;" style="width:180px;height:32px">&#8211;Select&#8211;</button>
+  </div>
+  <div class="fab-FormField">
+    <label>Country&#8201;*</label>
+    <button data-menu-id="fab-menu28" aria-haspopup="true" aria-expanded="false"
+            aria-label="Country United States" style="width:180px;height:32px">United States</button>
+  </div>
   <select aria-hidden="true" name="state.value" style="height:0;opacity:0"><option value=""></option></select>
   <label for="addr">Address *</label><input id="addr" type="text" value="">
 </body></html>
@@ -720,7 +726,7 @@ def test_a_menu_button_is_read_as_the_question_and_its_answer(page, agent):
     agent.adapter = lambda _page: __import__("sites").SiteAdapter()
     agent.answer_standard_questions(page, get_user_profile())
 
-    asked = {q for q, _value, _c in seen}
+    asked = {q.replace(" ", " ").replace("*", "").strip() for q, _value, _c in seen}
     assert "State" in asked                      # unanswered, so it is answered
     assert "Country" not in asked                # already says United States
 
@@ -733,3 +739,34 @@ def test_an_address_field_is_filled_from_the_profile(page, agent):
     agent.adapter = lambda _page: __import__("sites").SiteAdapter()
     agent._answer_text_questions(page, get_user_profile())
     assert page.input_value("#addr") == "9365 Lee Hwy"
+
+
+ADP_SOCIAL = """
+<html><body>
+  <label for="email">Email Address</label><input id="email" type="email">
+  <button>Continue</button>
+  <div>Or sign in using social media</div>
+  <div class="icons-section">
+    <sdf-icon-button id="linkedin" label="linkedin"><a href="#li"><img src="/assets/icons/linkedin.svg" alt="LinkedIn" width="40" height="40"></a></sdf-icon-button>
+    <sdf-icon-button id="google" label="google"><a href="#g"><img src="/assets/icons/google.svg" alt="Google" width="40" height="40"></a></sdf-icon-button>
+    <sdf-icon-button id="indeed" label="indeed"><a href="#in"><img src="/assets/icons/indeed.svg" alt="Indeed" width="40" height="40"></a></sdf-icon-button>
+  </div>
+</body></html>
+"""
+
+
+def test_google_sign_in_drawn_as_an_icon_is_found(page, agent):
+    """ADP offers Google as a bare icon under "Or sign in using social media".
+    A search for the words "Sign in with Google" found nothing, so the run
+    filled the email box and stopped, though the user asked for Google."""
+    page.set_content(ADP_SOCIAL)
+    found = agent.find_google_sign_in(page)
+    assert found is not None
+    assert "google" in (found.evaluate("e => e.outerHTML") or "").lower()
+    assert "linkedin" not in (found.evaluate("e => e.outerHTML") or "").lower()
+
+
+def test_no_google_option_means_nothing_is_clicked(page, agent):
+    page.set_content(ADP_SOCIAL.replace('id="google" label="google"', 'id="x"')
+                     .replace('google.svg', 'x.svg').replace('alt="Google"', 'alt="X"'))
+    assert agent.find_google_sign_in(page) is None

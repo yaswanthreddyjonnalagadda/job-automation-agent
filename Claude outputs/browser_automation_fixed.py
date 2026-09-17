@@ -1230,6 +1230,24 @@ class JobApplicationAssistant:
 
     def _answer_select_from_profile(self, page: Page, control: dict, candidates: list[str]) -> None:
         select = page.locator(f"[id={json.dumps(control['id'])}]")
+
+        # Wait for dropdown options to load (important for dependent dropdowns like State/Country)
+        max_attempts = 5
+        for attempt in range(max_attempts):
+            options = select.locator("option").all_inner_texts()
+            # Filter out empty options
+            options = [opt for opt in options if opt.strip()]
+
+            if options:
+                # Options loaded successfully
+                break
+
+            if attempt < max_attempts - 1:
+                # Wait and retry if options not loaded yet
+                logger.info("Waiting for dropdown options to load: %s (attempt %d/%d)",
+                           control["question"][:60], attempt + 1, max_attempts)
+                page.wait_for_timeout(500)
+
         options = select.locator("option").all_inner_texts()
         idx = self._best_option(options, candidates)
         if idx is None:

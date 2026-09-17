@@ -1138,7 +1138,13 @@ class JobApplicationAssistant:
                         'button[aria-haspopup][aria-expanded]')].filter(visible);
                     return [...document.querySelectorAll("select, input[role=combobox]"),
                             ...menuButtons]
-                        .filter(e => (e.id || e.getAttribute('data-menu-id')) && visible(e) && !e.disabled)
+                        // A control of zero height, or marked aria-hidden, is
+                        // the machinery behind a widget rather than the widget:
+                        // BambooHR keeps a hidden select behind each menu
+                        // button, and answering that one could never work.
+                        .filter(e => (e.id || e.getAttribute('data-menu-id')) && visible(e) && !e.disabled
+                                     && e.getAttribute('aria-hidden') !== 'true'
+                                     && e.getBoundingClientRect().height > 1)
                         .map(e => {
                             let value = (e.tagName === 'SELECT' ? (e.selectedIndex > 0 ? e.value : '') : e.value || '').trim();
                             if (!value && e.tagName !== 'SELECT') {
@@ -1157,14 +1163,24 @@ class JobApplicationAssistant:
                             // SuccessFactors pickers show their placeholder as the value.
                             if (/^(-+\\s*)?(no selection|select|please select|choose one)(\\s*-+)?$/i.test(value)) value = '';
                             if (e.tagName === 'BUTTON') {
-                                // "State \u2039Select\u203a" is unanswered;
-                                // "Country United States" is answered.
-                                const whole = (e.getAttribute('aria-label') || '').trim();
-                                const label = (whole.split(/\\u2039|\\u203a|\\s{2,}/)[0] || whole).trim();
-                                const rest = whole.slice(label.length).replace(/[\\u2039\\u203a]/g, '').trim();
+                                // The question is the field's own label --
+                                // "State *" -- while aria-label repeats the
+                                // answer with it ("Country United States").
+                                // What the button shows is the answer:
+                                // "United States", or a placeholder such as
+                                // "\u2013Select\u2013" when there is none.
+                                const shown = (e.innerText || '')
+                                    .replace(/[\u2013\u2014\u2039\u203a<>]/g, ' ').trim();
+                                let label = '', n = e.parentElement;
+                                for (let i = 0; i < 5 && n && !label; i++, n = n.parentElement) {
+                                    const l = n.querySelector('label');
+                                    if (l && !l.contains(e)) label = (l.innerText || '').trim();
+                                }
+                                if (!label) label = (e.getAttribute('aria-label') || '').trim();
+                                const empty = !shown || /^(select|please select|choose( one)?|none)$/i.test(shown);
                                 return {id: e.id || e.getAttribute('data-menu-id'),
                                         kind: 'menu', question: label,
-                                        value: /^select$/i.test(rest) ? '' : rest, listbox: ''};
+                                        value: empty ? '' : shown, listbox: ''};
                             }
                             return {id: e.id, kind: e.tagName === 'SELECT' ? 'select' : 'combobox',
                                     question: textOf(e).trim(), value,
@@ -2416,11 +2432,9 @@ class JobApplicationAssistant:
         # The user's choice (2026-09-15): when the site offers Google sign-in,
         # use it. Only Google's account picker is driven -- a Google password
         # or 2-step prompt is always left to the user.
-        google = scope.get_by_role(
-            "button", name=re.compile(r"(sign in|continue|log in) (with|using) google", re.IGNORECASE)
-        )
-        if google.count() and google.first.is_visible():
-            return self._sign_in_with_google(page, google.first, email, host, header_link)
+        google = self.find_google_sign_in(scope)
+        if google is not None:
+            return self._sign_in_with_google(page, google, email, host, header_link)
 
         email_box = self._find_login_email_input(scope)
         if email_box is None:
@@ -2499,6 +2513,69 @@ class JobApplicationAssistant:
             page.keyboard.press("Escape")
         except Exception as exc:
             logger.warning("Could not close pop-up: %s", exc)
+
+    def find_google_sign_in(self, scope):
+        """The site's own "sign in with Google" control, however it is drawn.
+
+        ADP offers Google as a bare icon -- a red G under "Or sign in using
+        social media", an <img alt="Google"> with no words -- so a search for
+        "Sign in with Google" found nothing and the run filled the email box
+        and stopped. Only Google is looked for: LinkedIn, Indeed and Facebook
+        sit beside it and are never used.
+        """
+        wordings = (
+            re.compile(r"(sign in|continue|log in|sign up) (with|using) google", re.IGNORECASE),
+            re.compile(r"^\s*google\s*$", re.IGNORECASE),
+        )
+        for name in wordings:
+            for role in ("button", "link"):
+                try:
+                    found = scope.get_by_role(role, name=name)
+                    for i in range(min(found.count(), 3)):
+                        if found.nth(i).is_visible():
+                            return found.nth(i)
+                except Exception:
+                    continue
+        # An icon with no accessible name of its own: find the picture, click
+        # what it sits in.
+        for selector in ("[id=google]", "[label=google i]", "[aria-label*=google i]",
+                         "img[alt=google i]", "img[src*=google i]"):
+            try:
+                found = scope.locator(selector)
+                for i in range(min(found.count(), 3)):
+                    candidate = found.nth(i)
+                    if not candidate.is_visible():
+                        continue
+                    if (candidate.evaluate("e => e.tagName") or "").upper() == "IMG":
+                        wrapper = candidate.locator("xpath=ancestor::*[self::a or self::button][1]").first
+                        if wrapper.count():
+                            return wrapper
+                    return candidate
+            except Exception:
+                continue
+        return None
+
+    def sign_in_with_google_if_offered(self, page: Page, email: str) -> bool:
+        """Takes the Google option on a page whose whole purpose is signing in.
+
+        The user's choice (2026-09-15): where a site offers Google, use it. The
+        route through a header "Sign In" link did that; a sign-in *page* --
+        ADP's "Welcome!" -- has no such link, so Google was never tried there.
+        Once per site per run.
+        """
+        host = urlparse(page.url).netloc.lower()
+        tried = self.__dict__.setdefault("_google_signin_hosts", set())
+        if host in tried:
+            return False
+        button = self.find_google_sign_in(page)
+        if button is None:
+            return False
+        tried.add(host)
+        config = getattr(self, "_config", None)
+        email = (getattr(config, "ats_email", "") or email or "").strip()
+        # Signed in once the site stops offering Google sign-in.
+        return self._sign_in_with_google(page, button, email, host,
+                                         lambda: self.find_google_sign_in(page))
 
     def _sign_in_with_google(self, page: Page, button, email: str, host: str, header_link) -> bool:
         """Clicks 'Sign in using Google' and picks the user's account on
@@ -3675,6 +3752,8 @@ class JobApplicationAssistant:
 
         pw_locator = root.locator("input[type='password']").first
         if pw_locator.count() == 0 or not pw_locator.is_visible():
+            if self.sign_in_with_google_if_offered(page, email):
+                return True
             logger.info("No visible password field on %s; assuming no login is required", domain)
             return False
 
