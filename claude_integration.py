@@ -20,6 +20,17 @@ from resume_parser import ResumeData
 logger = logging.getLogger(__name__)
 
 
+def explain(exc: Exception) -> str:
+    """What went wrong, in words the owner can act on."""
+    message = str(exc)
+    if "credit balance" in message.lower() or "billing" in message.lower():
+        return ("the Claude account is out of credit -- add credits at console.anthropic.com "
+                "(Plans & Billing), then the agent can carry on")
+    if "rate limit" in message.lower():
+        return "the Claude account hit its rate limit -- it will work again shortly"
+    return message.splitlines()[0][:200]
+
+
 class ClaudeIntegrationError(RuntimeError):
     pass
 
@@ -415,7 +426,7 @@ Rules -- follow every one:
             except Exception as exc:
                 last_error = exc
                 break
-        raise ClaudeIntegrationError(f"Could not plan the page: {last_error}")
+        raise ClaudeIntegrationError(f"Could not plan the page: {explain(last_error)}")
 
     # ------------------------------------------------------------------
     # Looking at the page
@@ -477,7 +488,7 @@ Rules -- follow every one:
             except Exception as exc:
                 last_error = exc
                 break
-        raise ClaudeIntegrationError(f"Could not read the page: {last_error}")
+        raise ClaudeIntegrationError(f"Could not read the page: {explain(last_error)}")
 
     # ------------------------------------------------------------------
     # Cover letter generation

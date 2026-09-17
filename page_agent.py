@@ -482,7 +482,10 @@ class PageAgent:
                 plan = PagePlan.from_json(self.claude.plan_page(compact_snapshot(snapshot), self.facts(controls),
                                                                feedback))
             except Exception as exc:
-                return Outcome("owner_needed", page, [f"could not read this page ({str(exc).splitlines()[0][:100]})"])
+                message = str(exc)
+                if "out of credit" in message or "credit balance" in message.lower():
+                    return Outcome("owner_needed", page, [message.split(": ", 1)[-1][:200]])
+                return Outcome("owner_needed", page, [f"could not read this page ({message.splitlines()[0][:120]})"])
             logger.info("READ: %s%s -- %d to answer, %d for you, next: %s %r", plan.page_kind.replace("_", " "),
                         f" ({plan.step})" if plan.step else "", len(plan.answers), len(plan.for_owner),
                         plan.next_kind.replace("_", " "), plan.next_label[:40])
