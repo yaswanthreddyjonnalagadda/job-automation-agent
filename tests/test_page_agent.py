@@ -225,14 +225,49 @@ def test_nothing_is_sent_when_automatic_submission_is_off(page, resume_file):
     assert page.url.endswith("/apply/2")
 
 
-def test_a_declaration_waiting_on_the_last_page_stops_the_submit(page, resume_file):
-    serve(page, certify='<label><input type="checkbox" id="cert"> I certify that the information above is true '
-                        'and complete</label>')
-    planner = Planner(extra={2: [{"ref": "", "question": "cert", "action": "check", "value": "", "source": "consent"}]})
-    outcome = make_agent(planner, resume_file).run(page)
+CERT = ('<label><input type="checkbox" id="cert"> I certify that the information above is true and complete. '
+        'Checking this box is equivalent to a handwritten signature.</label>')
+
+
+def cert_planner(**kwargs):
+    planner = Planner(**kwargs)
+    original = planner.plan_page
+
+    def plan_page(snapshot, facts, feedback=""):
+        plan = original(snapshot, facts, feedback)
+        box = re.search(r'- checkbox "I certify[^"]*" \[ref=([\w-]+)\]', snapshot)
+        if box:
+            plan["answers"].append({"ref": box.group(1), "question": "I certify ... signature", "action": "check",
+                                    "value": "", "source": "consent"})
+        return plan
+    return SimpleNamespace(plan_page=plan_page)
+
+
+def test_the_owner_allowed_signing_so_the_agent_signs_last_and_submits(page, resume_file):
+    """The owner's decision (2026-09-17): the agent signs on their behalf."""
+    serve(page, certify=CERT)
+    agent = make_agent(cert_planner(), resume_file)
+    outcome = agent.run(page)
+    assert outcome.kind == "submitted", outcome.reasons
+    assert any(n.startswith("signed") for n in agent.notes)
+
+
+def test_without_the_owners_permission_nothing_is_signed(page, resume_file):
+    import dataclasses
+    serve(page, certify=CERT)
+    profile = dataclasses.replace(config.get_user_profile(), sign_attestations=False)
+    outcome = make_agent(cert_planner(), resume_file, profile=profile).run(page)
     assert outcome.kind == "owner_needed"
     assert not page.locator("#cert").is_checked()
     assert page.url.endswith("/apply/2")
+
+
+def test_nothing_is_signed_on_a_page_with_an_answer_that_did_not_stay(page, resume_file):
+    broken = STEP_2.replace("onclick=\"shown.textContent='Virginia'; list.hidden = true\"", "")
+    serve(page, step2=broken, certify=CERT)
+    outcome = make_agent(cert_planner(), resume_file).run(page)
+    assert outcome.kind == "owner_needed"
+    assert not page.locator("#cert").is_checked()
 
 
 # --- what is refused, whatever Claude proposes -------------------------------------------
@@ -245,10 +280,30 @@ def refusal_for(page, resume_file, html, action, value, source="profile.city", r
     return agent.refusal(page, page_agent.Answer(control.ref, control.question, action, value, source), control, controls)
 
 
-def test_a_declaration_is_never_ticked(page, resume_file):
-    why = refusal_for(page, resume_file, '<label><input type="checkbox"> I certify my answers are true and complete'
-                      '</label>', "check", "", "consent", role="checkbox", name="I certify")
-    assert "declaration" in why
+def test_a_declaration_is_ticked_only_with_the_owners_permission(page, resume_file):
+    import dataclasses
+    html = '<label><input type="checkbox"> I certify my answers are true and complete</label>'
+    page.set_content(html)
+    for allowed, expected in ((False, "declaration"), (True, "")):
+        profile = dataclasses.replace(config.get_user_profile(), sign_attestations=allowed)
+        agent = make_agent(Planner(), resume_file, profile=profile)
+        controls = page_agent.parse_snapshot(agent.snapshot(page))
+        box = next(c for c in controls if c.role == "checkbox")
+        why = agent.refusal(page, page_agent.Answer(box.ref, box.question, "check", "", "consent"), box, controls)
+        assert (expected in why) if expected else why == ""
+
+
+def test_a_typed_signature_is_only_ever_the_owners_own_name(page, resume_file):
+    page.set_content('<label>Electronic signature <input></label>')
+    agent = make_agent(Planner(), resume_file)
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    box = next(c for c in controls if c.role == "textbox")
+    full_name = config.get_user_profile().full_name
+    ok = agent.refusal(page, page_agent.Answer(box.ref, box.question, "fill", full_name, "profile.full_name"),
+                       box, controls)
+    wrong = agent.refusal(page, page_agent.Answer(box.ref, box.question, "fill", "Someone Else", "profile.full_name"),
+                          box, controls)
+    assert ok == "" and "declaration" in wrong
 
 
 def test_a_password_is_never_typed(page, resume_file):

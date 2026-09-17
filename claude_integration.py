@@ -355,9 +355,11 @@ Rules -- follow every one:
    non-compete or other legal status: answer ONLY when a profile field states it, and give that exact field
    as the source (e.g. "profile.requires_visa_sponsorship"). requires_visa_sponsorship true means the
    applicant DOES need sponsorship now or in the future (an H-1B transfer counts).
-3. Never tick, type or choose anything that certifies, attests, declares or signs ("I certify", "true and
-   complete", signature, e-signature). Put those in leave_for_owner. A plain privacy-notice consent may be
-   checked with source "consent".
+3. Signatures and certifications ("I certify", "true and complete", signature, e-signature): only when
+   FACTS.profile.sign_attestations is true, which means the applicant has authorized signing on their
+   behalf. Then check the checkbox (source "consent"), or type the applicant's full legal name exactly as
+   profile.full_name into a signature box (source "profile.full_name"). If sign_attestations is not true,
+   put them in leave_for_owner. A plain privacy-notice consent may be checked with source "consent".
 4. Skip any control that already shows an answer (a value, a [selected] real option, a [checked] radio).
    If an existing answer contradicts FACTS, don't put it in answers: report it in mismatches with the
    right answer (exactly as one of the offered choices) and the profile field it comes from -- the agent

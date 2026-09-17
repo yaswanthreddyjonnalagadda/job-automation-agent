@@ -6,7 +6,10 @@ so a new form handler cannot quietly acquire the ability to sign an attestation,
 overwrite something the user typed, or type a Google password.
 
 The rules (from the user's specification, 2026-09-15):
-  * never accept legal attestations or electronic signatures automatically
+  * never accept legal attestations or electronic signatures automatically --
+    unless the owner allows it (profile.sign_attestations; the owner's decision
+    of 2026-09-17), and then only on a page whose answers all came from the
+    profile (page_agent.PageAgent.sign)
   * never guess an answer -- only values the profile or resume actually support
   * never overwrite an answer the user entered
   * never enter Google account passwords

@@ -120,6 +120,13 @@ class UserProfile:
     # form until accepted. On = the agent accepts them itself (2026-09-15).
     # Cookie banners are handled separately and are not affected.
     accept_application_privacy_prompts: bool = True
+    # Signature and certification checkboxes ("equivalent to a handwritten
+    # signature", "I certify the information is true and complete"): the owner's
+    # decision (2026-09-17) is that the agent signs them on their behalf -- but
+    # only once every other answer on that page came from this profile, nothing
+    # contradicts it and nothing required is left blank. False = the agent stops
+    # at each one and carries on by itself once you have signed.
+    sign_attestations: bool = True
     # The agent's browser is signed in to the application email's Google
     # account. When the site shows no confirmation, the agent may look in
     # that Gmail (read-only search results) for the employer's "application

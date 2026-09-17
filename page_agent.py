@@ -14,7 +14,9 @@ What it may never do is decided here, in code, whatever Claude proposes:
   * never submit while a sponsorship or work-authorization answer on the page
     contradicts the profile, a CAPTCHA shows, a declaration is waiting, or a
     required question is left for the owner
-  * never tick a legal declaration or signature
+  * sign a declaration or signature only when the owner allows it
+    (profile.sign_attestations) and only after everything else on the page
+    came from the profile, contradicts nothing and leaves nothing required blank
   * never type a password (the sign-in code handles employer accounts)
   * never change an answer the owner gave; an answer the site pre-filled that
     contradicts the profile is corrected from the profile (the owner's rule,
@@ -465,7 +467,8 @@ class PageAgent:
         given: list[tuple[Answer, Control]] = []
         self.failed = []
         by_ref = {c.ref: c for c in controls}
-        for answer in plan.answers:
+        signing = [a for a in plan.answers if self._is_signature(a, by_ref.get(a.ref))]
+        for answer in [a for a in plan.answers if a not in signing]:
             control = by_ref.get(answer.ref)
             if control is None:
                 logger.info("SKIPPED: %r is not on the page", answer.question[:60])
@@ -491,6 +494,64 @@ class PageAgent:
                 logger.info("ANSWERED: %r -> %r (from %s)", (control.question or answer.question)[:60],
                             answer.value[:50], answer.source or "?")
                 self._remember(control, answer)
+        if signing:
+            given += self.sign(page, plan, signing, given)
+        return given
+
+    @staticmethod
+    def _is_signature(answer: Answer, control: Optional[Control]) -> bool:
+        texts = [answer.question] + ([control.question, control.name] if control else [])
+        return any(safety.is_attestation(t) and not safety.is_privacy_consent(t) for t in texts if t)
+
+    def sign(self, page, plan: PagePlan, signing: list[Answer],
+             given_here: list[tuple[Answer, Control]] = ()) -> list[tuple[Answer, Control]]:
+        """Signs the page's declarations on the owner's behalf -- last, and only
+        when everything else on the page is right."""
+        def leave(reason: str) -> list:
+            for answer in signing:
+                logger.info("NOT SIGNED: %r -- %s", answer.question[:70], reason)
+                plan.for_owner.append({"question": answer.question, "reason": reason, "required": True})
+            return []
+
+        if not getattr(self.profile, "sign_attestations", False):
+            return leave("a declaration or signature -- you haven't allowed the agent to give it")
+        self.settle(page, 800)
+        now = parse_snapshot(self.snapshot(page))
+        # Every answer given on this page must be showing before anything is signed.
+        problems = list(getattr(self, "failed", [])) + self.not_stuck(list(given_here), now)
+        problems += safety.legal_answer_conflicts(answered_fields(now), self.profile)
+        for item in plan.for_owner:
+            question = str(item.get("question") or "")
+            if (bool(item.get("required")) or "*" in question) and not any(
+                    _same_question(c.question, question) and c.answer for c in now):
+                problems.append(f"{question[:60]} is still unanswered")
+        if problems:
+            return leave("not signed while something on the page is wrong or missing: " + "; ".join(problems)[:200])
+
+        given: list[tuple[Answer, Control]] = []
+        by_ref = {c.ref: c for c in now}
+        for answer in signing:
+            control = by_ref.get(answer.ref)
+            if control is None:
+                continue
+            refusal = self.refusal(page, answer, control, now)
+            if refusal:
+                logger.info("NOT SIGNED: %r -- %s", control.question[:70], refusal)
+                plan.for_owner.append({"question": control.question, "reason": refusal, "required": True})
+                continue
+            try:
+                done = self.do(page, answer, control)
+            except Exception as exc:
+                done = False
+                logger.info("Could not sign %r: %s", control.question[:60], str(exc).splitlines()[0][:100])
+            if not done:
+                self.failed.append(f"{control.question[:60]} = {answer.value[:40]!r}")
+                continue
+            given.append((answer, control))
+            self.written[control.question] = answer.value
+            note = f"signed {control.question[:80]!r} on your behalf (your decision of 2026-09-17)"
+            self.notes.append(note)
+            logger.info("SIGNED: %s", note)
         return given
 
     def not_stuck(self, given: list[tuple[Answer, Control]], after: list[Control]) -> list[str]:
@@ -540,9 +601,15 @@ class PageAgent:
         if control.disabled:
             return "the field is disabled"
         if safety.is_attestation(question) or safety.is_attestation(control.name):
-            if not (action == "check" and safety.is_privacy_consent(question)
-                    and getattr(self.profile, "accept_application_privacy_prompts", False)):
-                return "a declaration or signature -- only you can give it"
+            privacy_ok = (action == "check" and safety.is_privacy_consent(question)
+                          and getattr(self.profile, "accept_application_privacy_prompts", False))
+            # The owner's decision (2026-09-17): the agent signs for them. A typed
+            # signature is only ever the owner's own legal name.
+            signing_ok = getattr(self.profile, "sign_attestations", False) and (
+                action == "check" or (action == "fill" and _plain(answer.value) == _plain(
+                    getattr(self.profile, "full_name", ""))))
+            if not (privacy_ok or signing_ok):
+                return "a declaration or signature -- you haven't allowed the agent to give it"
         try:
             if (self.locate(page, control.ref).get_attribute("type", timeout=2_000) or "").lower() == "password":
                 return "a password -- the agent never types those here"
