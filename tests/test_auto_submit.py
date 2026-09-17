@@ -202,6 +202,9 @@ def test_hand_over_records_evidence_and_does_not_submit_by_default(page, tmp_pat
             return [{"ref": "c", "label": "City", "value": "Fairfax", "required": True}]
         def raise_window(self, page):
             Assistant.raised = True
+        def find_submit_button(self, page):
+            button = page.get_by_role("button", name="Submit application")
+            return button if button.count() else None
         def click_verified_submit(self, page):
             raise AssertionError("must not submit while the setting is off")
 
@@ -225,6 +228,40 @@ def test_hand_over_records_evidence_and_does_not_submit_by_default(page, tmp_pat
     assert {p.name for p in evidence} >= {"page.png", "page.html", "comparison.json"}
     comparison = json.loads(next(p for p in evidence if p.name == "comparison.json").read_text(encoding="utf-8"))
     assert comparison["field_comparisons"][0]["label"] == "City"
+
+
+def test_a_page_before_the_last_is_not_called_ready_to_submit(page, tmp_path):
+    """Schwab's sign-in step was reported "ready to submit": nothing was left
+    to fill there, but there was no Submit button -- it was not the end."""
+    page.set_content("<label for=e>Email</label><input id=e value='a@b.c'>"
+                     "<input type=submit value='I Acknowledge the Privacy Notice'>")
+
+    class Assistant:
+        values = safety.AgentValues()
+        def validate_application(self, page, resume_name=""):
+            return {"required_still_blank": [], "errors_shown": [], "unanswered_questions": [],
+                    "attestations_pending": [], "warnings_shown": [], "ambiguous_choices": [],
+                    "unsupported_questions": [], "identity_checks": [], "attached_documents": [],
+                    "captcha": False, "resume_attached": None, "page_url": page.url}
+        def read_back_fields(self, page):
+            return [{"ref": "e", "label": "Email", "value": "a@b.c", "required": True}]
+        def raise_window(self, page):
+            pass
+        def find_submit_button(self, page):
+            return None
+        def click_verified_submit(self, page):
+            raise AssertionError("never on a page before the last")
+
+    class Config:
+        auto_submit_verified_only = False
+        auto_submit = True
+
+    tracker = Tracker()
+    summary = tmp_path / "review_summary.json"
+    summary.write_text("{}", encoding="utf-8")
+    status = apply_flow.hand_over(Assistant(), page, tracker, "key", Job(), tmp_path, "Resume.pdf",
+                                  summary, config=Config(), profile=Profile(), documents={})
+    assert status == "needs_user_review" and tracker.status == "needs_user_review"
 
 
 def test_submission_is_recorded_only_on_evidence(page, tmp_path):

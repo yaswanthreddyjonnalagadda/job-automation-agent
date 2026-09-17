@@ -280,3 +280,91 @@ def test_read_page_sends_the_screenshot_and_reads_the_answer():
     blocks = sent["messages"][0]["content"]
     assert blocks[0]["type"] == "image" and blocks[0]["source"]["media_type"] == "image/png"
     assert "never choose a control that submits" in sent["system"]
+
+
+# --- Schwab's Privacy Notice and Sign-In step (iCIMS) ---------------------------
+
+ICIMS_SIGN_IN = """
+<html><body>
+<form id="enterEmailForm" onsubmit="document.body.dataset.sent='yes'; return false;">
+  <label for="email">Email</label>
+  <input type="email" autocomplete="email" id="email" name="css_loginName" value="">
+  <div class="country-phone-group">
+    <div class="country-code">
+      <label for="countryCode">Phone Country Code</label>
+      <div class="country-code iCIMS_InfoData">
+        <input type="text" id="selectedCountryCode" name="countryCodeSelect" style="display:none">
+        <a id="dropdown" class="dropdown-select" role="combobox" aria-controls="dropdownOptions" tabindex="0"
+           aria-label="Country Code - Make a Selection -"
+           onclick="document.getElementById('dropdownOptions').hidden = !document.getElementById('dropdownOptions').hidden">
+          <span id="shown">- Make a Selection -</span></a>
+        <div id="dropdownOptions" hidden>
+          <input type="text" class="dropdown-search" id="countryCode" placeholder="- Type to Search -"
+                 oninput="for (const li of document.querySelectorAll('#dropdownResults li'))
+                            li.hidden = !li.textContent.toLowerCase().includes(this.value.toLowerCase())">
+          <ul id="dropdownResults" role="listbox">
+            <li role="option" value="AF"> (+93) Afghanistan</li>
+            <li role="option" value="UM"> (+1) United States Minor Outlying Islands</li>
+            <li role="option" value="US"> (+1) United States</li>
+            <li role="option" value="VI"> (+1340) Virgin Islands (US)</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <label for="phoneNumber">Number</label>
+    <input type="text" autocomplete="tel-national" id="phoneNumber" name="css_phoneNumber" value="">
+  </div>
+  <input id="enterEmailSubmitButton" type="submit" value="I Acknowledge the Privacy Notice">
+</form>
+<script>
+  for (const li of document.querySelectorAll('#dropdownResults li'))
+    li.addEventListener('click', () => {
+      document.getElementById('shown').textContent = li.textContent.trim();
+      document.getElementById('selectedCountryCode').value = li.getAttribute('value');
+      document.getElementById('dropdownOptions').hidden = true;
+    });
+</script>
+</body></html>
+"""
+
+
+def test_a_phone_box_labelled_only_number_is_known_by_its_autofill_hint(page, agent):
+    page.set_content(ICIMS_SIGN_IN)
+    fields = {f.selector: f.matched_profile_key for f in agent.detect_form_fields(page)}
+    assert fields['[id="phoneNumber"]'] == "phone"
+    assert fields['[id="email"]'] == "email"
+
+
+def test_the_country_code_list_is_set_to_the_united_states(page, agent):
+    page.set_content(ICIMS_SIGN_IN)
+    profile = SimpleNamespace(phone_country_code="+1", country="United States")
+    assert agent.set_phone_country(page, profile) == 1
+    assert page.locator("#shown").inner_text() == "(+1) United States"
+    assert page.locator("#selectedCountryCode").input_value() == "US"
+
+
+def test_a_country_code_already_chosen_is_left_alone(page, agent):
+    page.set_content(ICIMS_SIGN_IN.replace(">- Make a Selection -<", ">(+91) India<"))
+    assert agent.set_phone_country(page, SimpleNamespace(phone_country_code="+1", country="United States")) == 0
+    assert page.locator("#shown").inner_text() == "(+91) India"
+
+
+def test_the_privacy_acknowledgement_is_the_way_on(page, agent):
+    page.set_content(ICIMS_SIGN_IN)
+    agent._profile = SimpleNamespace(accept_application_privacy_prompts=True)
+    button = agent._wizard_button(page)
+    assert button is not None and button.get_attribute("value") == "I Acknowledge the Privacy Notice"
+
+
+def test_the_privacy_acknowledgement_waits_when_the_owner_has_not_allowed_it(page, agent):
+    page.set_content(ICIMS_SIGN_IN)
+    agent._profile = SimpleNamespace(accept_application_privacy_prompts=False)
+    assert agent._wizard_button(page) is None
+
+
+def test_a_legal_declaration_is_never_taken_for_a_privacy_acknowledgement(page, agent):
+    page.set_content(ICIMS_SIGN_IN.replace(
+        'value="I Acknowledge the Privacy Notice"',
+        'value="I acknowledge the privacy notice and certify my answers are true and complete"'))
+    agent._profile = SimpleNamespace(accept_application_privacy_prompts=True)
+    assert agent._wizard_button(page) is None

@@ -261,7 +261,13 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
     resume is a worse application, but sending the wrong company's is worse
     still, and sending nothing wastes the run."""
     generic = Path(config_module.RESUME_PATH)
+    safe_company = re.sub(r"[^A-Za-z0-9]+", "", job.company)[:24] or "Job"
     reused = reuse_stored_document(tracker, key, "resume", job_dir)
+    if reused is not None and reused.name not in (generic.name, f"Yaswanth_Jonnalagadda_Resume_{safe_company}.pdf"):
+        # Written when the posting was read as someone else's: Schwab's was
+        # tailored to its careers page's menu ("Career Schwab"), not the job.
+        logger.info("RETAILORING: %s was written from a misread posting; tailoring it again", reused.name)
+        reused = None
     if reused is not None and reused.name == generic.name:
         # That was the untailored fallback from a failed run -- tailor now
         # rather than locking the posting to the generic resume.
@@ -271,7 +277,6 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
         return reused
 
     resume_txt = job_dir / "tailored_resume.txt"
-    safe_company = re.sub(r"[^A-Za-z0-9]+", "", job.company)[:24] or "Job"
     resume_pdf = job_dir / f"Yaswanth_Jonnalagadda_Resume_{safe_company}.pdf"
 
     try:
@@ -669,6 +674,12 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
         else:
             logger.info("AUTO_SUBMIT: not yet -- %s", why)
 
+    if status == STATUS_READY_TO_SUBMIT and assistant.find_submit_button(page) is None:
+        # Schwab's sign-in step was reported "ready to submit": nothing left
+        # to fill there, but it was not the application's last page.
+        status, message = STATUS_NEEDS_USER_REVIEW, (
+            "stopped before the last page: nothing is left to fill here, but the agent found no way "
+            "on to the next step")
     tracker.update_status(key, status, notes=message)
     assistant.raise_window(page)
 

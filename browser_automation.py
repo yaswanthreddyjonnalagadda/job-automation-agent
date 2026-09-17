@@ -543,6 +543,13 @@ class JobApplicationAssistant:
             input_type = el.get_attribute("type") or el.evaluate("e => e.tagName.toLowerCase()")
             selector = self._build_selector(el)
             matched_key = self._match_field(label_text)
+            if matched_key is None:
+                # Schwab's phone box is labelled only "Number" and named
+                # "css_phoneNumber"; its autofill hint, tel-national, is the
+                # one thing that says what it is.
+                hint = self._AUTOCOMPLETE_WORDS.get((el.get_attribute("autocomplete") or "").strip().lower())
+                if hint:
+                    matched_key = self._match_field(f"{label_text} {hint}")
             detected.append(
                 DetectedField(
                     selector=selector,
@@ -656,6 +663,13 @@ class JobApplicationAssistant:
         r"\bif yes\b|\bif so\b|are you|have you|do you|were you|name of (the|your) (relative|employee|contact)",
         re.IGNORECASE,
     )
+
+    # The standard autofill hints (the autocomplete attribute) that name a
+    # profile field outright.
+    _AUTOCOMPLETE_WORDS = {
+        "email": "email", "tel": "phone", "tel-national": "phone",
+        "given-name": "first name", "family-name": "last name", "postal-code": "postal code",
+    }
 
     @staticmethod
     def _match_field(label_text: str) -> Optional[str]:
@@ -825,6 +839,46 @@ class JobApplicationAssistant:
                     done += 1
             except Exception as exc:
                 logger.debug("Phone country dropdown failed: %s", str(exc).splitlines()[0][:100])
+
+        # 3. any other "Country Code" combobox: a link that opens a searchable
+        #    list, as on Schwab's sign-in step (iCIMS), options "(+1) United States".
+        combos = page.locator("[role=combobox]:not(input):not(select)")
+        for i in range(min(combos.count(), 8)):
+            combo = combos.nth(i)
+            try:
+                if not combo.is_visible():
+                    continue
+                name = " ".join(((combo.get_attribute("aria-label") or "") + " " + combo.evaluate(
+                    "e => { const c = e.closest('div, fieldset, li'); const l = c && c.parentElement"
+                    " && c.parentElement.querySelector('label'); return l ? l.innerText : ''; }")).split())
+                if not re.search(r"country\s*code|dial(ing)?\s*code|phone\s*country", name, re.IGNORECASE):
+                    continue
+                shown = " ".join((combo.inner_text() or "").split())
+                if shown and not re.search(r"make a selection|^\W*select\b|choose|^\W*$", shown, re.IGNORECASE):
+                    continue  # a country is already chosen -- by the site, the user or the agent
+                combo.click(timeout=4_000)
+                page.wait_for_timeout(500)
+                panel_id = combo.get_attribute("aria-controls") or ""
+                scope = page.locator(f"[id={json.dumps(panel_id)}]") if panel_id else page
+                search = scope.locator("input:visible").first
+                if search.count():
+                    search.fill(country)
+                    page.wait_for_timeout(600)
+                options = scope.locator("[role=option]:visible")
+                texts = [" ".join(t.split()) for t in options.all_inner_texts()]
+                index = self._best_option(texts, [f"({code}) {country}", f"{country} ({code})", country])
+                if index is None:
+                    page.keyboard.press("Escape")
+                    continue
+                options.nth(index).click(timeout=4_000)
+                page.wait_for_timeout(400)
+                now = " ".join((combo.inner_text() or "").split())
+                if country.lower() in now.lower():
+                    self.note_page_changed()
+                    logger.info("PROFILE_ANSWER: phone country code -> %r", now[:40])
+                    done += 1
+            except Exception as exc:
+                logger.debug("Country code list failed: %s", str(exc).splitlines()[0][:100])
         return done
 
     def fix_rejected_phone_numbers(self, page: Page) -> int:
@@ -2805,6 +2859,29 @@ class JobApplicationAssistant:
                             return el
                 except Exception:
                     continue
+            # A privacy notice that is itself the way on. Schwab's sign-in step
+            # (iCIMS) has one button: "I Acknowledge the Privacy Notice". The
+            # owner lets the agent accept privacy notices
+            # (accept_application_privacy_prompts); a legal declaration never
+            # counts as one.
+            if getattr(getattr(self, "_profile", None), "accept_application_privacy_prompts", False):
+                consent = page.locator("input[type=submit], input[type=button], button, [role=button]")
+                for i in range(min(consent.count(), 20)):
+                    el = consent.nth(i)
+                    try:
+                        label = " ".join(((el.get_attribute("value") or "") + " " + (el.inner_text() or "") + " "
+                                          + (el.get_attribute("aria-label") or "")).split())
+                        if not re.search(r"\b(acknowledge|accept|agree)\b", label, re.IGNORECASE):
+                            continue
+                        if not safety.is_privacy_consent(label) or safety.is_attestation(label) \
+                                or safety.is_submit_label(label):
+                            continue
+                        if not el.is_visible() or self._in_popup(el) or not el.is_enabled():
+                            continue
+                        logger.info("Next page: accepting the privacy notice (%r)", label[:50])
+                        return el
+                    except Exception:
+                        continue
             # A next-page arrow with no words at all. Casey's ADP pages draw
             # their Next as a box whose only label is a right-arrow icon from
             # an icon font (drawn with CSS, not text), so nothing reading
