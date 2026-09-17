@@ -297,3 +297,12 @@ def test_an_answer_that_does_not_stay_is_never_submitted_blank(page, resume_file
     assert outcome.kind == "owner_needed"
     assert any("could not set" in r and "State" in r for r in outcome.reasons)
     assert page.url.endswith("/apply/2")
+
+
+def test_a_submit_button_on_a_step_before_the_last_just_moves_on(page, resume_file):
+    """Schwab's step 2 of 5 says "Submit" and only saves that step: it was
+    held as if it sent the application, for want of a resume attached earlier."""
+    serve(page, step1=STEP_1.replace('<button type="submit">Next</button>', '<button type="submit">Submit</button>'))
+    outcome = make_agent(Planner(next_label="Submit"), resume_file).run(page)
+    assert outcome.kind == "submitted", outcome.reasons
+    assert stored(page, "sponsor") == "Yes"

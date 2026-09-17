@@ -814,8 +814,13 @@ class PageAgent:
             if not getattr(self.profile, "accept_application_privacy_prompts", False):
                 return "stop", page, f"{label!r} accepts a notice -- you haven't allowed the agent to accept those"
 
-        final = plan.next_kind == "final_submit" or (
-            safety.is_submit_label(label) and plan.page_kind not in ("job_description",))
+        submit_word = safety.is_submit_label(label) and plan.page_kind != "job_description"
+        # Schwab's questions page is step 2 of 5 and its button says "Submit":
+        # it saves that step. A "Submit" is the application's last only when no
+        # step counter shows more steps to come.
+        counter = re.search(r"(\d+)\s*(?:of|/)\s*(\d+)", plan.step or "")
+        steps_remain = bool(counter) and int(counter.group(1)) < int(counter.group(2))
+        final = plan.next_kind == "final_submit" or (submit_word and not (steps_remain and plan.next_kind == "next_step"))
         if plan.page_kind == "job_description" and plan.next_kind == "open_application":
             final = False
         if final:
@@ -823,11 +828,20 @@ class PageAgent:
             if gate:
                 return "stop", page, gate
             logger.info("SUBMITTING: pressing %r -- every check passed", label)
+        elif submit_word:
+            # Not the last step -- but a button that could send the application
+            # still gets every check except the finished-application ones.
+            gate = self.submit_gate(page, controls, last_step=False)
+            if gate:
+                return "stop", page, gate
+            logger.info("NEXT: pressing %r (step %s -- more steps follow)", label, plan.step)
         else:
             logger.info("NEXT: pressing %r", label)
 
         before = re.sub(r"\[ref=[\w-]+\]|\[active\]", "", self.snapshot(page))
         tabs_before = len(tab.context.pages)
+        if submit_word:
+            self.final_pressed = True   # a confirmation after any Submit counts
         pressed_at = time.time()
         self.locate(page, control.ref).click(timeout=10_000)
         self.settle(page, 2_500)
@@ -844,7 +858,7 @@ class PageAgent:
                                    (f"; it says: {'; '.join(alerts)}" if alerts else ""))
         return "moved", page, ""
 
-    def submit_gate(self, page, controls: list[Control]) -> str:
+    def submit_gate(self, page, controls: list[Control], last_step: bool = True) -> str:
         """Why the application must not be sent now, or "" when it may."""
         if not getattr(self.config, "auto_submit", False):
             return "automatic submission is off -- the application is ready for you to submit"
@@ -859,7 +873,8 @@ class PageAgent:
             pending = []
         if pending:
             return f"your declaration or signature is needed: {pending[0][:90]}"
-        if self.resume_file and not self.resume_uploaded and not self._resume_on_page(page):
+        if last_step and self.resume_file and not (self.resume_uploaded or getattr(self, "resume_seen", False)
+                                                    or self._resume_on_page(page)):
             return "the tailored resume is not attached"
         return ""
 
@@ -895,6 +910,8 @@ class PageAgent:
 
     def _save(self, snapshot: str) -> None:
         """Every page read is kept: it is what a failure is replayed from."""
+        if self.resume_file and self.resume_file.name.lower() in (snapshot or "").lower():
+            self.resume_seen = True   # the tailored resume shows as attached on a page of this run
         if not self.job_dir:
             return
         try:
