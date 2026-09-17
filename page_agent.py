@@ -137,6 +137,12 @@ def parse_snapshot(snapshot: str) -> list[Control]:
 
         if role in ("text", "paragraph", "heading", "strong", "emphasis", "generic") and (value or name):
             last_text = (value or name).strip()[:200]
+            # Schwab's veteran question draws its radio buttons with no label of
+            # their own: each is followed by its text ("I AM NOT A PROTECTED
+            # VETERAN"). That text is the button's name.
+            if controls and not controls[-1].name and controls[-1].role in ("radio", "checkbox", "switch") \
+                    and not controls[-1].value and role == "text":
+                controls[-1].name = (value or name).strip()[:200]
         control = None
         if role in OPTION_ROLES and owner is not None and owner.role in ("combobox", "listbox"):
             owner.options.append(name or value)
@@ -282,7 +288,7 @@ class PageAgent:
     def _ensure_state(self) -> None:
         """Code reloaded into a run that is already going keeps its old object:
         anything added since starts empty rather than failing."""
-        for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict),
+        for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict)):
             if not hasattr(self, name):
                 setattr(self, name, default())
@@ -431,7 +437,7 @@ class PageAgent:
             # every answer the agent gave is really there.
             self.settle(page, 800)
             after = parse_snapshot(self.snapshot(page))
-            missing = self.not_stuck(given, after)
+            missing = self.not_stuck(given, after) + list(getattr(self, "failed", []))
             if missing:
                 stick_tries += 1
                 if stick_tries < MAX_TRIES_PER_PAGE:
@@ -454,8 +460,10 @@ class PageAgent:
 
     # -- answering ------------------------------------------------------------------
     def apply_answers(self, page, plan: PagePlan, controls: list[Control]) -> list[tuple[Answer, Control]]:
-        """Gives the plan's answers the rules allow; returns the ones given."""
+        """Gives the plan's answers the rules allow; returns the ones given.
+        The ones that could not be given are kept in self.failed."""
         given: list[tuple[Answer, Control]] = []
+        self.failed = []
         by_ref = {c.ref: c for c in controls}
         for answer in plan.answers:
             control = by_ref.get(answer.ref)
@@ -473,6 +481,8 @@ class PageAgent:
             except Exception as exc:
                 done = False
                 logger.info("Could not answer %r: %s", answer.question[:60], str(exc).splitlines()[0][:100])
+            if not done:
+                self.failed.append(f"{(control.question or answer.question)[:60]} = {answer.value[:40]!r}")
             if done:
                 given.append((answer, control))
                 self.written[control.question or answer.question] = answer.value
@@ -497,6 +507,14 @@ class PageAgent:
             if now is None:
                 continue   # the page rebuilt itself; the next read will show it
             want = answer.value.strip().lower()
+            if answer.action == "choose" and before.role in ("radio", "checkbox", "switch"):
+                # A choice among buttons: whichever button carries the answer must be the one on.
+                group = [c for c in after if c.role == before.role and before.group and c.group == before.group]
+                ok = any(c.checked and _same_answer(c.name, answer.value) for c in group) or \
+                    (not group and now.checked)
+                if not ok:
+                    missing.append(f"{before.question[:60]} = {answer.value[:40]!r}")
+                continue
             if answer.action in ("check", "uncheck"):
                 if now.role == "radio" and now.group:
                     ok = any(c.checked for c in by_question.get(now.group, []) if c.ref == before.ref) or now.checked
@@ -689,6 +707,20 @@ class PageAgent:
                 if hasattr(self.assistant, "attached_resume"):
                     self.assistant.attached_resume = str(path)
             self.settle(page, 1_500)
+            return True
+        if answer.action == "choose" and control.role in ("radio", "checkbox", "switch"):
+            group = [c for c in parse_snapshot(self.snapshot(page))
+                     if c.role == control.role and c.group and c.group == control.group] or [control]
+            index = self.assistant._best_option([c.name for c in group], [answer.value])
+            if index is None:
+                logger.info("No choice matching %r for %r among %s", answer.value, control.question[:50],
+                            [c.name for c in group][:8])
+                return False
+            target = self.locate(page, group[index].ref)
+            try:
+                target.set_checked(True, timeout=5_000)
+            except Exception:
+                target.click(timeout=5_000)
             return True
         if answer.action == "choose":
             return self.choose(page, control, answer.value)

@@ -367,7 +367,8 @@ Rules -- follow every one:
    no answers, next kind "none".
 7. Files: a resume upload control gets action "upload_resume"; a cover letter upload gets
    "upload_cover_letter". A resume already shown as attached needs nothing.
-8. For "choose", give the value exactly as one of the offered choices when choices are listed; for a
+8. Radio buttons and checkboxes: action "check" with the ref of the button whose label -- its name, or the
+   text right after it -- is the answer. For "choose", give the value exactly as one of the offered choices when choices are listed; for a
    dropdown whose choices aren't listed, give the value to search for (e.g. "United States").
 9. Phone numbers: use the digits as in the profile; where a country code is asked separately, use the
    profile's phone_country_code.

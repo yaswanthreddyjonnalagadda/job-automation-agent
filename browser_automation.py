@@ -6105,6 +6105,7 @@ class JobApplicationAssistant:
         # to its next step, and the run went on waiting for an instruction.
         waiting_on_captcha = False
         captcha_gone_polls = 0
+        waiting_on_signature = False
         if page is not None:
             try:
                 waiting_on_captcha = safety.captcha_visible(page)
@@ -6112,6 +6113,15 @@ class JobApplicationAssistant:
                 waiting_on_captcha = False
             if waiting_on_captcha:
                 logger.info("Waiting for you to complete the CAPTCHA; the agent carries on once it is done")
+            else:
+                # Stopped for a signature only the owner gives: once it is given,
+                # carry on without being told.
+                try:
+                    waiting_on_signature = bool(self.pending_attestations(getattr(page, "top", None) or page))
+                except Exception:
+                    waiting_on_signature = False
+                if waiting_on_signature:
+                    logger.info("Waiting for your signature; the agent carries on once you have given it")
         while not signal_path.exists():
             time.sleep(poll_seconds)
             waited += poll_seconds
@@ -6122,6 +6132,15 @@ class JobApplicationAssistant:
             if page is not None:
                 if page.is_closed():
                     return "browser_closed"
+                if waiting_on_signature and not waiting_on_captcha:
+                    try:
+                        signed = not self.pending_attestations(getattr(page, "top", None) or page)
+                    except Exception:
+                        signed = False
+                    if signed:
+                        logger.info("Your signature is given -- carrying on with the application")
+                        return "refresh"
+                    continue
                 if waiting_on_captcha:
                     try:
                         captcha_gone_polls = 0 if safety.captcha_visible(page) else captcha_gone_polls + 1

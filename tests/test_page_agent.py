@@ -306,3 +306,61 @@ def test_a_submit_button_on_a_step_before_the_last_just_moves_on(page, resume_fi
     outcome = make_agent(Planner(next_label="Submit"), resume_file).run(page)
     assert outcome.kind == "submitted", outcome.reasons
     assert stored(page, "sponsor") == "Yes"
+
+
+# --- radio buttons whose label is the text after them (Schwab's veteran form) -----
+
+VETERAN = """<html><body><h1>Voluntary Self-Identification</h1><p>Step 4 of 5</p>
+<form onsubmit="localStorage.vet = (document.querySelector('[name=vet]:checked') || {}).value || '';
+                location.href = '/done'; return false;">
+  <div>2. If you believe you belong to any of the categories of protected veterans, please check the box.</div>
+  <input type="radio" name="vet" value="identify"> I IDENTIFY AS A PROTECTED VETERAN
+  <input type="radio" name="vet" value="not"> I AM NOT A PROTECTED VETERAN
+  <input type="radio" name="vet" value="decline"> I DON'T WISH TO ANSWER
+  <button type="submit">Next</button>
+</form></body></html>"""
+
+
+def veteran_planner(action):
+    def plan_page(snapshot, facts, feedback=""):
+        if "Thank you for applying" in snapshot:
+            return {"page_kind": "confirmation", "next": {"kind": "none"}}
+        radio = re.search(r'- radio \[ref=([\w-]+)\]\n\s*- text: I AM NOT', snapshot)
+        first = re.search(r'- radio \[ref=([\w-]+)\]', snapshot)
+        ref = (radio or first).group(1) if action == "check" else first.group(1)
+        return {"page_kind": "application_form", "step": "4 of 5",
+                "answers": [{"ref": ref, "question": "protected veteran", "action": action,
+                             "value": "I AM NOT A PROTECTED VETERAN", "source": "profile.veteran_status"}],
+                "next": {"ref": ref_of(snapshot, "button", "Next"), "label": "Next", "kind": "next_step"}}
+    return SimpleNamespace(plan_page=plan_page)
+
+
+@pytest.mark.parametrize("action", ["check", "choose"])
+def test_a_radio_button_labelled_by_the_text_after_it_is_answered(page, resume_file, action):
+    page.route("https://jobs.example.com/**", lambda route: route.fulfill(
+        status=200, content_type="text/html", body=DONE if route.request.url.endswith("/done") else VETERAN))
+    page.goto("https://jobs.example.com/apply/4")
+    controls = page_agent.parse_snapshot(page.locator("body").aria_snapshot(mode="ai"))
+    radios = [c for c in controls if c.role == "radio"]
+    assert [c.name for c in radios][1] == "I AM NOT A PROTECTED VETERAN"
+    assert radios[0].group.startswith("2. If you believe")
+    make_agent(veteran_planner(action), resume_file).run(page)
+    assert stored(page, "vet") == "not"
+
+
+def test_an_answer_that_cannot_be_given_is_reported_not_dropped(page, resume_file):
+    serve(page)
+    planner = Planner(extra={1: [{"ref": "", "question": "x", "action": "fill", "value": "y", "source": "resume"}]})
+    # A choice the page doesn't offer: tried, retried, then reported.
+    original = planner.plan_page
+
+    def plan_page(snapshot, facts, feedback=""):
+        plan = original(snapshot, facts, feedback)
+        for answer in plan.get("answers", []):
+            if answer["question"] == "Country":
+                answer["value"] = "Atlantis"
+        return plan
+    outcome = make_agent(SimpleNamespace(plan_page=plan_page), resume_file).run(page)
+    assert outcome.kind == "owner_needed"
+    assert any("could not set" in r and "Atlantis" in r for r in outcome.reasons)
+    assert page.url.endswith("/apply/1")

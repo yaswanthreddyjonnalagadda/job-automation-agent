@@ -557,3 +557,12 @@ def test_submit_is_held_at_the_button_when_the_form_says_no_sponsorship_is_neede
     agent._profile = SimpleNamespace(requires_visa_sponsorship=True, legally_eligible_to_work="Yes")
     assert agent.click_verified_submit(page) is False
     assert page.evaluate("document.body.dataset.sent") is None
+
+
+def test_the_agent_carries_on_once_the_owner_has_signed(page, agent, tmp_path):
+    page.set_content("""<label><input type="checkbox" id="sig"> Signature (checking the checkbox above is
+        equivalent to a handwritten signature)</label>""")
+    assert agent.pending_attestations(page)
+    page.evaluate("setTimeout(() => document.getElementById('sig').checked = true, 1200)")
+    decision = agent.wait_for_signal(tmp_path / "_signal_x.txt", poll_seconds=0.3, timeout_seconds=20, page=page)
+    assert decision == "refresh"
