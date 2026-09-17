@@ -543,3 +543,17 @@ def test_update_profile_moves_on_and_finish_later_never_does(page, agent):
     button = agent._wizard_button(page)
     assert button is not None and button.get_attribute("value") == "Update Profile"
     assert not agent.safe_to_click_for_claude(page, "Finish Later")
+
+
+def test_submit_is_held_at_the_button_when_the_form_says_no_sponsorship_is_needed(page, agent):
+    page.set_content("""
+      <form onsubmit="document.body.dataset.sent='yes'; return false;">
+        <label for="q1">Do you now, or will you in the future, require sponsorship (e.g., H-1B visa, EAD, etc.)
+          to work (or continue to work) legally for the company in the United States?*</label>
+        <select id="q1" required><option value="">-- Make a Selection --</option>
+          <option value="y">Yes</option><option value="n" selected>No</option></select>
+        <button type="submit">Submit</button>
+      </form>""")
+    agent._profile = SimpleNamespace(requires_visa_sponsorship=True, legally_eligible_to_work="Yes")
+    assert agent.click_verified_submit(page) is False
+    assert page.evaluate("document.body.dataset.sent") is None

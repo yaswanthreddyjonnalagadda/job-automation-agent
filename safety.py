@@ -289,6 +289,61 @@ def unsupported_claims(source_text: str, generated_text: str, extra_allowed: Ite
 # --------------------------------------------------------------------------
 # Hand-over decision
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# Sponsorship and work authorization: what the page says must be what the
+# profile says, whoever put it there
+# --------------------------------------------------------------------------
+_SPONSORSHIP_Q = re.compile(r"\b(require|need)\w*\b.{0,80}\bsponsor|\bsponsor\w*\b.{0,40}\b(require|need)", re.IGNORECASE)
+_AUTHORIZED_Q = re.compile(
+    r"\b(authori[sz]ed|eligible|legally (permitted|able|allowed))\b.{0,30}\bto work\b", re.IGNORECASE)
+_CONDITIONAL_Q = re.compile(r"^\W*if\b", re.IGNORECASE)
+_NO_ANSWER = re.compile(r"^\W*(no|n)\b|\b(do not|don't|does not|will not|won't) (now or in the future )?(need|require)|"
+                        r"\bnot (need|require)", re.IGNORECASE)
+_YES_ANSWER = re.compile(r"^\W*(yes|y)\b|\b(will|do|would) (need|require)\b", re.IGNORECASE)
+
+
+def legal_answer_conflicts(form_fields: list[dict], profile) -> list[str]:
+    """Sponsorship and work-authorization answers on the page that contradict
+    the profile, or that are left blank.
+
+    Schwab's (iCIMS) questions page opened with "No" already chosen for "Do
+    you now, or will you in the future, require sponsorship (e.g., H-1B
+    visa...)?" -- carried over from an earlier Schwab application. The agent
+    rightly didn't overwrite an answer it hadn't written, but the application
+    was then submitted automatically with it, although the profile says
+    sponsorship is required. Whoever filled it in, an answer here that
+    contradicts the profile is never sent without the user.
+    """
+    if profile is None:
+        return []
+    needs_sponsorship = bool(getattr(profile, "requires_visa_sponsorship", False))
+    authorized = str(getattr(profile, "legally_eligible_to_work", "") or "").strip().lower().startswith("y")
+    conflicts: list[str] = []
+    for field in form_fields or []:
+        question = " ".join(str(field.get("label") or "").split())
+        value = " ".join(str(field.get("value") or "").split())
+        if not question or _CONDITIONAL_Q.search(question) or value.lower() == "checked":
+            continue
+        if re.search(r"placeholder|make a selection|^select\b|please select|^-+$", value, re.IGNORECASE):
+            value = ""
+        if _SPONSORSHIP_Q.search(question):
+            said_yes, said_no = bool(_YES_ANSWER.search(value)), bool(_NO_ANSWER.search(value))
+            if not value:
+                conflicts.append(f"{question[:90]} -- not answered; your profile says you "
+                                 f"{'need' if needs_sponsorship else 'do not need'} sponsorship")
+            elif needs_sponsorship and (said_no or not said_yes):
+                conflicts.append(f"{question[:90]} -- the form says {value[:30]!r}, but you need sponsorship")
+            elif not needs_sponsorship and said_yes and not said_no:
+                conflicts.append(f"{question[:90]} -- the form says {value[:30]!r}, but you do not need sponsorship")
+        elif _AUTHORIZED_Q.search(question):
+            said_no = bool(re.match(r"^\W*(no|n)\b", value, re.IGNORECASE))
+            if not value:
+                conflicts.append(f"{question[:90]} -- not answered")
+            elif authorized and said_no:
+                conflicts.append(f"{question[:90]} -- the form says {value[:30]!r}, but you are authorized to work")
+    return conflicts
+
+
 def handover_status(report: dict) -> tuple[str, str]:
     """(status, message) for a filled application, from its validation report.
 
@@ -306,6 +361,8 @@ def handover_status(report: dict) -> tuple[str, str]:
         ("required fields still blank", report.get("required_still_blank") or []),
         ("errors shown by the form", report.get("errors_shown") or []),
         ("attestations or signatures for you to complete", report.get("attestations_pending") or []),
+        ("sponsorship or work-authorization answers that don't match your profile",
+         report.get("legal_answer_conflicts") or []),
     ):
         if items:
             problems.append(f"{label}: " + "; ".join(str(i) for i in items[:5]))
@@ -383,7 +440,11 @@ def ready_to_auto_submit(report: dict, resume_on_form: bool, submit_button_found
       * the resume the agent prepared is on the form;
       * this is the last page: the form's own Submit button is there.
     Duplicates and jobs that will not sponsor a visa never reach this point.
+    Nor does a sponsorship or work-authorization answer that contradicts the
+    profile, whoever filled it in.
     """
+    if report.get("legal_answer_conflicts"):
+        return False, "a sponsorship or work-authorization answer doesn't match your profile"
     status, message = handover_status(report)
     if status != "ready_to_submit":
         return False, message

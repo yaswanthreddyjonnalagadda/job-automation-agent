@@ -386,3 +386,54 @@ def test_auto_submit_waits_for_anything_only_the_user_can_do():
     for report, resume, submit_button in cases:
         go, why = safety.ready_to_auto_submit(report, resume, submit_button)
         assert not go, why
+
+
+# ---------------------------------------------------------------- sponsorship answers vs the profile
+# Schwab's (iCIMS) questions page opened with "No" already chosen for the
+# sponsorship question, carried over from an earlier application, and the
+# application was submitted automatically with it.
+
+SCHWAB_SPONSORSHIP = ("Do you now, or will you in the future, require sponsorship (e.g., H-1B visa, EAD, etc.) "
+                      "to work (or continue to work) legally for the company in the United States?*")
+SCHWAB_OPT = "If you will require sponsorship, do you currently hold Optional Practical Training (OPT)?*"
+SCHWAB_AUTHORIZED = "Are you currently authorized to work in the U.S.? (If applying to non-US position, select N/A)*"
+
+
+def _needs_sponsorship():
+    from types import SimpleNamespace
+    return SimpleNamespace(requires_visa_sponsorship=True, legally_eligible_to_work="Yes")
+
+
+def test_a_carried_over_no_to_sponsorship_is_a_conflict():
+    fields = [{"label": SCHWAB_AUTHORIZED, "value": "Yes"},
+              {"label": SCHWAB_SPONSORSHIP, "value": "No"},
+              {"label": SCHWAB_OPT, "value": "N/A"}]
+    conflicts = safety.legal_answer_conflicts(fields, _needs_sponsorship())
+    assert len(conflicts) == 1 and "you need sponsorship" in conflicts[0]
+
+
+def test_the_right_sponsorship_answer_is_not_a_conflict():
+    fields = [{"label": SCHWAB_AUTHORIZED, "value": "Yes"},
+              {"label": SCHWAB_SPONSORSHIP, "value": "Yes"},
+              {"label": SCHWAB_OPT, "value": "No"},  # a conditional follow-up, not the question itself
+              {"label": "Will you now or in the future require immigration sponsorship to work for Casey's?",
+               "value": "Yes, I will require sponsorship"}]
+    assert safety.legal_answer_conflicts(fields, _needs_sponsorship()) == []
+
+
+def test_other_wordings_of_the_wrong_answer_are_caught():
+    profile = _needs_sponsorship()
+    for value in ("No, I do not require sponsorship", "I will not require sponsorship", "", "N/A",
+                  "-- Make a Selection --"):
+        assert safety.legal_answer_conflicts([{"label": SCHWAB_SPONSORSHIP, "value": value}], profile), value
+    assert safety.legal_answer_conflicts([{"label": SCHWAB_AUTHORIZED, "value": "No"}], profile)
+
+
+def test_a_sponsorship_conflict_holds_the_application_and_never_auto_submits():
+    report = {"required_still_blank": [], "errors_shown": [], "attestations_pending": [], "captcha": False,
+              "form_reached": True, "fields_filled": 9, "documents_attached": 1,
+              "legal_answer_conflicts": [f"{SCHWAB_SPONSORSHIP[:60]} -- the form says 'No', but you need sponsorship"]}
+    status, message = safety.handover_status(report)
+    assert status == "needs_user_review" and "sponsorship" in message
+    go, why = safety.ready_to_auto_submit(report, resume_on_form=True, submit_button_found=True)
+    assert go is False

@@ -5669,6 +5669,11 @@ class JobApplicationAssistant:
         if self.pending_attestations(page):
             logger.error("SUBMIT_HELD: an attestation/signature is outstanding -- not submitting")
             return False
+        # Checked again at the button itself, whatever decided to submit.
+        conflicts = safety.legal_answer_conflicts(self.read_back_fields(page), getattr(self, "_profile", None))
+        if conflicts:
+            logger.error("SUBMIT_HELD: %s -- not submitting", conflicts[0])
+            return False
         button = self.find_submit_button(page)
         if button is None:
             logger.error("SUBMIT_HELD: no Submit button on this page")
