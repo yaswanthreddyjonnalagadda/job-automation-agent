@@ -724,6 +724,89 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
     return status
 
 
+def run_page_agent(assistant, page, claude, config, profile, resume, job, tracker, key: str,
+                   job_dir: Path, resume_file: Path, args, signal_path: Path) -> None:
+    """Works the application with the reading agent (page_agent.py).
+
+    It reads each page, answers what the owner's facts answer, moves on, and
+    submits once every check passes. When it needs the owner it says why, waits
+    for them to deal with it in the browser, and carries on from that page when
+    they press Continue -- or by itself once a CAPTCHA they solved is gone.
+    """
+    import page_agent
+
+    made: dict = {}
+
+    def cover_letter():
+        if "letter" not in made:
+            made["letter"] = prepare_cover_letter(claude, resume, job, profile, job_dir, tracker, key)
+            if made["letter"]:
+                tracker.update_materials(key, str(resume_file), str(made["letter"][1]))
+                store_materials(tracker, key, None, made["letter"][1])
+        return made["letter"]
+
+    store_materials(tracker, key, resume_file, None)
+    agent = page_agent.PageAgent(assistant, claude, config, profile, resume, job, tracker, key,
+                                 job_dir, resume_file, cover_letter)
+    while True:
+        outcome = agent.run(page)
+        page = agent.tab(outcome.page)
+        remember_progress(tracker, key, page, outcome.summary[:200])
+        notes = "; ".join(agent.notes[:5])
+
+        if outcome.kind == "submitted":
+            try:
+                page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
+            except Exception:
+                pass
+            message = "Submitted by the agent -- the site confirmed it" + (f". Worth checking: {notes}" if notes else "")
+            tracker.update_status(key, STATUS_SUBMITTED, notes=message[:1000])
+            logger.info("SUBMITTED: %s at %s -- the site confirmed it", job.title, job.company)
+            return
+        if outcome.kind == "no_sponsorship":
+            tracker.update_status(key, STATUS_SKIPPED, notes=f"Skipped: no visa sponsorship -- {outcome.summary}")
+            logger.warning("SKIPPED: %s at %s does not sponsor visas -- %r", job.title, job.company, outcome.summary)
+            return
+
+        message = outcome.summary + (f" | worth checking: {notes}" if notes else "")
+        tracker.update_status(key, STATUS_NEEDS_USER_REVIEW, notes=message[:1000])
+        banner = "=" * 78
+        logger.info(banner)
+        logger.info("NEEDS YOU -- %s at %s", job.title, job.company)
+        for reason in outcome.reasons:
+            logger.info("  %s", reason)
+        for note in agent.notes[:5]:
+            logger.info("  worth checking: %s", note)
+        logger.info("Deal with it in the browser window, then press Continue on the dashboard: "
+                    "the agent reads the page again and carries on.")
+        logger.info(banner)
+        assistant.raise_window(page)
+        try:
+            decision = assistant.wait_for_signal(signal_path, timeout_seconds=args.timeout, page=page)
+        except TimeoutError:
+            logger.info("No instruction received; the application is left as it is, unsubmitted.")
+            return
+        if decision == "submitted_by_user":
+            evidence = getattr(assistant, "_confirmation_evidence", "") or "the page confirmed it"
+            status, note = safety.verification_status(evidence)
+            tracker.update_status(key, status, notes=note)
+            logger.info("SUBMITTED_BY_USER: %s", note)
+            return
+        if decision in ("browser_closed", "left_form"):
+            remember_progress(tracker, key, page, f"run ended: {decision}")
+            return
+        if decision in ("skip", "decline", "abort", "quit"):
+            tracker.update_status(key, STATUS_SKIPPED, notes="Skipped by you")
+            return
+        if decision == "reload_code":
+            assistant = reload_browser_automation(assistant)
+            importlib.reload(page_agent)
+            agent.__class__ = page_agent.PageAgent
+            agent.assistant = assistant
+            logger.info("Reloaded the reading agent as well")
+        # continue / refresh / anything else: read the page again and carry on
+
+
 def submit_verified(assistant, page, tracker, key, job, job_dir: Path, decision) -> bool:
     """Submits ONLY on an eligible AutoSubmitDecision (every required field
     matched approved data, job and documents verified, nothing uncertain on the
@@ -918,6 +1001,16 @@ def main() -> None:
             # whole wizard again.
             resume_at = existing.last_page_url
             logger.info("Continuing where the last run left it")
+        if getattr(config, "agent_engine", "reader") == "reader":
+            # The reading agent opens nothing on its own: it reads whatever page
+            # it is given -- the posting, a sign-in, a step of the form -- and
+            # works out what to do there.
+            logger.info("Working the application with the reading agent")
+            page = assistant.open_job_page(resume_at or job.url)
+            run_page_agent(assistant, page, claude, config, profile, resume, job, tracker, key, job_dir,
+                           attach_resume, args, Path(args.signal_file))
+            return
+
         if resume_at:
             # Resuming: the application form itself, not the posting. Walking
             # the posting again would re-enter a wizard the last run had

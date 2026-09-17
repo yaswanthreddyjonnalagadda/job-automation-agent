@@ -5484,7 +5484,10 @@ class JobApplicationAssistant:
             wanted = [w.lower() for w in (company, job_title) if w]
             for text in texts:
                 low = text.lower()
-                if any(w in low for w in wanted) and self._CONFIRMATION_MAIL.search(text):
+                # The job itself, not just the employer: an older application
+                # to another Schwab job was taken as this one's confirmation.
+                names_job = job_title.lower() in low if job_title else company.lower() in low
+                if names_job and self._CONFIRMATION_MAIL.search(text):
                     logger.info("GMAIL: confirmation email found -- %s", text[:160])
                     return text[:300]
             for text in texts[:5]:

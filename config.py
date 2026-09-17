@@ -172,6 +172,10 @@ class AppConfig:
     auto_submit: bool = field(
         default_factory=lambda: os.getenv("AUTO_SUBMIT", "").strip().lower() in {"1", "true", "yes", "on"}
     )
+    # Which agent works the application pages. "reader" (the default) reads each
+    # page the way a screen reader does and has Claude plan it (page_agent.py);
+    # "rules" is the older engine built from per-site rules, kept as a fallback.
+    agent_engine: str = field(default_factory=lambda: os.getenv("AGENT_ENGINE", "reader").strip().lower())
     # How many times a flaky page action is retried before it is reported.
     action_retries: int = 3
 

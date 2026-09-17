@@ -325,6 +325,91 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
         }
 
     # ------------------------------------------------------------------
+    # Reading an application page and planning its answers
+    # ------------------------------------------------------------------
+    PLAN_PAGE_SYSTEM = """You fill in job applications for one applicant. You are given the page as an
+accessibility snapshot (every control with a [ref=...], its current value, its choices, [checked] and
+[selected] states) and FACTS about the applicant. Decide how to answer this page and how to move on.
+
+Respond with ONLY JSON:
+{
+ "page_kind": "application_form" | "job_description" | "chooser" | "sign_in" | "review" | "confirmation" | "captcha" | "error" | "other",
+ "step": "<e.g. '3 of 5' when the page shows a step counter, else ''>",
+ "answers": [{"ref": "<ref of the control>", "question": "<the question as the page words it>",
+              "action": "fill" | "choose" | "check" | "uncheck" | "upload_resume" | "upload_cover_letter",
+              "value": "<text to type, or the choice to pick, exactly as offered when there are choices>",
+              "source": "profile.<field name> | resume | owner_earlier_answer | job | consent | document"}],
+ "leave_for_owner": [{"question": "...", "reason": "...", "required": true | false}],
+ "mismatches": [{"question": "...", "on_page": "...", "facts_say": "..."}],
+ "next": {"ref": "<ref of the control that moves the application on>", "label": "<its name>",
+          "kind": "next_step" | "final_submit" | "open_application" | "sign_in" | "consent" | "none"}
+}
+
+Rules -- follow every one:
+1. Answer ONLY from FACTS: the profile, the resume text, the owner's earlier answers, the job. Never invent,
+   never guess. If FACTS don't answer a question, put it in leave_for_owner (required = whether the page
+   marks it required, e.g. with *).
+2. Questions about immigration, visas, sponsorship, work authorization, citizenship, criminal history,
+   non-compete or other legal status: answer ONLY when a profile field states it, and give that exact field
+   as the source (e.g. "profile.requires_visa_sponsorship"). requires_visa_sponsorship true means the
+   applicant DOES need sponsorship now or in the future (an H-1B transfer counts).
+3. Never tick, type or choose anything that certifies, attests, declares or signs ("I certify", "true and
+   complete", signature, e-signature). Put those in leave_for_owner. A plain privacy-notice consent may be
+   checked with source "consent".
+4. Skip any control that already shows an answer (a value, a [selected] real option, a [checked] radio).
+   If an existing answer contradicts FACTS, report it in mismatches -- do not change it.
+5. Never touch password boxes. On a sign-in page, return page_kind "sign_in" with no answers.
+6. If a CAPTCHA or "verify you are human" challenge is anywhere on the page, return page_kind "captcha",
+   no answers, next kind "none".
+7. Files: a resume upload control gets action "upload_resume"; a cover letter upload gets
+   "upload_cover_letter". A resume already shown as attached needs nothing.
+8. For "choose", give the value exactly as one of the offered choices when choices are listed; for a
+   dropdown whose choices aren't listed, give the value to search for (e.g. "United States").
+9. Phone numbers: use the digits as in the profile; where a country code is asked separately, use the
+   profile's phone_country_code.
+10. next: the button or link that moves the application forward on this page (Next, Continue, Save and
+   Continue, Update Profile, Apply, Submit...). kind "final_submit" when pressing it sends the application
+   (a last step, a review page, or "Submit Application"); "next_step" when more steps follow;
+   "open_application" for Apply on a job posting or an apply-method chooser (prefer applying manually /
+   without an account); "consent" for accepting a privacy notice dialog. NEVER choose Finish Later, Save for
+   later, Cancel, Back, Withdraw, Log out, or sign-in with LinkedIn/Indeed/Facebook/Apple/Microsoft.
+   Sign in with Google is allowed (kind "sign_in"). "none" when nothing should be pressed.
+11. A confirmation that the application was received: page_kind "confirmation", next kind "none".
+"""
+
+    def plan_page(self, snapshot: str, facts: dict[str, Any], feedback: str = "") -> dict[str, Any]:
+        """How to answer one application page, from its accessibility snapshot.
+
+        The agent's code carries the plan out and enforces what may never be
+        done; this only proposes. See page_agent.py.
+        """
+        user = (
+            "FACTS:\n" + json.dumps(facts, ensure_ascii=False, default=str) +
+            "\n\nPAGE SNAPSHOT:\n" + snapshot +
+            (f"\n\nWHAT HAPPENED LAST TIME ON THIS PAGE: {feedback}" if feedback else "")
+        )
+        last_error: Exception | None = None
+        for attempt in range(1, self._config.claude_max_retries + 1):
+            try:
+                response = self._client.messages.create(
+                    model=self._config.anthropic_model, max_tokens=6_000, system=self.PLAN_PAGE_SYSTEM,
+                    messages=[{"role": "user", "content": user}],
+                    timeout=max(self._config.claude_request_timeout, 120.0),
+                )
+                raw = "".join(block.text for block in response.content if block.type == "text")
+                start, end = raw.find("{"), raw.rfind("}")
+                return self._extract_json(raw[start:end + 1] if start >= 0 and end > start else raw)
+            except (anthropic.RateLimitError, anthropic.APIConnectionError, anthropic.APITimeoutError) as exc:
+                last_error = exc
+                time.sleep(2 ** attempt)
+            except ClaudeIntegrationError as exc:
+                last_error = exc
+            except Exception as exc:
+                last_error = exc
+                break
+        raise ClaudeIntegrationError(f"Could not plan the page: {last_error}")
+
+    # ------------------------------------------------------------------
     # Looking at the page
     # ------------------------------------------------------------------
     def read_page(self, screenshot_png: bytes, page_url: str, goal: str) -> dict[str, Any]:
