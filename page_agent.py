@@ -1499,17 +1499,12 @@ class PageAgent:
             said = str(mismatch.get("on_page") or "")[:60]
             if any(_same_question(question, q) for q in self.corrected):
                 continue   # already put right from the profile, and checked since
-            legal = (safety.is_legal_status_question(question) or safety._SPONSORSHIP_Q.search(question)
-                     or safety._AUTHORIZED_Q.search(question))
-            # Claude read R+L's "legally eligible ... on an ongoing indefinite
-            # basis?" as a mismatch although the page says Yes, which is what
-            # the profile says. The agent's own check decides.
-            on_page = next((f for f in answered_fields(controls) if _same_question(f["label"], question)), None)
-            if legal and (not on_page or safety.legal_answer_conflicts([on_page], self.profile)):
-                reason = f"doesn't match your profile: {question[:90]} -- the page says {said!r}"
-                if not any(question[:60] in r for r in reasons):
-                    reasons.append(reason)
             else:
+                # What Claude reads as a mismatch is passed on, not acted on:
+                # R+L's "legally eligible ... on an ongoing indefinite basis?"
+                # says Yes, which is what the profile says, and the run was
+                # held up over it. Only the agent's own check above, made on
+                # what the page actually holds, stops an application.
                 note = f"{question[:80]}: the page says {said!r}, your profile says {str(mismatch.get('facts_say') or '')[:60]!r}"
                 if note not in self.notes:
                     self.notes.append(note)
