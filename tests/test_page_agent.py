@@ -162,7 +162,8 @@ def test_a_radio_button_carries_its_question():
   - radio "Yes" [ref=e6]
   - radio "No" [checked] [ref=e7]"""
     controls = page_agent.parse_snapshot(snapshot)
-    assert [c.group for c in controls] == ["Are you at least 18 years old? *"] * 2
+    radios = [c for c in controls if c.role == "radio"]
+    assert [c.group for c in radios] == ["Are you at least 18 years old? *"] * 2
     assert page_agent.answered_fields(controls) == [{"label": "Are you at least 18 years old? *", "value": "No"}]
 
 
@@ -713,3 +714,39 @@ def test_no_code_is_read_without_permission_to_read_the_mail(page, resume_file):
     controls = page_agent.parse_snapshot(agent.snapshot(page))
     assert agent.complete_account_code(page, controls, agent.snapshot(page)) is False
     assert page.locator("#c").input_value() == ""
+
+
+def test_choices_with_no_reference_belong_to_their_group():
+    """R+L's yes/no radios carry no reference of their own -- only their group
+    does -- so nothing could be clicked and the question came back to the owner."""
+    snapshot = ('- radiogroup "Have you ever been convicted of a crime?" [ref=e974]:\n'
+                '  - radio "No"\n  - generic: "No"\n  - radio "Yes"')
+    group = next(c for c in page_agent.parse_snapshot(snapshot) if c.holds_choices)
+    assert group.ref == "e974" and group.options == ["No", "Yes"]
+    assert group.question == "Have you ever been convicted of a crime?"
+
+
+def test_a_choice_inside_a_group_is_clicked_by_what_it_says(page, resume_file):
+    page.set_content("""
+      <div role="radiogroup" aria-label="Have you ever been convicted of a crime?">
+        <label><input type="radio" name="crime" value="No" aria-label="No"> No</label>
+        <label><input type="radio" name="crime" value="Yes" aria-label="Yes"> Yes</label>
+      </div>""")
+    agent = make_agent(Planner(), resume_file)
+    snapshot = agent.snapshot(page)
+    group_ref = re.search(r'- radiogroup [^\n]*\[ref=([\w-]+)\]', snapshot).group(1)
+    group = page_agent.Control(ref=group_ref, role="radiogroup",
+                               name="Have you ever been convicted of a crime?", options=["No", "Yes"])
+    answer = page_agent.Answer(group.ref, group.question, "check", "No", "profile.felony_conviction")
+    assert agent.do(page, answer, group) is True
+    assert page.locator("[value=No]").is_checked()
+
+
+def test_a_box_a_plan_calls_a_choice_is_still_filled(page, resume_file):
+    """ZIP Code is a plain box; the plan called it a choice and it was left blank."""
+    page.set_content('<label for="z">ZIP Code</label><input id="z">')
+    agent = make_agent(Planner(), resume_file)
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    box = next(c for c in controls if c.role == "textbox")
+    assert agent.do(page, page_agent.Answer(box.ref, "ZIP Code", "choose", "22031", "profile.postal_code"), box)
+    assert page.locator("#z").input_value() == "22031"

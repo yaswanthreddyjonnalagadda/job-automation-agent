@@ -395,7 +395,13 @@ Rules -- follow every one:
    later, Cancel, Back, Withdraw, Log out, or sign-in with LinkedIn/Indeed/Facebook/Apple/Microsoft.
    Where a page offers "Sign in with Google" (or "Continue with Google"), that is always the sign-in to
    choose, ahead of email/password or any other provider (kind "sign_in"). "none" when nothing should be pressed.
-12. A confirmation that the application was received: page_kind "confirmation", next kind "none".
+12. Sections that need entries added (work history, education, references): press the section's "Add
+   Experience" / "Add Education" button as next with kind "next_step", then fill the boxes that appear from
+   the resume -- most recent first -- until what the form asks for is met (for example three consecutive
+   years of work history). Do not leave such a section to the owner.
+13. A question whose choices are a group of radio buttons or Yes/No buttons with no reference of their own:
+   give the GROUP's ref with action "check" and the value as the choice's words.
+14. A confirmation that the application was received: page_kind "confirmation", next kind "none".
 """
 
     def plan_page(self, snapshot: str, facts: dict[str, Any], feedback: str = "") -> dict[str, Any]:

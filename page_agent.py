@@ -96,6 +96,11 @@ class Control:
     GENERIC_NAMES = re.compile(r"^(attach|choose file|upload( file)?|browse|add file|select file)$", re.IGNORECASE)
 
     @property
+    def holds_choices(self) -> bool:
+        """A group whose choices have no reference of their own."""
+        return self.role in ("radiogroup", "group", "list", "region") and bool(self.options)
+
+    @property
     def question(self) -> str:
         if self.group:
             return self.group
@@ -148,8 +153,7 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         ref_m = re.search(r"\[ref=([\w-]+)\]", attrs)
         while stack and stack[-1][0] >= indent:
             stack.pop()
-        parent_group = next((label for _i, label, ctl in reversed(stack)
-                             if ctl is None and label), "")
+        parent_group = next((label for _i, label, _ctl in reversed(stack) if label), "")
         owner = next((ctl for _i, _l, ctl in reversed(stack) if ctl is not None), None)
 
         if role in ("text", "paragraph", "heading", "strong", "emphasis", "generic") and (value or name):
@@ -162,12 +166,21 @@ def parse_snapshot(snapshot: str) -> list[Control]:
                     and not controls[-1].value and role == "text":
                 controls[-1].name = (value or name).strip()[:200]
         control = None
+        if role in ("radio", "checkbox", "switch") and not ref_m and owner is not None \
+                and owner.role in ("radiogroup", "group", "list", "listbox", "region"):
+            # R+L's yes/no radios carry no reference of their own -- only their
+            # group does -- so nothing could be clicked and the question came
+            # back to the owner. They are the group's choices.
+            owner.options.append(name or value)
+            if "[checked]" in attrs:
+                owner.selected_option = name or value
         if role in OPTION_ROLES and owner is not None and owner.role in ("combobox", "listbox"):
             owner.options.append(name or value)
             if "[selected]" in attrs:
                 owner.selected_option = name or value
         # Choices drawn by script have references of their own, and are clicked.
-        if ref_m and (role in ANSWER_ROLES or role in PRESS_ROLES or role in OPTION_ROLES):
+        if ref_m and (role in ANSWER_ROLES or role in PRESS_ROLES or role in OPTION_ROLES
+                      or role in ("radiogroup", "group", "list", "region")):
             if role == "radio" and not (controls and controls[-1].role == "radio"):
                 radio_context = last_text
             shown = value if value and not value.endswith(":") else ""
@@ -184,12 +197,9 @@ def parse_snapshot(snapshot: str) -> list[Control]:
                 disabled="[disabled]" in attrs, group=(parent_group or radio_context) if role == "radio" else "",
                 container=parent_group, context="" if name else last_text)
             controls.append(control)
-        if role in ("group", "radiogroup") and name:
-            stack.append((indent, name, None))
-        elif control is not None:
-            stack.append((indent, role, control))
-        else:
-            stack.append((indent, "", None))
+        # A named group is both a question for what is inside it and, when it
+        # has a reference, a control the agent can act on.
+        stack.append((indent, name if role in ("group", "radiogroup", "region") else "", control))
     return controls
 
 
@@ -1166,6 +1176,10 @@ class PageAgent:
     def do(self, page, answer: Answer, control: Control) -> bool:
         tab = self.tab(page)
         loc = self.locate(page, control.ref)
+        if control.holds_choices and answer.action in ("choose", "check", "fill"):
+            # The choices have no reference of their own: click the one that
+            # says what the answer says, inside the group.
+            return self._choose_inside(page, control, answer.value)
         if answer.action == "fill":
             loc.fill(answer.value, timeout=8_000)
             try:
@@ -1196,6 +1210,9 @@ class PageAgent:
                 if hasattr(self.assistant, "attached_resume"):
                     self.assistant.attached_resume = str(path)
             self.settle(page, 1_500)
+            return True
+        if answer.action == "choose" and control.role in ("textbox", "searchbox", "spinbutton"):
+            loc.fill(answer.value, timeout=8_000)     # a plain box, whatever the plan called it
             return True
         if answer.action == "choose" and control.role in ("radio", "checkbox", "switch"):
             group = [c for c in parse_snapshot(self.snapshot(page))
@@ -1307,6 +1324,39 @@ class PageAgent:
         if len(words) > 1:
             terms.append(words[0])
         return terms[:3]
+
+    def _choose_inside(self, page, control: Control, value: str) -> bool:
+        """Clicks the choice inside a group -- by what it says, since it has no
+        reference of its own."""
+        index = self.assistant._best_option(control.options, [value])
+        if index is None:
+            index = closest_choice(control.options, value)
+        if index is None:
+            logger.info("No choice matching %r for %r among %s", value, control.question[:50], control.options[:6])
+            return False
+        wanted = control.options[index]
+        inside = self.locate(page, control.ref)
+        exact = re.compile(rf"^\s*{re.escape(wanted)}\s*$", re.IGNORECASE)
+        for role in ("radio", "checkbox", "button", "option", "link"):
+            try:
+                choice = inside.get_by_role(role, name=exact)
+                if choice.count() and choice.first.is_visible():
+                    try:
+                        choice.first.check(timeout=4_000)
+                    except Exception:
+                        choice.first.click(timeout=4_000)
+                    logger.info("Chose %r inside %r", wanted[:40], control.question[:40])
+                    return True
+            except Exception:
+                continue
+        try:
+            fallback = inside.get_by_text(exact).first
+            if fallback.count():
+                fallback.click(timeout=4_000)
+                return True
+        except Exception:
+            pass
+        return False
 
     def _letter_file(self) -> Optional[Path]:
         if self._letter is None and self.cover_letter is not None:
