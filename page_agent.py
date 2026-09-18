@@ -1585,10 +1585,14 @@ class PageAgent:
             # A spinbutton keeps its own count: setting its text leaves the
             # widget on the value it had (Workday's year box stayed on 2012),
             # so the digits are typed in as a person types them.
-            loc.click(timeout=5_000)
-            tab.keyboard.press("Control+a")
-            tab.keyboard.type(answer.value, delay=60)
-            tab.keyboard.press("Tab")
+            # Not clicked: Workday's date boxes take keystrokes but refuse a
+            # click (it times out waiting for them to be clickable).
+            loc.fill("", timeout=5_000)
+            loc.press_sequentially(answer.value, delay=60, timeout=8_000)
+            try:
+                loc.press("Tab", timeout=2_000)
+            except Exception:
+                pass
             return True
         if answer.action == "fill":
             loc.fill(answer.value, timeout=8_000)

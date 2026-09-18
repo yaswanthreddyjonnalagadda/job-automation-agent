@@ -23,10 +23,11 @@
 2026-09-18 17:39:47,885 [INFO] session_planner: still waiting for the session (28 minutes)
 2026-09-18 17:41:47,938 [INFO] session_planner: still waiting for the session (30 minutes)
 2026-09-18 17:43:47,997 [INFO] session_planner: still waiting for the session (32 minutes)
-lication form (the application asks how to start; taking the resume autofill) -- 0 to answer, 0 for you, next: next step 'Autofill with Resume'
-2026-09-18 17:28:08,022 [INFO] page_agent: NEXT: pressing 'Autofill with Resume'
-2026-09-18 17:28:16,691 [INFO] page_agent: LOGIN: this site offers Google sign-in -- using it
-2026-09-18 17:28:16,717 [INFO] browser_automation: LOGIN: using the site's Google sign-in on theocc.wd5.myworkdayjobs.com
+2026-09-18 17:45:48,047 [INFO] session_planner: still waiting for the session (34 minutes)
+2026-09-18 17:47:48,101 [INFO] session_planner: still waiting for the session (36 minutes)
+2026-09-18 17:49:48,147 [INFO] session_planner: still waiting for the session (38 minutes)
+2026-09-18 17:51:48,202 [INFO] session_planner: still waiting for the session (40 minutes)
+ion: LOGIN: using the site's Google sign-in on theocc.wd5.myworkdayjobs.com
 2026-09-18 17:28:20,805 [INFO] browser_automation: LOGIN: picked jo***@gmail.com on Google's account chooser
 2026-09-18 17:28:27,964 [INFO] browser_automation: LOGIN_OK: signed in on theocc.wd5.myworkdayjobs.com with Google
 2026-09-18 17:28:28,042 [INFO] db: Recorded google account for The Options Clearing Corporation (jo***@gmail.com)
@@ -101,3 +102,28 @@ lication form (the application asks how to start; taking the resume autofill) --
 2026-09-18 17:39:16,329 [INFO] page_agent: ANSWERED: 'Year' -> '2025' (from resume)
 2026-09-18 17:39:17,223 [INFO] page_agent: NOT STUCK: Year = '2025' -- reading the page again
 2026-09-18 17:39:17,411 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:41:17,457 [INFO] session_planner: still waiting for the session (2 minutes)
+2026-09-18 17:43:17,497 [INFO] session_planner: still waiting for the session (4 minutes)
+2026-09-18 17:45:17,544 [INFO] session_planner: still waiting for the session (6 minutes)
+2026-09-18 17:45:25,557 [INFO] session_planner: THE SESSION ANSWERED after 368 seconds
+2026-09-18 17:45:25,568 [INFO] page_agent: READ: application form (My Experience -- pausing so the agent can pick up its new way of filling date boxes) -- 0 to answer, 1 for you, next: none ''
+2026-09-18 17:45:26,629 [INFO] db: Updated application 3862af10024e -> status=needs_user_review
+2026-09-18 17:45:26,630 [INFO] apply_flow: ==============================================================================
+2026-09-18 17:45:26,631 [INFO] apply_flow: NEEDS YOU -- Associate Principal, Cloud Engineering at The Options Clearing Corporation
+2026-09-18 17:45:26,631 [INFO] apply_flow:   needs your answer: From Year (the agent is being taught to type into a spinbutton)
+2026-09-18 17:45:26,632 [INFO] apply_flow:   worth checking: corrected 'First Name' from 'YASWANTH' to 'Yaswanth Reddy' (from your profile.first_name)
+2026-09-18 17:45:26,633 [INFO] apply_flow: Deal with it in the browser window, then press Continue on the dashboard: the agent reads the page again and carries on.
+2026-09-18 17:45:26,634 [INFO] apply_flow: ==============================================================================
+2026-09-18 17:45:26,683 [INFO] browser_automation: Waiting for review signal at C:\Users\jonna\job-automation-agent\data\_signal_The_Options_Clearing_Corporation_Associa.txt ...
+2026-09-18 17:45:26,707 [INFO] browser_automation: Received review signal: reload_code
+2026-09-18 17:45:26,862 [INFO] apply_flow: Reloaded the profile as well
+2026-09-18 17:45:26,897 [INFO] apply_flow: Reloaded browser_automation.py and the site adapters in place
+2026-09-18 17:45:26,910 [INFO] apply_flow: Reloaded the reading agent, your profile and the instructions
+2026-09-18 17:45:27,103 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:45:45,113 [INFO] session_planner: THE SESSION ANSWERED after 18 seconds
+2026-09-18 17:45:45,113 [INFO] page_agent: READ: application form (My Experience -- typing the right from-date into the current job) -- 2 to answer, 0 for you, next: none ''
+2026-09-18 17:45:50,166 [INFO] page_agent: Could not answer 'Month': Locator.click: Timeout 5000ms exceeded.
+2026-09-18 17:45:50,167 [INFO] page_agent: LEFT BLANK: Month: could not choose '02' -- this form doesn't offer it
+2026-09-18 17:45:55,190 [INFO] page_agent: Could not answer 'Year': Locator.click: Timeout 5000ms exceeded.
+2026-09-18 17:45:55,190 [INFO] page_agent: LEFT BLANK: Year: could not choose '2025' -- this form doesn't offer it
+2026-09-18 17:45:59,361 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
