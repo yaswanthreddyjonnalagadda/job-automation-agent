@@ -45,6 +45,7 @@ logger = logging.getLogger("page_agent")
 
 MAX_PAGES = 30          # steps in one run before handing over
 MAX_TRIES_PER_PAGE = 3  # reads of the same page that failed to move it on
+MAX_READS_PER_PAGE = 15  # reads of one page's questions -- enough to add several entries to it
 
 # Roles that take an answer or move the application on.
 ANSWER_ROLES = {"textbox", "searchbox", "combobox", "listbox", "radio", "checkbox", "switch", "spinbutton", "slider"}
@@ -421,10 +422,21 @@ def closest_choice(choices: list[str], wanted: str) -> Optional[int]:
     return best if best_score >= 0.6 else None
 
 
+_PROSE = re.compile(r"^\s*- (paragraph|heading|text|strong|emphasis)\b")
+_COMPLAINT = re.compile(r"required|issue|error|invalid|must be|cannot|please (enter|select|provide)", re.IGNORECASE)
+
+
+def _shorten(line: str) -> str:
+    """Prose is cut short, a control -- or a complaint about one -- is not."""
+    if _PROSE.match(line) and not _COMPLAINT.search(line):
+        return line[:200]
+    return line[:400]
+
+
 def compact_snapshot(snapshot: str, limit: int = 60_000) -> str:
     """The snapshot without its empty containers and link addresses, which
     carry no meaning for answering a form and cost most of the space."""
-    kept = [line[:400] for line in (snapshot or "").splitlines()
+    kept = [_shorten(line) for line in (snapshot or "").splitlines()
             if not re.match(r"^\s*- generic( \[active\])? \[ref=[\w-]+\]:?$", line)
             and not re.match(r"^\s*- /url:", line)]
     text = "\n".join(kept)
@@ -523,6 +535,7 @@ class PageAgent:
         self._opened_entries: set[str] = set()
         self._woken: set[str] = set()
         self._list_retries = 0
+        self._shapes: dict[int, int] = {}
         self._asked_for_new_code = False
         self._signed_in_at: set[str] = set()
         self._google_tried: set[str] = set()
@@ -553,7 +566,7 @@ class PageAgent:
         anything added since starts empty rather than failing."""
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
-                              ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set), ("_list_retries", int),
+                              ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set), ("_list_retries", int), ("_shapes", dict),
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict)):
             if not hasattr(self, name):
                 setattr(self, name, default())
@@ -904,6 +917,11 @@ class PageAgent:
 
             controls = parse_snapshot(snapshot)
             self._save(snapshot)
+            shape = tuple(sorted({c.question for c in controls if c.question}))
+            self._shapes[hash(shape)] = self._shapes.get(hash(shape), 0) + 1
+            if self._shapes[hash(shape)] > MAX_READS_PER_PAGE:
+                return Outcome("owner_needed", page, ["this page keeps asking the same things and is not "
+                                                      "moving on -- the rest of it needs you"])
             if self.sign_in_step(page, controls):
                 self.settle(page)
                 continue
