@@ -114,6 +114,10 @@ class Control:
         if self.role in ("radio", "checkbox", "switch"):
             return "checked" if self.checked else ""
         shown = (self.selected_option or self.value or "").strip()
+        # An icon drawn from a symbol font is not an answer: R+L's ZIP box
+        # showed one and the agent would not touch the field.
+        if shown and not re.search(r"[0-9A-Za-z]", shown):
+            return ""
         # A box that shows its own label is showing a placeholder, not an
         # answer: R+L's date lists read as answered "Month", "Day", "Year".
         if shown and shown.lower() in (self.name.strip().lower(), self.group.strip().lower()):
@@ -490,6 +494,7 @@ class PageAgent:
         self._code_tries = 0
         self._last_code = ""
         self._pressed: dict[str, int] = {}
+        self._opened_entries: set[str] = set()
         self._asked_for_new_code = False
         self._signed_in_at: set[str] = set()
         self._google_tried: set[str] = set()
@@ -519,7 +524,7 @@ class PageAgent:
         anything added since starts empty rather than failing."""
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
-                              ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict),
+                              ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set),
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict)):
             if not hasattr(self, name):
                 setattr(self, name, default())
@@ -639,6 +644,36 @@ class PageAgent:
     HUMAN_CHECK = re.compile(
         r"confirm (that )?(you'?re|you are) (a )?human|prove (that )?you('re| are) (a )?human|"
         r"not a robot|human verification|verify (that )?you are (a )?human", re.IGNORECASE)
+
+    def open_entry_for_missing_field(self, page, snapshot: str, controls: list[Control]) -> bool:
+        """Opens a collapsed entry the page is complaining about.
+
+        R+L lists each job and each qualification as a closed card and then
+        says "The Reason for Leaving field is required" -- the box is inside
+        the card, and there is nothing on the page to fill until it is opened.
+        """
+        errors = " ".join(re.findall(r"- alert[^:\n]*: (.+)", snapshot))
+        wanted = re.findall(r"The ([A-Za-z/ ]{3,40}?) field is required", errors)
+        if not wanted:
+            return False
+        missing = [w for w in dict.fromkeys(wanted)
+                   if not any(_same_question(c.question, w) for c in controls)]
+        if not missing:
+            return False
+        cards = [c for c in controls
+                 if c.role in ("group", "region", "listitem") and not c.options and not c.name
+                 and c.ref not in self._opened_entries]
+        if not cards or len(self._opened_entries) >= 8:
+            return False
+        card = cards[0]
+        self._opened_entries.add(card.ref)
+        logger.info("The page wants %s, which is inside a closed entry -- opening it", ", ".join(missing[:2]))
+        try:
+            self.locate(page, card.ref).click(timeout=6_000)
+            return True
+        except Exception as exc:
+            logger.debug("Could not open the entry: %s", str(exc).splitlines()[0][:100])
+            return False
 
     def _code_boxes(self, page) -> list[Control]:
         """The code boxes the page is showing now."""
@@ -805,6 +840,9 @@ class PageAgent:
                 continue
             if self.complete_account_code(page, controls, snapshot):
                 self.settle(page)
+                continue
+            if self.open_entry_for_missing_field(page, snapshot, controls):
+                self.settle(page, 1_500)
                 continue
             try:
                 plan = PagePlan.from_json(self.claude.plan_page(compact_snapshot(snapshot), self.facts(controls),
@@ -1083,7 +1121,14 @@ class PageAgent:
         except Exception:
             pass
         if action in ("fill", "choose") and not answer.value.strip():
-            return "no answer to give"
+            # Emptying a box is an answer when the profile says the thing does
+            # not exist: the owner has no middle name, and the site's import
+            # had put one there.
+            field_name = answer.source.split(".", 1)[1] if answer.source.startswith("profile.") else ""
+            deliberate = bool(field_name) and hasattr(self.profile, field_name) \
+                and not str(getattr(self.profile, field_name) or "").strip()
+            if not deliberate:
+                return "no answer to give"
         if safety.is_legal_status_question(question) or safety._SPONSORSHIP_Q.search(question) \
                 or safety._AUTHORIZED_Q.search(question):
             field_name = answer.source.split(".", 1)[1] if answer.source.startswith("profile.") else ""
@@ -1129,6 +1174,11 @@ class PageAgent:
                 continue
             wanted = str(getattr(self.profile, field, "") or "").strip()
             shown = control.answer.strip()
+            if field == "middle_name" and not wanted and shown:
+                # The owner has no middle name; the site's import put "Reddy"
+                # there, which is part of their first name.
+                fixes.append((control.question, "", "profile.middle_name", True))
+                continue
             if wanted and shown.lower() != wanted.lower():
                 # Exactly: "Yaswanth" is not "Yaswanth Reddy", though one
                 # begins the other.
@@ -1163,7 +1213,7 @@ class PageAgent:
             if was and (_plain(was) == _plain(value) if exact else _same_answer(was, value)):
                 continue
             action = ("check" if control.role in ("radio", "checkbox", "switch")
-                      else "choose" if control.role in ("combobox", "listbox") else "fill")
+                      else "choose" if control.role in ("combobox", "listbox") and value else "fill")
             answer = Answer(control.ref, control.question, action, value, source)
             refusal = self.refusal(page, answer, control, controls, correcting=True)
             if refusal:
@@ -1212,6 +1262,9 @@ class PageAgent:
         except Exception:
             return
         for question, value in now.items():
+            if any(w and (_plain(w) in _plain(value) or _plain(value) in _plain(w))
+                   for w in self.written.values()):
+                continue   # the site tidied up what the agent wrote ("22030" -> "22030, Fairfax, VA")
             if question in self._paused_state and value != self._paused_state[question]:
                 self.owner_answers[question] = value
                 logger.info("YOURS: %r is now %r -- the agent leaves it as you set it", question[:60], value[:40])
