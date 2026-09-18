@@ -84,6 +84,10 @@ class UserProfile:
     security_clearance: str = "None"
     felony_conviction: str = "No"
     previously_employed_here: str = "No"  # default; verify if the user has history with an employer
+    # The owner's answers (2026-09-18), asked once so no form has to ask again.
+    applied_here_before: str = "No"
+    relatives_employed_here: str = "No"
+    willing_drug_test_and_physical: str = "Yes"
     veteran_status: str = "I am not a veteran"
     disability_status: str = "No, I do not have a disability"
     ethnicity: str = "Asian"

@@ -750,3 +750,16 @@ def test_a_box_a_plan_calls_a_choice_is_still_filled(page, resume_file):
     box = next(c for c in controls if c.role == "textbox")
     assert agent.do(page, page_agent.Answer(box.ref, "ZIP Code", "choose", "22031", "profile.postal_code"), box)
     assert page.locator("#z").input_value() == "22031"
+
+
+def test_an_add_button_is_not_pressed_over_and_over(page, resume_file):
+    """R+L's "Add Experience" was pressed again and again, leaving empty
+    entries behind, because the dates could not be filled in."""
+    page.set_content('<h1>Work history</h1><button onclick="document.body.dataset.n = '
+                     '(+(document.body.dataset.n || 0) + 1)">Add Experience</button>')
+    planner = SimpleNamespace(plan_page=lambda s, f, fb="": {
+        "page_kind": "application_form", "answers": [],
+        "next": {"ref": ref_of(s, "button", "Add Experience"), "label": "Add Experience", "kind": "next_step"}})
+    outcome = make_agent(planner, resume_file).run(page)
+    assert outcome.kind == "owner_needed" and "pressed" in outcome.summary
+    assert int(page.evaluate("document.body.dataset.n")) <= 2

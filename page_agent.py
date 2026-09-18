@@ -113,8 +113,14 @@ class Control:
         """What the control shows as answered, "" when nothing is."""
         if self.role in ("radio", "checkbox", "switch"):
             return "checked" if self.checked else ""
-        shown = self.selected_option or self.value
-        return "" if PLACEHOLDER.match(shown or "") else shown.strip()
+        shown = (self.selected_option or self.value or "").strip()
+        # A box that shows its own label is showing a placeholder, not an
+        # answer: R+L's date lists read as answered "Month", "Day", "Year".
+        if shown and shown.lower() in (self.name.strip().lower(), self.group.strip().lower()):
+            return ""
+        if re.fullmatch(r"mm|dd|yy(yy)?|mm/dd/yyyy|month|day|year", shown, re.IGNORECASE):
+            return ""
+        return "" if PLACEHOLDER.match(shown) else shown
 
 
 _LINE = re.compile(r'^(?P<indent>\s*)- (?P<role>[\w/-]+)(?: "(?P<name>(?:[^"\\]|\\.)*)")?(?P<attrs>(?: \[[^\]]*\])*)'
@@ -257,9 +263,29 @@ def _same_question(a: str, b: str) -> bool:
     return a == b or (min(len(a), len(b)) >= 25 and (a.startswith(b[:60]) or b.startswith(a[:60])))
 
 
+# What a form writes instead of the state's name.
+_STATE_CODES = {
+    "alabama": "al", "alaska": "ak", "arizona": "az", "arkansas": "ar", "california": "ca", "colorado": "co",
+    "connecticut": "ct", "delaware": "de", "florida": "fl", "georgia": "ga", "hawaii": "hi", "idaho": "id",
+    "illinois": "il", "indiana": "in", "iowa": "ia", "kansas": "ks", "kentucky": "ky", "louisiana": "la",
+    "maine": "me", "maryland": "md", "massachusetts": "ma", "michigan": "mi", "minnesota": "mn",
+    "mississippi": "ms", "missouri": "mo", "montana": "mt", "nebraska": "ne", "nevada": "nv",
+    "new hampshire": "nh", "new jersey": "nj", "new mexico": "nm", "new york": "ny", "north carolina": "nc",
+    "north dakota": "nd", "ohio": "oh", "oklahoma": "ok", "oregon": "or", "pennsylvania": "pa",
+    "rhode island": "ri", "south carolina": "sc", "south dakota": "sd", "tennessee": "tn", "texas": "tx",
+    "utah": "ut", "vermont": "vt", "virginia": "va", "washington": "wa", "west virginia": "wv",
+    "wisconsin": "wi", "wyoming": "wy", "district of columbia": "dc",
+}
+
+
 def _same_answer(a: str, b: str) -> bool:
     a, b = _plain(a), _plain(b)
-    return bool(a) and bool(b) and (a == b or a.startswith(b + " ") or b.startswith(a + " "))
+    if not a or not b:
+        return False
+    # "VA" is "Virginia": the form had it right and the agent reported it as wrong.
+    if _STATE_CODES.get(a) == b or _STATE_CODES.get(b) == a:
+        return True
+    return a == b or a.startswith(b + " ") or b.startswith(a + " ")
 
 
 def frames_loading(snapshot: str) -> bool:
@@ -441,6 +467,7 @@ class PageAgent:
         self._letter_attached = False
         self._code_tries = 0
         self._last_code = ""
+        self._pressed: dict[str, int] = {}
         self._asked_for_new_code = False
         self._signed_in_at: set[str] = set()
         self._google_tried: set[str] = set()
@@ -470,7 +497,7 @@ class PageAgent:
         anything added since starts empty rather than failing."""
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
-                              ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool),
+                              ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict),
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict)):
             if not hasattr(self, name):
                 setattr(self, name, default())
@@ -815,7 +842,9 @@ class PageAgent:
                     logger.info("NOT STUCK: %s -- reading the page again", "; ".join(missing)[:200])
                     continue
                 return Outcome("owner_needed", page, [f"could not set: {m}" for m in missing])
-            blockers = self.blockers(page, plan, after)
+            # Only the last step must be complete before the agent presses on.
+            about_to_send = plan.next_kind in ("final_submit", "none") or safety.is_submit_label(plan.next_label)
+            blockers = self.blockers(page, plan, after, about_to_send=about_to_send)
             if blockers:
                 return Outcome("owner_needed", page, blockers)
 
@@ -1001,7 +1030,7 @@ class PageAgent:
             else:
                 shown = now.answer.strip().lower()
                 digits = re.sub(r"\D", "", want)
-                ok = bool(shown) and (want in shown or shown in want
+                ok = bool(shown) and (want in shown or shown in want or _same_answer(shown, want)
                                       or (len(digits) >= 7 and digits[-10:] in re.sub(r"\D", "", shown)))
             if not ok:
                 missing.append(f"{before.question[:60]} = {answer.value[:40]!r}")
@@ -1376,7 +1405,12 @@ class PageAgent:
             logger.debug("Could not record the answer: %s", exc)
 
     # -- what stops the run -----------------------------------------------------------
-    def blockers(self, page, plan: PagePlan, controls: list[Control]) -> list[str]:
+    def blockers(self, page, plan: PagePlan, controls: list[Control], about_to_send: bool = True) -> list[str]:
+        """What must stop the run. Before a submit that includes a required
+        question nobody has answered; mid-form it does not -- R+L asks "have
+        you added 3 consecutive years of work history?", which can only be
+        answered once the agent has pressed Add Experience and filled it in.
+        """
         reasons: list[str] = []
         if safety.captcha_visible(page):
             reasons.append("a CAPTCHA is showing -- only you can complete it")
@@ -1390,7 +1424,13 @@ class PageAgent:
             said = str(mismatch.get("on_page") or "")[:60]
             if any(_same_question(question, q) for q in self.corrected):
                 continue   # already put right from the profile, and checked since
-            if safety.is_legal_status_question(question) or safety._SPONSORSHIP_Q.search(question)                     or safety._AUTHORIZED_Q.search(question):
+            legal = (safety.is_legal_status_question(question) or safety._SPONSORSHIP_Q.search(question)
+                     or safety._AUTHORIZED_Q.search(question))
+            # Claude read R+L's "legally eligible ... on an ongoing indefinite
+            # basis?" as a mismatch although the page says Yes, which is what
+            # the profile says. The agent's own check decides.
+            on_page = next((f for f in answered_fields(controls) if _same_question(f["label"], question)), None)
+            if legal and (not on_page or safety.legal_answer_conflicts([on_page], self.profile)):
                 reason = f"doesn't match your profile: {question[:90]} -- the page says {said!r}"
                 if not any(question[:60] in r for r in reasons):
                     reasons.append(reason)
@@ -1403,7 +1443,12 @@ class PageAgent:
             required = bool(item.get("required")) or "*" in question
             still_blank = not any(c.question == question and c.answer for c in controls)
             if required and still_blank:
-                reasons.append(f"needs your answer: {question[:90]} ({item.get('reason', '')})")
+                note = f"needs your answer: {question[:90]} ({item.get('reason', '')})"
+                if about_to_send:
+                    reasons.append(note)
+                elif note not in self.notes:
+                    self.notes.append(note)
+                    logger.info("LEFT FOR YOU (for now): %s", note[:140])
         try:
             pending = self.assistant.pending_attestations(self.tab(page))
         except Exception:
@@ -1440,6 +1485,13 @@ class PageAgent:
             label = " ".join((control.name or "").split())
         if NEVER_PRESS.search(label):
             return "stop", page, f"the way forward looked like {label!r}, which the agent never presses"
+        # "Add Experience" was pressed again and again, leaving empty entries
+        # behind, because the entry could not be filled in.
+        pressed = self._pressed.get(label.lower(), 0)
+        if re.match(r"^\s*add\b", label, re.IGNORECASE) and pressed >= 2:
+            return "stop", page, (f"{label!r} has been pressed {pressed} times and the entries are still not "
+                                  f"filled in -- the rest of this section needs you")
+        self._pressed[label.lower()] = pressed + 1
         if re.search(r"linked ?in|indeed|facebook|apple|microsoft", label, re.IGNORECASE):
             return "stop", page, f"{label!r} is a sign-in the agent never uses"
         if plan.next_kind == "consent" or re.search(r"(i )?(agree|accept|acknowledge|consent)", label, re.IGNORECASE):
