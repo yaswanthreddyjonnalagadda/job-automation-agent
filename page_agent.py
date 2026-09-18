@@ -1585,15 +1585,11 @@ class PageAgent:
             # A spinbutton keeps its own count: setting its text leaves the
             # widget on the value it had (Workday's year box stayed on 2012),
             # so the digits are typed in as a person types them.
-            # Not clicked: Workday's date boxes take keystrokes but refuse a
-            # click (it times out waiting for them to be clickable).
-            loc.fill("", timeout=5_000)
-            loc.press_sequentially(answer.value, delay=60, timeout=8_000)
-            try:
-                loc.press("Tab", timeout=2_000)
-            except Exception:
-                pass
-            return True
+            # Workday's date boxes take keystrokes but refuse a click, and a
+            # value set into them does not stay: the month came out as 2
+            # whatever was typed. Each way is tried until the box really holds
+            # what was asked for.
+            return self.put_in_a_spinbutton(page, loc, answer.value)
         if answer.action == "fill":
             loc.fill(answer.value, timeout=8_000)
             try:
@@ -1736,6 +1732,39 @@ class PageAgent:
         self.locate(page, offered[index][0]).click(timeout=5_000)
         tab.wait_for_timeout(500)
         return True
+
+    def put_in_a_spinbutton(self, page, loc, value: str) -> bool:
+        """Get a value into a box that keeps its own count, and check it took."""
+        tab = self.tab(page)
+
+        def holds_it() -> bool:
+            try:
+                return (loc.input_value(timeout=2_000) or "").strip().lstrip("0") == value.strip().lstrip("0")
+            except Exception:
+                return False
+
+        def by_setting():
+            loc.fill(value, timeout=5_000)
+
+        def by_typing():
+            loc.focus(timeout=3_000)
+            tab.keyboard.press("Control+a")
+            tab.keyboard.type(value, delay=80)
+
+        def by_clearing_then_typing():
+            loc.fill("", timeout=3_000)
+            loc.press_sequentially(value, delay=80, timeout=6_000)
+
+        for attempt in (by_setting, by_typing, by_clearing_then_typing):
+            try:
+                attempt()
+                tab.wait_for_timeout(300)
+            except Exception as exc:
+                logger.debug("%s did not work: %s", attempt.__name__, str(exc).splitlines()[0][:70])
+                continue
+            if holds_it():
+                return True
+        return holds_it()
 
     def type_and_commit(self, page, control: Control, value: str) -> bool:
         """Type the answer into a list box and take its first suggestion.

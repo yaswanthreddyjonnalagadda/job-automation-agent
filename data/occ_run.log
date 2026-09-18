@@ -27,10 +27,11 @@
 2026-09-18 17:47:48,101 [INFO] session_planner: still waiting for the session (36 minutes)
 2026-09-18 17:49:48,147 [INFO] session_planner: still waiting for the session (38 minutes)
 2026-09-18 17:51:48,202 [INFO] session_planner: still waiting for the session (40 minutes)
-ion: LOGIN: using the site's Google sign-in on theocc.wd5.myworkdayjobs.com
-2026-09-18 17:28:20,805 [INFO] browser_automation: LOGIN: picked jo***@gmail.com on Google's account chooser
-2026-09-18 17:28:27,964 [INFO] browser_automation: LOGIN_OK: signed in on theocc.wd5.myworkdayjobs.com with Google
-2026-09-18 17:28:28,042 [INFO] db: Recorded google account for The Options Clearing Corporation (jo***@gmail.com)
+2026-09-18 17:53:48,255 [INFO] session_planner: still waiting for the session (42 minutes)
+2026-09-18 17:55:48,296 [INFO] session_planner: still waiting for the session (44 minutes)
+2026-09-18 17:57:48,341 [INFO] session_planner: still waiting for the session (46 minutes)
+2026-09-18 17:59:48,391 [INFO] session_planner: still waiting for the session (48 minutes)
+e Options Clearing Corporation (jo***@gmail.com)
 2026-09-18 17:28:28,042 [INFO] page_agent: LOGIN: signed in with Google
 2026-09-18 17:28:29,810 [INFO] page_agent: KNEW THE WHOLE PAGE: 0 filled in, pressing 'Continue' -- nobody was asked
 2026-09-18 17:28:29,811 [INFO] page_agent: READ: application form (answered from what the agent already knew) -- 0 to answer, 0 for you, next: next step 'Continue'
@@ -127,3 +128,68 @@ ion: LOGIN: using the site's Google sign-in on theocc.wd5.myworkdayjobs.com
 2026-09-18 17:45:55,190 [INFO] page_agent: Could not answer 'Year': Locator.click: Timeout 5000ms exceeded.
 2026-09-18 17:45:55,190 [INFO] page_agent: LEFT BLANK: Year: could not choose '2025' -- this form doesn't offer it
 2026-09-18 17:45:59,361 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:47:59,409 [INFO] session_planner: still waiting for the session (2 minutes)
+2026-09-18 17:49:59,462 [INFO] session_planner: still waiting for the session (4 minutes)
+2026-09-18 17:51:59,515 [INFO] session_planner: still waiting for the session (6 minutes)
+2026-09-18 17:52:01,520 [INFO] session_planner: THE SESSION ANSWERED after 362 seconds
+2026-09-18 17:52:01,522 [INFO] page_agent: READ: application form (My Experience -- pausing for the agent to pick up the new way of typing dates) -- 0 to answer, 1 for you, next: none ''
+2026-09-18 17:52:02,543 [INFO] db: Updated application 3862af10024e -> status=needs_user_review
+2026-09-18 17:52:02,543 [INFO] apply_flow: ==============================================================================
+2026-09-18 17:52:02,544 [INFO] apply_flow: NEEDS YOU -- Associate Principal, Cloud Engineering at The Options Clearing Corporation
+2026-09-18 17:52:02,544 [INFO] apply_flow:   needs your answer: From Year (the agent is being taught to type into a date box without clicking it)
+2026-09-18 17:52:02,545 [INFO] apply_flow:   worth checking: corrected 'First Name' from 'YASWANTH' to 'Yaswanth Reddy' (from your profile.first_name)
+2026-09-18 17:52:02,545 [INFO] apply_flow:   worth checking: Month: could not choose '02' -- this form doesn't offer it
+2026-09-18 17:52:02,546 [INFO] apply_flow:   worth checking: Year: could not choose '2025' -- this form doesn't offer it
+2026-09-18 17:52:02,547 [INFO] apply_flow: Deal with it in the browser window, then press Continue on the dashboard: the agent reads the page again and carries on.
+2026-09-18 17:52:02,547 [INFO] apply_flow: ==============================================================================
+2026-09-18 17:52:02,572 [INFO] browser_automation: Waiting for review signal at C:\Users\jonna\job-automation-agent\data\_signal_The_Options_Clearing_Corporation_Associa.txt ...
+2026-09-18 17:52:02,588 [INFO] browser_automation: Received review signal: reload_code
+2026-09-18 17:52:02,757 [INFO] apply_flow: Reloaded the profile as well
+2026-09-18 17:52:02,799 [INFO] apply_flow: Reloaded browser_automation.py and the site adapters in place
+2026-09-18 17:52:02,809 [INFO] apply_flow: Reloaded the reading agent, your profile and the instructions
+2026-09-18 17:52:02,980 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:52:16,998 [INFO] session_planner: THE SESSION ANSWERED after 14 seconds
+2026-09-18 17:52:17,001 [INFO] page_agent: READ: application form (My Experience -- typing the from-date of the current job) -- 2 to answer, 0 for you, next: none ''
+2026-09-18 17:52:17,316 [INFO] page_agent: ANSWERED: 'Month' -> '02' (from resume)
+2026-09-18 17:52:17,779 [INFO] page_agent: ANSWERED: 'Year' -> '2025' (from resume)
+2026-09-18 17:52:21,924 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:52:41,934 [INFO] session_planner: THE SESSION ANSWERED after 20 seconds
+2026-09-18 17:52:41,936 [INFO] page_agent: READ: application form (My Experience -- adding the second job) -- 0 to answer, 0 for you, next: next step 'Add Another'
+2026-09-18 17:52:42,860 [INFO] page_agent: NEXT: pressing 'Add Another'
+2026-09-18 17:52:45,804 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:53:05,818 [INFO] session_planner: THE SESSION ANSWERED after 20 seconds
+2026-09-18 17:53:05,820 [INFO] page_agent: READ: application form (My Experience -- the second entry has not opened yet; pressing Add Another again) -- 0 to answer, 0 for you, next: next step 'Add Another'
+2026-09-18 17:53:06,754 [INFO] page_agent: NEXT: pressing 'Add Another'
+2026-09-18 17:53:10,089 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:53:32,098 [INFO] session_planner: THE SESSION ANSWERED after 22 seconds
+2026-09-18 17:53:32,099 [INFO] page_agent: READ: application form (My Experience -- Freddie Mac, from the resume) -- 8 to answer, 0 for you, next: none ''
+2026-09-18 17:53:32,137 [INFO] page_agent: ANSWERED: 'Job Title' -> 'Network Engineer' (from resume)
+2026-09-18 17:53:32,181 [INFO] page_agent: ANSWERED: 'Company' -> 'Freddie Mac' (from resume)
+2026-09-18 17:53:32,224 [INFO] page_agent: ANSWERED: 'Location' -> 'McLean, VA' (from resume)
+2026-09-18 17:53:32,436 [INFO] page_agent: ANSWERED: 'Month' -> '02' (from resume)
+2026-09-18 17:53:32,822 [INFO] page_agent: ANSWERED: 'Year' -> '2023' (from resume)
+2026-09-18 17:53:33,060 [INFO] page_agent: ANSWERED: 'Month' -> '01' (from resume)
+2026-09-18 17:53:33,440 [INFO] page_agent: ANSWERED: 'Year' -> '2025' (from resume)
+2026-09-18 17:53:33,524 [INFO] page_agent: ANSWERED: 'Role Description' -> 'Led a Cisco SD-WAN (Viptela) migration across 25 b' (from resume)
+2026-09-18 17:53:34,383 [INFO] page_agent: NOT STUCK: Job Title = 'Network Engineer'; Company = 'Freddie Mac'; Month = '01' -- reading the page again
+2026-09-18 17:53:34,649 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:53:48,660 [INFO] session_planner: THE SESSION ANSWERED after 14 seconds
+2026-09-18 17:53:48,662 [INFO] page_agent: READ: application form (My Experience -- Freddie Mac ended in January 2025, not February) -- 1 to answer, 0 for you, next: none ''
+2026-09-18 17:53:48,806 [INFO] page_agent: ANSWERED: 'Month' -> '1' (from resume)
+2026-09-18 17:53:53,058 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:54:05,067 [INFO] session_planner: THE SESSION ANSWERED after 12 seconds
+2026-09-18 17:54:05,070 [INFO] page_agent: READ: application form (My Experience -- adding the third job) -- 0 to answer, 0 for you, next: next step 'Add Another'
+2026-09-18 17:54:06,000 [INFO] page_agent: NEXT: pressing 'Add Another'
+2026-09-18 17:54:09,390 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:54:25,398 [INFO] session_planner: THE SESSION ANSWERED after 16 seconds
+2026-09-18 17:54:25,399 [INFO] page_agent: READ: application form (My Experience -- Capri Global, from the resume) -- 8 to answer, 0 for you, next: none ''
+2026-09-18 17:54:25,432 [INFO] page_agent: ANSWERED: 'Job Title' -> 'Network Engineer' (from resume)
+2026-09-18 17:54:25,498 [INFO] page_agent: ANSWERED: 'Company' -> 'Capri Global Capital Ltd.' (from resume)
+2026-09-18 17:54:25,545 [INFO] page_agent: ANSWERED: 'Location' -> 'Hyderabad, India' (from resume)
+2026-09-18 17:54:25,698 [INFO] page_agent: ANSWERED: 'Month' -> '5' (from resume)
+2026-09-18 17:54:26,059 [INFO] page_agent: ANSWERED: 'Year' -> '2019' (from resume)
+2026-09-18 17:54:26,208 [INFO] page_agent: ANSWERED: 'Month' -> '7' (from resume)
+2026-09-18 17:54:26,574 [INFO] page_agent: ANSWERED: 'Year' -> '2021' (from resume)
+2026-09-18 17:54:26,653 [INFO] page_agent: ANSWERED: 'Role Description' -> 'Scaled enterprise LAN and WAN for 2,000 users acro' (from resume)
+2026-09-18 17:54:27,592 [INFO] page_agent: NOT STUCK: Job Title = 'Network Engineer'; Company = 'Capri Global Capital Ltd.'; Location = 'Hyderabad, India'; Month = '5'; Month = '7' -- reading the page again
+2026-09-18 17:54:28,003 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
