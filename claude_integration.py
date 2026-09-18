@@ -360,7 +360,9 @@ Respond with ONLY JSON:
 
 Rules -- follow every one:
 1. Answer ONLY from FACTS: the profile, the resume text, the owner's earlier answers, the job. Never invent,
-   never guess. If FACTS don't answer a question, put it in leave_for_owner (required = whether the page
+   never guess. The profile comes first: where it has a field for something (name, address, city, postal code,
+   phone, email, work authorization...), use the profile, never an earlier answer -- those can be old.
+   owner_earlier_answers are for questions the profile does not cover. If FACTS don't answer a question, put it in leave_for_owner (required = whether the page
    marks it required, e.g. with *).
 2. Questions about immigration, visas, sponsorship, work authorization, citizenship, criminal history,
    non-compete or other legal status: answer ONLY when a profile field states it, and give that exact field

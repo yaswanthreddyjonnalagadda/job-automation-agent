@@ -230,6 +230,16 @@ def host_of(url: str) -> str:
     return urlparse(url or "").netloc
 
 
+# The owner's own details, and the profile field each box takes. An old
+# address remembered from another employer's pre-filled form was being written
+# into new applications; the profile is what the owner keeps up to date.
+_DETAIL_FIELDS = (
+    (re.compile(r"^\W*(street |home |mailing )?address(\s*(line\s*)?1)?\W*$", re.IGNORECASE), "address_line1"),
+    (re.compile(r"^\W*(city|town)\b", re.IGNORECASE), "city"),
+    (re.compile(r"^\W*(zip|postal)\s*(code)?\b", re.IGNORECASE), "postal_code"),
+    (re.compile(r"^\W*e-?mail\b", re.IGNORECASE), "email"),
+)
+
 # The name boxes a form asks for, and the profile field each one takes.
 _NAME_FIELDS = (
     (re.compile(r"^\W*(legal\s+|given\s+)?first\s*(name)?\b", re.IGNORECASE), "first_name"),
@@ -237,6 +247,18 @@ _NAME_FIELDS = (
     (re.compile(r"^\W*(legal\s+)?middle\s*(name|initial)?\b", re.IGNORECASE), "middle_name"),
     (re.compile(r"^\W*(full|legal)\s*(legal\s*)?name\b", re.IGNORECASE), "full_name"),
 )
+
+
+def _detail_field(question: str) -> str:
+    """Which of the owner's own details a box is asking for, or ""."""
+    question = " ".join((question or "").split())
+    if not question or re.search(r"employer|company|school|university|reference|referr|emergency|previous|"
+                                 r"supervisor|manager|work address", question, re.IGNORECASE):
+        return ""
+    for pattern, field in _DETAIL_FIELDS:
+        if pattern.search(question):
+            return field
+    return ""
 
 
 def _name_field(question: str) -> str:
@@ -1102,7 +1124,7 @@ class PageAgent:
         for control in controls:
             if control.role not in ("textbox", "searchbox") or control.disabled:
                 continue
-            field = _name_field(control.question)
+            field = _name_field(control.question) or _detail_field(control.question)
             if not field:
                 continue
             wanted = str(getattr(self.profile, field, "") or "").strip()
