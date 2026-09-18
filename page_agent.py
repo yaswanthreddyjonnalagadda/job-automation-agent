@@ -359,12 +359,18 @@ def frames_loading(snapshot: str) -> bool:
     return False
 
 
-def choices_in(snapshot: str) -> list[tuple[str, str]]:
+def choices_in(snapshot: str, under: str = "", any_list: bool = False) -> list[tuple[str, str]]:
     """(reference, text) for every choice a list is showing.
 
     Some lists (Greenhouse's) give their options no name of their own and put
     the words in a child element, so the agent read them as empty and could
     choose nothing -- School, Discipline and Veteran Status were all left blank.
+
+    `under` is the question being answered. R+L draws its dropdowns as a plain
+    list, which is otherwise ignored here so that a job description's bullets
+    are never mistaken for choices; a list named after the question at hand is
+    that question's choices, and "Employer State or Province" could not be
+    answered at all until it counted.
     """
     lines = (snapshot or "").splitlines()
     found: list[tuple[str, str]] = []
@@ -377,6 +383,14 @@ def choices_in(snapshot: str) -> list[tuple[str, str]]:
         while holders and holders[-1][0] >= indent_here:
             holders.pop()
         if m.group("role") in ("listbox", "menu", "grid", "tree", "combobox", "dialog"):
+            holders.append((indent_here, m.group("role")))
+        elif under and m.group("role") in ("list", "group", "region") \
+                and _same_question(_unquote(m.group("name") or ""), under):
+            holders.append((indent_here, m.group("role")))
+        elif any_list and m.group("role") == "list":
+            # R+L's dropdown is an unnamed list that appears when the widget is
+            # opened. Only what was NOT on the page a moment ago counts, so a
+            # job description's bullets are still never read as choices.
             holders.append((indent_here, m.group("role")))
         if m.group("role") not in OPTION_ROLES:
             continue
@@ -1481,8 +1495,15 @@ class PageAgent:
                                control.question)), None)
         if opener is not None:
             try:
+                showing = {ref for ref, _t in choices_in(self.snapshot(page), under=control.question,
+                                                         any_list=True)}
                 self.locate(page, opener.ref).click(timeout=4_000)
-                offered = self._wait_for_choices(page)
+                # A list the site fetches when it opens (R+L's states, once the
+                # country is set) takes its time; four seconds was not enough
+                # and the answer was typed into the box instead, which the form
+                # then refused as empty.
+                offered = [c for c in self._wait_for_choices(page, seconds=12.0, under=control.question,
+                                                             any_list=True) if c[0] not in showing]
                 index = self._pick(offered, value)
                 if index is not None:
                     self.locate(page, offered[index][0]).click(timeout=5_000)
@@ -1501,11 +1522,12 @@ class PageAgent:
                 return True
             except Exception:
                 pass   # a listbox drawn by script: pick the option instead
-        before = {ref for ref, _text in choices_in(self.snapshot(page))}
+        before = {ref for ref, _text in choices_in(self.snapshot(page), under=control.question, any_list=True)}
         loc.click(timeout=5_000)
         # A long list takes a moment to appear: read at 0.7s, it was empty, and
         # School, Discipline and Veteran Status were all left blank.
-        offered = [(ref, text) for ref, text in self._wait_for_choices(page) if ref not in before]
+        offered = [(ref, text) for ref, text in self._wait_for_choices(page, under=control.question,
+                                                                       any_list=True) if ref not in before]
         index = self._pick(offered, value)
         if index is None:
             # A type-ahead list shows its choices once something is typed, and a
@@ -1521,7 +1543,8 @@ class PageAgent:
                     tab.keyboard.type(typed, delay=40)
                 except Exception:
                     break
-                offered = self._wait_for_choices(page)
+                offered = [c for c in self._wait_for_choices(page, under=control.question, any_list=True)
+                           if c[0] not in before]
                 index = self._pick(offered, value)
                 if index is not None:
                     break
@@ -1537,6 +1560,12 @@ class PageAgent:
                 logger.info("CHOICE: %r is not offered for %r -- taking 'Other'", value[:40], control.question[:40])
                 index = other
         if index is None:
+            # Some widgets never put their list where the page's structure can
+            # be read (R+L's "Employer State or Province"). A person types and
+            # presses Down then Enter; so does the agent, and then checks the
+            # form has stopped calling the field empty.
+            if self.type_and_commit(page, control, value):
+                return True
             tab.keyboard.press("Escape")
             logger.info("No choice matching %r for %r among %s", value, control.question[:50],
                         [t for _r, t in offered][:8])
@@ -1545,14 +1574,47 @@ class PageAgent:
         tab.wait_for_timeout(500)
         return True
 
-    def _wait_for_choices(self, page, seconds: float = 4.0) -> list[tuple[str, str]]:
+    def type_and_commit(self, page, control: Control, value: str) -> bool:
+        """Type the answer into a list box and take its first suggestion.
+
+        True only when the form stops saying the field is empty -- typing alone
+        leaves a value showing that the form does not accept.
+        """
+        tab = self.tab(page)
+        complaint = re.compile(r"The " + re.escape(control.question) + r"[^\n]*? is required", re.IGNORECASE)
+        for typed in self._search_terms(value):
+            try:
+                box = self.locate(page, control.ref)
+                box.click(timeout=4_000)
+                box.fill("", timeout=3_000)
+                tab.keyboard.type(typed, delay=60)
+                tab.wait_for_timeout(1_500)          # the list is fetched as you type
+                tab.keyboard.press("ArrowDown")
+                tab.wait_for_timeout(400)
+                tab.keyboard.press("Enter")
+                tab.wait_for_timeout(1_200)
+            except Exception as exc:
+                logger.debug("Could not type %r into %r: %s", typed, control.question[:40],
+                             str(exc).splitlines()[0][:80])
+                return False
+            snapshot = self.snapshot(page)
+            shown = next((c for c in parse_snapshot(snapshot)
+                          if _same_question(c.question, control.question)), None)
+            took = shown is not None and shown.answer and _same_answer(shown.answer, value)
+            if took and not complaint.search(snapshot):
+                logger.info("CHOSE %r for %r by typing and pressing Enter", value[:30], control.question[:40])
+                return True
+        return False
+
+    def _wait_for_choices(self, page, seconds: float = 8.0, under: str = "",
+                          any_list: bool = False) -> list[tuple[str, str]]:
         """The choices a list is showing, once it has finished showing them."""
         tab = self.tab(page)
         deadline = time.time() + seconds
         offered: list[tuple[str, str]] = []
         while time.time() < deadline:
             tab.wait_for_timeout(500)
-            offered = choices_in(self.snapshot(page))
+            offered = choices_in(self.snapshot(page), under=under, any_list=any_list)
             if offered:
                 break
         return offered
