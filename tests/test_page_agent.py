@@ -650,3 +650,50 @@ def test_a_name_the_owner_typed_is_left_alone(page, resume_file):
     controls = page_agent.parse_snapshot(agent.snapshot(page))
     agent.correct_from_profile(page, page_agent.PagePlan(), controls)
     assert page.locator("#f").input_value() == "Yash R."
+
+
+# --- a one-time code emailed to the owner ------------------------------------------
+
+CODE_PAGE = ('<h2>Verify your email</h2><label for="c">Enter verification code sent to email</label>'
+             '<input id="c"><button>Verify</button>')
+HUMAN_CHECK_PAGE = ('<p>A verification code was sent to you@example.com. To submit your application, enter the '
+                    '8-character code to confirm you\'re a human.</p><label for="c">Security code</label>'
+                    '<input id="c"><button>Submit application</button>')
+
+
+def _code_agent(page, resume_file, done=True):
+    agent = make_agent(Planner(), resume_file)
+    calls = []
+    agent.assistant.complete_emailed_passcode = lambda pg: calls.append("read the mail") or done
+    return agent, calls
+
+
+def test_a_code_for_the_owners_own_account_is_entered(page, resume_file):
+    """R+L Carriers asks for a code emailed to the applicant -- the step the
+    owner approved on 2026-09-15 for account setup and sign-in."""
+    page.set_content(CODE_PAGE)
+    agent, calls = _code_agent(page, resume_file)
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    assert agent.complete_account_code(page, controls, agent.snapshot(page)) is True
+    assert calls == ["read the mail"]
+
+
+def test_a_code_asked_for_to_prove_a_human_is_never_entered(page, resume_file):
+    """Harbinger's page says the code is there to confirm a human is applying."""
+    page.set_content(HUMAN_CHECK_PAGE)
+    agent, calls = _code_agent(page, resume_file)
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    assert agent.complete_account_code(page, controls, agent.snapshot(page)) is False
+    assert calls == []
+
+
+def test_no_code_is_read_without_permission_to_read_the_mail(page, resume_file):
+    import dataclasses
+    page.set_content(CODE_PAGE)
+    profile = dataclasses.replace(config.get_user_profile(), check_gmail_for_confirmation=False)
+    agent = make_agent(Planner(), resume_file, profile=profile)
+    calls = []
+    agent.assistant.complete_emailed_passcode = lambda pg: calls.append("read") or True
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    assert agent.complete_account_code(page, controls, agent.snapshot(page)) is False
+    assert calls == []

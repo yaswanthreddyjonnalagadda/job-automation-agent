@@ -429,6 +429,7 @@ class PageAgent:
         self.written: dict[str, str] = {}          # question -> value the agent put there
         self._letter: Optional[tuple[Path, Path]] = None
         self._letter_attached = False
+        self._code_tries = 0
         self._signed_in_at: set[str] = set()
         self._google_tried: set[str] = set()
         self._retried_after_error = False
@@ -455,7 +456,7 @@ class PageAgent:
         anything added since starts empty rather than failing."""
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
-                              ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool),
+                              ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int),
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict)):
             if not hasattr(self, name):
                 setattr(self, name, default())
@@ -567,6 +568,43 @@ class PageAgent:
                 logger.warning("LOGIN: %s", str(exc).splitlines()[0][:120])
         return False
 
+    # A code emailed to the owner for their own account or email address.
+    ACCOUNT_CODE = re.compile(
+        r"(verification|security|confirmation|one[- ]?time|access)\s*code|passcode|\botp\b|"
+        r"code (was )?(sent|emailed) to", re.IGNORECASE)
+    # A code a site asks for to prove a human is applying: never the agent's.
+    HUMAN_CHECK = re.compile(
+        r"confirm (that )?(you'?re|you are) (a )?human|prove (that )?you('re| are) (a )?human|"
+        r"not a robot|human verification|verify (that )?you are (a )?human", re.IGNORECASE)
+
+    def complete_account_code(self, page, controls: list[Control], snapshot: str) -> bool:
+        """Enters a one-time code emailed to the owner for their own account.
+
+        The owner approved this on 2026-09-15 for account setup and sign-in
+        (browser_automation.complete_emailed_passcode), and R+L Carriers' form
+        asks for exactly that. A code a site asks for to prove a human is
+        applying is refused -- Harbinger's says so beside its reCAPTCHA, and
+        that one is the owner's to enter.
+        """
+        box = next((c for c in controls
+                    if c.role in ("textbox", "searchbox") and not c.answer and not c.disabled
+                    and self.ACCOUNT_CODE.search(f"{c.question} {c.container}")), None)
+        if box is None or self._code_tries >= 2:
+            return False
+        if not getattr(self.profile, "check_gmail_for_confirmation", False):
+            logger.info("A code was emailed to you; the agent may not read your mail")
+            return False
+        if self.HUMAN_CHECK.search(snapshot) or safety.captcha_visible(page):
+            logger.info("This code is asked for to prove a human is applying -- that one is yours to enter")
+            return False
+        self._code_tries += 1
+        logger.info("CODE: a code was emailed to you for this account -- fetching it from your mail")
+        try:
+            return bool(self.assistant.complete_emailed_passcode(self.tab(page)))
+        except Exception as exc:
+            logger.warning("Could not complete the emailed code: %s", str(exc).splitlines()[0][:120])
+            return False
+
     # -- facts Claude may answer from ---------------------------------------------
     def facts(self, controls: list[Control]) -> dict:
         profile = asdict(self.profile) if hasattr(self.profile, "__dataclass_fields__") else dict(vars(self.profile))
@@ -641,6 +679,9 @@ class PageAgent:
             controls = parse_snapshot(snapshot)
             self._save(snapshot)
             if self.sign_in_step(page, controls):
+                self.settle(page)
+                continue
+            if self.complete_account_code(page, controls, snapshot):
                 self.settle(page)
                 continue
             try:
