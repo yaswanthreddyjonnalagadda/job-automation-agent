@@ -431,6 +431,7 @@ class PageAgent:
         self._letter_attached = False
         self._code_tries = 0
         self._last_code = ""
+        self._asked_for_new_code = False
         self._signed_in_at: set[str] = set()
         self._google_tried: set[str] = set()
         self._retried_after_error = False
@@ -451,13 +452,15 @@ class PageAgent:
         self._signed_in_at = set()
         self._emailed_in = set()
         self._retried_after_error = False
+        self._code_tries = 0        # a resumed run may fetch a fresh code
+        self._asked_for_new_code = False
 
     def _ensure_state(self) -> None:
         """Code reloaded into a run that is already going keeps its old object:
         anything added since starts empty rather than failing."""
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
-                              ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str),
+                              ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool),
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict)):
             if not hasattr(self, name):
                 setattr(self, name, default())
@@ -578,6 +581,12 @@ class PageAgent:
         r"confirm (that )?(you'?re|you are) (a )?human|prove (that )?you('re| are) (a )?human|"
         r"not a robot|human verification|verify (that )?you are (a )?human", re.IGNORECASE)
 
+    def _code_boxes(self, page) -> list[Control]:
+        """The code boxes the page is showing now."""
+        return [c for c in parse_snapshot(self.snapshot(page))
+                if c.role in ("textbox", "searchbox", "spinbutton") and not c.disabled
+                and self.ACCOUNT_CODE.search(f"{c.question} {c.container}")]
+
     def complete_account_code(self, page, controls: list[Control], snapshot: str) -> bool:
         """Enters a one-time code emailed to the owner for their own account.
 
@@ -616,10 +625,25 @@ class PageAgent:
                 if not code:
                     logger.info("CODE: your mail doesn't show a %d-digit code yet", expected)
                     return False
+            if not code and self._last_code and not self._asked_for_new_code:
+                # The last code was refused and no newer mail has come: ask the
+                # site to send another, then read for it.
+                fresh = next((c for c in controls if c.role in PRESS_ROLES and re.search(
+                    r"send (a )?new code|resend( code)?|send( me)? (another|a new) code",
+                    c.name or "", re.IGNORECASE)), None)
+                if fresh is not None:
+                    self._asked_for_new_code = True
+                    logger.info("CODE: asking the site to send a new one")
+                    self.locate(page, fresh.ref).click(timeout=8_000)
+                    tab.wait_for_timeout(4_000)
+                    code = self.assistant.passcode_from_gmail(tab, previous=self._last_code, length=expected)
             if not code:
                 logger.info("CODE: it has not arrived yet -- the agent will look again")
                 return False
             self._last_code = code
+            # The page redraws while a new code is sent, so the boxes found
+            # earlier are gone: find them again before typing.
+            boxes = self._code_boxes(page) or boxes
             for box in (b for b in boxes if b.answer):   # clear only what was refused
                 try:
                     self.locate(page, box.ref).fill("", timeout=2_000)
