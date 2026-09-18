@@ -123,6 +123,17 @@ class UserProfile:
         ("Master's", "Computer Technology", "Eastern Illinois University", "2022"),
         ("Bachelor's", "Electrical and Electronics Engineering", "JNTU Hyderabad", "2019"),
     )
+    # The same degrees with the dates forms ask for, given by the owner on
+    # 2026-09-18: (school, started, finished). The resume shows only the
+    # graduation date, and R+L's form wanted both.
+    education_dates: tuple[tuple[str, str, str], ...] = (
+        ("Eastern Illinois University", "August 2021", "December 2022"),
+        ("JNTU Hyderabad", "August 2015", "April 2019"),
+    )
+    # What the break between jobs was, for forms that ask about gaps
+    # (August 2021 to January 2023). The owner's words, 2026-09-18.
+    work_history_gap: str = ("Full-time graduate study -- MS in Computer Technology, "
+                             "Eastern Illinois University")
     country: str = "United States"
     phone_country_code: str = "+1"
     # Application-form pop-ups like "Data Privacy Agreement" that block the
