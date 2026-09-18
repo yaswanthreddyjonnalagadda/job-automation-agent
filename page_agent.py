@@ -214,6 +214,27 @@ def host_of(url: str) -> str:
     return urlparse(url or "").netloc
 
 
+# The name boxes a form asks for, and the profile field each one takes.
+_NAME_FIELDS = (
+    (re.compile(r"^\W*(legal\s+|given\s+)?first\s*(name)?\b", re.IGNORECASE), "first_name"),
+    (re.compile(r"^\W*(legal\s+)?(last|family|sur)\s*name\b", re.IGNORECASE), "last_name"),
+    (re.compile(r"^\W*(legal\s+)?middle\s*(name|initial)?\b", re.IGNORECASE), "middle_name"),
+    (re.compile(r"^\W*(full|legal)\s*(legal\s*)?name\b", re.IGNORECASE), "full_name"),
+)
+
+
+def _name_field(question: str) -> str:
+    """Which name a box is asking for, or "" when it isn't asking for one."""
+    question = " ".join((question or "").split())
+    if not question or re.search(r"preferred|nickname|maiden|father|mother|spouse|referr|employer|company|school",
+                                 question, re.IGNORECASE):
+        return ""
+    for pattern, field in _NAME_FIELDS:
+        if pattern.search(question):
+            return field
+    return ""
+
+
 def _plain(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
 
@@ -931,17 +952,32 @@ class PageAgent:
         a named profile field is corrected too. An answer the owner set is never
         touched.
         """
-        fixes: list[tuple[str, str, str]] = []   # (question, right answer, profile field)
+        # (question, right answer, profile field, must match exactly)
+        fixes: list[tuple[str, str, str, bool]] = []
+        # The owner's name as they write it. Forms were filled "Yaswanth" /
+        # "Reddy Jonnalagadda", split from the full name.
+        for control in controls:
+            if control.role not in ("textbox", "searchbox") or control.disabled:
+                continue
+            field = _name_field(control.question)
+            if not field:
+                continue
+            wanted = str(getattr(self.profile, field, "") or "").strip()
+            shown = control.answer.strip()
+            if wanted and shown.lower() != wanted.lower():
+                # Exactly: "Yaswanth" is not "Yaswanth Reddy", though one
+                # begins the other.
+                fixes.append((control.question, wanted, f"profile.{field}", True))
         for item in answered_fields(controls):
             question = item["label"]
             if not question or not safety.legal_answer_conflicts([item], self.profile):
                 continue
             if safety._SPONSORSHIP_Q.search(question):
                 needs = bool(getattr(self.profile, "requires_visa_sponsorship", False))
-                fixes.append((question, "Yes" if needs else "No", "profile.requires_visa_sponsorship"))
+                fixes.append((question, "Yes" if needs else "No", "profile.requires_visa_sponsorship", False))
             elif safety._AUTHORIZED_Q.search(question):
                 allowed = str(getattr(self.profile, "legally_eligible_to_work", "") or "").lower().startswith("y")
-                fixes.append((question, "Yes" if allowed else "No", "profile.legally_eligible_to_work"))
+                fixes.append((question, "Yes" if allowed else "No", "profile.legally_eligible_to_work", False))
         for mismatch in plan.mismatches:
             question = " ".join(str(mismatch.get("question") or "").split())
             value = str(mismatch.get("correct_value") or "").strip()
@@ -949,17 +985,17 @@ class PageAgent:
             field_name = source.split(".", 1)[1] if source.startswith("profile.") else ""
             if not question or not value or not field_name or not str(getattr(self.profile, field_name, "") or "").strip():
                 continue
-            if any(_same_question(question, q) for q, _v, _s in fixes):
+            if any(_same_question(question, q) for q, _v, _s, _e in fixes):
                 continue
-            fixes.append((question, value, source))
+            fixes.append((question, value, source, False))
 
         given: list[tuple[Answer, Control]] = []
-        for question, value, source in fixes:
+        for question, value, source, exact in fixes:
             control = self._control_for(question, value, controls)
             if control is None:
                 continue
             was = self._shown_answer(control, controls)
-            if was and _same_answer(was, value):
+            if was and (_plain(was) == _plain(value) if exact else _same_answer(was, value)):
                 continue
             action = ("check" if control.role in ("radio", "checkbox", "switch")
                       else "choose" if control.role in ("combobox", "listbox") else "fill")

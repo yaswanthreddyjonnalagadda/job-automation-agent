@@ -808,7 +808,20 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             importlib.reload(page_agent)
             agent.__class__ = page_agent.PageAgent
             agent.assistant = assistant
-            logger.info("Reloaded the reading agent as well")
+            # The profile and Claude's instructions too: a corrected name or a
+            # new rule reached the code but not the run using it.
+            try:
+                agent.profile = config_module.get_user_profile()
+                assistant._profile = agent.profile
+            except Exception as exc:
+                logger.warning("Could not reload the profile: %s", exc)
+            try:
+                import claude_integration
+                importlib.reload(claude_integration)
+                agent.claude.__class__ = claude_integration.ClaudeClient
+            except Exception as exc:
+                logger.warning("Could not reload the Claude instructions: %s", exc)
+            logger.info("Reloaded the reading agent, your profile and the instructions")
         # continue / refresh / anything else: read the page again and carry on
 
 

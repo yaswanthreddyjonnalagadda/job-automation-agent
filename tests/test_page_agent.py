@@ -615,3 +615,38 @@ def test_the_owners_name_is_given_as_they_write_it():
     import config
     profile = config.get_user_profile()
     assert (profile.first_name, profile.middle_name, profile.last_name) == ("Yaswanth Reddy", "", "Jonnalagadda")
+
+
+NAME_FORM = """<html><body><h1>Apply</h1>
+<form onsubmit="return false;">
+  <label for="f">First Name *</label><input id="f" value="Yaswanth">
+  <label for="m">Middle Name</label><input id="m">
+  <label for="l">Last Name *</label><input id="l" value="Reddy Jonnalagadda">
+  <label for="c">Company Name</label><input id="c" value="Capital One">
+  <label for="p">Preferred First Name</label><input id="p">
+</form></body></html>"""
+
+
+def test_the_name_is_put_right_from_the_profile(page, resume_file):
+    """A form filled "Yaswanth" / "Reddy Jonnalagadda" is corrected to the
+    owner's own first and last name."""
+    page.set_content(NAME_FORM)
+    agent = make_agent(Planner(), resume_file)
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    agent.correct_from_profile(page, page_agent.PagePlan(), controls)
+    assert page.locator("#f").input_value() == "Yaswanth Reddy"
+    assert page.locator("#l").input_value() == "Jonnalagadda"
+    assert page.locator("#m").input_value() == ""            # no middle name: left empty
+    assert page.locator("#c").input_value() == "Capital One"  # not a name of the owner's
+    assert page.locator("#p").input_value() == ""
+
+
+def test_a_name_the_owner_typed_is_left_alone(page, resume_file):
+    page.set_content(NAME_FORM.replace('id="f" value="Yaswanth"', 'id="f" value="Yash"'))
+    agent = make_agent(Planner(), resume_file)
+    agent.remember_page_state(page)
+    page.locator("#f").fill("Yash R.")                        # the owner, while the agent waited
+    agent.note_owner_changes(page)
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    agent.correct_from_profile(page, page_agent.PagePlan(), controls)
+    assert page.locator("#f").input_value() == "Yash R."
