@@ -818,9 +818,29 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             try:
                 import claude_integration
                 importlib.reload(claude_integration)
-                agent.claude.__class__ = claude_integration.ClaudeClient
+                if agent.claude.__class__.__name__ == "ClaudeClient":
+                    agent.claude.__class__ = claude_integration.ClaudeClient
             except Exception as exc:
                 logger.warning("Could not reload the Claude instructions: %s", exc)
+            try:
+                # A run started on the API can be moved onto the session brain
+                # (or back) without restarting, keeping the form as it stands.
+                import session_planner
+                importlib.reload(session_planner)
+                wanted = getattr(config_module.get_app_config(), "agent_brain", "api")
+                on_session = agent.claude.__class__.__name__ == "SessionPlanner"
+                if wanted == "session" and not on_session:
+                    api = agent.claude
+                    agent.claude = session_planner.SessionPlanner(config, folder=Path("data"), fallback=api)
+                    agent.claude.now_applying = f"{job.company} -- {job.title}"
+                    logger.info("BRAIN: now asking the Claude Code session about each page")
+                elif on_session:
+                    agent.claude.__class__ = session_planner.SessionPlanner
+                    if wanted != "session":
+                        agent.claude = agent.claude._fallback
+                        logger.info("BRAIN: back to asking the API about each page")
+            except Exception as exc:
+                logger.warning("Could not switch the brain over: %s", exc)
             logger.info("Reloaded the reading agent, your profile and the instructions")
         # continue / refresh / anything else: read the page again and carry on
 
@@ -851,6 +871,19 @@ def submit_verified(assistant, page, tracker, key, job, job_dir: Path, decision)
         pass
     logger.info("AUTO_SUBMIT result: %s -- %s", status, note)
     return status == STATUS_SUBMITTED
+
+
+def brain_for(config, job=None):
+    """What works out the answers: the session the owner is talking to, or the
+    API. Everything the session does not take over falls through to the API."""
+    api = ClaudeClient(config)
+    if getattr(config, "agent_brain", "api") != "session":
+        return api
+    import session_planner
+    brain = session_planner.SessionPlanner(config, folder=Path("data"), fallback=api)
+    brain.now_applying = f"{getattr(job, 'company', '')} -- {getattr(job, 'title', '')}".strip(" -")
+    logger.info("BRAIN: this run asks the Claude Code session about each page (no API credit used)")
+    return brain
 
 
 def reload_browser_automation(assistant: JobApplicationAssistant) -> JobApplicationAssistant:
@@ -982,7 +1015,7 @@ def main() -> None:
             return
 
     resume = parse_resume(config.resume_path)
-    claude = ClaudeClient(config)
+    claude = brain_for(config, job)
 
     # Windows forbids <>:"/\|?* in folder names; a title with '|' crashed a run.
     folder = re.sub(r'[<>:"/\\|?*]+', "_", f"{job.company}_{job.title}".replace(" ", "_")).strip("._")[:120]
