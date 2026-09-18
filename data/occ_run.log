@@ -1,21 +1,82 @@
-2026-09-18 17:11:31,371 [INFO] Applying as Yaswanth Reddy Jonnalagadda <jonnalagaddayaswanth06@gmail.com>
-2026-09-18 17:11:32,295 [INFO] Job: Associate Principal, Cloud Engineering @ The Options Clearing Corporation (Dallas, TX)
-2026-09-18 17:11:33,151 [INFO] Starting the application. It will stop at Review and wait for you.
-2026-09-18 17:11:38,030 [INFO] jd_analyzer: Built job description: Associate Principal, Cloud Engineering @ The Options Clearing Corporation (other), 4 local keywords matched
-2026-09-18 17:11:38,203 [INFO] apply_flow: Tracking to Postgres
-2026-09-18 17:11:38,229 [INFO] db: Recorded application: Associate Principal, Cloud Engineering @ The Options Clearing Corporation (id=191)
-2026-09-18 17:11:38,465 [INFO] resume_parser: Extracted 4738 characters of resume text from data\Yaswanth_J__Cloud_Networking&Security_Resume.pdf
-2026-09-18 17:11:38,871 [INFO] apply_flow: BRAIN: this run asks the Claude Code session about each page (no API credit used)
-2026-09-18 17:11:38,911 [INFO] apply_flow: REUSED_RESUME: Yaswanth_Jonnalagadda_Resume_TheOptionsClearingCorpor.pdf was already tailored for this posting -- not generating another
-2026-09-18 17:11:42,762 [INFO] browser_automation: Closed 10 browser process(es) left over from an earlier run
-2026-09-18 17:11:42,763 [INFO] browser_automation: Using chrome with the profile at C:\Users\jonna\job-automation-agent\browser_profile (Chrome already running is OK)
-2026-09-18 17:11:44,207 [INFO] apply_flow: Working the application with the reading agent
-2026-09-18 17:11:46,646 [INFO] db: Stored resume (5788 bytes) for 3862af10024e
-2026-09-18 17:11:47,099 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_page.txt, the plan goes in data\_plan_page.json
-2026-09-18 17:13:47,154 [INFO] session_planner: still waiting for the session (2 minutes)
-2026-09-18 17:15:47,214 [INFO] session_planner: still waiting for the session (4 minutes)
-2026-09-18 17:17:47,260 [INFO] session_planner: still waiting for the session (6 minutes)
-2026-09-18 17:19:47,301 [INFO] session_planner: still waiting for the session (8 minutes)
-2026-09-18 17:21:47,375 [INFO] session_planner: still waiting for the session (10 minutes)
-2026-09-18 17:23:47,432 [INFO] session_planner: still waiting for the session (12 minutes)
-2026-09-18 17:25:47,481 [INFO] session_planner: still waiting for the session (14 minutes)
+2026-09-18 17:26:55,582 [INFO] Applying as Yaswanth Reddy Jonnalagadda <jonnalagaddayaswanth06@gmail.com>
+2026-09-18 17:26:56,340 [INFO] Job: Associate Principal, Cloud Engineering @ The Options Clearing Corporation (Dallas, TX)
+2026-09-18 17:26:57,023 [INFO] Starting the application. It will stop at Review and wait for you.
+2026-09-18 17:26:59,773 [INFO] jd_analyzer: Built job description: Associate Principal, Cloud Engineering @ The Options Clearing Corporation (other), 4 local keywords matched
+2026-09-18 17:26:59,905 [INFO] apply_flow: Tracking to Postgres
+2026-09-18 17:26:59,927 [INFO] db: Recorded application: Associate Principal, Cloud Engineering @ The Options Clearing Corporation (id=191)
+2026-09-18 17:27:00,081 [INFO] resume_parser: Extracted 4738 characters of resume text from data\Yaswanth_J__Cloud_Networking&Security_Resume.pdf
+2026-09-18 17:27:00,357 [INFO] apply_flow: BRAIN: this run asks the Claude Code session about each page (no API credit used)
+2026-09-18 17:27:00,386 [INFO] apply_flow: REUSED_RESUME: Yaswanth_Jonnalagadda_Resume_TheOptionsClearingCorpor.pdf was already tailored for this posting -- not generating another
+2026-09-18 17:27:03,121 [INFO] browser_automation: Closed 9 browser process(es) left over from an earlier run
+2026-09-18 17:27:03,122 [INFO] browser_automation: Using chrome with the profile at C:\Users\jonna\job-automation-agent\browser_profile (Chrome already running is OK)
+2026-09-18 17:27:04,484 [INFO] apply_flow: Working the application with the reading agent
+2026-09-18 17:27:06,729 [INFO] db: Stored resume (5788 bytes) for 3862af10024e
+2026-09-18 17:27:08,140 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:27:24,152 [INFO] session_planner: THE SESSION ANSWERED after 16 seconds
+2026-09-18 17:27:24,153 [INFO] page_agent: READ: other (the page had not drawn yet -- read it again) -- 0 to answer, 0 for you, next: none ''
+2026-09-18 17:27:28,835 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_A2026-09-18 17:27:47,559 [INFO] session_planner: still waiting for the session (16 minutes)
+2026-09-18 17:29:47,603 [INFO] session_planner: still waiting for the session (18 minutes)
+2026-09-18 17:31:47,651 [INFO] session_planner: still waiting for the session (20 minutes)
+2026-09-18 17:33:47,695 [INFO] session_planner: still waiting for the session (22 minutes)
+2026-09-18 17:35:47,739 [INFO] session_planner: still waiting for the session (24 minutes)
+2026-09-18 17:37:47,796 [INFO] session_planner: still waiting for the session (26 minutes)
+poration_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:27:59,102 [INFO] session_planner: THE SESSION ANSWERED after 10 seconds
+2026-09-18 17:27:59,102 [INFO] page_agent: READ: application form (the application asks how to start; taking the resume autofill) -- 0 to answer, 0 for you, next: next step 'Autofill with Resume'
+2026-09-18 17:28:08,022 [INFO] page_agent: NEXT: pressing 'Autofill with Resume'
+2026-09-18 17:28:16,691 [INFO] page_agent: LOGIN: this site offers Google sign-in -- using it
+2026-09-18 17:28:16,717 [INFO] browser_automation: LOGIN: using the site's Google sign-in on theocc.wd5.myworkdayjobs.com
+2026-09-18 17:28:20,805 [INFO] browser_automation: LOGIN: picked jo***@gmail.com on Google's account chooser
+2026-09-18 17:28:27,964 [INFO] browser_automation: LOGIN_OK: signed in on theocc.wd5.myworkdayjobs.com with Google
+2026-09-18 17:28:28,042 [INFO] db: Recorded google account for The Options Clearing Corporation (jo***@gmail.com)
+2026-09-18 17:28:28,042 [INFO] page_agent: LOGIN: signed in with Google
+2026-09-18 17:28:29,810 [INFO] page_agent: KNEW THE WHOLE PAGE: 0 filled in, pressing 'Continue' -- nobody was asked
+2026-09-18 17:28:29,811 [INFO] page_agent: READ: application form (answered from what the agent already knew) -- 0 to answer, 0 for you, next: next step 'Continue'
+2026-09-18 17:28:30,652 [INFO] page_agent: NEXT: pressing 'Continue'
+2026-09-18 17:28:33,616 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:29:11,633 [INFO] session_planner: THE SESSION ANSWERED after 38 seconds
+2026-09-18 17:29:11,640 [INFO] page_agent: READ: application form (My Information -- the resume autofill left two required questions) -- 2 to answer, 0 for you, next: none ''
+2026-09-18 17:29:11,772 [INFO] page_agent: CORRECTED: corrected 'First Name' from 'YASWANTH' to 'Yaswanth Reddy' (from your profile.first_name)
+2026-09-18 17:29:12,416 [INFO] page_agent: Closest choice to 'Job Board' is 'Other Career Job Board'
+2026-09-18 17:29:12,973 [INFO] page_agent: ANSWERED: 'How Did You Hear About Us? Select One Required' -> 'Job Board' (from job)
+2026-09-18 17:29:13,065 [INFO] page_agent: ANSWERED: 'Country Phone Code' -> 'United States of America (+1)' (from profile.phone_country_code)
+2026-09-18 17:29:13,929 [INFO] page_agent: NOT STUCK: Country Phone Code = 'United States of America (+1)' -- reading the page again
+2026-09-18 17:29:14,212 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:29:44,224 [INFO] session_planner: THE SESSION ANSWERED after 30 seconds
+2026-09-18 17:29:44,225 [INFO] page_agent: READ: application form (My Information -- the page objects to the surname being all capitals; writing it as the owner writes it) -- 1 to answer, 0 for you, next: next step 'Save and Continue'
+2026-09-18 17:29:44,233 [INFO] page_agent: LEFT FOR YOU: 'Last Name' -- already answered 'JONNALAGADDA' -- not changing an answer the agent didn't give
+2026-09-18 17:29:45,128 [INFO] page_agent: NEXT: pressing 'Save and Continue'
+2026-09-18 17:29:47,995 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:30:22,014 [INFO] session_planner: THE SESSION ANSWERED after 34 seconds
+2026-09-18 17:30:22,019 [INFO] page_agent: READ: application form (My Experience -- the resume is the required part; attaching it and giving the LinkedIn profile) -- 2 to answer, 0 for you, next: none ''
+2026-09-18 17:30:23,725 [INFO] page_agent: ANSWERED: 'Select files' -> '' (from document)
+2026-09-18 17:30:23,755 [INFO] page_agent: ANSWERED: 'If you would like to provide your LinkedIn profile, please d' -> 'https://www.linkedin.com/in/yaswanthreddyjonnalaga' (from profile.linkedin_url)
+2026-09-18 17:30:27,906 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:30:45,913 [INFO] session_planner: THE SESSION ANSWERED after 18 seconds
+2026-09-18 17:30:45,914 [INFO] page_agent: READ: application form (My Experience -- adding the work history from the resume) -- 0 to answer, 0 for you, next: next step 'Add work experience'
+2026-09-18 17:30:46,760 [INFO] page_agent: NEXT: pressing 'Add'
+2026-09-18 17:30:50,024 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:31:10,034 [INFO] session_planner: THE SESSION ANSWERED after 20 seconds
+2026-09-18 17:31:10,034 [INFO] page_agent: READ: application form (My Experience -- the current job, from the resume) -- 7 to answer, 0 for you, next: none ''
+2026-09-18 17:31:10,067 [INFO] page_agent: ANSWERED: 'Job Title' -> 'Senior Network and Security Engineer' (from resume)
+2026-09-18 17:31:10,125 [INFO] page_agent: ANSWERED: 'Company' -> 'Capital One' (from resume)
+2026-09-18 17:31:10,177 [INFO] page_agent: ANSWERED: 'Location' -> 'McLean, VA' (from resume)
+2026-09-18 17:31:10,418 [INFO] page_agent: ANSWERED: 'I currently work here' -> 'Yes' (from resume)
+2026-09-18 17:31:10,500 [INFO] page_agent: ANSWERED: 'Month' -> '02' (from resume)
+2026-09-18 17:31:10,563 [INFO] page_agent: ANSWERED: 'Year' -> '2025' (from resume)
+2026-09-18 17:31:10,675 [INFO] page_agent: ANSWERED: 'Role Description' -> 'Designed and deployed an EVPN-VXLAN spine-leaf dat' (from resume)
+2026-09-18 17:31:11,546 [INFO] page_agent: NOT STUCK: Month = '02'; Year = '2025' -- reading the page again
+2026-09-18 17:31:11,756 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:31:37,770 [INFO] session_planner: THE SESSION ANSWERED after 26 seconds
+2026-09-18 17:31:37,772 [INFO] page_agent: READ: application form (My Experience -- the from-date on the current job) -- 2 to answer, 0 for you, next: none ''
+2026-09-18 17:31:37,862 [INFO] page_agent: ANSWERED: 'Month' -> '2' (from resume)
+2026-09-18 17:31:37,909 [INFO] page_agent: LEFT FOR YOU: 'Year' -- already answered '2012' -- not changing an answer the agent didn't give
+2026-09-18 17:31:41,998 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:32:02,008 [INFO] session_planner: THE SESSION ANSWERED after 20 seconds
+2026-09-18 17:32:02,009 [INFO] page_agent: READ: application form (My Experience -- clearing the year box before writing the right year into it) -- 2 to answer, 0 for you, next: none ''
+2026-09-18 17:32:02,013 [INFO] page_agent: LEFT FOR YOU: 'Year' -- no answer to give
+2026-09-18 17:32:02,016 [INFO] page_agent: LEFT FOR YOU: 'Year' -- already answered '2012' -- not changing an answer the agent didn't give
+2026-09-18 17:32:06,138 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:34:06,181 [INFO] session_planner: still waiting for the session (2 minutes)
+2026-09-18 17:36:06,228 [INFO] session_planner: still waiting for the session (4 minutes)
+2026-09-18 17:38:06,283 [INFO] session_planner: still waiting for the session (6 minutes)

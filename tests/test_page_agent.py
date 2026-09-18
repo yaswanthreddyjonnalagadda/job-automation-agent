@@ -796,3 +796,21 @@ def test_a_button_that_opens_a_file_dialog_is_given_the_resume(page, resume_file
                  "label": "Autofill with Resume", "kind": "next_step"}})
     make_agent(planner, resume_file).run(page)
     assert page.evaluate("document.body.dataset.got") == resume_file.name
+
+
+def test_the_agent_may_put_right_a_box_it_filled_in_badly(page, resume_file):
+    """Workday's year box was left reading "2012" by the agent's own failed
+    attempt, and it then refused to correct it, taking that for the owner's
+    own answer. What the owner really typed is protected separately."""
+    page.set_content('<label for="y">Year</label><input id="y">')
+    agent = make_agent(Planner(), resume_file)
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    box = next(c for c in controls if c.role == "textbox")
+
+    agent.do(page, page_agent.Answer(box.ref, "Year", "fill", "2025", "resume"), box)
+    agent.written["Year"] = "2025"
+    page.fill("#y", "2012")                       # what the widget was left showing
+
+    assert agent._ours("Year", "2012")            # the agent's own mess, not the owner's
+    agent.owner_answers["Year"] = "1999"
+    assert agent._owner_gave("Year")              # what the owner set is still his

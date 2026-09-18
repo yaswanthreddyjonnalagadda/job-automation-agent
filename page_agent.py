@@ -1564,9 +1564,15 @@ class PageAgent:
         return any(_same_question(question, q) for q in self.owner_answers)
 
     def _ours(self, question: str, current: str) -> bool:
-        wrote = self.written.get(question)
-        return wrote is not None and (wrote.strip().lower() == current.strip().lower()
-                                      or wrote.strip().lower() in current.strip().lower())
+        """Whether what a box shows is the agent's own doing.
+
+        A box the agent has written to during this run is its own whatever it
+        now shows: Workday's year spinbutton was left reading "2012" by the
+        agent's own failed attempt, and the agent then refused to put it right
+        because it did not recognise the value as one of its own. What the
+        owner typed himself is held in owner_answers and protected separately.
+        """
+        return question in self.written
 
     def do(self, page, answer: Answer, control: Control) -> bool:
         tab = self.tab(page)
