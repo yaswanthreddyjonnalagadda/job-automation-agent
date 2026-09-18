@@ -147,3 +147,38 @@ def test_what_the_session_does_not_do_still_goes_to_the_api(tmp_path):
     planner = make_planner(tmp_path, fallback=fallback)
     assert planner.generate_cover_letter() == "Dear hiring manager"
     assert planner.tailor_resume() == "resume"
+
+
+def test_a_run_given_its_own_planner_keeps_it(monkeypatch, tmp_path):
+    """Switching AGENT_BRAIN must not seize a planner handed in on purpose --
+    a test's stub, or anything else a caller chose."""
+    monkeypatch.setenv("AGENT_BRAIN", "session")
+    stub = SimpleNamespace(plan_page=lambda *a, **k: {"page_kind": "other"})
+    agent = page_agent.PageAgent.__new__(page_agent.PageAgent)
+    agent.claude, agent.config, agent.job = stub, SimpleNamespace(), SimpleNamespace()
+    agent.follow_the_chosen_brain()
+    assert agent.claude is stub
+
+
+def test_a_real_run_moves_onto_the_session_and_back(monkeypatch, tmp_path):
+    """The owner changes AGENT_BRAIN and the running application follows, with
+    the API client kept underneath for what the session does not do."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data").mkdir()
+    class ClaudeClient:                      # only its name matters here
+        def plan_page(self, *a, **k):
+            return {}
+
+    api = ClaudeClient()
+    agent = page_agent.PageAgent.__new__(page_agent.PageAgent)
+    agent.claude, agent.config = api, SimpleNamespace()
+    agent.job = SimpleNamespace(company="R+L Carriers", title="Network Engineer")
+
+    monkeypatch.setenv("AGENT_BRAIN", "session")
+    agent.follow_the_chosen_brain()
+    assert type(agent.claude).__name__ == "SessionPlanner"
+    assert agent.claude.now_applying == "R+L Carriers -- Network Engineer"
+
+    monkeypatch.setenv("AGENT_BRAIN", "api")
+    agent.follow_the_chosen_brain()
+    assert agent.claude is api

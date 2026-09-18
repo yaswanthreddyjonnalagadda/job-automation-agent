@@ -737,6 +737,39 @@ class PageAgent:
             self._list_retries += 1
         return rejected
 
+    def follow_the_chosen_brain(self) -> None:
+        """Who works out the answers -- the session the owner is talking to, or
+        the API -- read afresh each page from AGENT_BRAIN.
+
+        It is decided here rather than where the run starts because apply_flow
+        cannot reload itself while it is running: this is what lets the owner
+        move an application already half filled in from one to the other.
+        """
+        try:
+            import os
+            from dotenv import load_dotenv
+            load_dotenv()
+            wanted = (os.getenv("AGENT_BRAIN", "api") or "api").strip().lower()
+        except Exception:
+            return
+        # Only the two real brains are swapped: a run given something else on
+        # purpose (a test, a stub) keeps what it was given.
+        if type(self.claude).__name__ not in ("ClaudeClient", "SessionPlanner"):
+            return
+        on_session = type(self.claude).__name__ == "SessionPlanner"
+        if wanted == "session" and not on_session:
+            try:
+                import session_planner
+                brain = session_planner.SessionPlanner(self.config, folder=Path("data"), fallback=self.claude)
+                brain.now_applying = f"{getattr(self.job, 'company', '')} -- {getattr(self.job, 'title', '')}"
+                self.claude = brain
+                logger.info("BRAIN: asking the Claude Code session about each page (no API credit used)")
+            except Exception as exc:
+                logger.warning("Could not hand over to the session: %s", str(exc)[:120])
+        elif wanted != "session" and on_session:
+            self.claude = self.claude._fallback
+            logger.info("BRAIN: back to asking the API about each page")
+
     def wake_loading_control(self, page, snapshot: str) -> bool:
         """Clicks a control that is still a spinner, so it draws itself.
 
@@ -934,6 +967,7 @@ class PageAgent:
             if self.wake_loading_control(page, snapshot):
                 self.settle(page, 2_000)
                 continue
+            self.follow_the_chosen_brain()
             try:
                 plan = PagePlan.from_json(self.claude.plan_page(compact_snapshot(snapshot), self.facts(controls),
                                                                feedback))
