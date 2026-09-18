@@ -1,0 +1,21 @@
+2026-09-18 17:11:31,371 [INFO] Applying as Yaswanth Reddy Jonnalagadda <jonnalagaddayaswanth06@gmail.com>
+2026-09-18 17:11:32,295 [INFO] Job: Associate Principal, Cloud Engineering @ The Options Clearing Corporation (Dallas, TX)
+2026-09-18 17:11:33,151 [INFO] Starting the application. It will stop at Review and wait for you.
+2026-09-18 17:11:38,030 [INFO] jd_analyzer: Built job description: Associate Principal, Cloud Engineering @ The Options Clearing Corporation (other), 4 local keywords matched
+2026-09-18 17:11:38,203 [INFO] apply_flow: Tracking to Postgres
+2026-09-18 17:11:38,229 [INFO] db: Recorded application: Associate Principal, Cloud Engineering @ The Options Clearing Corporation (id=191)
+2026-09-18 17:11:38,465 [INFO] resume_parser: Extracted 4738 characters of resume text from data\Yaswanth_J__Cloud_Networking&Security_Resume.pdf
+2026-09-18 17:11:38,871 [INFO] apply_flow: BRAIN: this run asks the Claude Code session about each page (no API credit used)
+2026-09-18 17:11:38,911 [INFO] apply_flow: REUSED_RESUME: Yaswanth_Jonnalagadda_Resume_TheOptionsClearingCorpor.pdf was already tailored for this posting -- not generating another
+2026-09-18 17:11:42,762 [INFO] browser_automation: Closed 10 browser process(es) left over from an earlier run
+2026-09-18 17:11:42,763 [INFO] browser_automation: Using chrome with the profile at C:\Users\jonna\job-automation-agent\browser_profile (Chrome already running is OK)
+2026-09-18 17:11:44,207 [INFO] apply_flow: Working the application with the reading agent
+2026-09-18 17:11:46,646 [INFO] db: Stored resume (5788 bytes) for 3862af10024e
+2026-09-18 17:11:47,099 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_page.txt, the plan goes in data\_plan_page.json
+2026-09-18 17:13:47,154 [INFO] session_planner: still waiting for the session (2 minutes)
+2026-09-18 17:15:47,214 [INFO] session_planner: still waiting for the session (4 minutes)
+2026-09-18 17:17:47,260 [INFO] session_planner: still waiting for the session (6 minutes)
+2026-09-18 17:19:47,301 [INFO] session_planner: still waiting for the session (8 minutes)
+2026-09-18 17:21:47,375 [INFO] session_planner: still waiting for the session (10 minutes)
+2026-09-18 17:23:47,432 [INFO] session_planner: still waiting for the session (12 minutes)
+2026-09-18 17:25:47,481 [INFO] session_planner: still waiting for the session (14 minutes)

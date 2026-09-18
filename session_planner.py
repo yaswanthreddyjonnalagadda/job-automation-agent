@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,7 +50,22 @@ class SessionPlanner:
         self._folder.mkdir(parents=True, exist_ok=True)
         self._fallback = fallback
         self._timeout = int(timeout_seconds or os.getenv("SESSION_BRAIN_TIMEOUT", DEFAULT_TIMEOUT))
-        self.now_applying = ""      # the job being applied to, so the session knows what it is reading
+        self._now_applying = ""     # the job being applied to, so the session knows what it is reading
+
+    @property
+    def now_applying(self) -> str:
+        return self._now_applying
+
+    @now_applying.setter
+    def now_applying(self, job: str) -> None:
+        """Two applications running at once had one answer between them: the
+        first to look took the other's plan. Each names its own files."""
+        self._now_applying = job or ""
+        slug = re.sub(r"[^A-Za-z0-9]+", "_", self._now_applying).strip("_")[:60]
+        if slug:
+            self.ASK_JSON = f"_ask_{slug}.json"
+            self.ASK_PAGE = f"_ask_{slug}.txt"
+            self.PLAN_JSON = f"_plan_{slug}.json"
 
     # -- what the session answers -------------------------------------------
     def plan_page(self, snapshot: str, facts: dict[str, Any], feedback: str = "") -> dict[str, Any]:
