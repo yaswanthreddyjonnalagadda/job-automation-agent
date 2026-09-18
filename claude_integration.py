@@ -410,12 +410,16 @@ Rules -- follow every one:
             (f"\n\nWHAT HAPPENED LAST TIME ON THIS PAGE: {feedback}" if feedback else "")
         )
         last_error: Exception | None = None
+        cut_off = ""
         for attempt in range(1, self._config.claude_max_retries + 1):
             try:
                 response = self._client.messages.create(
-                    model=self._config.anthropic_model, max_tokens=6_000, system=self.PLAN_PAGE_SYSTEM,
-                    messages=[{"role": "user", "content": user}],
-                    timeout=max(self._config.claude_request_timeout, 120.0),
+                    # Room for a long form: R+L's application page is 43,000
+                    # characters and its plan ran past a 6,000-token reply,
+                    # which arrived cut off and could not be read at all.
+                    model=self._config.anthropic_model, max_tokens=16_000, system=self.PLAN_PAGE_SYSTEM,
+                    messages=[{"role": "user", "content": user + cut_off}],
+                    timeout=max(self._config.claude_request_timeout, 180.0),
                 )
                 raw = "".join(block.text for block in response.content if block.type == "text")
                 start, end = raw.find("{"), raw.rfind("}")
@@ -425,6 +429,10 @@ Rules -- follow every one:
                 time.sleep(2 ** attempt)
             except ClaudeIntegrationError as exc:
                 last_error = exc
+                # The reply was cut off mid-JSON: ask for a shorter one.
+                cut_off = ("\n\nYour last reply was cut off before the JSON ended. Answer again with JSON only, "
+                           "and keep it short: the questions that matter most on this page (at most 20 answers), "
+                           "no explanations.")
             except Exception as exc:
                 last_error = exc
                 break
