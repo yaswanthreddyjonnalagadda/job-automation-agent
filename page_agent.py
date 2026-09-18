@@ -314,6 +314,15 @@ def _same_answer(a: str, b: str) -> bool:
     return a == b or a.startswith(b + " ") or b.startswith(a + " ")
 
 
+def still_loading(snapshot: str) -> bool:
+    """True while the page is still drawing part of itself.
+
+    R+L's "How did you hear about us?" was a spinner when the agent read it,
+    so there was nothing to choose and the question came back to the owner.
+    """
+    return bool(re.search(r"^\s*- progressbar\b", snapshot or "", re.MULTILINE))
+
+
 def frames_loading(snapshot: str) -> bool:
     """True when a frame on the page has nothing in it yet."""
     lines = [l for l in (snapshot or "").splitlines() if l.strip()]
@@ -1705,7 +1714,7 @@ class PageAgent:
         """
         deadline = time.time() + wait_seconds
         snapshot = self.snapshot(page)
-        while frames_loading(snapshot) and time.time() < deadline:
+        while (frames_loading(snapshot) or still_loading(snapshot)) and time.time() < deadline:
             self.tab(page).wait_for_timeout(1_000)
             snapshot = self.snapshot(page)
         return snapshot
