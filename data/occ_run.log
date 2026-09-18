@@ -31,10 +31,11 @@
 2026-09-18 17:55:48,296 [INFO] session_planner: still waiting for the session (44 minutes)
 2026-09-18 17:57:48,341 [INFO] session_planner: still waiting for the session (46 minutes)
 2026-09-18 17:59:48,391 [INFO] session_planner: still waiting for the session (48 minutes)
-e Options Clearing Corporation (jo***@gmail.com)
-2026-09-18 17:28:28,042 [INFO] page_agent: LOGIN: signed in with Google
-2026-09-18 17:28:29,810 [INFO] page_agent: KNEW THE WHOLE PAGE: 0 filled in, pressing 'Continue' -- nobody was asked
-2026-09-18 17:28:29,811 [INFO] page_agent: READ: application form (answered from what the agent already knew) -- 0 to answer, 0 for you, next: next step 'Continue'
+2026-09-18 18:01:48,431 [INFO] session_planner: still waiting for the session (50 minutes)
+2026-09-18 18:03:48,483 [INFO] session_planner: still waiting for the session (52 minutes)
+2026-09-18 18:05:48,528 [INFO] session_planner: still waiting for the session (54 minutes)
+2026-09-18 18:07:48,567 [INFO] session_planner: still waiting for the session (56 minutes)
+ for you, next: next step 'Continue'
 2026-09-18 17:28:30,652 [INFO] page_agent: NEXT: pressing 'Continue'
 2026-09-18 17:28:33,616 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
 2026-09-18 17:29:11,633 [INFO] session_planner: THE SESSION ANSWERED after 38 seconds
@@ -193,3 +194,32 @@ e Options Clearing Corporation (jo***@gmail.com)
 2026-09-18 17:54:26,653 [INFO] page_agent: ANSWERED: 'Role Description' -> 'Scaled enterprise LAN and WAN for 2,000 users acro' (from resume)
 2026-09-18 17:54:27,592 [INFO] page_agent: NOT STUCK: Job Title = 'Network Engineer'; Company = 'Capri Global Capital Ltd.'; Location = 'Hyderabad, India'; Month = '5'; Month = '7' -- reading the page again
 2026-09-18 17:54:28,003 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:56:28,060 [INFO] session_planner: still waiting for the session (2 minutes)
+2026-09-18 17:58:28,111 [INFO] session_planner: still waiting for the session (4 minutes)
+2026-09-18 18:00:28,164 [INFO] session_planner: still waiting for the session (6 minutes)
+2026-09-18 18:00:48,179 [INFO] session_planner: THE SESSION ANSWERED after 380 seconds
+2026-09-18 18:00:48,182 [INFO] page_agent: READ: application form (My Experience -- pausing for the agent to pick up its checked way of filling date boxes) -- 0 to answer, 1 for you, next: none ''
+2026-09-18 18:00:49,148 [INFO] db: Updated application 3862af10024e -> status=needs_user_review
+2026-09-18 18:00:49,149 [INFO] apply_flow: ==============================================================================
+2026-09-18 18:00:49,149 [INFO] apply_flow: NEEDS YOU -- Associate Principal, Cloud Engineering at The Options Clearing Corporation
+2026-09-18 18:00:49,150 [INFO] apply_flow:   needs your answer: From Month (the agent is being taught to check a date box really took the value)
+2026-09-18 18:00:49,150 [INFO] apply_flow:   worth checking: corrected 'First Name' from 'YASWANTH' to 'Yaswanth Reddy' (from your profile.first_name)
+2026-09-18 18:00:49,151 [INFO] apply_flow:   worth checking: Month: could not choose '02' -- this form doesn't offer it
+2026-09-18 18:00:49,152 [INFO] apply_flow:   worth checking: Year: could not choose '2025' -- this form doesn't offer it
+2026-09-18 18:00:49,152 [INFO] apply_flow: Deal with it in the browser window, then press Continue on the dashboard: the agent reads the page again and carries on.
+2026-09-18 18:00:49,152 [INFO] apply_flow: ==============================================================================
+2026-09-18 18:00:49,178 [INFO] browser_automation: Waiting for review signal at C:\Users\jonna\job-automation-agent\data\_signal_The_Options_Clearing_Corporation_Associa.txt ...
+2026-09-18 18:00:49,192 [INFO] browser_automation: Received review signal: reload_code
+2026-09-18 18:00:49,357 [INFO] apply_flow: Reloaded the profile as well
+2026-09-18 18:00:49,387 [INFO] apply_flow: Reloaded browser_automation.py and the site adapters in place
+2026-09-18 18:00:49,397 [INFO] apply_flow: Reloaded the reading agent, your profile and the instructions
+2026-09-18 18:00:49,699 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 18:01:01,710 [INFO] session_planner: THE SESSION ANSWERED after 12 seconds
+2026-09-18 18:01:01,713 [INFO] page_agent: READ: application form (My Experience -- Capri Global ran from May 2019 to July 2021) -- 2 to answer, 0 for you, next: none ''
+2026-09-18 18:01:02,079 [INFO] page_agent: ANSWERED: 'Month' -> '5' (from resume)
+2026-09-18 18:01:02,468 [INFO] page_agent: ANSWERED: 'Month' -> '7' (from resume)
+2026-09-18 18:01:06,756 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 18:01:22,768 [INFO] session_planner: THE SESSION ANSWERED after 16 seconds
+2026-09-18 18:01:22,770 [INFO] page_agent: READ: application form (My Experience -- adding the education) -- 0 to answer, 0 for you, next: next step 'Add education'
+2026-09-18 18:01:23,714 [INFO] page_agent: NEXT: pressing 'Add'
+2026-09-18 18:01:26,578 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json

@@ -825,3 +825,14 @@ def test_a_spinbutton_is_typed_into_not_set(page, resume_file):
     box = next(c for c in page_agent.parse_snapshot(agent.snapshot(page)) if c.role == "spinbutton")
     assert agent.do(page, page_agent.Answer(box.ref, "Year", "fill", "2025", "resume"), box)
     assert page.evaluate("document.body.dataset.typed") == "2025"
+
+
+def test_a_page_that_asks_to_be_refreshed_is_refreshed(page, resume_file):
+    """Workday answered a press with "Something went wrong. Please refresh the
+    page and then try again." -- a passing fault the agent can clear itself."""
+    page.set_content('<h1>Something went wrong</h1><p>Please refresh the page and then try again.</p>')
+    agent = make_agent(SimpleNamespace(plan_page=lambda s, f, fb="": {
+        "page_kind": "other", "answers": [], "next": {"ref": "", "label": "", "kind": "none"}}), resume_file)
+    assert agent._refreshed is False
+    agent.run(page)
+    assert agent._refreshed is True          # it did what the page asked

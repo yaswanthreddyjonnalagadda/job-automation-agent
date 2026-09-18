@@ -64,6 +64,11 @@ NEVER_PRESS = re.compile(
 OPENS_A_FILE_DIALOG = re.compile(
     r"autofill|upload|attach|choose (a )?file|browse|import (your )?(profile|resume|cv)", re.IGNORECASE)
 
+# Workday answered a page press with "Something went wrong. Please refresh the
+# page and then try again." -- a passing fault, and the page says what to do.
+ASKS_FOR_A_REFRESH = re.compile(r"something went wrong|please (refresh|reload) (the |this )?page|"
+                                r"try (again|reloading)", re.IGNORECASE)
+
 CONFIRMATION_TEXT = re.compile(
     r"thank you for (applying|your application|your interest)|application (has been |was )?(received|submitted)|"
     r"(successfully|now) submitted|we('ve| have) received your application|your application is complete|"
@@ -583,6 +588,7 @@ class PageAgent:
         self._opened_entries: set[str] = set()
         self._woken: set[str] = set()
         self._list_retries = 0
+        self._refreshed = False
         self._shapes: dict[int, int] = {}
         self._asked_for_new_code = False
         self._signed_in_at: set[str] = set()
@@ -615,6 +621,7 @@ class PageAgent:
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
                               ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set), ("_list_retries", int), ("_shapes", dict),
+                             ("_refreshed", bool),
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict)):
             if not hasattr(self, name):
                 setattr(self, name, default())
@@ -1137,6 +1144,17 @@ class PageAgent:
             logger.info("READ: %s%s -- %d to answer, %d for you, next: %s %r", plan.page_kind.replace("_", " "),
                         f" ({plan.step})" if plan.step else "", len(plan.answers), len(plan.for_owner),
                         plan.next_kind.replace("_", " "), plan.next_label[:40])
+
+            if ASKS_FOR_A_REFRESH.search(snapshot) and not self._refreshed:
+                # Do what the page asks, once, keeping everything already saved.
+                self._refreshed = True
+                logger.info("The page says something went wrong and asks to be refreshed -- refreshing it")
+                try:
+                    tab.reload(wait_until="domcontentloaded", timeout=60_000)
+                except Exception as exc:
+                    logger.debug("Could not refresh: %s", str(exc).splitlines()[0][:70])
+                self.settle(page, 3_000)
+                continue
 
             said = ACCOUNT_ERROR.search(snapshot)
             if said or (plan.page_kind == "error" and not controls):
