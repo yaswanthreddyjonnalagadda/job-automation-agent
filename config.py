@@ -100,7 +100,15 @@ class UserProfile:
     current_position_title: str = "Senior Network and Security Engineer"
     current_employer_type: str = "Financial Services"
     current_employment_dates: str = "February 2025 - Present"
-    reason_for_leaving: str = "Currently employed"
+    # The current role: the owner's contract is ending (2026-09-18).
+    reason_for_leaving: str = "Contract ending"
+    # Why each job ended, in the owner's own words (2026-09-18). A work-history
+    # entry takes the reason for its own employer, not the current one's.
+    reasons_for_leaving: tuple[tuple[str, str], ...] = (
+        ("Capital One", "Contract is coming to an end"),
+        ("Freddie Mac", "Contract ended"),
+        ("Capri Global Capital Ltd.", "Left to study for a master's degree"),
+    )
     current_employer_location: str = "McLean, VA"
     employment_statuses: tuple[str, ...] = ("Full-Time",)  # Text field or checkboxes: select all that apply
     # Where the user actually finds these postings (their answer, 2026-09-16).

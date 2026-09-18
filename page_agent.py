@@ -505,6 +505,7 @@ class PageAgent:
         self._pressed: dict[str, int] = {}
         self._opened_entries: set[str] = set()
         self._woken: set[str] = set()
+        self._list_retries = 0
         self._asked_for_new_code = False
         self._signed_in_at: set[str] = set()
         self._google_tried: set[str] = set()
@@ -534,7 +535,7 @@ class PageAgent:
         anything added since starts empty rather than failing."""
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
-                              ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set),
+                              ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set), ("_list_retries", int),
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict)):
             if not hasattr(self, name):
                 setattr(self, name, default())
@@ -684,6 +685,26 @@ class PageAgent:
         except Exception as exc:
             logger.debug("Could not open the entry: %s", str(exc).splitlines()[0][:100])
             return False
+
+    def rejected_by_the_page(self, snapshot: str, controls: list[Control]) -> list[str]:
+        """Fields the page still calls empty although they show a value.
+
+        R+L kept saying "The Employer State or Province field is required"
+        after the agent had typed VA into it: that box only takes a value
+        picked from its own list.
+        """
+        if self._list_retries >= 2:
+            return []
+        errors = " ".join(re.findall(r"- alert[^:\n]*: (.+)", snapshot or ""))
+        named = re.findall(r"The ([A-Za-z/ ]{3,40}?) field is required", errors)
+        rejected = []
+        for name in dict.fromkeys(named):
+            shown = next((c for c in controls if _same_question(c.question, name) and c.answer), None)
+            if shown is not None:
+                rejected.append(f"{name} (it shows {shown.answer[:30]!r})")
+        if rejected:
+            self._list_retries += 1
+        return rejected
 
     def wake_loading_control(self, page, snapshot: str) -> bool:
         """Clicks a control that is still a spinner, so it draws itself.
@@ -941,7 +962,12 @@ class PageAgent:
             if blockers:
                 return Outcome("owner_needed", page, blockers)
 
-            moved, page, feedback = self.press_next(page, plan, after)
+            rejected = self.rejected_by_the_page(self.snapshot(page), after)
+            if rejected:
+                feedback = ("the page still says these are empty although they show a value, so type nothing: "
+                            "open each one's list and choose from it -- " + "; ".join(rejected))
+                logger.info("REFUSED BY THE PAGE: %s", "; ".join(rejected)[:160])
+            moved, page, feedback = self.press_next(page, plan, after) if not rejected else ("retry", page, feedback)
             if moved == "moved":
                 stick_tries = 0
             if moved == "submitted":
