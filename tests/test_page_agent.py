@@ -661,30 +661,47 @@ HUMAN_CHECK_PAGE = ('<p>A verification code was sent to you@example.com. To subm
                     '<input id="c"><button>Submit application</button>')
 
 
-def _code_agent(page, resume_file, done=True):
+DIGIT_BOXES = ("<h2>Verify your email</h2>"
+               "<p>The verification code was sent to this email address: you@example.com.</p>" +
+               "".join(f'<input type="number" aria-label="Enter verification code digit {i} of six.">'
+                       for i in range(1, 7)) +
+               "<button onclick=\"document.body.dataset.verified = "
+               "[...document.querySelectorAll('input')].map(i => i.value).join('')\">Verify</button>")
+
+
+def _code_agent(page, resume_file, code="482913"):
     agent = make_agent(Planner(), resume_file)
-    calls = []
-    agent.assistant.complete_emailed_passcode = lambda pg: calls.append("read the mail") or done
-    return agent, calls
+    agent.assistant.passcode_from_gmail = lambda pg, previous="", wait_seconds=150: code
+    return agent
 
 
 def test_a_code_for_the_owners_own_account_is_entered(page, resume_file):
     """R+L Carriers asks for a code emailed to the applicant -- the step the
     owner approved on 2026-09-15 for account setup and sign-in."""
     page.set_content(CODE_PAGE)
-    agent, calls = _code_agent(page, resume_file)
+    agent = _code_agent(page, resume_file)
     controls = page_agent.parse_snapshot(agent.snapshot(page))
     assert agent.complete_account_code(page, controls, agent.snapshot(page)) is True
-    assert calls == ["read the mail"]
+    assert page.locator("#c").input_value() == "482913"
+
+
+def test_a_code_split_across_one_box_per_digit_is_typed(page, resume_file):
+    """R+L gives the code six boxes, one per digit, that advance themselves."""
+    page.set_content(DIGIT_BOXES)
+    agent = _code_agent(page, resume_file)
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    assert agent.complete_account_code(page, controls, agent.snapshot(page)) is True
+    assert page.evaluate("[...document.querySelectorAll('input')].map(i => i.value).join('')") == "482913"
+    assert page.evaluate("document.body.dataset.verified") == "482913"   # Verify was pressed
 
 
 def test_a_code_asked_for_to_prove_a_human_is_never_entered(page, resume_file):
     """Harbinger's page says the code is there to confirm a human is applying."""
     page.set_content(HUMAN_CHECK_PAGE)
-    agent, calls = _code_agent(page, resume_file)
+    agent = _code_agent(page, resume_file)
     controls = page_agent.parse_snapshot(agent.snapshot(page))
     assert agent.complete_account_code(page, controls, agent.snapshot(page)) is False
-    assert calls == []
+    assert page.locator("#c").input_value() == ""
 
 
 def test_no_code_is_read_without_permission_to_read_the_mail(page, resume_file):
@@ -692,8 +709,7 @@ def test_no_code_is_read_without_permission_to_read_the_mail(page, resume_file):
     page.set_content(CODE_PAGE)
     profile = dataclasses.replace(config.get_user_profile(), check_gmail_for_confirmation=False)
     agent = make_agent(Planner(), resume_file, profile=profile)
-    calls = []
-    agent.assistant.complete_emailed_passcode = lambda pg: calls.append("read") or True
+    agent.assistant.passcode_from_gmail = lambda *a, **k: "482913"
     controls = page_agent.parse_snapshot(agent.snapshot(page))
     assert agent.complete_account_code(page, controls, agent.snapshot(page)) is False
-    assert calls == []
+    assert page.locator("#c").input_value() == ""

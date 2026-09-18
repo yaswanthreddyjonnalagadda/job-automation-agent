@@ -586,10 +586,12 @@ class PageAgent:
         applying is refused -- Harbinger's says so beside its reCAPTCHA, and
         that one is the owner's to enter.
         """
-        box = next((c for c in controls
-                    if c.role in ("textbox", "searchbox") and not c.answer and not c.disabled
-                    and self.ACCOUNT_CODE.search(f"{c.question} {c.container}")), None)
-        if box is None or self._code_tries >= 2:
+        # R+L Carriers gives the code a box per digit ("Enter verification code
+        # digit 1 of six."), so one box or six, they are all the same step.
+        boxes = [c for c in controls
+                 if c.role in ("textbox", "searchbox", "spinbutton") and not c.answer and not c.disabled
+                 and self.ACCOUNT_CODE.search(f"{c.question} {c.container}")]
+        if not boxes or self._code_tries >= 2:
             return False
         if not getattr(self.profile, "check_gmail_for_confirmation", False):
             logger.info("A code was emailed to you; the agent may not read your mail")
@@ -599,8 +601,27 @@ class PageAgent:
             return False
         self._code_tries += 1
         logger.info("CODE: a code was emailed to you for this account -- fetching it from your mail")
+        tab = self.tab(page)
         try:
-            return bool(self.assistant.complete_emailed_passcode(self.tab(page)))
+            code = self.assistant.passcode_from_gmail(tab)
+            if not code:
+                logger.info("CODE: it has not arrived yet -- the agent will look again")
+                return False
+            first = self.locate(page, boxes[0].ref)
+            first.click(timeout=5_000)
+            if len(boxes) > 1:
+                tab.keyboard.type(code, delay=150)   # a box per digit: they advance themselves
+            else:
+                first.fill(code, timeout=5_000)
+            tab.wait_for_timeout(800)
+            press = next((c for c in parse_snapshot(self.snapshot(page))
+                          if c.role in PRESS_ROLES and re.match(
+                              r"^\s*(verify|continue|confirm|next|submit code)\s*$",
+                              " ".join((c.name or "").split()), re.IGNORECASE)), None)
+            if press is not None:
+                self.locate(page, press.ref).click(timeout=8_000)
+            logger.info("CODE: entered the code from your mail")
+            return True
         except Exception as exc:
             logger.warning("Could not complete the emailed code: %s", str(exc).splitlines()[0][:120])
             return False
