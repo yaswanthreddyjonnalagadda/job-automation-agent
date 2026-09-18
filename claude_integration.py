@@ -403,6 +403,12 @@ Rules -- follow every one:
    years of work history). Do not leave such a section to the owner.
 13. A question whose choices are a group of radio buttons or Yes/No buttons with no reference of their own:
    give the GROUP's ref with action "check" and the value as the choice's words.
+13a. An entry form open on the page (its boxes are filled and it shows Cancel beside its own Add/Save button)
+   must be saved before anything else: answer whatever is still empty in it, then give that Add/Save button
+   as next with kind "next_step". Where the page shows its own complaint next to a box ("The End Date field
+   is required", "(1 issue)"), that box is what is stopping it -- answer that one first.
+13b. For the job the owner still holds, tick "Current Job" / "I currently work here" (action "check")
+   instead of inventing an end date; a job that has ended gets its real end date from the resume.
 14. A confirmation that the application was received: page_kind "confirmation", next kind "none".
 """
 

@@ -761,5 +761,21 @@ def test_an_add_button_is_not_pressed_over_and_over(page, resume_file):
         "page_kind": "application_form", "answers": [],
         "next": {"ref": ref_of(s, "button", "Add Experience"), "label": "Add Experience", "kind": "next_step"}})
     outcome = make_agent(planner, resume_file).run(page)
-    assert outcome.kind == "owner_needed" and "pressed" in outcome.summary
-    assert int(page.evaluate("document.body.dataset.n")) <= 2
+    assert outcome.kind == "owner_needed"          # it stops rather than pressing forever
+    assert int(page.evaluate("document.body.dataset.n")) <= 4   # enough for three jobs, then it stops
+
+
+def test_a_tick_box_is_clicked_by_the_label_beside_it(page, resume_file):
+    """R+L's "Current Job" box carries no reference at all: the only part of it
+    the page lets anyone click is the label drawn next to it, and without that
+    the entry could never be saved (it kept asking for an end date)."""
+    page.set_content(
+        '<div><span role="checkbox" aria-checked="false" aria-label="Current Job"></span>'
+        '<div role="status" style="cursor:pointer" '
+        'onclick="document.body.dataset.ticked = 1">Current Job</div></div>')
+    agent = make_agent(Planner(), resume_file)
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    box = next(c for c in controls if c.name == "Current Job")
+    assert box.role == "checkbox"
+    assert agent.do(page, page_agent.Answer(box.ref, "Current Job", "check", "Yes", "resume"), box)
+    assert page.evaluate("document.body.dataset.ticked") == "1"

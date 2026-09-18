@@ -146,6 +146,7 @@ def parse_snapshot(snapshot: str) -> list[Control]:
     last_text = ""
     last_text_indent = -1
     radio_context = ""   # the question above a run of radio buttons with no group of their own
+    unclickable = None   # a tick box with no reference: (role, name, checked, lines left to find it)
     for raw in (snapshot or "").splitlines():
         # A line whose text holds a colon comes wrapped in quotes:
         #   - 'heading "Apply: Network Engineer" [level=1] [ref=e2]'
@@ -176,14 +177,30 @@ def parse_snapshot(snapshot: str) -> list[Control]:
                     and not controls[-1].value and role == "text":
                 controls[-1].name = (value or name).strip()[:200]
         control = None
+        if unclickable is not None:
+            # R+L draws "Current Job" as a box with no reference at all; the
+            # only thing that can be clicked is the label drawn beside it.
+            # Whatever carries the box's own words is what a person clicks:
+            # a label, the status line beside it, or the generic Oracle draws.
+            beside = ref_m and role in ("generic", "status", "text", "paragraph", "label", "listitem")
+            if beside and _same_question((value or name).strip(), unclickable[1]):
+                controls.append(Control(ref=ref_m.group(1), role=unclickable[0], name=unclickable[1],
+                                        checked=unclickable[2], container=parent_group))
+                unclickable = None
+            elif unclickable[3] <= 0 or (ref_m and role in ANSWER_ROLES):
+                unclickable = None
+            else:
+                unclickable = (*unclickable[:3], unclickable[3] - 1)
         if role in ("radio", "checkbox", "switch") and not ref_m and owner is not None \
-                and owner.role in ("radiogroup", "group", "list", "listbox", "region"):
+                and owner.role in ("radiogroup", "group", "list", "listbox"):
             # R+L's yes/no radios carry no reference of their own -- only their
             # group does -- so nothing could be clicked and the question came
             # back to the owner. They are the group's choices.
             owner.options.append(name or value)
             if "[checked]" in attrs:
                 owner.selected_option = name or value
+        elif role in ("radio", "checkbox", "switch") and not ref_m and (name or value):
+            unclickable = (role, name or value, "[checked]" in attrs, 6)
         if role in OPTION_ROLES and owner is not None and owner.role in ("combobox", "listbox"):
             owner.options.append(name or value)
             if "[selected]" in attrs:
@@ -526,6 +543,7 @@ class PageAgent:
         # forgiven, so a resumed run can try them again.
         self._signed_in_at = set()
         self._emailed_in = set()
+        self._pressed = {}          # a resumed run may press on again
         self._retried_after_error = False
         self._code_tries = 0        # a resumed run may fetch a fresh code
         self._asked_for_new_code = False
@@ -948,6 +966,10 @@ class PageAgent:
             # every answer the agent gave is really there.
             self.settle(page, 800)
             after = parse_snapshot(self.snapshot(page))
+            if given:
+                # Something was filled in, so pressing "Add" again is progress
+                # (the next job), not the loop the count is there to stop.
+                self._pressed.clear()
             missing = self.not_stuck(given, after) + list(getattr(self, "failed", []))
             if missing:
                 stick_tries += 1
@@ -1392,12 +1414,30 @@ class PageAgent:
                 target.click(timeout=5_000)
             return True
         if answer.action == "choose":
-            return self.choose(page, control, answer.value)
+            return self.choose(page, control, answer.value, self._page_controls(page))
         return False
 
-    def choose(self, page, control: Control, value: str) -> bool:
+    def choose(self, page, control: Control, value: str, controls: list[Control] = ()) -> bool:
         tab = self.tab(page)
         loc = self.locate(page, control.ref)
+        # Some widgets only open from a button of their own ("Open the drop-down
+        # list for Employer State or Province."), and typing into the box alone
+        # leaves the form saying the field is empty.
+        opener = next((c for c in controls if c.role in PRESS_ROLES and re.search(
+            r"open the (drop-?down )?list for", c.name or "", re.IGNORECASE)
+            and _same_question(re.sub(r"^.*list for\s*|[.]$", "", c.name or "", flags=re.IGNORECASE),
+                               control.question)), None)
+        if opener is not None:
+            try:
+                self.locate(page, opener.ref).click(timeout=4_000)
+                offered = self._wait_for_choices(page)
+                index = self._pick(offered, value)
+                if index is not None:
+                    self.locate(page, offered[index][0]).click(timeout=5_000)
+                    tab.wait_for_timeout(500)
+                    return True
+            except Exception as exc:
+                logger.debug("The list button did not help: %s", str(exc).splitlines()[0][:90])
         best = self.assistant._best_option
         if control.options:
             index = best(control.options, [value])
@@ -1487,6 +1527,12 @@ class PageAgent:
         if len(words) > 1:
             terms.append(words[0])
         return terms[:3]
+
+    def _page_controls(self, page) -> list[Control]:
+        try:
+            return parse_snapshot(self.snapshot(page))
+        except Exception:
+            return []
 
     def _choose_inside(self, page, control: Control, value: str) -> bool:
         """Clicks the choice inside a group -- by what it says, since it has no
@@ -1617,9 +1663,14 @@ class PageAgent:
         # "Add Experience" was pressed again and again, leaving empty entries
         # behind, because the entry could not be filled in.
         pressed = self._pressed.get(label.lower(), 0)
-        if re.match(r"^\s*add\b", label, re.IGNORECASE) and pressed >= 2:
-            return "stop", page, (f"{label!r} has been pressed {pressed} times and the entries are still not "
-                                  f"filled in -- the rest of this section needs you")
+        # An entry form open on the page has its own confirm button, named like
+        # the one that opened it ("Add Experience" beside "Cancel"): pressing
+        # that saves the entry, and is never the loop this count is for.
+        confirming = any(c.role in PRESS_ROLES and re.fullmatch(r"\s*cancel\s*", c.name or "", re.IGNORECASE)
+                         for c in controls)
+        if re.match(r"^\s*add\b", label, re.IGNORECASE) and pressed >= 4 and not confirming:
+            return "stop", page, (f"{label!r} has been pressed {pressed} times and nothing was filled in "
+                                  f"between -- the rest of this section needs you")
         self._pressed[label.lower()] = pressed + 1
         if re.search(r"linked ?in|indeed|facebook|apple|microsoft", label, re.IGNORECASE):
             return "stop", page, f"{label!r} is a sign-in the agent never uses"
