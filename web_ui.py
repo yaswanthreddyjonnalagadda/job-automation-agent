@@ -353,15 +353,43 @@ def local_time(value: datetime | None, fmt: str = "%d %b %I:%M %p") -> str:
 # ----------------------------------------------------------------------
 # Views
 # ----------------------------------------------------------------------
+PAGE_SIZE = 10        # applications shown at first, and added by "Show 10 more"
+MAX_SHOWN = 300       # as far as the list grows
+
+
 @app.get("/")
 def index():
     tracker = get_tracker()
     apps = tracker.list_all()
     signals = sorted(p.name for p in (BASE_DIR / "data").glob("_signal_*.txt"))
     runs = _current_runs()
+    try:
+        show = int(request.args.get("show", PAGE_SIZE))
+    except ValueError:
+        show = PAGE_SIZE
+    show = max(PAGE_SIZE, min(show, MAX_SHOWN))
+    counts = {}
+    for record in apps:
+        counts[record.status] = counts.get(record.status, 0) + 1
     return render_template_string(
-        INDEX_HTML, apps=apps, runs=runs, signals=signals, error=request.args.get("error"),
+        INDEX_HTML, apps=apps[:show], total=len(apps), shown=min(show, len(apps)),
+        more=min(show + PAGE_SIZE, MAX_SHOWN), can_show_more=show < min(len(apps), MAX_SHOWN),
+        counts=counts, runs=latest_run(runs), signals=signals, error=request.args.get("error"),
     )
+
+
+def latest_run(runs: dict) -> dict:
+    """The one run worth showing: the live one, else the most recent.
+
+    The list grew with every application of the session and pushed everything
+    else down the page; only the run in hand is of any use.
+    """
+    if not runs:
+        return {}
+    live = [(url, run) for url, run in runs.items() if run.get("state") == "running"]
+    if live:
+        return dict(live[-1:])
+    return dict(list(runs.items())[-1:])
 
 
 def _running_url() -> str:
@@ -508,29 +536,45 @@ def log():
 # Templates
 # ----------------------------------------------------------------------
 BASE_CSS = """
-:root { --bg:#f6f7f9; --card:#fff; --ink:#1a1f2b; --muted:#6b7280; --line:#e5e7eb;
-        --accent:#1a3d6d; --ok:#0f7b46; }
+:root { --bg:#f4f6f9; --card:#fff; --ink:#151a23; --muted:#6b7280; --line:#e6e9ef;
+        --accent:#1a3d6d; --accent-soft:#eaf1fb; --ok:#0f7b46; --shadow:0 1px 2px rgba(16,24,40,.06),
+        0 1px 3px rgba(16,24,40,.04); }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--ink);
-       font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; }
-.wrap { max-width:1000px; margin:0 auto; padding:24px 16px 60px; }
-h1 { font-size:20px; margin:0 0 4px; }
-h2 { font-size:15px; margin:28px 0 10px; color:var(--muted);
-     text-transform:uppercase; letter-spacing:.04em; }
-.sub { color:var(--muted); margin:0 0 20px; }
-.card { background:var(--card); border:1px solid var(--line); border-radius:10px;
-        padding:16px; margin-bottom:14px; }
-form.apply { display:flex; gap:8px; }
-input[type=url] { flex:1; padding:10px 12px; border:1px solid var(--line);
-                  border-radius:8px; font-size:14px; }
-button { background:var(--accent); color:#fff; border:0; border-radius:8px;
-         padding:10px 16px; font-size:14px; cursor:pointer; }
-button.ghost { background:#eef1f5; color:var(--ink); }
+       font:14px/1.55 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+       -webkit-font-smoothing:antialiased; }
+.wrap { max-width:1060px; margin:0 auto; padding:28px 18px 72px; }
+h1 { font-size:22px; letter-spacing:-.01em; margin:0 0 4px; }
+h2 { font-size:12px; margin:26px 0 10px; color:var(--muted); font-weight:600;
+     text-transform:uppercase; letter-spacing:.06em; }
+.sub { color:var(--muted); margin:0 0 18px; max-width:70ch; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+        padding:16px; margin-bottom:14px; box-shadow:var(--shadow); }
+.card.flush { padding:4px 4px 0; }
+.card h3 { margin:0 0 4px; font-size:15px; }
+/* The counters across the top: what is done, what is waiting. */
+.stats { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:16px; }
+.stat { background:var(--card); border:1px solid var(--line); border-radius:12px;
+        padding:10px 14px; min-width:104px; box-shadow:var(--shadow); }
+.stat b { display:block; font-size:20px; line-height:1.2; }
+.stat span { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+form.apply { display:flex; gap:8px; flex-wrap:wrap; }
+input[type=url] { flex:1; min-width:280px; padding:11px 13px; border:1px solid var(--line);
+                  border-radius:9px; font-size:14px; background:#fff; color:var(--ink); }
+input[type=url]:focus { outline:2px solid var(--accent-soft); border-color:var(--accent); }
+button { background:var(--accent); color:#fff; border:0; border-radius:9px;
+         padding:10px 16px; font-size:14px; font-weight:600; cursor:pointer; }
+button:hover { filter:brightness(1.08); }
+button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+button.ghost { background:#f1f4f8; color:var(--ink); border:1px solid var(--line);
+               padding:6px 12px; font-weight:500; line-height:1.4; }
+button.ghost:hover { background:#e6ebf3; }
 table { width:100%; border-collapse:collapse; }
-th,td { text-align:left; padding:10px 10px; border-bottom:1px solid var(--line);
+th,td { text-align:left; padding:11px 12px; border-bottom:1px solid var(--line);
         vertical-align:top; }
-th { color:var(--muted); font-weight:600; font-size:12px; white-space:nowrap;
-     text-transform:uppercase; letter-spacing:.04em; }
+th { color:var(--muted); font-weight:600; font-size:11px; white-space:nowrap;
+     text-transform:uppercase; letter-spacing:.06em; background:#fbfcfe; }
+tbody tr:hover { background:#fafbfd; }
 tr:last-child td { border-bottom:0; }
 /* Dates broke across two lines in the middle of a row, so nothing lined up. */
 td.when, th.when { white-space:nowrap; width:1%; color:var(--muted); }
@@ -540,37 +584,64 @@ td.actions, th.actions { width:1%; white-space:nowrap; text-align:right; }
 .row-actions { display:flex; gap:6px; align-items:center; justify-content:flex-end; }
 .row-actions form { margin:0; display:inline-flex; }
 .row-actions a { margin-right:2px; }
-button.ghost { background:#eef1f5; color:var(--ink); border:1px solid var(--line);
-               padding:6px 12px; line-height:1.4; }
-button.ghost:hover { background:#e3e8ef; }
 /* The label column of a detail table wrapped "Applied via" onto two lines. */
 td.label, th.label { width:130px; white-space:nowrap; color:var(--muted);
                      font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
 td.num, th.num { text-align:right; white-space:nowrap; width:1%; }
+/* The employer needs room: "Charles Schwab" was breaking across two lines. */
+td.company, th.company { width:210px; }
+td.company strong { display:block; }
+td.role, th.role { min-width:190px; }
+/* A note under a row spans the table instead of squeezing into the last column. */
+tr.note-row td { border-bottom:1px solid var(--line); padding:0 12px 11px; }
+tr.note-row + tr td { border-top:0; }
+td.logcell { width:1%; white-space:nowrap; }
+.run-url { word-break:break-all; color:var(--muted); font-size:13px; }
 .links a { white-space:nowrap; }
 .links a + a::before { content:" · "; color:var(--muted); }
-a { color:var(--accent); }
-.pill { display:inline-block; padding:2px 9px; border-radius:99px; font-size:12px;
-        font-weight:600; }
+a { color:var(--accent); text-decoration:none; }
+a:hover { text-decoration:underline; }
+.pill { display:inline-block; padding:3px 10px; border-radius:99px; font-size:12px;
+        font-weight:600; white-space:nowrap; }
 .submitted { background:#e3f5ea; color:#0f7b46; }
 .ready_to_submit { background:#dff0ff; color:#0b5394; }
 .needs_user_review { background:#ffe9d6; color:#9a4a00; }
 .form_filled { background:#fff3d6; color:#8a5a00; }
 .skipped { background:#eceef1; color:#6b7280; }
 .prepared { background:#e7effa; color:#1a3d6d; }
-.err { background:#fde8e8; color:#9b1c1c; padding:10px 12px; border-radius:8px;
-       margin-bottom:14px; }
+.err { background:#fde8e8; color:#9b1c1c; padding:11px 13px; border-radius:9px;
+       margin-bottom:14px; border:1px solid #f7cdcd; }
 .muted { color:var(--muted); }
-code { background:#eef1f5; padding:1px 5px; border-radius:4px; font-size:12px; }
+.note { color:var(--muted); max-width:460px; margin-top:4px; }
+code { background:#eef1f5; padding:1px 6px; border-radius:5px; font-size:12px; }
+.live { display:inline-flex; align-items:center; gap:6px; font-weight:600; color:var(--ok); }
+.live::before { content:""; width:8px; height:8px; border-radius:50%; background:var(--ok);
+                box-shadow:0 0 0 3px rgba(15,123,70,.15); }
+.more { display:flex; align-items:center; justify-content:space-between; gap:10px;
+        padding:12px 12px 14px; }
+@media (max-width:720px) {
+  th.when, td.when { display:none; }
+  .row-actions { flex-wrap:wrap; justify-content:flex-start; }
+  td.actions, th.actions { text-align:left; }
+}
 """
+
 
 INDEX_HTML = """
 <!doctype html><meta charset="utf-8"><title>Job Applications</title>
 <style>""" + BASE_CSS + """</style>
 <div class="wrap">
   <h1>Job Applications</h1>
-  <p class="sub">Paste an employer job URL. Workday, Greenhouse and Lever are read
-     automatically; job boards and staffing agencies are rejected.</p>
+  <p class="sub">Paste an employer's job link and the agent applies: it reads each page,
+     answers from your profile, attaches your tailored resume and submits when every
+     check passes. Job boards and staffing agencies are refused.</p>
+
+  <div class="stats">
+    <div class="stat"><b>{{ total }}</b><span>tracked</span></div>
+    <div class="stat"><b>{{ counts.get('submitted', 0) }}</b><span>submitted</span></div>
+    <div class="stat"><b>{{ counts.get('needs_user_review', 0) + counts.get('ready_to_submit', 0) }}</b><span>waiting for you</span></div>
+    <div class="stat"><b>{{ counts.get('skipped', 0) }}</b><span>skipped</span></div>
+  </div>
 
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
 
@@ -578,14 +649,18 @@ INDEX_HTML = """
   {% if waiting %}
     <div class="card" style="border-left:4px solid #0b5394">
       <strong>Waiting for you</strong>
-      <p class="muted" style="margin:6px 0 0">The agent fills and checks the form, then stops.
-         Review each one in the browser window and click Submit there.</p>
+      <p class="muted" style="margin:6px 0 0">The agent stopped on these and said why &mdash; a CAPTCHA,
+         a question your profile doesn't answer, or something the site refused. Deal with it in the
+         browser window and press <strong>Continue</strong>; the agent carries on from there.</p>
       <ul style="margin:8px 0 0 18px; padding:0">
-        {% for a in waiting %}
+        {% for a in waiting[:5] %}
           <li><a href="/application/{{ a.id }}">{{ a.title }}</a> at {{ a.company }} &mdash;
               <span class="pill {{ a.status }}">{{ a.status.replace('_', ' ') }}</span>
               <span class="muted">{{ (a.notes or '')[:140] }}</span></li>
         {% endfor %}
+        {% if waiting|length > 5 %}
+          <li class="muted">and {{ waiting|length - 5 }} more below</li>
+        {% endif %}
       </ul>
     </div>
   {% endif %}
@@ -605,21 +680,22 @@ INDEX_HTML = """
       setInterval(() => {
         const box = document.querySelector("input[name=url]");
         if (box && (box.value || document.activeElement === box)) return;
-        location.reload();
+        location.reload();   // the address keeps ?show=, so the list stays where it was
       }, 5000);
     </script>
   {% endif %}
 
   {% if runs %}
-    <h2>Runs this session</h2>
+    <h2>Current run</h2>
     <div class="card">
       <table>
-        <tr><th>URL</th><th>State</th><th>Log</th><th class="actions">Controls</th></tr>
+        <tr><th>Job</th><th>State</th><th class="label">Log</th><th class="actions">Controls</th></tr>
         {% for url, r in runs.items() %}
         <tr>
-          <td style="word-break:break-all">{{ url[:90] }}</td>
-          <td>{{ r.state }}{% if r.started %}<span class="muted"> &middot; started {{ r.started|local }}</span>{% endif %}</td>
-          <td class="label">{% if r.log %}<a href="/log?path={{ r.log }}" target="_blank">view</a>{% else %}<span class="muted">&mdash;</span>{% endif %}</td>
+          <td class="run-url">{{ url[:110] }}{% if url|length > 110 %}&hellip;{% endif %}</td>
+          <td>{% if r.state == 'running' %}<span class="live">running</span>{% else %}{{ r.state }}{% endif %}
+              {% if r.started %}<span class="muted"> &middot; started {{ r.started|local }}</span>{% endif %}</td>
+          <td class="logcell">{% if r.log %}<a href="/log?path={{ r.log }}" target="_blank">view log</a>{% else %}<span class="muted">&mdash;</span>{% endif %}</td>
           <td class="actions"><div class="row-actions">
             {% if r.state == 'running' %}
             <form method="post" action="/reload-agent">
@@ -641,13 +717,14 @@ INDEX_HTML = """
   {% if signals %}
     <h2>Waiting for a decision</h2>
     <div class="card">
-      <p class="muted">A run is waiting at a form. Review it in the browser window and
-         click <strong>Submit</strong> there yourself &mdash; the agent never submits.</p>
+      <p class="muted">The agent is waiting at a page. Press <strong>Continue</strong> and it reads
+         the page again and carries on &mdash; after you have dealt with whatever it stopped for.</p>
       {% for s in signals %}
         <div style="margin-top:8px">
           <code>{{ s }}</code>
           <form method="post" action="/signal/{{ s }}" style="display:inline">
-            <button class="ghost" name="decision" value="refresh">Refresh</button>
+            <button name="decision" value="continue">Continue</button>
+            <button class="ghost" name="decision" value="reload_code">Reload agent code</button>
             <button class="ghost" name="decision" value="skip">Skip</button>
             <button class="ghost" name="decision" value="close">Close browser</button>
           </form>
@@ -656,15 +733,15 @@ INDEX_HTML = """
     </div>
   {% endif %}
 
-  <h2>Tracked applications ({{ apps|length }})</h2>
-  <div class="card">
+  <h2>Applications</h2>
+  <div class="card flush">
     <table>
-      <tr><th>Company</th><th>Role</th><th class="status">Status</th>
+      <tr><th class="company">Company</th><th class="role">Role</th><th class="status">Status</th>
           <th class="when">Updated</th><th class="actions">Controls</th></tr>
       {% for a in apps %}
       <tr>
-        <td><strong>{{ a.company }}</strong><br><span class="muted">{{ a.location or '' }}</span></td>
-        <td>{{ a.title }}</td>
+        <td class="company"><strong>{{ a.company }}</strong><span class="muted">{{ a.location or '' }}</span></td>
+        <td class="role">{{ a.title }}</td>
         <td class="status"><span class="pill {{ a.status }}">{{ a.status.replace('_',' ') }}</span></td>
         <td class="when">{{ a.updated_at|local }}</td>
         <td class="actions"><div class="row-actions">
@@ -681,16 +758,23 @@ INDEX_HTML = """
                 onsubmit="return confirm('Delete {{ a.company }} -- {{ a.title[:60] }}?\n\nThis removes the application, its documents, its answers and its history. It cannot be undone.');">
             <button class="ghost" title="Remove this application and everything filed under it">Delete</button>
           </form>
-        </div>
-          {% if a.status in ('ready_to_submit', 'needs_user_review') %}
-            <div class="muted" style="max-width:420px">{{ (a.notes or '')[:180] }}</div>
-          {% endif %}
-        </td>
+        </div></td>
       </tr>
+      {% if a.status in ('ready_to_submit', 'needs_user_review') and a.notes %}
+        <tr class="note-row"><td colspan="5" class="note">{{ a.notes[:220] }}</td></tr>
+      {% endif %}
       {% else %}
       <tr><td colspan="5" class="muted">Nothing tracked yet.</td></tr>
       {% endfor %}
     </table>
+    <div class="more">
+      <span class="muted">Showing {{ shown }} of {{ total }}</span>
+      {% if can_show_more %}
+        <a href="/?show={{ more }}"><button class="ghost" type="button">Show {{ more - shown }} more</button></a>
+      {% elif total > 10 %}
+        <a href="/?show=10"><button class="ghost" type="button">Show fewer</button></a>
+      {% endif %}
+    </div>
   </div>
 </div>
 """

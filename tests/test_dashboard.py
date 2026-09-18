@@ -167,3 +167,42 @@ def test_an_error_page_is_not_recorded_as_progress():
     assert not apply_flow.worth_returning_to("about:blank")
     assert apply_flow.worth_returning_to(
         "https://jobs.dayforcehcm.com/en-US/lumos/CANDIDATEPORTAL/jobs/9416/apply/manualApplication")
+
+
+# ---------------------------------------------------------------- the list and the run
+def _records(count, status="submitted"):
+    return [Record(app_id=i + 1, status=status, url=f"https://jobs.example.com/apply/{i}")
+            for i in range(count)]
+
+
+def test_ten_applications_at_a_time_growing_to_three_hundred(client, monkeypatch):
+    records = _records(320)
+    monkeypatch.setattr(web_ui, "get_tracker", lambda: type("T", (), {"list_all": lambda s: records})())
+
+    first = client.get("/").get_data(as_text=True)
+    assert first.count('class="company"') == 10 + 1          # ten rows and the heading
+    assert "Showing 10 of 320" in first and "Show 10 more" in first
+    assert "/?show=20" in first
+
+    twenty = client.get("/?show=20").get_data(as_text=True)
+    assert twenty.count('class="company"') == 20 + 1
+    assert "Showing 20 of 320" in twenty
+
+    # It grows to 300 and no further.
+    full = client.get("/?show=999").get_data(as_text=True)
+    assert full.count('class="company"') == 300 + 1
+    assert "Showing 300 of 320" in full and "Show 10 more" not in full
+
+
+def test_only_one_run_is_shown_at_the_top(client, monkeypatch):
+    monkeypatch.setattr(web_ui, "get_tracker", lambda: type("T", (), {"list_all": lambda s: _records(2)})())
+    web_ui._RUNS.update({
+        "https://jobs.example.com/old": {"state": "finished -- submitted", "log": "", "pid": None, "started": None},
+        "https://jobs.example.com/older": {"state": "ended", "log": "", "pid": None, "started": None},
+        "https://jobs.example.com/live": {"state": "running", "log": "", "pid": 4242, "started": None},
+    })
+    monkeypatch.setattr(web_ui, "_process_alive", lambda pid: pid == 4242)
+    page = client.get("/").get_data(as_text=True)
+    assert "Current run" in page
+    assert "jobs.example.com/live" in page
+    assert "jobs.example.com/old" not in page and "jobs.example.com/older" not in page
