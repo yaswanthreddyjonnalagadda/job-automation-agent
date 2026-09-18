@@ -10,6 +10,7 @@ import re
 
 import pytest
 
+import config
 import safety
 from browser_automation import JobApplicationAssistant
 
@@ -691,7 +692,8 @@ def test_a_questionnaires_employment_questions_are_answered(page, agent):
     assert page.input_value("#q2") == "Financial Services"
     assert page.input_value("#q3") == "February 2025 - Present"
     assert page.input_value("#q4") == "Senior Network and Security Engineer"
-    assert page.input_value("#q5") == "Currently employed"
+    # The owner's own words for the current role (2026-09-18): the contract is ending.
+    assert page.input_value("#q5") == config.get_user_profile().reason_for_leaving
 
 
 BAMBOO_MENU = """
