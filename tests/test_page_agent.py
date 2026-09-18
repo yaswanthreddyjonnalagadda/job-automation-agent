@@ -535,3 +535,83 @@ def test_linkedin_sign_in_is_never_used(page, resume_file):
                                next_label="Sign in with LinkedIn")
     moved, _page, why = agent.press_next(page, plan, controls)
     assert moved == "stop" and ("never uses" in why or "never presses" in why)
+
+
+# --- Harbinger's form (Greenhouse): choices, wording, the cover letter -------------
+
+def test_choices_are_read_even_when_their_text_sits_in_a_child():
+    """School, Discipline and Veteran Status were all read as empty and left
+    blank: these options carry their words in a child element."""
+    offered = page_agent.choices_in('''- listbox [ref=e9]:
+  - option [ref=e10]:
+    - generic [ref=e11]: Jawaharlal Nehru Technological University
+  - option [ref=e12]: Jawaharlal Nehru University''')
+    assert offered == [("e10", "Jawaharlal Nehru Technological University"),
+                       ("e12", "Jawaharlal Nehru University")]
+
+
+def test_the_closest_wording_is_taken_but_never_the_opposite():
+    veteran = ["I am not a protected veteran",
+               "I identify as one or more of the classifications of a protected veteran",
+               "I don't wish to answer"]
+    assert veteran[page_agent.closest_choice(veteran, "I am not a veteran")] == "I am not a protected veteran"
+    # A choice that reverses the meaning is never taken.
+    assert page_agent.closest_choice(veteran[1:], "I am not a veteran") is None
+    assert page_agent.closest_choice(["No, I do not have a disability"], "Yes, I have a disability") is None
+
+
+COVER_LETTER_FORM = """<html><body><h1>Apply</h1><p>Step 1 of 1</p>
+<form onsubmit="localStorage.cover = cover.files.length ? cover.files[0].name : '';
+                localStorage.resume = resume.files.length ? resume.files[0].name : '';
+                location.href='/done'; return false;">
+  <fieldset><legend>Resume/CV*</legend><input type="file" id="resume" aria-label="Attach"></fieldset>
+  <fieldset><legend>Cover Letter</legend><input type="file" id="cover" aria-label="Attach"></fieldset>
+  <button type="submit">Submit Application</button>
+</form></body></html>"""
+
+
+def test_the_cover_letter_is_attached_where_the_form_asks_for_one(page, resume_file, tmp_path):
+    """Harbinger's "Cover Letter" section has one control, called "Attach",
+    and the cover letter was forgotten again."""
+    letter = tmp_path / "Yaswanth_Jonnalagadda_Cover_Letter.pdf"
+    letter.write_bytes(b"%PDF-1.4 letter")
+    page.route("https://jobs.example.com/**", lambda route: route.fulfill(
+        status=200, content_type="text/html",
+        body=DONE if route.request.url.endswith("/done") else COVER_LETTER_FORM))
+    page.goto("https://jobs.example.com/apply/1")
+
+    planner = SimpleNamespace(plan_page=lambda snapshot, facts, feedback="": (
+        {"page_kind": "confirmation", "next": {"kind": "none"}} if "Thank you" in snapshot else
+        {"page_kind": "application_form", "answers": [],
+         "next": {"ref": ref_of(snapshot, "button", "Submit Application"), "label": "Submit Application",
+                  "kind": "final_submit"}}))
+    agent = make_agent(planner, resume_file)
+    agent.cover_letter = lambda: (letter.with_suffix(".txt"), letter)
+    outcome = agent.run(page)
+    assert outcome.kind == "submitted", outcome.reasons
+    assert stored(page, "resume") == resume_file.name
+    assert stored(page, "cover") == letter.name          # attached without being told to
+
+
+def test_a_document_already_attached_is_not_attached_again(page, resume_file):
+    filled = COVER_LETTER_FORM.replace('<legend>Cover Letter</legend>',
+                                       '<legend>Cover Letter</legend><p>Cover_Letter.pdf</p>')
+    page.route("https://jobs.example.com/**", lambda route: route.fulfill(
+        status=200, content_type="text/html",
+        body=DONE if route.request.url.endswith("/done") else filled))
+    page.goto("https://jobs.example.com/apply/1")
+    asked = []
+    agent = make_agent(SimpleNamespace(plan_page=lambda s, f, fb="": (
+        {"page_kind": "confirmation", "next": {"kind": "none"}} if "Thank you" in s else
+        {"page_kind": "application_form", "answers": [],
+         "next": {"ref": ref_of(s, "button", "Submit Application"), "label": "Submit Application",
+                  "kind": "final_submit"}})), resume_file)
+    agent.cover_letter = lambda: asked.append("written") or None
+    agent.run(page)
+    assert asked == []                                   # no cover letter written for a section that has one
+
+
+def test_the_owners_name_is_given_as_they_write_it():
+    import config
+    profile = config.get_user_profile()
+    assert (profile.first_name, profile.middle_name, profile.last_name) == ("Yaswanth Reddy", "", "Jonnalagadda")

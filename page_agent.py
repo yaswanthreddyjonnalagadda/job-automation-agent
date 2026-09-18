@@ -88,13 +88,20 @@ class Control:
     selected: bool = False
     disabled: bool = False
     group: str = ""                       # the question a radio button belongs to
+    container: str = ""                   # the section it sits in ("Cover Letter")
     context: str = ""                     # nearby text, when the control has no name of its own
     options: list[str] = field(default_factory=list)
     selected_option: str = ""
 
+    GENERIC_NAMES = re.compile(r"^(attach|choose file|upload( file)?|browse|add file|select file)$", re.IGNORECASE)
+
     @property
     def question(self) -> str:
-        return self.group or self.name or self.context
+        if self.group:
+            return self.group
+        if self.name and not self.GENERIC_NAMES.match(self.name.strip()):
+            return self.name
+        return self.container or self.name or self.context
 
     @property
     def answer(self) -> str:
@@ -175,7 +182,7 @@ def parse_snapshot(snapshot: str) -> list[Control]:
                 ref=ref_m.group(1), role=role, name=name, value=shown,
                 checked="[checked]" in attrs or "[checked=true]" in attrs, selected="[selected]" in attrs,
                 disabled="[disabled]" in attrs, group=(parent_group or radio_context) if role == "radio" else "",
-                context="" if name else last_text)
+                container=parent_group, context="" if name else last_text)
             controls.append(control)
         if role in ("group", "radiogroup") and name:
             stack.append((indent, name, None))
@@ -184,6 +191,23 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         else:
             stack.append((indent, "", None))
     return controls
+
+
+def _section_holds_a_file(snapshot: str, section: str) -> bool:
+    """True when the section already shows an attached file."""
+    if not section:
+        return False
+    lines = (snapshot or "").splitlines()
+    for i, line in enumerate(lines):
+        if not re.search(rf'- (group|region) "{re.escape(section)}[^"]*"', line):
+            continue
+        indent = len(line) - len(line.lstrip())
+        for later in lines[i + 1:]:
+            if later.strip() and len(later) - len(later.lstrip()) <= indent:
+                break
+            if re.search(r"\.(pdf|docx?|txt|rtf)\b|remove file", later, re.IGNORECASE):
+                return True
+    return False
 
 
 def host_of(url: str) -> str:
@@ -223,6 +247,69 @@ def frames_loading(snapshot: str) -> bool:
         if not [c for c in children if re.sub(r"^- (text|generic)(\s*\[[^\]]*\])*:?\s*$", "", c)]:
             return True
     return False
+
+
+def choices_in(snapshot: str) -> list[tuple[str, str]]:
+    """(reference, text) for every choice a list is showing.
+
+    Some lists (Greenhouse's) give their options no name of their own and put
+    the words in a child element, so the agent read them as empty and could
+    choose nothing -- School, Discipline and Veteran Status were all left blank.
+    """
+    lines = (snapshot or "").splitlines()
+    found: list[tuple[str, str]] = []
+    holders: list[tuple[int, str]] = []   # the lists open on the page
+    for i, line in enumerate(lines):
+        m = _LINE.match(line)
+        if not m:
+            continue
+        indent_here = len(m.group("indent"))
+        while holders and holders[-1][0] >= indent_here:
+            holders.pop()
+        if m.group("role") in ("listbox", "menu", "grid", "tree", "combobox", "dialog"):
+            holders.append((indent_here, m.group("role")))
+        if m.group("role") not in OPTION_ROLES:
+            continue
+        # A plain bullet is not a choice: the job description's own list was
+        # being read as the School dropdown's options.
+        if m.group("role") in ("listitem", "gridcell") and not holders:
+            continue
+        ref = re.search(r"\[ref=([\w-]+)\]", m.group("attrs") or "")
+        if not ref:
+            continue
+        words = [_unquote(m.group("name") or ""), _unquote(m.group("value") or "")]
+        indent = len(m.group("indent"))
+        for later in lines[i + 1:]:
+            child = _LINE.match(later)
+            if not child or len(child.group("indent")) <= indent:
+                break
+            words += [_unquote(child.group("name") or ""), _unquote(child.group("value") or "")]
+        text = " ".join(w for w in (" ".join(words)).split() if w)[:160]
+        if text:
+            found.append((ref.group(1), text))
+    return found
+
+
+def closest_choice(choices: list[str], wanted: str) -> Optional[int]:
+    """The choice that says what the profile says, where the words differ.
+
+    The profile says "I am not a veteran"; the form offers "I am not a
+    protected veteran". A choice that reverses the meaning ("I identify as
+    ...") is never taken: a yes/no in the answer must appear in the choice too.
+    """
+    want = set(_plain(wanted).split()) - {"i", "a", "an", "the", "of", "or", "am", "is", "are", "to", "my"}
+    if not want:
+        return None
+    negative = bool(re.search(r"\b(not|no|never|none)\b", _plain(wanted)))
+    best, best_score = None, 0.0
+    for i, choice in enumerate(choices):
+        words = set(_plain(choice).split())
+        if not words or negative != bool(re.search(r"\b(not|no|never|none)\b", _plain(choice))):
+            continue
+        score = len(want & words) / len(want)
+        if score > best_score:
+            best, best_score = i, score
+    return best if best_score >= 0.6 else None
 
 
 def compact_snapshot(snapshot: str, limit: int = 60_000) -> str:
@@ -320,6 +407,7 @@ class PageAgent:
         self.pages_read = 0
         self.written: dict[str, str] = {}          # question -> value the agent put there
         self._letter: Optional[tuple[Path, Path]] = None
+        self._letter_attached = False
         self._signed_in_at: set[str] = set()
         self._google_tried: set[str] = set()
         self._retried_after_error = False
@@ -346,7 +434,7 @@ class PageAgent:
         anything added since starts empty rather than failing."""
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
-                              ("_emailed_in", set), ("_created_at", set),
+                              ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool),
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict)):
             if not hasattr(self, name):
                 setattr(self, name, default())
@@ -576,7 +664,9 @@ class PageAgent:
                     return Outcome("submitted", page, ["the site confirmed the application"])
                 return Outcome("owner_needed", page, ["the site says this application was already sent"])
 
-            given = self.correct_from_profile(page, plan, controls) + self.apply_answers(page, plan, controls)
+            given = (self.correct_from_profile(page, plan, controls)
+                     + self.apply_answers(page, plan, controls)
+                     + self.attach_documents(page, snapshot, controls))
 
             # Read back what is on the page now, whoever filled it, and check
             # every answer the agent gave is really there.
@@ -628,7 +718,14 @@ class PageAgent:
                 done = False
                 logger.info("Could not answer %r: %s", answer.question[:60], str(exc).splitlines()[0][:100])
             if not done:
-                self.failed.append(f"{(control.question or answer.question)[:60]} = {answer.value[:40]!r}")
+                question = (control.question or answer.question)[:70]
+                if "*" in (control.question or "") or "*" in (control.name or ""):
+                    self.failed.append(f"{question} = {answer.value[:40]!r}")
+                else:
+                    note = f"{question}: could not choose {answer.value[:40]!r} -- this form doesn't offer it"
+                    if note not in self.notes:
+                        self.notes.append(note)
+                    logger.info("LEFT BLANK: %s", note)
             if done:
                 given.append((answer, control))
                 self.written[control.question or answer.question] = answer.value
@@ -695,6 +792,47 @@ class PageAgent:
             note = f"signed {control.question[:80]!r} on your behalf (your decision of 2026-09-17)"
             self.notes.append(note)
             logger.info("SIGNED: %s", note)
+        return given
+
+    def attach_documents(self, page, snapshot: str, controls: list[Control]) -> list[tuple[Answer, Control]]:
+        """Attaches the resume and the cover letter where the form asks for them.
+
+        Not left to the plan: Harbinger's form (Greenhouse) has a "Cover Letter"
+        section whose only control is called "Attach", and the cover letter was
+        forgotten again. A section that already holds a file is left alone.
+        """
+        given: list[tuple[Answer, Control]] = []
+        wanted = (("resume", re.compile(r"resume|\bcv\b", re.IGNORECASE), "upload_resume"),
+                  ("cover letter", re.compile(r"cover letter", re.IGNORECASE), "upload_cover_letter"))
+        for what, matches, action in wanted:
+            if action == "upload_resume" and (self.resume_uploaded or not self.resume_file):
+                continue
+            if action == "upload_cover_letter" and (self._letter_attached or self.cover_letter is None):
+                continue
+            control = next((c for c in controls
+                            if c.role in PRESS_ROLES | {"button"} and matches.search(f"{c.container} {c.name}")
+                            and re.search(r"attach|upload|choose|add|browse|file", c.name or "", re.IGNORECASE)), None)
+            if control is None:
+                continue
+            if _section_holds_a_file(snapshot, control.container or control.question):
+                if action == "upload_cover_letter":
+                    self._letter_attached = True
+                continue
+            path = self.resume_file if action == "upload_resume" else self._letter_file()
+            if not path:
+                logger.info("The form asks for a %s and none could be prepared", what)
+                continue
+            answer = Answer(control.ref, control.question or what, action, Path(path).name, "document")
+            try:
+                done = self.do(page, answer, control)
+            except Exception as exc:
+                done = False
+                logger.info("Could not attach the %s: %s", what, str(exc).splitlines()[0][:100])
+            if done:
+                given.append((answer, control))
+                if action == "upload_cover_letter":
+                    self._letter_attached = True
+                logger.info("ATTACHED: the %s (%s)", what, Path(path).name)
         return given
 
     def not_stuck(self, given: list[tuple[Answer, Control]], after: list[Control]) -> list[str]:
@@ -951,31 +1089,84 @@ class PageAgent:
                 return True
             except Exception:
                 pass   # a listbox drawn by script: pick the option instead
-        before = {c.ref for c in parse_snapshot(self.snapshot(page))}
+        before = {ref for ref, _text in choices_in(self.snapshot(page))}
         loc.click(timeout=5_000)
-        tab.wait_for_timeout(700)
-        options = [c for c in parse_snapshot(self.snapshot(page)) if c.role in OPTION_ROLES and c.ref not in before]
-        if not options or len(options) > 40:
-            # A type-ahead list shows its choices once something is typed.
-            try:
-                typing = self.locate(page, control.ref)
-                if control.role in ("combobox", "searchbox", "textbox"):
-                    typing.fill(value, timeout=4_000)
-                else:
-                    tab.keyboard.type(value, delay=30)
-                tab.wait_for_timeout(1_000)
-            except Exception:
-                pass
-            options = [c for c in parse_snapshot(self.snapshot(page)) if c.role in OPTION_ROLES]
-        names = [c.name or c.value for c in options]
-        index = best(names, [value]) if names else None
+        # A long list takes a moment to appear: read at 0.7s, it was empty, and
+        # School, Discipline and Veteran Status were all left blank.
+        offered = [(ref, text) for ref, text in self._wait_for_choices(page) if ref not in before]
+        index = self._pick(offered, value)
+        if index is None:
+            # A type-ahead list shows its choices once something is typed, and a
+            # long list needs narrowing down.
+            for typed in self._search_terms(value):
+                try:
+                    # Typed, not set: a list that searches as you type only
+                    # answers to real keystrokes.
+                    typing = self.locate(page, control.ref)
+                    typing.click(timeout=4_000)
+                    if control.role in ("combobox", "searchbox", "textbox"):
+                        typing.fill("", timeout=3_000)
+                    tab.keyboard.type(typed, delay=40)
+                except Exception:
+                    break
+                offered = self._wait_for_choices(page)
+                index = self._pick(offered, value)
+                if index is not None:
+                    break
+        if index is None and offered:
+            # The site's list simply does not have it (Greenhouse's school list
+            # has no "Jawaharlal Nehru Technological University"): "Other",
+            # where the list offers it, says so honestly.
+            other = next((i for i, (_ref, text) in enumerate(offered)
+                          if re.fullmatch(r"other( \(please specify\))?", text.strip(), re.IGNORECASE)), None)
+            if other is not None:
+                self.notes.append(f"{control.question[:70]}: {value[:50]!r} is not on this form's list, "
+                                  f"so the agent chose 'Other'")
+                logger.info("CHOICE: %r is not offered for %r -- taking 'Other'", value[:40], control.question[:40])
+                index = other
         if index is None:
             tab.keyboard.press("Escape")
-            logger.info("No choice matching %r for %r among %s", value, control.question[:50], names[:8])
+            logger.info("No choice matching %r for %r among %s", value, control.question[:50],
+                        [t for _r, t in offered][:8])
             return False
-        self.locate(page, options[index].ref).click(timeout=5_000)
+        self.locate(page, offered[index][0]).click(timeout=5_000)
         tab.wait_for_timeout(500)
         return True
+
+    def _wait_for_choices(self, page, seconds: float = 4.0) -> list[tuple[str, str]]:
+        """The choices a list is showing, once it has finished showing them."""
+        tab = self.tab(page)
+        deadline = time.time() + seconds
+        offered: list[tuple[str, str]] = []
+        while time.time() < deadline:
+            tab.wait_for_timeout(500)
+            offered = choices_in(self.snapshot(page))
+            if offered:
+                break
+        return offered
+
+    def _pick(self, offered: list[tuple[str, str]], value: str) -> Optional[int]:
+        """Which choice to take: the one that matches, else the closest."""
+        names = [text for _ref, text in offered]
+        if not names:
+            return None
+        index = self.assistant._best_option(names, [value])
+        if index is None:
+            index = closest_choice(names, value)
+            if index is not None:
+                logger.info("Closest choice to %r is %r", value[:40], names[index][:60])
+        return index
+
+    @staticmethod
+    def _search_terms(value: str) -> list[str]:
+        """What to type into a list that searches: the answer, then less of it."""
+        words = [w for w in re.split(r"[^\w&]+", value) if w]
+        terms = [value]
+        if len(words) > 3:
+            terms.append(" ".join(words[:3]))
+        if len(words) > 1:
+            terms.append(words[0])
+        return terms[:3]
 
     def _letter_file(self) -> Optional[Path]:
         if self._letter is None and self.cover_letter is not None:

@@ -38,6 +38,11 @@ class UserProfile:
     """The client's job-search profile. Not secret -- safe to keep in code."""
 
     full_name: str = "Yaswanth Reddy Jonnalagadda"
+    # Split as the owner gives it (2026-09-17), not guessed from the full name:
+    # forms were filled with "Yaswanth" / "Reddy Jonnalagadda".
+    first_name: str = "Yaswanth Reddy"
+    middle_name: str = ""          # none
+    last_name: str = "Jonnalagadda"
     email: str = "jonnalagaddayaswanth06@gmail.com"
     phone: str = "(571) 354-5212"  # from your resume -- correct this if it's wrong/outdated
     phone_mobile: str = "(571) 354-5212"  # mobile/cell phone

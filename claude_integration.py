@@ -383,9 +383,11 @@ Rules -- follow every one:
 8. Radio buttons and checkboxes: action "check" with the ref of the button whose label -- its name, or the
    text right after it -- is the answer. For "choose", give the value exactly as one of the offered choices when choices are listed; for a
    dropdown whose choices aren't listed, give the value to search for (e.g. "United States").
-9. Phone numbers: use the digits as in the profile; where a country code is asked separately, use the
+9. Names: use profile.first_name, profile.middle_name and profile.last_name exactly as given -- never split
+   the full name yourself. An empty middle name means there is none: leave that box empty.
+10. Phone numbers: use the digits as in the profile; where a country code is asked separately, use the
    profile's phone_country_code.
-10. next: the button or link that moves the application forward on this page (Next, Continue, Save and
+11. next: the button or link that moves the application forward on this page (Next, Continue, Save and
    Continue, Update Profile, Apply, Submit...). kind "final_submit" when pressing it sends the application
    (a last step, a review page, or "Submit Application"); "next_step" when more steps follow;
    "open_application" for Apply on a job posting or an apply-method chooser (prefer applying manually /
@@ -393,7 +395,7 @@ Rules -- follow every one:
    later, Cancel, Back, Withdraw, Log out, or sign-in with LinkedIn/Indeed/Facebook/Apple/Microsoft.
    Where a page offers "Sign in with Google" (or "Continue with Google"), that is always the sign-in to
    choose, ahead of email/password or any other provider (kind "sign_in"). "none" when nothing should be pressed.
-11. A confirmation that the application was received: page_kind "confirmation", next kind "none".
+12. A confirmation that the application was received: page_kind "confirmation", next kind "none".
 """
 
     def plan_page(self, snapshot: str, facts: dict[str, Any], feedback: str = "") -> dict[str, Any]:
