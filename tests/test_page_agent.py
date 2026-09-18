@@ -174,7 +174,9 @@ def test_a_whole_application_is_read_answered_and_submitted(page, resume_file):
     planner = Planner()
     outcome = make_agent(planner, resume_file).run(page)
     assert outcome.kind == "submitted", outcome.reasons
-    assert stored(page, "first") == "Yaswanth"
+    # The agent fills his name from the profile before anyone is asked, so it
+    # is the name as he writes it, not the one the page was offered.
+    assert stored(page, "first") == "Yaswanth Reddy"
     assert stored(page, "country") == "United States"
     assert stored(page, "sponsor") == "Yes"
     assert stored(page, "state") == "Virginia"          # the dropdown drawn by script
@@ -779,3 +781,18 @@ def test_a_tick_box_is_clicked_by_the_label_beside_it(page, resume_file):
     assert box.role == "checkbox"
     assert agent.do(page, page_agent.Answer(box.ref, "Current Job", "check", "Yes", "resume"), box)
     assert page.evaluate("document.body.dataset.ticked") == "1"
+
+
+def test_a_button_that_opens_a_file_dialog_is_given_the_resume(page, resume_file):
+    """Workday's "Autofill with Resume" opens the computer's own file dialog.
+    Nothing on the page can close that, and the run froze behind it."""
+    page.set_content('<h1>Start your application</h1>'
+                     '<input id="f" type="file" style="display:none" '
+                     'onchange="document.body.dataset.got = this.files[0].name">'
+                     '<button onclick="document.getElementById(\'f\').click()">Autofill with Resume</button>')
+    planner = SimpleNamespace(plan_page=lambda s, f, fb="": {
+        "page_kind": "application_form", "answers": [],
+        "next": {"ref": ref_of(s, "button", "Autofill with Resume"),
+                 "label": "Autofill with Resume", "kind": "next_step"}})
+    make_agent(planner, resume_file).run(page)
+    assert page.evaluate("document.body.dataset.got") == resume_file.name

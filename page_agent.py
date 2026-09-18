@@ -58,6 +58,12 @@ NEVER_PRESS = re.compile(
     r"\bback\b|previous|\bdelete\b|\bremove\b|linked ?in|\bindeed\b|facebook|twitter|\bprint\b",
     re.IGNORECASE)
 
+# Workday's "Autofill with Resume" opens the computer's own file dialog. That
+# dialog belongs to Windows, not to the page: nothing on the page can close it,
+# and a whole run sat frozen behind it until it was killed.
+OPENS_A_FILE_DIALOG = re.compile(
+    r"autofill|upload|attach|choose (a )?file|browse|import (your )?(profile|resume|cv)", re.IGNORECASE)
+
 CONFIRMATION_TEXT = re.compile(
     r"thank you for (applying|your application|your interest)|application (has been |was )?(received|submitted)|"
     r"(successfully|now) submitted|we('ve| have) received your application|your application is complete|"
@@ -281,6 +287,34 @@ def _detail_field(question: str) -> str:
         if pattern.search(question):
             return field
     return ""
+
+
+# Answers the owner has settled once and for all, and the profile field that
+# holds each. A form asks these in its own words on every site.
+_STANDING_ANSWERS: tuple[tuple[re.Pattern, str], ...] = (
+    (re.compile(r"sponsor", re.IGNORECASE), "requires_visa_sponsorship"),
+    (re.compile(r"legally (eligible|authori[sz]ed)|authori[sz]ed to work|right to work", re.IGNORECASE),
+     "legally_eligible_to_work"),
+    (re.compile(r"(ever )?(applied|been interviewed|interviewed) (at|with|for|here)|previously applied",
+                re.IGNORECASE), "applied_here_before"),
+    (re.compile(r"(relative|family member).{0,40}(employ|work)", re.IGNORECASE), "relatives_employed_here"),
+    (re.compile(r"drug (screen|test)|physical exam|pre-?employment screening", re.IGNORECASE),
+     "willing_drug_test_and_physical"),
+)
+
+# What a button that moves an application on is called, and what is never
+# pressed on the agent's own initiative.
+FORWARD_LABEL = re.compile(r"^(next|continue|save and continue|save & continue|save and next|next step|"
+                           r"submit|submit application|review|review and submit|proceed|"
+                           r"save and proceed|start application|begin)$", re.IGNORECASE)
+
+
+def required_questions(snapshot: str) -> set[str]:
+    """The questions a form marks with a star."""
+    marked = set(re.findall(r'- generic "([^"]{2,120})" \[ref=[\w-]+\]: "\*"', snapshot or ""))
+    marked |= {m.strip() for m in re.findall(r'- generic \[ref=[\w-]+\]: ([^\n]{2,120}?) \*$',
+                                             snapshot or "", re.MULTILINE)}
+    return {" ".join(q.split()) for q in marked if q.strip()}
 
 
 def _name_field(question: str) -> str:
@@ -892,6 +926,89 @@ class PageAgent:
             return False
 
     # -- facts Claude may answer from ---------------------------------------------
+    def known_answer(self, control: Control) -> tuple[str, str]:
+        """What the agent already knows for this box, and where it came from.
+
+        The owner's profile first -- his own details and the answers he has
+        settled once and for all -- then an answer he gave himself on an
+        earlier application. Nothing about an employer, a school or a
+        supervisor is answered this way: those belong to one entry, not to him.
+        """
+        question = control.question
+        if not question or safety.is_attestation(question):
+            return "", ""
+        field = _name_field(question) or _detail_field(question)
+        if field:
+            value = str(getattr(self.profile, field, "") or "").strip()
+            if value:
+                return value, f"profile.{field}"
+        for pattern, standing in _STANDING_ANSWERS:
+            if not pattern.search(question):
+                continue
+            held = getattr(self.profile, standing, None)
+            if isinstance(held, bool):
+                return ("Yes" if held else "No"), f"profile.{standing}"
+            value = str(held or "").strip()
+            if value:
+                return value, f"profile.{standing}"
+        if re.search(r"employer|company|school|university|supervisor|reference|previous|this position|"
+                     r"why (do|are) you", question, re.IGNORECASE):
+            return "", ""
+        if self.tracker is not None and hasattr(self.tracker, "recall_answer") \
+                and not safety.is_legal_status_question(question):
+            try:
+                for match in self.tracker.recall_answer(question, limit=3):
+                    said = (match.get("answer") or "").strip()
+                    if match.get("answered_by") == "user" and said \
+                            and _same_question(match.get("question") or "", question):
+                        return said, "owner_earlier_answer"
+            except Exception:
+                pass
+        return "", ""
+
+    def answer_what_is_known(self, page, controls: list[Control],
+                             required: set[str]) -> tuple[int, list[str]]:
+        """Fill in every box whose answer is already known, with no help from
+        anyone. Returns how many were filled and the questions still open.
+        """
+        filled, open_questions = 0, []
+        for control in controls:
+            if control.role not in ANSWER_ROLES or control.disabled or control.answer:
+                continue
+            if control.question in self.owner_answers:
+                continue
+            value, source = self.known_answer(control)
+            if not value:
+                # Every box still empty is left open, not only the starred
+                # ones: a form that marks nothing as required still has
+                # questions on it that only a reader can answer.
+                star = "*" if any(_same_question(control.question, q) for q in required) else ""
+                open_questions.append(control.question + star)
+                continue
+            action = "fill" if control.role in ("textbox", "searchbox") else "choose"
+            if control.role in ("checkbox", "switch", "radio") or control.holds_choices:
+                action = "check"
+            try:
+                answer = Answer(control.ref, control.question, action, value, source)
+                if self.do(page, answer, control):
+                    filled += 1
+                    self._remember(control, answer)
+                    logger.info("KNEW: %s = %r (%s)", control.question[:44], value[:34], source)
+            except Exception as exc:
+                logger.debug("Could not fill %r: %s", control.question[:40], str(exc).splitlines()[0][:70])
+        return filled, open_questions
+
+    def obvious_next(self, controls: list[Control]) -> Optional[Control]:
+        """The one control that plainly moves the application on, or None.
+
+        Only used when nothing on the page is still unanswered; anything
+        ambiguous is left for the brain to decide.
+        """
+        forward = [c for c in controls if c.role in PRESS_ROLES and c.name
+                   and FORWARD_LABEL.match(" ".join(c.name.split()))
+                   and not NEVER_PRESS.search(c.name) and not c.disabled]
+        return forward[0] if len(forward) == 1 else None
+
     def facts(self, controls: list[Control]) -> dict:
         profile = asdict(self.profile) if hasattr(self.profile, "__dataclass_fields__") else dict(vars(self.profile))
         phone, code = profile.get("phone", ""), profile.get("phone_country_code", "")
@@ -981,15 +1098,42 @@ class PageAgent:
             if self.wake_loading_control(page, snapshot):
                 self.settle(page, 2_000)
                 continue
-            self.follow_the_chosen_brain()
-            try:
-                plan = PagePlan.from_json(self.claude.plan_page(compact_snapshot(snapshot), self.facts(controls),
-                                                               feedback))
-            except Exception as exc:
-                message = str(exc)
-                if "out of credit" in message or "credit balance" in message.lower():
-                    return Outcome("owner_needed", page, [message.split(": ", 1)[-1][:200]])
-                return Outcome("owner_needed", page, [f"could not read this page ({message.splitlines()[0][:120]})"])
+            # What the owner has already settled is filled in here, by the agent
+            # itself: his own details and the answers he has given before. Only
+            # what is left over is worth anybody else's time.
+            required = required_questions(snapshot)
+            knew, still_open = self.answer_what_is_known(page, controls, required)
+            if knew:
+                self.settle(page, 800)
+                snapshot = self.read_when_loaded(page)
+                controls = parse_snapshot(snapshot)
+                still_open = [q for q in still_open
+                              if not any(_same_question(c.question, q) and c.answer for c in controls)]
+            plan = None
+            if not still_open:
+                forward = self.obvious_next(controls)
+                if forward is not None:
+                    logger.info("KNEW THE WHOLE PAGE: %d filled in, pressing %r -- nobody was asked",
+                                knew, (forward.name or "")[:40])
+                    plan = PagePlan(page_kind="application_form",
+                                    step="answered from what the agent already knew",
+                                    next_ref=forward.ref, next_label=forward.name,
+                                    next_kind=("final_submit" if safety.is_submit_label(forward.name)
+                                               else "next_step"))
+            if plan is None:
+                self.follow_the_chosen_brain()
+                if still_open:
+                    feedback = ((feedback + " | ") if feedback else "") + \
+                        "the agent could not answer these itself: " + "; ".join(still_open[:12])
+                try:
+                    plan = PagePlan.from_json(self.claude.plan_page(compact_snapshot(snapshot),
+                                                                    self.facts(controls), feedback))
+                except Exception as exc:
+                    message = str(exc)
+                    if "out of credit" in message or "credit balance" in message.lower():
+                        return Outcome("owner_needed", page, [message.split(": ", 1)[-1][:200]])
+                    return Outcome("owner_needed", page,
+                                   [f"could not read this page ({message.splitlines()[0][:120]})"])
             logger.info("READ: %s%s -- %d to answer, %d for you, next: %s %r", plan.page_kind.replace("_", " "),
                         f" ({plan.step})" if plan.step else "", len(plan.answers), len(plan.for_owner),
                         plan.next_kind.replace("_", " "), plan.next_label[:40])
@@ -1823,7 +1967,16 @@ class PageAgent:
         if submit_word:
             self.final_pressed = True   # a confirmation after any Submit counts
         pressed_at = time.time()
-        self.locate(page, control.ref).click(timeout=10_000)
+        if OPENS_A_FILE_DIALOG.search(label) and self.resume_file and Path(self.resume_file).is_file():
+            try:
+                with tab.expect_file_chooser(timeout=6_000) as chooser:
+                    self.locate(page, control.ref).click(timeout=10_000)
+                chooser.value.set_files(str(self.resume_file))
+                logger.info("FILE DIALOG: %r asked for a file, so the agent gave it the resume", label[:40])
+            except Exception:
+                pass          # no dialog came; the click itself still happened
+        else:
+            self.locate(page, control.ref).click(timeout=10_000)
         self.settle(page, 2_500)
         page = self.newest_tab(page, tabs_before)
         if final:
