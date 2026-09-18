@@ -430,6 +430,7 @@ class PageAgent:
         self._letter: Optional[tuple[Path, Path]] = None
         self._letter_attached = False
         self._code_tries = 0
+        self._last_code = ""
         self._signed_in_at: set[str] = set()
         self._google_tried: set[str] = set()
         self._retried_after_error = False
@@ -456,7 +457,7 @@ class PageAgent:
         anything added since starts empty rather than failing."""
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
-                              ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int),
+                              ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str),
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict)):
             if not hasattr(self, name):
                 setattr(self, name, default())
@@ -591,7 +592,7 @@ class PageAgent:
         boxes = [c for c in controls
                  if c.role in ("textbox", "searchbox", "spinbutton") and not c.answer and not c.disabled
                  and self.ACCOUNT_CODE.search(f"{c.question} {c.container}")]
-        if not boxes or self._code_tries >= 2:
+        if not boxes or self._code_tries >= 3:
             return False
         if not getattr(self.profile, "check_gmail_for_confirmation", False):
             logger.info("A code was emailed to you; the agent may not read your mail")
@@ -603,10 +604,27 @@ class PageAgent:
         logger.info("CODE: a code was emailed to you for this account -- fetching it from your mail")
         tab = self.tab(page)
         try:
-            code = self.assistant.passcode_from_gmail(tab)
+            # A different code each time: the last one was refused.
+            expected = len(boxes) if len(boxes) > 1 else 0
+            code = self.assistant.passcode_from_gmail(tab, previous=self._last_code, length=expected)
+            if code and expected:
+                # It must fit the boxes: a number picked out of the wrong part
+                # of the message was typed in and refused ("The code isn't
+                # valid. Enter a valid code.").
+                digits = re.sub(r"\D", "", code)
+                code = digits if len(digits) == expected else ""
+                if not code:
+                    logger.info("CODE: your mail doesn't show a %d-digit code yet", expected)
+                    return False
             if not code:
                 logger.info("CODE: it has not arrived yet -- the agent will look again")
                 return False
+            self._last_code = code
+            for box in (b for b in boxes if b.answer):   # clear only what was refused
+                try:
+                    self.locate(page, box.ref).fill("", timeout=2_000)
+                except Exception:
+                    pass
             first = self.locate(page, boxes[0].ref)
             first.click(timeout=5_000)
             if len(boxes) > 1:

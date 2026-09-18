@@ -5540,16 +5540,28 @@ class JobApplicationAssistant:
         return None
 
     @staticmethod
-    def _extract_code(text: str) -> str:
+    def _extract_code(text: str, length: int = 0) -> str:
         """A 4-10 character code (with at least one digit) right after the words
-        that introduce it: 'Your one-time password is 482913'."""
+        that introduce it: 'Your one-time password is 482913'.
+
+        With a length, only a code of exactly that length counts: the page says
+        how long it is ("digit 1 of six"), and a number from elsewhere in the
+        message was typed in and refused.
+        """
+        if length:
+            near = re.search(r"(?:passcode|password|code|pin)\D{0,20}\b(\d{%d})\b" % length, text, re.IGNORECASE)
+            if near:
+                return near.group(1)
+            anywhere = re.findall(r"\b(\d{%d})\b" % length, text)
+            return anywhere[0] if anywhere else ""
         m = re.search(r"(?:passcode|password|code|pin)\W{0,3}(?:is|:)?\W{0,3}\b([A-Za-z0-9]{4,10})\b", text, re.IGNORECASE)
         if m and re.search(r"\d", m.group(1)):
             return m.group(1)
         m = re.search(r"\b(\d{4,8})\b", text)
         return m.group(1) if m else ""
 
-    def passcode_from_gmail(self, page: Page, previous: str = "", wait_seconds: int = 150) -> str:
+    def passcode_from_gmail(self, page: Page, previous: str = "", wait_seconds: int = 150,
+                            length: int = 0) -> str:
         """Reads the newest one-time passcode email (last hour) in the Gmail this
         browser is signed in to, in a separate tab. Opens only that one email,
         and only when its preview doesn't already show the code."""
@@ -5575,12 +5587,12 @@ class JobApplicationAssistant:
                         continue
                     if employer and employer.lower() not in text.lower() and i > 0:
                         continue  # prefer this employer's mail beyond the very newest
-                    code = self._extract_code(text)
+                    code = self._extract_code(length=length, text=text)
                     if not code:
                         rows.nth(i).click()
                         tab.wait_for_timeout(3_000)
                         body = " ".join(tab.locator("div.a3s, [role=main]").first.inner_text().split())
-                        code = self._extract_code(body)
+                        code = self._extract_code(length=length, text=body)
                     if code and code != previous:
                         logger.info("PASSCODE: found a one-time passcode in Gmail (%s...)", text[:60])
                         return code
