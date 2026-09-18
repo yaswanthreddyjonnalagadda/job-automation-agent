@@ -1581,6 +1581,15 @@ class PageAgent:
             # The choices have no reference of their own: click the one that
             # says what the answer says, inside the group.
             return self._choose_inside(page, control, answer.value)
+        if answer.action == "fill" and control.role == "spinbutton":
+            # A spinbutton keeps its own count: setting its text leaves the
+            # widget on the value it had (Workday's year box stayed on 2012),
+            # so the digits are typed in as a person types them.
+            loc.click(timeout=5_000)
+            tab.keyboard.press("Control+a")
+            tab.keyboard.type(answer.value, delay=60)
+            tab.keyboard.press("Tab")
+            return True
         if answer.action == "fill":
             loc.fill(answer.value, timeout=8_000)
             try:

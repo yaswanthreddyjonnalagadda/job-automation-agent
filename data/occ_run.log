@@ -20,9 +20,10 @@
 2026-09-18 17:33:47,695 [INFO] session_planner: still waiting for the session (22 minutes)
 2026-09-18 17:35:47,739 [INFO] session_planner: still waiting for the session (24 minutes)
 2026-09-18 17:37:47,796 [INFO] session_planner: still waiting for the session (26 minutes)
-poration_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
-2026-09-18 17:27:59,102 [INFO] session_planner: THE SESSION ANSWERED after 10 seconds
-2026-09-18 17:27:59,102 [INFO] page_agent: READ: application form (the application asks how to start; taking the resume autofill) -- 0 to answer, 0 for you, next: next step 'Autofill with Resume'
+2026-09-18 17:39:47,885 [INFO] session_planner: still waiting for the session (28 minutes)
+2026-09-18 17:41:47,938 [INFO] session_planner: still waiting for the session (30 minutes)
+2026-09-18 17:43:47,997 [INFO] session_planner: still waiting for the session (32 minutes)
+lication form (the application asks how to start; taking the resume autofill) -- 0 to answer, 0 for you, next: next step 'Autofill with Resume'
 2026-09-18 17:28:08,022 [INFO] page_agent: NEXT: pressing 'Autofill with Resume'
 2026-09-18 17:28:16,691 [INFO] page_agent: LOGIN: this site offers Google sign-in -- using it
 2026-09-18 17:28:16,717 [INFO] browser_automation: LOGIN: using the site's Google sign-in on theocc.wd5.myworkdayjobs.com
@@ -80,3 +81,23 @@ poration_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Option
 2026-09-18 17:34:06,181 [INFO] session_planner: still waiting for the session (2 minutes)
 2026-09-18 17:36:06,228 [INFO] session_planner: still waiting for the session (4 minutes)
 2026-09-18 17:38:06,283 [INFO] session_planner: still waiting for the session (6 minutes)
+2026-09-18 17:38:56,318 [INFO] session_planner: THE SESSION ANSWERED after 410 seconds
+2026-09-18 17:38:56,330 [INFO] page_agent: READ: application form (My Experience -- pausing so the agent can pick up its fix for correcting its own entries) -- 0 to answer, 1 for you, next: none ''
+2026-09-18 17:38:57,424 [INFO] db: Updated application 3862af10024e -> status=needs_user_review
+2026-09-18 17:38:57,425 [INFO] apply_flow: ==============================================================================
+2026-09-18 17:38:57,425 [INFO] apply_flow: NEEDS YOU -- Associate Principal, Cloud Engineering at The Options Clearing Corporation
+2026-09-18 17:38:57,426 [INFO] apply_flow:   needs your answer: From Year (the agent is being taught it may correct a box it filled in badly)
+2026-09-18 17:38:57,426 [INFO] apply_flow:   worth checking: corrected 'First Name' from 'YASWANTH' to 'Yaswanth Reddy' (from your profile.first_name)
+2026-09-18 17:38:57,427 [INFO] apply_flow: Deal with it in the browser window, then press Continue on the dashboard: the agent reads the page again and carries on.
+2026-09-18 17:38:57,428 [INFO] apply_flow: ==============================================================================
+2026-09-18 17:38:57,518 [INFO] browser_automation: Waiting for review signal at C:\Users\jonna\job-automation-agent\data\_signal_The_Options_Clearing_Corporation_Associa.txt ...
+2026-09-18 17:38:57,560 [INFO] browser_automation: Received review signal: reload_code
+2026-09-18 17:38:57,797 [INFO] apply_flow: Reloaded the profile as well
+2026-09-18 17:38:57,859 [INFO] apply_flow: Reloaded browser_automation.py and the site adapters in place
+2026-09-18 17:38:57,914 [INFO] apply_flow: Reloaded the reading agent, your profile and the instructions
+2026-09-18 17:38:58,130 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json
+2026-09-18 17:39:16,139 [INFO] session_planner: THE SESSION ANSWERED after 18 seconds
+2026-09-18 17:39:16,140 [INFO] page_agent: READ: application form (My Experience -- putting the right year on the current job) -- 1 to answer, 0 for you, next: none ''
+2026-09-18 17:39:16,329 [INFO] page_agent: ANSWERED: 'Year' -> '2025' (from resume)
+2026-09-18 17:39:17,223 [INFO] page_agent: NOT STUCK: Year = '2025' -- reading the page again
+2026-09-18 17:39:17,411 [INFO] session_planner: ASKING THE SESSION: The Options Clearing Corporation -- Associate Principal, Cloud Engineering -- the page is in data\_ask_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.txt, the plan goes in data\_plan_The_Options_Clearing_Corporation_Associate_Principal_Cloud_E.json

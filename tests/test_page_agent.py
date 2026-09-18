@@ -814,3 +814,14 @@ def test_the_agent_may_put_right_a_box_it_filled_in_badly(page, resume_file):
     assert agent._ours("Year", "2012")            # the agent's own mess, not the owner's
     agent.owner_answers["Year"] = "1999"
     assert agent._owner_gave("Year")              # what the owner set is still his
+
+
+def test_a_spinbutton_is_typed_into_not_set(page, resume_file):
+    """Workday's year box is a spinbutton that keeps its own count: setting its
+    text left it reading 2012 however often the right year was written."""
+    page.set_content('<label for="y">Year</label>'
+                     '<input id="y" role="spinbutton" oninput="document.body.dataset.typed = this.value">')
+    agent = make_agent(Planner(), resume_file)
+    box = next(c for c in page_agent.parse_snapshot(agent.snapshot(page)) if c.role == "spinbutton")
+    assert agent.do(page, page_agent.Answer(box.ref, "Year", "fill", "2025", "resume"), box)
+    assert page.evaluate("document.body.dataset.typed") == "2025"
