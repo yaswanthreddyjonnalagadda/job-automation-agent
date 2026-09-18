@@ -504,6 +504,7 @@ class PageAgent:
         self._last_code = ""
         self._pressed: dict[str, int] = {}
         self._opened_entries: set[str] = set()
+        self._woken: set[str] = set()
         self._asked_for_new_code = False
         self._signed_in_at: set[str] = set()
         self._google_tried: set[str] = set()
@@ -533,7 +534,7 @@ class PageAgent:
         anything added since starts empty rather than failing."""
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
-                              ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set),
+                              ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set),
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict)):
             if not hasattr(self, name):
                 setattr(self, name, default())
@@ -683,6 +684,26 @@ class PageAgent:
         except Exception as exc:
             logger.debug("Could not open the entry: %s", str(exc).splitlines()[0][:100])
             return False
+
+    def wake_loading_control(self, page, snapshot: str) -> bool:
+        """Clicks a control that is still a spinner, so it draws itself.
+
+        R+L's "How did you hear about us?" stays a "Loading screen" until it is
+        touched, so there was never anything to choose and the question came
+        back to the owner.
+        """
+        spinners = re.findall(r'- progressbar "([^"]{3,80})"[^\n]*\[ref=([\w-]+)\]', snapshot or "")
+        for name, ref in spinners:
+            if ref in self._woken or len(self._woken) >= 4:
+                continue
+            self._woken.add(ref)
+            logger.info("Waking %r, which is still loading", name.replace(" Loading screen", "")[:50])
+            try:
+                self.locate(page, ref).click(timeout=5_000)
+                return True
+            except Exception as exc:
+                logger.debug("Could not wake it: %s", str(exc).splitlines()[0][:80])
+        return False
 
     def _code_boxes(self, page) -> list[Control]:
         """The code boxes the page is showing now."""
@@ -852,6 +873,9 @@ class PageAgent:
                 continue
             if self.open_entry_for_missing_field(page, snapshot, controls):
                 self.settle(page, 1_500)
+                continue
+            if self.wake_loading_control(page, snapshot):
+                self.settle(page, 2_000)
                 continue
             try:
                 plan = PagePlan.from_json(self.claude.plan_page(compact_snapshot(snapshot), self.facts(controls),
