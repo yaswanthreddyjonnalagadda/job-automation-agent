@@ -671,7 +671,7 @@ DIGIT_BOXES = ("<h2>Verify your email</h2>"
 
 def _code_agent(page, resume_file, code="482913"):
     agent = make_agent(Planner(), resume_file)
-    agent.assistant.passcode_from_gmail = lambda pg, previous="", wait_seconds=150: code
+    agent.assistant.passcode_from_gmail = lambda pg, previous="", wait_seconds=150, length=0: code
     return agent
 
 
