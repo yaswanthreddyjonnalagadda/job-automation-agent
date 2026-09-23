@@ -1324,3 +1324,31 @@ def test_date_field_converts_month_year_and_skips_disabled(page, resume_file):
 
 
 
+
+
+# --- the options confirm what a location question asks (RFC-001, M1) ----------
+
+def _somewhere_profile(**place):
+    """A made-up owner, so these tests hold for anyone's profile."""
+    import dataclasses
+    return dataclasses.replace(config.UserProfile(), full_name="Alex Example", first_name="Alex",
+                               last_name="Example", **place)
+
+
+def test_a_region_question_over_countries_is_answered_with_the_country(resume_file):
+    """23 September: "Country/Region of Residence" was answered "Virginia"
+    from a list of countries, and the field kept the site's default."""
+    agent = make_agent(Planner(), resume_file,
+                       profile=_somewhere_profile(country="United States", state="Virginia", city="Fairfax"))
+    countries = ["- Select -", "Aaland Islands", "Afghanistan", "Albania", "Algeria", "Andorra", "United States"]
+    for label in ("Country/Region of Residence *", "Region of Residence *"):
+        control = page_agent.Control(ref="c", role="combobox", name=label, options=countries)
+        assert agent.known_answer(control)[0] == "United States", label
+
+
+def test_the_same_question_is_answered_for_an_owner_anywhere(resume_file):
+    agent = make_agent(Planner(), resume_file,
+                       profile=_somewhere_profile(country="India", state="Telangana", city="Hyderabad"))
+    countries = ["- Select -", "Afghanistan", "Iceland", "India", "Indonesia", "United States"]
+    control = page_agent.Control(ref="c", role="combobox", name="Region of Residence *", options=countries)
+    assert agent.known_answer(control)[0] == "India"

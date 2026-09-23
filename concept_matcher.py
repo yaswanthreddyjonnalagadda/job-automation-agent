@@ -11,6 +11,8 @@ import re
 from datetime import date
 from typing import Any, Optional
 
+import geo_reference
+
 
 def clean_text(text: str) -> str:
     """Normalize label or question text for concept matching."""
@@ -28,20 +30,8 @@ def clean_text(text: str) -> str:
     return " ".join(t.split())
 
 
-# US State to abbreviation mapping (and vice versa)
-STATE_MAP = {
-    "alabama": "al", "alaska": "ak", "arizona": "az", "arkansas": "ar", "california": "ca",
-    "colorado": "co", "connecticut": "ct", "delaware": "de", "florida": "fl", "georgia": "ga",
-    "hawaii": "hi", "idaho": "id", "illinois": "il", "indiana": "in", "iowa": "ia",
-    "kansas": "ks", "kentucky": "ky", "louisiana": "la", "maine": "me", "maryland": "md",
-    "massachusetts": "ma", "michigan": "mi", "minnesota": "mn", "mississippi": "ms",
-    "missouri": "mo", "montana": "mt", "nebraska": "ne", "nevada": "nv", "new hampshire": "nh",
-    "new jersey": "nj", "new mexico": "nm", "new york": "ny", "north carolina": "nc",
-    "north dakota": "nd", "ohio": "oh", "oklahoma": "ok", "oregon": "or", "pennsylvania": "pa",
-    "rhode island": "ri", "south carolina": "sc", "south dakota": "sd", "tennessee": "tn",
-    "texas": "tx", "utah": "ut", "vermont": "vt", "virginia": "va", "washington": "wa",
-    "west virginia": "wv", "wisconsin": "wi", "wyoming": "wy", "district of columbia": "dc",
-}
+# US state name -> USPS code (and back), from reference/geo.json.
+STATE_MAP = geo_reference.us_state_map()
 REV_STATE_MAP = {v: k.title() for k, v in STATE_MAP.items()}
 
 
@@ -431,6 +421,30 @@ def match_concept(
     return best_concept
 
 
+# Questions about where the owner lives. The options on offer can correct the
+# label: "Region of Residence" over a list of countries asks for a country.
+RESIDENCE_CONCEPTS = ("COUNTRY", "STATE_PROVINCE")
+
+
+def confirm_concept(concept: Optional[str], options: Optional[list[str]]) -> Optional[str]:
+    """The concept a location question really asks, judged by its options.
+
+    Label keywords propose; the option list decides. "Region" belongs to the
+    vocabulary of both country and state, so "Country/Region of Residence"
+    was once answered "Virginia" from a list of countries. Only residence
+    concepts are ever redirected -- a country list under "Country of
+    Citizenship" is a citizenship question, and it is left as the label said.
+    """
+    if concept not in RESIDENCE_CONCEPTS or not options:
+        return concept
+    domain = geo_reference.option_domain(options)
+    if domain == geo_reference.COUNTRY:
+        return "COUNTRY"
+    if domain == geo_reference.US_STATE:
+        return "STATE_PROVINCE"
+    return concept
+
+
 def best_option_match(desired: str, options: list[str]) -> Optional[str]:
     """Find the best match from a select/dropdown's options."""
     if not desired or not options:
@@ -444,23 +458,18 @@ def best_option_match(desired: str, options: list[str]) -> Optional[str]:
         if clean_opt == desired_clean or opt.strip().lower() == desired_lower:
             return opt
 
-    # State abbreviation handling: "Virginia" vs "VA"
-    if desired_lower in STATE_MAP:
-        abbr = STATE_MAP[desired_lower]
+    # The same place spelled another way: "Virginia" / "VA" / "Virginia (VA)",
+    # "United States" / "USA" / "United States of America (+1)" -- for every
+    # country and US state in reference/geo.json, not one of each.
+    state = geo_reference.us_state_code(desired)
+    if state:
         for opt in options:
-            if opt.strip().lower() == abbr or clean_text(opt) == abbr:
+            if geo_reference.us_state_code(opt) == state:
                 return opt
-    if desired_lower in REV_STATE_MAP:
-        full_st = REV_STATE_MAP[desired_lower].lower()
+    country = geo_reference.country_code(desired)
+    if country:
         for opt in options:
-            if clean_text(opt) == full_st:
-                return opt
-
-    # Country variations: "United States" vs "United States of America" / "USA" / "US"
-    if desired_lower in ("united states", "usa", "us", "united states of america"):
-        for opt in options:
-            clean_opt = clean_text(opt)
-            if clean_opt in ("united states", "united states of america", "usa", "us"):
+            if geo_reference.country_code(opt) == country:
                 return opt
 
     # Substring / prefix match

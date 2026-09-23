@@ -1328,6 +1328,8 @@ class PageAgent:
             context=control.context,
             name=control.name,
         )
+        # The options on offer settle what a location question asks.
+        concept = concept_matcher.confirm_concept(concept, control.options)
         if concept:
             val, src = concept_matcher.resolve_profile_value(
                 concept=concept,
