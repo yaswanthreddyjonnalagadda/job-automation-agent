@@ -37,137 +37,113 @@ PROFILE_PATH = Path(os.getenv("PROFILE_PATH", str(DATA_DIR / "profile.json")))
 
 @dataclass(frozen=True)
 class UserProfile:
-    """The client's job-search profile. Not secret -- safe to keep in code."""
+    """The client's job-search profile.
 
-    full_name: str = "Yaswanth Reddy Jonnalagadda"
-    # Split as the owner gives it (2026-09-17), not guessed from the full name:
-    # forms were filled with "Yaswanth" / "Reddy Jonnalagadda".
-    first_name: str = "Yaswanth Reddy"
-    middle_name: str = ""          # none
-    last_name: str = "Jonnalagadda"
-    email: str = "jonnalagaddayaswanth06@gmail.com"
-    phone: str = "(571) 354-5212"  # from your resume -- correct this if it's wrong/outdated
-    phone_mobile: str = "(571) 354-5212"  # mobile/cell phone
-    phone_home: str = ""  # home phone (optional)
-    phone_work: str = ""  # work phone (optional)
-    target_titles: tuple[str, ...] = (
-        "Network Engineer",
-        "Cloud Network Engineer",
-        "Senior Network Engineer",
-    )
-    prefix: str = "Mr."
-    address_line1: str = "9365 Lee Hwy"
-    city: str = "Fairfax"
-    state: str = "Virginia"
-    county: str = "Fairfax"  # some ATS forms require county separately
-    postal_code: str = "22031"
-    current_location: str = "Fairfax, VA"  # used to autofill combined "current location" form fields
-    locations: tuple[str, ...] = ("Remote", "Fairfax, VA", "Arlington, VA")  # preferred, not exclusive
-    open_to_relocation: bool = True  # anywhere in the US -- remote, hybrid, or fully onsite all fine
-    salary_min: int = 125_000
-    salary_max: int = 185_000
-    years_experience: int = 6
-    requires_visa_sponsorship: bool = True  # on H-1B; a transfer counts as sponsorship
-    linkedin_url: str = "https://www.linkedin.com/in/yaswanthreddyjonnalagadda"
+    These are placeholder defaults only -- never real identifying data. The
+    actual profile lives in the gitignored data/profile.json and is merged
+    in by get_user_profile() below. See data/profile.example.json for the
+    template.
+    """
+
+    full_name: str = "Your Name"
+    first_name: str = "Your"
+    middle_name: str = ""
+    last_name: str = "Name"
+    email: str = "you@example.com"
+    phone: str = ""
+    phone_mobile: str = ""
+    phone_home: str = ""
+    phone_work: str = ""
+    target_titles: tuple[str, ...] = ()
+    prefix: str = ""
+    address_line1: str = ""
+    city: str = ""
+    state: str = ""
+    county: str = ""  # some ATS forms require county separately
+    postal_code: str = ""
+    current_location: str = ""  # used to autofill combined "current location" form fields
+    locations: tuple[str, ...] = ()  # preferred, not exclusive
+    open_to_relocation: bool = False
+    salary_min: int = 0
+    salary_max: int = 0
+    years_experience: int = 0
+    requires_visa_sponsorship: bool = False
+    linkedin_url: str = ""
     portfolio_url: str = ""
 
-    # Standard application answers, supplied by the user on 2026-09-14 so
-    # these questions don't have to be asked per-employer. The EEO ones
-    # (veteran/disability/ethnicity/gender) are voluntary self-identification
-    # the user chose to disclose -- never infer or change them.
-    work_authorization: str = "H-1B"
-    # Supplied by the user on 2026-09-15 so these are never asked again.
-    us_citizen: str = "No"
-    country_of_citizenship: str = "India"  # confirmed by the user, not inferred
-    security_clearance_level: str = "None"
-    legally_eligible_to_work: str = "Yes"
-    availability_to_start: str = "Immediately"
-    willing_to_travel: str = "Greater than 50%"  # user is open to up to 100%
-    security_clearance: str = "None"
-    felony_conviction: str = "No"
-    previously_employed_here: str = "No"  # default; verify if the user has history with an employer
-    # The owner's answers (2026-09-18), asked once so no form has to ask again.
-    applied_here_before: str = "No"
-    relatives_employed_here: str = "No"
-    willing_drug_test_and_physical: str = "Yes"
-    veteran_status: str = "I am not a veteran"
-    disability_status: str = "No, I do not have a disability"
-    ethnicity: str = "Asian"
-    gender: str = "Male"
-    work_arrangements: tuple[str, ...] = ("In Person Office", "Remote Virtual", "Hybrid")
-    work_type: str = "Full-Time"
-    # The most recent employer, as questionnaires ask for it. These match the
-    # resume word for word, so the form and the document say the same thing.
-    current_employer: str = "Capital One"
-    current_position_title: str = "Senior Network and Security Engineer"
-    current_employer_type: str = "Financial Services"
-    current_employment_dates: str = "February 2025 - Present"
-    # The current role: the owner's contract is ending (2026-09-18).
-    reason_for_leaving: str = "Contract ending"
-    # Why each job ended, in the owner's own words (2026-09-18). A work-history
-    # entry takes the reason for its own employer, not the current one's.
-    reasons_for_leaving: tuple[tuple[str, str], ...] = (
-        ("Capital One", "Contract is coming to an end"),
-        ("Freddie Mac", "Contract ended"),
-        ("Capri Global Capital Ltd.", "Left to study for a master's degree"),
-    )
-    current_employer_location: str = "McLean, VA"
-    employment_statuses: tuple[str, ...] = ("Full-Time",)  # Text field or checkboxes: select all that apply
-    # Where the user actually finds these postings (their answer, 2026-09-16).
-    how_did_you_hear: str = "LinkedIn"
-    # How an employer should reach you first. Dayforce asks it outright.
-    preferred_contact_method: str = "Email"
-    # Supplied by the user on 2026-09-15 (IGT application).
-    bound_by_non_compete: str = "No"
-    # Answers the agent may give only because the user stated them. Leave a
-    # value empty and the agent leaves that question for you rather than
-    # guessing at it.
-    hispanic_or_latino: str = "No"          # from the user's 2026-09-14 EEO answers
-    at_least_18: str = "Yes"
-    authorized_for_any_employer: str = "Yes"
-    willing_to_submit_to_pre_employment_background_check: str = "Yes"
-    worked_for_occ: str = "No"  # resume-backed: no OCC employment is listed
-    provided_services_to_occ: str = "No"  # resume-backed: no OCC consulting is listed
-    bonus_expectations: str = "5%"
-    willing_to_work_onsite_three_days: str = "Yes"
-    relatives_employed_here: str = "No"
-    preferred_language: str = "English"
-    people_managed: str = ""                 # unknown -- the user fills this in
-    outside_business_interests_with_competitors: str = "No"
+    # Standard application answers. Leaving these blank means the agent
+    # leaves the question for you rather than guessing.
+    work_authorization: str = ""
+    us_citizen: str = ""
+    country_of_citizenship: str = ""
+    security_clearance_level: str = ""
+    legally_eligible_to_work: str = ""
+    availability_to_start: str = ""
+    willing_to_travel: str = ""
+    security_clearance: str = ""
+    felony_conviction: str = ""
+    previously_employed_here: str = ""
+    applied_here_before: str = ""
+    relatives_employed_here: str = ""
+    willing_drug_test_and_physical: str = ""
+    veteran_status: str = ""
+    disability_status: str = ""
+    ethnicity: str = ""
+    gender: str = ""
+    work_arrangements: tuple[str, ...] = ()
+    work_type: str = ""
+    # The most recent employer, as questionnaires ask for it. These should
+    # match the resume word for word, so the form and the document agree.
+    current_employer: str = ""
+    current_position_title: str = ""
+    current_employer_type: str = ""
+    current_employment_dates: str = ""
+    reason_for_leaving: str = ""
+    # Why each job ended, in your own words. A work-history entry takes the
+    # reason for its own employer, not the current one's.
+    reasons_for_leaving: tuple[tuple[str, str], ...] = ()
+    current_employer_location: str = ""
+    employment_statuses: tuple[str, ...] = ()  # Text field or checkboxes: select all that apply
+    how_did_you_hear: str = ""
+    preferred_contact_method: str = ""
+    bound_by_non_compete: str = ""
+    # Answers the agent may give only because you stated them. Leave a value
+    # empty and the agent leaves that question for you rather than guessing.
+    hispanic_or_latino: str = ""
+    at_least_18: str = ""
+    authorized_for_any_employer: str = ""
+    willing_to_submit_to_pre_employment_background_check: str = ""
+    worked_for_occ: str = ""
+    provided_services_to_occ: str = ""
+    bonus_expectations: str = ""
+    willing_to_work_onsite_three_days: str = ""
+    preferred_language: str = ""
+    people_managed: str = ""
+    outside_business_interests_with_competitors: str = ""
     # Degrees from the resume, newest first: (degree level, field, school, year).
-    education: tuple[tuple[str, str, str, str], ...] = (
-        ("Master's", "Computer Technology", "Eastern Illinois University", "2022"),
-        ("Bachelor's", "Electrical and Electronics Engineering", "JNTU Hyderabad", "2019"),
-    )
-    # The same degrees with the dates forms ask for, given by the owner on
-    # 2026-09-18: (school, started, finished). The resume shows only the
-    # graduation date, and R+L's form wanted both.
-    education_dates: tuple[tuple[str, str, str], ...] = (
-        ("Eastern Illinois University", "August 2021", "December 2022"),
-        ("JNTU Hyderabad", "August 2015", "April 2019"),
-    )
-    # What the break between jobs was, for forms that ask about gaps
-    # (August 2021 to January 2023). The owner's words, 2026-09-18.
-    work_history_gap: str = ("Full-time graduate study -- MS in Computer Technology, "
-                             "Eastern Illinois University")
-    country: str = "United States"
-    phone_country_code: str = "+1"
+    education: tuple[tuple[str, str, str, str], ...] = ()
+    # The same degrees with the dates forms ask for: (school, started, finished).
+    education_dates: tuple[tuple[str, str, str], ...] = ()
+    # What the break between jobs was, for forms that ask about gaps.
+    work_history_gap: str = ""
+    country: str = ""
+    phone_country_code: str = ""
     # Application-form pop-ups like "Data Privacy Agreement" that block the
-    # form until accepted. On = the agent accepts them itself (2026-09-15).
-    # Cookie banners are handled separately and are not affected.
-    accept_application_privacy_prompts: bool = True
+    # form until accepted. On = the agent accepts them itself. Cookie banners
+    # are handled separately and are not affected.
+    accept_application_privacy_prompts: bool = False
     # Signature and certification checkboxes ("equivalent to a handwritten
-    # signature", "I certify the information is true and complete"): the owner's
-    # decision (2026-09-17) is that the agent signs them on their behalf -- but
-    # only once every other answer on that page came from this profile, nothing
-    # contradicts it and nothing required is left blank. False = the agent stops
-    # at each one and carries on by itself once you have signed.
-    sign_attestations: bool = True
+    # signature", "I certify the information is true and complete"): True =
+    # the agent signs them on your behalf, but only once every other answer
+    # on that page came from this profile, nothing contradicts it and
+    # nothing required is left blank. False = the agent stops at each one
+    # and carries on by itself once you have signed.
+    sign_attestations: bool = False
     # The agent's browser is signed in to the application email's Google
     # account. When the site shows no confirmation, the agent may look in
     # that Gmail (read-only search results) for the employer's "application
-    # received" email. The user's decision, 2026-09-15.
-    check_gmail_for_confirmation: bool = True
+    # received" email.
+    check_gmail_for_confirmation: bool = False
 
 
 @dataclass(frozen=True)
