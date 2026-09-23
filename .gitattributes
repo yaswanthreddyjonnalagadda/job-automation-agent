@@ -1,0 +1,16 @@
+# Line endings: the repository stores LF; a Windows checkout gets CRLF.
+# Without this file, git on Windows and git inside Linux tools disagree about
+# which files changed, and whole files show up as modified for no reason.
+* text=auto
+
+# Binary files are never converted.
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.db binary
+*.sqlite binary
+*.zip binary
+*.docx binary

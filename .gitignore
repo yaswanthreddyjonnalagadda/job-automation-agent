@@ -28,3 +28,10 @@ data/*.doc
 # Editor/tool scratch.
 .pytest_cache/
 .vscode/
+
+# Forensic dumps from the circuit breaker (state_machine.py): page HTML and
+# screenshots of real application forms, which carry personal answers.
+runs/
+
+# Virtual environments under either common name.
+.venv/
