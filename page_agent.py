@@ -54,6 +54,7 @@ from interaction import (
 from perception import (
     find_active_draft_cards,
     is_ant_dropdown,
+    is_ant_single_select,
     is_field_active,
     read_control_attributes,
 )
@@ -2693,13 +2694,21 @@ class PageAgent:
             except Exception:
                 pass   # a listbox drawn by script: pick the option instead
 
-        # Ant Design rc-select dropdown resolution: dispatch mousedown on wrapper,
-        # wait for detached portal at document.body, match option case-insensitively,
-        # click and verify portal hides.
+        # An Ant Design list (Dayforce): read whole, chosen by label, and
+        # confirmed by what the select then shows (interaction.resolve_ant_dropdown).
+        # A single-choice list takes nothing but its own options, so when the
+        # answer is not among them nothing else is tried: typing and pressing
+        # Enter picks whichever row is first -- that is how "United States"
+        # became "Afghanistan". The field is left for the owner instead.
         if is_ant_dropdown(loc):
-            if resolve_ant_dropdown(self.tab(page), loc, value):
+            strict = is_ant_single_select(loc)
+            if resolve_ant_dropdown(self.tab(page), loc, value, pick=lambda labels: self._pick_label(labels, value)):
                 self._choice_methods[control.ref] = "ant_dropdown"
                 return True
+            if strict:
+                logger.info("No choice matching %r for %r in its list -- left for you", value[:40],
+                            control.question[:50])
+                return False
 
         before = {ref for ref, _text in choices_in(self.snapshot(page), under=control.question, any_list=True)}
         opened = False
@@ -3089,6 +3098,21 @@ class PageAgent:
             if index is not None:
                 logger.info("Closest choice to %r is %r", value[:40], names[index][:60])
         return index
+
+    def _pick_label(self, labels: list[str], value: str) -> Optional[int]:
+        """Which of a list's labels answers `value`. A country or US state is
+        that place in any spelling or nothing ("United States" is never "United
+        States Minor Outlying Islands", a first row, or a blank); anything else
+        follows the page agent's usual rules (_pick)."""
+        if not str(value or "").strip():
+            return None
+        if geo_reference.country_code(value) or geo_reference.us_state_code(value):
+            return next((i for i, label in enumerate(labels)
+                         if label.strip() and (geo_reference.same_place(label, value)
+                                               or geo_reference.normalize(label) == geo_reference.normalize(value))),
+                        None)
+        index = self._pick([(str(i), label) for i, label in enumerate(labels)], value)
+        return index if index is not None and labels[index].strip() else None
 
     @staticmethod
     def _search_terms(value: str) -> list[str]:

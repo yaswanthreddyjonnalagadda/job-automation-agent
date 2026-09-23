@@ -46,6 +46,21 @@ def is_ant_dropdown(locator: Any) -> bool:
         return False
 
 
+def is_ant_single_select(locator: Any) -> bool:
+    """An Ant Design select that takes exactly one of its own options and
+    nothing else: not an AutoComplete (free text with suggestions) and not a
+    multiple or tags select."""
+    try:
+        return bool(locator.evaluate("""el => {
+            const root = el.closest('.ant-select');
+            return Boolean(root) && !root.classList.contains('ant-select-auto-complete')
+                && !root.classList.contains('ant-select-multiple')
+                && !root.classList.contains('ant-select-customize-input');
+        }"""))
+    except Exception:
+        return False
+
+
 def find_active_draft_cards(page: Page) -> list[dict[str, Any]]:
     """Scans the DOM for inline resume-parsed experience or education cards
     that are currently in active 'Edit' or 'Draft' modes.

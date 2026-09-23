@@ -18,3 +18,7 @@
 # Hook scripts run under sh, which cannot read Windows line endings.
 .githooks/* text eol=lf
 *.sh text eol=lf
+
+# A third-party bundle used as a test fixture (see its README): generated,
+# not reviewed line by line.
+tests/fixtures/ant_select/ant-select.bundle.js -diff linguist-generated=true

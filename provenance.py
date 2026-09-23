@@ -12,8 +12,10 @@ This module replaces the guess with an observation. A small script runs in
 every page and frame (Playwright's add_init_script) and records the form
 controls a person really typed into or changed:
 
-  * only *trusted* input and change events count -- a site's own scripts
-    cannot produce them; and
+  * only *trusted* events count -- a site's own scripts cannot produce
+    them: input and change on a field, value-changing keys in it, and a
+    click in a list drawn outside the field (Ant Design, React-Select),
+    which is credited to the field that names the list; and
   * only while the agent is not working -- the agent's own Playwright input
     is trusted too, so the page starts every document marked "agent busy"
     and the agent marks it idle exactly while it waits for the owner (the
@@ -60,12 +62,39 @@ OBSERVER_SCRIPT = r"""(() => {
       for (let n = t; n; n = n.parentNode || n.host) { if (n === el) return true; }
       return false;
     });
+    // A list drawn outside its field (Ant Design, React-Select) changes the
+    // field without an input or change event on it: a person's click in such
+    // a list is credited to the field that names the list (aria-controls /
+    // aria-owns), so their choice there is theirs too.
+    state.noteChoice = (event) => {
+      if (!event.isTrusted || state.agentBusy) return;
+      const path = event.composedPath ? event.composedPath() : [];
+      const target = path.length ? path[0] : event.target;
+      if (!target || target.nodeType !== 1 || !target.closest) return;
+      const list = target.closest('.ant-select-dropdown, [role=listbox], [role=menu]');
+      if (!list) return;
+      const named = list.matches('[id]') && list.matches('[role=listbox], [role=menu]')
+        ? list : list.querySelector('[role=listbox][id], [role=menu][id]');
+      if (!named) return;
+      const id = CSS.escape(named.id);
+      const field = document.querySelector(`[aria-controls="${id}"], [aria-owns="${id}"]`);
+      if (field && !edited.includes(field)) edited.push(field);
+    };
+    // Keys that change a value (typing, deleting, choosing from a list), on
+    // the field that has the focus.
+    state.noteKey = (event) => {
+      if (event.key && (event.key.length === 1 || /^(Backspace|Delete|Enter|ArrowUp|ArrowDown)$/.test(event.key))) {
+        state.note(event);
+      }
+    };
     window.__jaaProvenance = state;
   }
   // Adding the same listener twice does nothing, and adding it again after
   // document.open() (which erases listeners) brings it back.
   document.addEventListener('input', state.note, true);
   document.addEventListener('change', state.note, true);
+  document.addEventListener('click', state.noteChoice, true);
+  document.addEventListener('keydown', state.noteKey, true);
 })();"""
 
 

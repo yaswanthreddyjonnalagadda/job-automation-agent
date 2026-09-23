@@ -27,11 +27,16 @@
   controlled components can discard a raw value injection. Every fill
   sequences: focus -> `fill(value)` -> dispatch `input` -> dispatch
   `change` -> blur, each bubbling.
-- **Detached dropdowns** (Ant Design `rc-select` and similar): trigger the
-  wrapper via `mousedown` (the native input is often
-  `pointer-events: none`), wait for the option list mounted at
-  `document.body`, match by visible text, click, and verify the portal
-  detaches.
+- **Detached dropdowns** (Ant Design `rc-select` and similar):
+  `interaction.resolve_ant_dropdown()`. Trigger the wrapper via `mousedown`
+  (the native input is often `pointer-events: none`), find the list the
+  field names (`aria-controls`) at `document.body`, and read it WHOLE -- a
+  long list is virtual and holds only the rows in view. Match a real row's
+  label exactly (a place as that place in any spelling); never an empty or
+  partial label, never the first row. Click it, then confirm the select
+  shows that option; if it does not, the answer was not given. Never type
+  and press Enter in a single-choice list: that takes whichever row is
+  first (23 September: "United States" became "Afghanistan").
 - **Pre-progression card commits:** before clicking a wizard's Next/
   Continue, sweep for any inline Work/Education entry still in edit mode
   and click its own Save/Update/Done first (see `sites/workday.py` for the
