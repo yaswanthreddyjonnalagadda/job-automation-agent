@@ -15,6 +15,7 @@ import os
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -33,6 +34,8 @@ DB_PATH = DATA_DIR / "applications.db"
 RESUME_PATH = os.getenv("RESUME_PATH", str(DATA_DIR / "resume.pdf"))
 JOB_QUEUE_PATH = os.getenv("JOB_QUEUE_PATH", str(DATA_DIR / "job_queue.txt"))
 PROFILE_PATH = Path(os.getenv("PROFILE_PATH", str(DATA_DIR / "profile.json")))
+# The owner's standard resume, used only when RESUME_SOURCE=master.
+MASTER_RESUME_PATH = BASE_DIR / "assets" / "master_resume.pdf"
 
 
 @dataclass(frozen=True)
@@ -214,6 +217,11 @@ class AppConfig:
     agent_brain: str = field(default_factory=lambda: os.getenv("AGENT_BRAIN", "api").strip().lower())
     # How many times a flaky page action is retried before it is reported.
     action_retries: int = 3
+    # Which resume an application gets: "tailored" (the default) is the one
+    # Claude tailored to this job; "master" is assets/master_resume.pdf.
+    # See resume_to_attach().
+    resume_source: str = field(
+        default_factory=lambda: os.getenv("RESUME_SOURCE", "tailored").strip().lower())
 
 
 def get_user_profile() -> UserProfile:
@@ -229,6 +237,23 @@ def get_user_profile() -> UserProfile:
         return UserProfile(**{**defaults.__dict__, **values})
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Could not load profile from {PROFILE_PATH}: {exc}") from exc
+
+
+def resume_to_attach(tailored, app_config=None) -> Optional[Path]:
+    """The one resume an application gets.
+
+    By default the resume tailored to this job. With RESUME_SOURCE=master,
+    the owner's standard resume at assets/master_resume.pdf, when it exists.
+    Every place that attaches or verifies a resume asks here, so the
+    uploader and the submit gate can never disagree about which file is
+    the right one -- they did when three places each forced the master
+    file on their own while the gate still expected the tailored one.
+    """
+    source = str(getattr(app_config, "resume_source", "")
+                 or os.getenv("RESUME_SOURCE", "tailored")).strip().lower()
+    if source == "master" and MASTER_RESUME_PATH.is_file():
+        return MASTER_RESUME_PATH
+    return Path(tailored) if tailored else None
 
 
 def get_app_config() -> AppConfig:

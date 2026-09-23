@@ -41,6 +41,7 @@ from typing import Callable, Optional
 from urllib.parse import urlparse
 
 import concept_matcher
+from config import resume_to_attach
 from interaction import (
     click_resiliently,
     commit_draft_cards,
@@ -708,11 +709,7 @@ class PageAgent:
         self.assistant, self.claude, self.config, self.profile = assistant, claude, config, profile
         self.resume, self.job, self.tracker, self.key = resume, job, tracker, key
         self.job_dir = Path(job_dir) if job_dir else None
-        master_resume = Path("assets/master_resume.pdf")
-        if master_resume.is_file():
-            self.resume_file = master_resume
-        else:
-            self.resume_file = Path(resume_file) if resume_file else None
+        self.resume_file = resume_to_attach(resume_file, config)
         self.cover_letter = cover_letter
         self.resume_uploaded = False
         self._resume_autofill_attempted = False
@@ -2512,8 +2509,7 @@ class PageAgent:
             return True
         if answer.action in ("upload_resume", "upload_cover_letter"):
             if answer.action == "upload_resume":
-                master = Path("assets/master_resume.pdf")
-                path = master if master.is_file() else self.resume_file
+                path = self.resume_file
             else:
                 path = self._letter_file()
             if not path or not Path(path).is_file():

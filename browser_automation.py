@@ -30,7 +30,7 @@ from urllib.parse import quote, urlparse
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 
 import safety
-from config import AppConfig, UserProfile
+from config import AppConfig, UserProfile, resume_to_attach
 from interaction import (
     CARD_COMMIT_TEXT_PATTERN,
     click_resiliently,
@@ -4256,10 +4256,7 @@ class JobApplicationAssistant:
         An override path can be supplied out-of-band via
         data/_resume_override.txt, so a JD-tailored resume can replace the
         generic one without restarting this process."""
-        target = Path(resume_path)
-        master_resume = Path("assets/master_resume.pdf")
-        if master_resume.is_file():
-            target = master_resume
+        target = resume_to_attach(resume_path, getattr(self, "_config", None)) or Path(resume_path)
         override_file = Path("data/_resume_override.txt")
         try:
             if override_file.exists():

@@ -234,7 +234,7 @@ def test_local_master_resume_mount_exists():
 
 
 def test_upload_resume_forces_master_resume_set_input_files(page, tmp_path):
-    """Verifies that upload_resume targets assets/master_resume.pdf via direct .set_input_files()."""
+    """With RESUME_SOURCE=master, upload_resume attaches assets/master_resume.pdf."""
     page.set_content("""
     <html>
       <body>
@@ -247,11 +247,11 @@ def test_upload_resume_forces_master_resume_set_input_files(page, tmp_path):
     """)
 
     assistant = browser_automation.JobApplicationAssistant.__new__(browser_automation.JobApplicationAssistant)
-    assistant._config = SimpleNamespace(action_retries=1)
+    assistant._config = SimpleNamespace(action_retries=1, resume_source="master")
     assistant.adapter = lambda p: MagicMock(attachment_is_empty=lambda p, k: True)
     assistant._file_already_attached = lambda p, n: False
 
-    # Call upload_resume with a dummy fallback path; it should target assets/master_resume.pdf
+    # The owner chose the master resume, so it replaces the path passed in.
     dummy_fallback = tmp_path / "other_resume.pdf"
     dummy_fallback.write_bytes(b"%PDF-dummy")
 
@@ -364,3 +364,17 @@ def test_click_next_step_trips_circuit_breaker_on_stalled_page(page, tmp_path):
     assert assistant._stuck_on == STATUS_BLOCKED_VALIDATION_LOOP
     assert assistant._circuit_breaker.tripped is True
 
+
+
+def test_the_tailored_resume_is_attached_unless_the_owner_chose_the_master(tmp_path, monkeypatch):
+    """One setting decides the resume, so the uploader and the submit gate agree."""
+    import config
+
+    tailored = tmp_path / "Tailored_Resume.pdf"
+    tailored.write_bytes(b"%PDF-1.4 tailored")
+    monkeypatch.delenv("RESUME_SOURCE", raising=False)
+    assert config.resume_to_attach(tailored, SimpleNamespace()) == tailored
+    assert config.resume_to_attach(tailored, SimpleNamespace(resume_source="tailored")) == tailored
+    if config.MASTER_RESUME_PATH.is_file():
+        assert config.resume_to_attach(tailored, SimpleNamespace(resume_source="master")) \
+            == config.MASTER_RESUME_PATH
