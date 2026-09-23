@@ -58,6 +58,7 @@ STATUS_NEEDS_USER_REVIEW = "needs_user_review"  # something needs a person: blan
 STATUS_SUBMITTED = "submitted"                  # confirmed by the site or a confirmation email
 STATUS_SKIPPED = "skipped"
 STATUS_DISQUALIFIED_POLICY_MISMATCH = "DISQUALIFIED_POLICY_MISMATCH"
+STATUS_BLOCKED_VALIDATION_LOOP = "BLOCKED_VALIDATION_LOOP"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS applications (

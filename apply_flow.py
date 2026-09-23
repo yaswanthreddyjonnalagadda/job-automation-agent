@@ -53,6 +53,11 @@ from config import get_app_config, get_user_profile
 from jd_analyzer import build_job_description, dedup_key_for_url
 import safety
 from safety import STATUS_DISQUALIFIED_POLICY_MISMATCH
+from state_machine import (
+    STATUS_BLOCKED_VALIDATION_LOOP,
+    StateFingerprintCircuitBreaker,
+    dump_forensic_failure,
+)
 from job_tracker import (
     STATUS_FORM_FILLED, STATUS_NEEDS_USER_REVIEW, STATUS_READY_TO_SUBMIT, STATUS_SKIPPED,
     STATUS_SUBMITTED, JobTracker,
@@ -737,6 +742,10 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
     def cover_letter():
         if not getattr(config, "generate_cover_letters", False):
             return None
+        # Task 4.3: Strict lazy compilation - only if explicit required cover letter field detected
+        has_req = getattr(assistant, "has_required_cover_letter_field", None)
+        if has_req and not has_req(page):
+            return None
         if "letter" not in made:
             made["letter"] = prepare_cover_letter(claude, resume, job, profile, job_dir, tracker, key)
             if made["letter"]:
@@ -748,7 +757,17 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
     agent = page_agent.PageAgent(assistant, claude, config, profile, resume, job, tracker, key,
                                  job_dir, resume_file, cover_letter)
     while True:
-        outcome = agent.run(page)
+        try:
+            outcome = agent.run(page)
+        except (Exception, TimeoutError) as exc:
+            logger.exception("UNHANDLED ERROR / STALL in agent.run: %s", exc)
+            try:
+                dump_path = dump_forensic_failure(page, reason=f"Unhandled agent error/stall: {exc}", console_logs=getattr(page, "_console_logs", []))
+                tracker.update_status(key, STATUS_NEEDS_USER_REVIEW, notes=f"Crashed/Stalled: {exc} (dump: {dump_path})")
+            except Exception as dump_err:
+                logger.error("Failed to dump forensic diagnostics: %s", dump_err)
+            raise
+
         page = agent.tab(outcome.page)
         remember_progress(tracker, key, page, outcome.summary[:200])
         notes = "; ".join(agent.notes[:5])
@@ -762,6 +781,18 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             message = "Submitted by the agent -- the site confirmed it" + (f". Worth checking: {notes}" if notes else "")
             tracker.update_status(key, STATUS_SUBMITTED, notes=message[:1000])
             logger.info("SUBMITTED: %s at %s -- the site confirmed it", job.title, job.company)
+            return
+        if outcome.kind == "blocked_validation_loop":
+            tracker.update_status(
+                key,
+                STATUS_BLOCKED_VALIDATION_LOOP,
+                notes=f"Blocked: validation loop detected -- {outcome.summary}",
+            )
+            logger.error("BLOCKED_VALIDATION_LOOP: %s at %s -- %r", job.title, job.company, outcome.summary)
+            try:
+                dump_forensic_failure(page, reason=f"Validation loop: {outcome.summary}", console_logs=getattr(page, "_console_logs", []))
+            except Exception as dump_err:
+                logger.error("Failed to dump forensic diagnostics on validation loop: %s", dump_err)
             return
         if outcome.kind == "disqualified_policy_mismatch":
             tracker.update_status(
@@ -1273,9 +1304,9 @@ def main() -> None:
                 store_materials(tracker, key, attach_resume, None)
                 materials_stored = True
 
-            # Cover letter only when this page has a field for one. It is
-            # recorded as sent only once it is actually on the form.
-            if hasattr(assistant, "has_cover_letter_field") and assistant.has_cover_letter_field(page):
+            # Task 4.3: Strict lazy compilation - only when this page has an explicit, required field for one
+            has_req_cl = getattr(assistant, "has_required_cover_letter_field", getattr(assistant, "has_cover_letter_field", None))
+            if has_req_cl and has_req_cl(page):
                 if letter is None:
                     letter = prepare_cover_letter(claude, resume, job, profile, job_dir, tracker, key)
                     if letter:
@@ -1427,6 +1458,10 @@ def main() -> None:
             if decision == "continue":
                 advanced = assistant.click_next_step(page)
                 if not advanced:
+                    if getattr(assistant, "_stuck_on", "") == "BLOCKED_VALIDATION_LOOP":
+                        tracker.update_status(key, STATUS_BLOCKED_VALIDATION_LOOP, notes="Circuit breaker tripped: validation loop detected")
+                        logger.error("BLOCKED_VALIDATION_LOOP: circuit breaker tripped in wizard")
+                        return
                     logger.warning("NO_NEXT_BUTTON: nothing to advance to from step %d -- treat this as the final step", step)
                 continue
 

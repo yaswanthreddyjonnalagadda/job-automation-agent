@@ -41,9 +41,9 @@ def already_submitted(job: dict) -> bool:
 
     When the Postgres tracker is unreachable (e.g. Docker is not running) this
     falls back to the SQLite tracker so the run is never blocked by a DB outage."""
-    from db import get_tracker, is_transient_connection_error
+    import db
     try:
-        tracker = get_tracker()
+        tracker = db.get_tracker()
         found = tracker.find_submitted(url=job.get("url", ""), company=job.get("company", ""),
                                        title=job.get("title", ""))
         if found:
@@ -51,7 +51,8 @@ def already_submitted(job: dict) -> bool:
                          found.title, found.company, found.updated_at)
         return bool(found)
     except Exception as exc:
-        if is_transient_connection_error(exc):
+        is_transient = getattr(db, "is_transient_connection_error", lambda e: False)
+        if is_transient(exc):
             # Postgres is down (Docker not started etc.) -- fall back to SQLite.
             logger.warning(
                 "Postgres unavailable (%s); falling back to SQLite for duplicate check",

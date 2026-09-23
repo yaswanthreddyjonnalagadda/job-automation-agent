@@ -357,6 +357,20 @@ class JobApplicationAssistant:
         )
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        # Task 4.2: Automated Forensic Failure Dumper on unhandled error or stall
+        if exc_type is not None:
+            try:
+                page = getattr(self, "_last_page", None)
+                if page is None and self._context and self._context.pages:
+                    page = self._context.pages[-1]
+                if page is not None and not page.is_closed():
+                    from state_machine import dump_forensic_failure
+                    logs = getattr(page, "_console_logs", [])
+                    dump_dir = dump_forensic_failure(page, reason=f"Unhandled exception: {exc_val}", console_logs=logs)
+                    logger.error("AUTOMATED FORENSIC FAILURE DUMP exported to: %s", dump_dir)
+            except Exception as dump_err:
+                logger.error("Failed to run forensic failure dumper in __exit__: %s", dump_err)
+
         # Teardown must not raise. Closing a browser the user already closed
         # themselves throws TargetClosedError, which turned a clean, finished
         # run into an alarming exit-code-1 traceback that looks exactly like a
@@ -412,9 +426,29 @@ class JobApplicationAssistant:
                 continue
         return False
 
+    def _attach_console_listener(self, page: Page) -> None:
+        """Captures browser console logs for diagnostic forensic export."""
+        if not hasattr(page, "_console_logs") or page._console_logs is None:
+            page._console_logs = []
+        def _on_console(msg):
+            try:
+                page._console_logs.append({
+                    "type": msg.type,
+                    "text": msg.text,
+                    "location": getattr(msg, "location", None),
+                })
+            except Exception:
+                pass
+        try:
+            page.on("console", _on_console)
+        except Exception:
+            pass
+
     def open_job_page(self, url: str) -> Page:
         assert self._context is not None, "Use within a `with` block"
         page = self._context.new_page()
+        self._last_page = page
+        self._attach_console_listener(page)
         self.with_retries(f"opening {url[:60]}", lambda: page.goto(url, wait_until="domcontentloaded"))
         # Workday/Greenhouse/etc. render via JS after domcontentloaded fires,
         # so the page is typically still blank at this point. Give it a
@@ -3875,6 +3909,44 @@ class JobApplicationAssistant:
         tile = page.locator("a, button, [role=button], div, span").filter(has_text=re.compile(self._COVER_TILE, re.IGNORECASE))
         return any(tile.nth(i).is_visible() for i in range(min(tile.count(), 5)))
 
+    def has_required_cover_letter_field(self, page: Page) -> bool:
+        """Task 4.3: True only if an explicit, required cover letter upload
+        target or text input area is actively detected on the live form.
+        Optional cover letter fields return False to enforce lazy compilation."""
+        found = self._cover_letter_control(page)
+        if found is not None:
+            kind, control = found
+            try:
+                is_req = control.evaluate("""el => {
+                    if (el.required || el.getAttribute('aria-required') === 'true') return true;
+                    const scope = el.closest('fieldset, form, div[role="group"], [class*="form-group" i], [class*="field" i]') || el.parentElement;
+                    const text = scope ? (scope.innerText || '') : '';
+                    return text.includes('*') || /\\brequired\\b/i.test(text);
+                }""")
+                if is_req:
+                    return True
+            except Exception:
+                pass
+
+        try:
+            tiles = page.locator("a, button, [role=button], div, span").filter(
+                has_text=re.compile(self._COVER_TILE, re.IGNORECASE)
+            )
+            for i in range(min(tiles.count(), 5)):
+                t = tiles.nth(i)
+                if t.is_visible():
+                    is_req = t.evaluate("""el => {
+                        const scope = el.closest('fieldset, form, div[role="group"], [class*="form-group" i], [class*="field" i]') || el.parentElement;
+                        const text = scope ? (scope.innerText || '') : '';
+                        return text.includes('*') || /\\brequired\\b/i.test(text);
+                    }""")
+                    if is_req:
+                        return True
+        except Exception:
+            pass
+
+        return False
+
     def attach_cover_letter(self, page: Page, letter_txt: Path, letter_pdf: Path) -> bool:
         """Uploads the letter PDF, or pastes the text into a cover-letter text
         box. Leaves the field alone if it already holds the letter."""
@@ -4118,6 +4190,9 @@ class JobApplicationAssistant:
         data/_resume_override.txt, so a JD-tailored resume can replace the
         generic one without restarting this process."""
         target = Path(resume_path)
+        master_resume = Path("assets/master_resume.pdf")
+        if master_resume.is_file():
+            target = master_resume
         override_file = Path("data/_resume_override.txt")
         try:
             if override_file.exists():
@@ -4126,6 +4201,9 @@ class JobApplicationAssistant:
                     target = Path(override)
         except Exception as exc:
             logger.warning("Could not read resume override: %s", exc)
+
+        if not target.exists():
+            target = Path(resume_path)
 
         if not target.exists():
             logger.warning("Resume file not found: %s", target)
@@ -5702,6 +5780,25 @@ class JobApplicationAssistant:
         btn = self._wizard_button(page)
         if btn is None:
             return False
+
+        # Task 4.1: Deploy the State Fingerprint Circuit Breaker
+        if not hasattr(self, "_circuit_breaker") or self._circuit_breaker is None:
+            from state_machine import StateFingerprintCircuitBreaker
+            self._circuit_breaker = StateFingerprintCircuitBreaker(consecutive_threshold=3)
+
+        tripped, state, meta = self._circuit_breaker.check(page)
+        if tripped:
+            logger.warning("CIRCUIT BREAKER TRIPPED in click_next_step: %s across 3 consecutive cycles", state)
+            dump_dir = self._circuit_breaker.trip_and_dump(
+                page,
+                reason="State fingerprint identical across 3 consecutive cycles",
+                tracker=getattr(self, "tracker", None),
+                key=getattr(self, "application_key", ""),
+                console_logs=getattr(page, "_console_logs", []),
+            )
+            self._stuck_on = "BLOCKED_VALIDATION_LOOP"
+            return False
+
         before = self._page_fingerprint(page)
         try:
             btn.click(timeout=10_000)

@@ -701,7 +701,11 @@ class PageAgent:
         self.assistant, self.claude, self.config, self.profile = assistant, claude, config, profile
         self.resume, self.job, self.tracker, self.key = resume, job, tracker, key
         self.job_dir = Path(job_dir) if job_dir else None
-        self.resume_file = Path(resume_file) if resume_file else None
+        master_resume = Path("assets/master_resume.pdf")
+        if master_resume.is_file():
+            self.resume_file = master_resume
+        else:
+            self.resume_file = Path(resume_file) if resume_file else None
         self.cover_letter = cover_letter
         self.resume_uploaded = False
         self._resume_autofill_attempted = False
@@ -1777,6 +1781,8 @@ class PageAgent:
                 stick_tries = 0
             if moved == "submitted":
                 return Outcome("submitted", page, ["the site confirmed the application"])
+            if moved == "blocked_validation_loop":
+                return Outcome("blocked_validation_loop", page, [feedback])
             if moved == "stop":
                 return Outcome("owner_needed", page, [feedback])
         return Outcome("gave_up", page, ["too many pages in one run"])
@@ -1967,8 +1973,14 @@ class PageAgent:
             if action == "upload_resume" and (self.resume_uploaded or not self.resume_file):
                 continue
             if action == "upload_cover_letter":
-                is_required = any(matches.search(f"{c.container} {c.name}") and ("*" in c.name or "*" in c.container) for c in controls)
-                if not is_required and not self.cover_letter and not getattr(self.profile, "cover_letter", ""):
+                # Task 4.3: Ensure cover letter generation is strictly lazy-loaded:
+                # only trigger if an explicit, required cover letter target or text area is actively detected
+                is_required = any(
+                    matches.search(f"{c.container} {c.name}")
+                    and ("*" in (c.name or "") or "*" in (c.container or "") or "*" in (c.question or "") or "required" in (c.context or "").lower())
+                    for c in controls
+                )
+                if not is_required:
                     continue
                 if self._letter_attached or self.cover_letter is None:
                     continue
@@ -2431,7 +2443,11 @@ class PageAgent:
                 loc.click(timeout=5_000)
             return True
         if answer.action in ("upload_resume", "upload_cover_letter"):
-            path = self.resume_file if answer.action == "upload_resume" else self._letter_file()
+            if answer.action == "upload_resume":
+                master = Path("assets/master_resume.pdf")
+                path = master if master.is_file() else self.resume_file
+            else:
+                path = self._letter_file()
             if not path or not Path(path).is_file():
                 return False
             # Workday's "Select files" button is only a visual trigger; its
@@ -3281,6 +3297,23 @@ class PageAgent:
             logger.info("NEXT: pressing %r (step %s -- more steps follow)", label, plan.step)
         else:
             logger.info("NEXT: pressing %r", label)
+
+        # Task 4.1: Deploy the State Fingerprint Circuit Breaker
+        if not hasattr(self, "_circuit_breaker") or self._circuit_breaker is None:
+            from state_machine import StateFingerprintCircuitBreaker
+            self._circuit_breaker = StateFingerprintCircuitBreaker(consecutive_threshold=3)
+
+        tripped, state, meta = self._circuit_breaker.check(tab)
+        if tripped:
+            logger.warning("CIRCUIT BREAKER TRIPPED in press_next: %s across 3 consecutive cycles", state)
+            dump_dir = self._circuit_breaker.trip_and_dump(
+                tab,
+                reason="State fingerprint identical across 3 consecutive cycles",
+                tracker=getattr(self, "tracker", None),
+                key=getattr(self, "key", ""),
+                console_logs=getattr(tab, "_console_logs", []),
+            )
+            return "blocked_validation_loop", page, f"Circuit breaker tripped: {state} (evidence in {dump_dir})"
 
         before = re.sub(r"\[ref=[\w-]+\]|\[active\]", "", self.snapshot(page))
         tabs_before = len(tab.context.pages)

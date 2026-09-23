@@ -437,6 +437,7 @@ def no_sponsorship_statement(text: str) -> str:
 
 
 STATUS_DISQUALIFIED_POLICY_MISMATCH = "DISQUALIFIED_POLICY_MISMATCH"
+STATUS_BLOCKED_VALIDATION_LOOP = "BLOCKED_VALIDATION_LOOP"
 
 
 def check_visa_sponsorship_shield(
