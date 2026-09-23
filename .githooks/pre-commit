@@ -1,0 +1,13 @@
+#!/bin/sh
+# Every change reaches main through a branch and a pull request (RFC-001, M0),
+# whoever makes it -- you, Claude Code or any other coding agent.
+# Turn this on once per clone:   git config core.hooksPath .githooks
+branch=$(git symbolic-ref --short -q HEAD)
+case "$branch" in
+  main|master)
+    echo "Not committing on '$branch': changes go on a branch and reach $branch by pull request." >&2
+    echo "  git switch -c fix/<what-it-fixes>" >&2
+    exit 1
+    ;;
+esac
+exit 0

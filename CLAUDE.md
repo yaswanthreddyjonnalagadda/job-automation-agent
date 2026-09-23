@@ -68,3 +68,41 @@
 - **Submission:** never implement a code path that clicks Submit outside
   `apply_flow.hand_over()`'s existing review gate, or the strictly-verified
   auto-submit path in `safety.evaluate_auto_submit()`. See `BEHAVIOUR.md`.
+
+## 7. How a change is made (definition of done)
+These rules bind every coding agent working in this repository (Claude Code,
+Antigravity, any other) and every session. A change is done only when all
+of them hold.
+- **Branch and pull request, never `main`.** Work on a branch, open a pull
+  request, and leave the merge to the owner. `.githooks/` refuses commits
+  and pushes to `main` (enable once: `git config core.hooksPath .githooks`);
+  GitHub's branch protection refuses them on the server.
+- **One task per session, started by the owner.** A plan, roadmap or RFC is
+  context, not a queue: never work through its phases on your own.
+- **Fix the class, not the instance.** A bug-fix pull request states the
+  symptom, the root cause as a class ("a label keyword chose the wrong
+  concept"), why the existing tests missed it, and the test that now covers
+  the whole class -- a property test where the class is large. A fix that
+  works for one site, one form or one value is not a fix.
+- **Data never lives in logic.** No place, company, person or answer
+  literal decides anything in code. Places come from `reference/geo.json`
+  through `geo_reference.py` (regenerate the data with
+  `reference/build_geo.py`); the owner's facts come from the profile; site
+  quirks live in `sites/`. `tests/test_no_place_literals.py` fails the
+  build on a country, state or province name in a logic module.
+- **Ask who put a value there before changing it.** `provenance.py`
+  observes what a person typed; `safety.may_overrule()` is the only place
+  that decides whether a value on the form may be replaced. The owner's
+  values are never changed; the site's only as `SITE_PREFILL_POLICY`
+  allows. Never add an exception for a particular value.
+- **One decision, one place.** If a rule already lives in `safety.py`,
+  call it; if the same decision exists in two modules, consolidate it
+  rather than patching each copy. `safety.py` changes only with the
+  owner's explicit approval on the pull request.
+- **Tests first, all green.** A new behaviour or fix comes with a test that
+  failed before it. `python -m pytest -q` passes locally and in CI, with no
+  test weakened to make it pass.
+- **Say what the owner will see.** Any change to what the agent does on a
+  form updates `BEHAVIOUR.md` in the same pull request.
+- **Plans live outside the repository root.** Roadmaps, RFCs, reviews and
+  postmortems go in the Claude Project; the root keeps rules only.

@@ -14,3 +14,7 @@
 *.sqlite binary
 *.zip binary
 *.docx binary
+
+# Hook scripts run under sh, which cannot read Windows line endings.
+.githooks/* text eol=lf
+*.sh text eol=lf

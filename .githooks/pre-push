@@ -1,0 +1,13 @@
+#!/bin/sh
+# Refuse to push straight to main (RFC-001, M0): push the branch and open a
+# pull request. GitHub's branch protection enforces the same on the server.
+# Turn this on once per clone:   git config core.hooksPath .githooks
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main|refs/heads/master)
+      echo "Not pushing to ${remote_ref#refs/heads/}: push your branch and open a pull request." >&2
+      exit 1
+      ;;
+  esac
+done
+exit 0

@@ -118,3 +118,19 @@ A job you decline at checkpoint 1 or 2 is still recorded (status
   with a different field-naming convention, extend `_FIELD_HINTS` in
   `browser_automation.py` as you encounter new field labels — the matcher
   is intentionally simple and easy to widen.
+
+## For development
+
+Changes reach `main` only through a branch and a pull request (see section 7
+of `CLAUDE.md`). Once per clone:
+
+```bash
+git config core.hooksPath .githooks          # refuse commits and pushes to main
+pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest -q                          # the whole suite, as CI runs it
+```
+
+On GitHub, protect `main` (Settings -> Branches -> Add rule: require a pull
+request and the "tests" status check) and add the repository secret
+`PROFILE_JSON` with the contents of `data/profile.json`, which the tests read
+until they move to synthetic fixtures.
