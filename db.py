@@ -57,6 +57,7 @@ STATUS_NEEDS_USER_REVIEW = "needs_user_review"  # something needs a person: blan
                                                 # we could not verify
 STATUS_SUBMITTED = "submitted"                  # confirmed by the site or a confirmation email
 STATUS_SKIPPED = "skipped"
+STATUS_DISQUALIFIED_POLICY_MISMATCH = "DISQUALIFIED_POLICY_MISMATCH"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS applications (

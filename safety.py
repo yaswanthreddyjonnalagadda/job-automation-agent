@@ -411,7 +411,9 @@ _NO_SPONSORSHIP = re.compile(
     r"without (?:the )?(?:need (?:for|of) )?(?:current or future )?(?:employment[- ]based )?"
     r"(?:visa |immigration )?sponsorship"
     r"|(?:not|unable to|cannot|can't|will not|won't|does not|do not|are not able to|is not able to)"
-    r" (?:currently )?(?:able to )?(?:offer|provide|support|sponsor)\w*[^.!?\n]{0,40}(?:sponsorship|visas?\b)"
+    r" (?:currently )?(?:able to )?(?:offer|provide|support|sponsor|transfer|assume|take over)\w*[^.!?\n]{0,60}(?:sponsorship|visas?\b)"
+    r"|unable to (?:sponsor|take over sponsorship|transfer|provide)[^.!?\n]{0,60}(?:sponsorship|visa)"
+    r"|take over (?:sponsorship|visa)"
     r"|no (?:visa |employment[- ]based |immigration )?sponsorship"
     r"|sponsorship (?:is |will )?(?:not|n't) (?:be )?(?:available|offered|provided|considered)"
     r"|(?:u\.?s\.? citizens?|green card holders?|permanent residents?) only"
@@ -432,6 +434,52 @@ def no_sponsorship_statement(text: str) -> str:
     """
     match = _NO_SPONSORSHIP.search(" ".join((text or "").split()))
     return match.group(0).strip()[:240] if match else ""
+
+
+STATUS_DISQUALIFIED_POLICY_MISMATCH = "DISQUALIFIED_POLICY_MISMATCH"
+
+
+def check_visa_sponsorship_shield(
+    page,
+    profile,
+    job_dir: Optional[Path] = None,
+) -> tuple[bool, str, Optional[str]]:
+    """Safety compliance guardrail: scans the active form for hard employer
+    disqualification clauses (e.g. 'unable to sponsor or take over sponsorship of
+    an employment visa at this time').
+
+    If candidate profile specifies requires_visa_sponsorship = True and an explicit
+    non-sponsorship declaration is found, executes a safety abort:
+    captures a full-page forensic screenshot and returns (True, statement, screenshot_path).
+    """
+    if not getattr(profile, "requires_visa_sponsorship", False):
+        return False, "", None
+
+    try:
+        body_text = page.locator("body").inner_text(timeout=3_000) or ""
+    except Exception:
+        try:
+            body_text = page.content() or ""
+        except Exception:
+            body_text = ""
+
+    clause = no_sponsorship_statement(body_text)
+    if not clause:
+        return False, "", None
+
+    screenshot_path = None
+    if job_dir is not None:
+        try:
+            import time
+            out_dir = Path(job_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            shot = out_dir / f"forensic_disqualified_policy_mismatch_{int(time.time())}.png"
+            page.screenshot(path=str(shot), full_page=True)
+            screenshot_path = str(shot)
+        except Exception as exc:
+            logging.getLogger(__name__).debug("Could not take forensic screenshot for visa policy mismatch: %s", exc)
+
+    return True, clause, screenshot_path
 
 
 def ready_to_auto_submit(report: dict, resume_on_form: bool, submit_button_found: bool) -> tuple[bool, str]:

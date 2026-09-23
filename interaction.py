@@ -263,3 +263,166 @@ def commit_draft_cards(page: Page, timeout_ms: int = 4_000) -> int:
                 logger.debug("Failed while inspecting/clicking card button: %s", exc)
 
     return committed
+
+
+def sweep_modals_and_policies(page_or_tab: Any, profile: Any = None) -> bool:
+    """Universal Modal & Policy Interceptor:
+    Checks for active modal dialogs (role="dialog", .ant-modal, aria-modal="true", dialog[open])
+    on initial page load and immediately following navigation clicks.
+
+    When an active modal dialog (like Inframark 'Recruiting Communications' popup) appears:
+    1. Programmatically scrolls internal text container to the bottom (scrollTop = scrollHeight).
+    2. Asserts any mandatory compliance checkboxes inside the modal.
+    3. Clicks the primary confirmation button ('Save', 'Agree', 'Accept', 'Confirm', 'Done', etc.).
+    4. Verifies that both the modal card and background backdrop mask detach completely or hide.
+    """
+    page = getattr(page_or_tab, "page", page_or_tab)
+
+    modal_selectors = (
+        "[role='dialog']:visible",
+        ".ant-modal:visible",
+        "[aria-modal='true']:visible",
+        "dialog[open]:visible",
+        ".modal.show:visible",
+        ".modal:visible",
+    )
+
+    dismissed_any = False
+
+    for selector in modal_selectors:
+        try:
+            modals = page.locator(selector)
+            count = modals.count()
+            if count == 0:
+                continue
+
+            for idx in range(count):
+                modal = modals.nth(idx)
+                if not modal.is_visible():
+                    continue
+
+                # Safety: Skip authentication dialogs (password inputs present) or file inputs
+                has_password = modal.evaluate("""el => {
+                    return Boolean(el.querySelector('input[type="password"]'));
+                }""")
+                if has_password:
+                    continue
+
+                # Safety: Skip modals asking for attestations/certifications unless allowed
+                try:
+                    modal_text = modal.inner_text(timeout=1_000) or ""
+                    if safety.is_attestation(modal_text) and not getattr(profile, "sign_attestations", False):
+                        logger.info("Modal contains legal attestation/certification -- leaving for user")
+                        continue
+                except Exception:
+                    pass
+
+                # 1. Programmatically scroll internal text container to the bottom
+                try:
+                    modal.evaluate("""el => {
+                        const candidates = [
+                            el.querySelector('.ant-modal-body'),
+                            el.querySelector('[class*="modal-body"]'),
+                            el.querySelector('[class*="dialog-body"]'),
+                            el.querySelector('[class*="scroll"]'),
+                            el.querySelector('[class*="content"]'),
+                            el.querySelector('article'),
+                            el.querySelector('section'),
+                            el
+                        ];
+                        for (const c of candidates) {
+                            if (c && c.scrollHeight > c.clientHeight) {
+                                c.scrollTop = c.scrollHeight;
+                            }
+                        }
+                        const allChildren = el.querySelectorAll('*');
+                        for (const child of allChildren) {
+                            if (child.scrollHeight > child.clientHeight && child.clientHeight > 40) {
+                                child.scrollTop = child.scrollHeight;
+                            }
+                        }
+                    }""")
+                    page.wait_for_timeout(300)
+                except Exception as exc:
+                    logger.debug("Failed scrolling modal content: %s", exc)
+
+                # 2. Assert any mandatory compliance checkboxes
+                try:
+                    cbs = modal.locator("input[type='checkbox'], [role='checkbox']")
+                    for cb_idx in range(cbs.count()):
+                        cb = cbs.nth(cb_idx)
+                        if cb.is_visible() and not cb.is_checked():
+                            try:
+                                cb.check(timeout=1_500)
+                            except Exception:
+                                cb.evaluate("""el => {
+                                    if (!el.checked) {
+                                        el.checked = true;
+                                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                                        el.dispatchEvent(new Event('change', {bubbles: true}));
+                                    }
+                                }""")
+                            page.wait_for_timeout(200)
+                except Exception as exc:
+                    logger.debug("Failed asserting compliance checkbox in modal: %s", exc)
+
+                # 3. Locate and click primary confirmation button ('Save', 'Agree', 'Accept', etc.)
+                confirm_clicked = False
+                confirm_selectors = (
+                    "button:has-text('I Accept')",
+                    "button:has-text('Accept All')",
+                    "button:has-text('Accept')",
+                    "button:has-text('I Agree')",
+                    "button:has-text('Agree')",
+                    "button:has-text('Save')",
+                    "button:has-text('Continue')",
+                    "button:has-text('Confirm')",
+                    "button:has-text('Done')",
+                    "button:has-text('OK')",
+                    "button:has-text('Close')",
+                    "[role='button']:has-text('Agree')",
+                    "[role='button']:has-text('Accept')",
+                )
+
+                for c_sel in confirm_selectors:
+                    c_btn = modal.locator(c_sel).first
+                    try:
+                        if c_btn.count() and c_btn.is_visible():
+                            label = (c_btn.inner_text(timeout=500) or "").strip()
+                            if safety.is_submit_label(label) and "agree" not in label.lower() and "accept" not in label.lower():
+                                continue
+                            if click_resiliently(c_btn, timeout_ms=3_000):
+                                confirm_clicked = True
+                                logger.info("Modal & Policy Interceptor: confirmed modal with %r", label)
+                                break
+                    except Exception:
+                        continue
+
+                # 4. Verify that both the modal card and background backdrop mask detach completely from the DOM
+                if confirm_clicked:
+                    page.wait_for_timeout(500)
+                    try:
+                        modal.wait_for(state="hidden", timeout=4_000)
+                    except Exception:
+                        pass
+
+                    backdrop_selectors = (
+                        ".ant-modal-mask",
+                        ".ant-modal-wrap",
+                        ".modal-backdrop",
+                        "[class*='backdrop']",
+                        "[class*='mask']",
+                    )
+                    for b_sel in backdrop_selectors:
+                        try:
+                            mask = page.locator(b_sel)
+                            if mask.count() and mask.first.is_visible():
+                                mask.first.wait_for(state="hidden", timeout=2_000)
+                        except Exception:
+                            pass
+
+                    dismissed_any = True
+        except Exception as exc:
+            logger.debug("sweep_modals_and_policies encountered: %s", exc)
+
+    return dismissed_any

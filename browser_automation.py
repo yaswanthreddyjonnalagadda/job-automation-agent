@@ -37,6 +37,7 @@ from interaction import (
     commit_draft_cards,
     fill_and_dispatch,
     resolve_ant_dropdown,
+    sweep_modals_and_policies,
 )
 from perception import (
     find_active_draft_cards,
@@ -424,6 +425,7 @@ class JobApplicationAssistant:
         except Exception:
             logger.info("Page did not reach networkidle within 10s, continuing anyway")
             page.wait_for_timeout(3_000)
+        self.sweep_modals_and_policies(page)
         return page
 
     def wait_for_manual_login(self, page: Page, logged_in_selector: str, timeout_ms: int = 300_000) -> None:
@@ -473,10 +475,23 @@ class JobApplicationAssistant:
             logger.warning("Could not inspect frames: %s", exc)
         return False
 
+    def sweep_modals_and_policies(self, page: Page) -> bool:
+        """Task 3.1: Automated popup sweeper that checks for active modal dialogs
+        (role='dialog', .ant-modal, aria-modal='true') on initial page load and
+        immediately following navigation clicks. Programmatically scrolls internal
+        container to bottom (scrollTop = scrollHeight), asserts compliance checkboxes,
+        clicks primary confirmation ('Save', 'Agree', 'Accept'), and verifies modal
+        and backdrop mask detachment."""
+        return sweep_modals_and_policies(page, getattr(self, "_profile", None))
+
     def dismiss_cookie_banner(self, page: Page) -> bool:
         """Accepts/closes a cookie consent banner. These overlay the page and
         swallow clicks aimed at whatever is underneath, which has already cost
         several 30-second actionability timeouts on other sites."""
+        try:
+            self.sweep_modals_and_policies(page)
+        except Exception:
+            pass
         for selector in (
             # Rejecting optional cookies clears a banner just as well and shares
             # less; take that choice whenever the banner offers it.
@@ -2899,12 +2914,12 @@ class JobApplicationAssistant:
         """True on the final review/summary step -- where auto mode stops and
         hands back to the human, because Submit is theirs to press."""
         try:
-            if page.locator("button:text-is('Submit')").count():
+            if page.locator("button:text-is('Submit'), [role='button']:text-is('Submit'), button:has-text('Submit Application')").count():
                 return True
             # Workday marks the active wizard step; 'Review' being current is
             # the same signal without depending on a button label.
             return page.locator(
-                "[aria-current='step']:has-text('Review'), [data-automation-id='progressBarActiveStep']:has-text('Review')"
+                "[aria-current='step']:has-text('Review'), [data-automation-id='progressBarActiveStep']:has-text('Review'), [class*='active']:has-text('Review')"
             ).count() > 0
         except Exception:
             return False
@@ -5726,6 +5741,10 @@ class JobApplicationAssistant:
                 logger.debug("Keyboard press failed: %s", str(exc).splitlines()[0][:100])
 
         self._stuck_on = before if self._page_fingerprint(page) == before else None
+        try:
+            self.sweep_modals_and_policies(page)
+        except Exception as exc:
+            logger.debug("Post-navigation modal sweep: %s", exc)
         if self._stuck_on:
             # The page stayed put. Whatever it is waiting for, it usually says
             # so somewhere on screen -- worth reporting rather than calling

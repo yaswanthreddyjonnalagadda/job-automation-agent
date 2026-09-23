@@ -52,6 +52,7 @@ from claude_integration import ClaudeClient, ClaudeIntegrationError
 from config import get_app_config, get_user_profile
 from jd_analyzer import build_job_description, dedup_key_for_url
 import safety
+from safety import STATUS_DISQUALIFIED_POLICY_MISMATCH
 from job_tracker import (
     STATUS_FORM_FILLED, STATUS_NEEDS_USER_REVIEW, STATUS_READY_TO_SUBMIT, STATUS_SKIPPED,
     STATUS_SUBMITTED, JobTracker,
@@ -762,10 +763,58 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             tracker.update_status(key, STATUS_SUBMITTED, notes=message[:1000])
             logger.info("SUBMITTED: %s at %s -- the site confirmed it", job.title, job.company)
             return
+        if outcome.kind == "disqualified_policy_mismatch":
+            tracker.update_status(
+                key,
+                STATUS_DISQUALIFIED_POLICY_MISMATCH,
+                notes=f"Disqualified: policy mismatch -- {outcome.summary}",
+            )
+            logger.warning("DISQUALIFIED_POLICY_MISMATCH: %s at %s -- %r", job.title, job.company, outcome.summary)
+            return
         if outcome.kind == "no_sponsorship":
             tracker.update_status(key, STATUS_SKIPPED, notes=f"Skipped: no visa sponsorship -- {outcome.summary}")
             logger.warning("SKIPPED: %s at %s does not sponsor visas -- %r", job.title, job.company, outcome.summary)
             return
+
+        # Task 3.3: Enforce the Human-in-the-Loop Review Border
+        is_review = assistant.is_review_step(page) or any(
+            "ready for you to submit" in r or "last step" in r or "review step" in r.lower()
+            for r in outcome.reasons
+        )
+        if is_review:
+            logger.info("REVIEW BORDER: Reached designated final review step. Halting for human review.")
+            assistant.save_progress(page)
+            summary_path = job_dir / f"summary_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.json"
+            hand_over(
+                assistant, page, tracker, key, job, job_dir,
+                Path(resume_file).name, summary_path,
+                config=config, profile=profile,
+                documents={"resume": resume_file,
+                           **({"cover_letter": made["letter"][1]} if "letter" in made and made["letter"] else {})},
+                step=agent.pages_read,
+            )
+            try:
+                decision = assistant.wait_for_signal(signal_path, timeout_seconds=args.timeout, page=page)
+            except TimeoutError:
+                logger.info("No instruction received; application left filled and unsubmitted.")
+                return
+            if not page.is_closed():
+                agent.note_owner_changes(page)
+            agent._ensure_state()
+            agent.forget_sign_in_attempts()
+            if decision == "submitted_by_user":
+                evidence = getattr(assistant, "_confirmation_evidence", "") or "the page confirmed it"
+                status, note = safety.verification_status(evidence)
+                tracker.update_status(key, status, notes=note)
+                logger.info("SUBMITTED_BY_USER: %s", note)
+                return
+            if decision in ("browser_closed", "left_form"):
+                remember_progress(tracker, key, page, f"run ended: {decision}")
+                return
+            if decision in ("skip", "decline", "abort", "quit"):
+                tracker.update_status(key, STATUS_SKIPPED, notes="Skipped by you")
+                return
+            continue
 
         if any("already sent" in r or "already applied" in r for r in outcome.reasons) or \
                 "already sent" in outcome.summary or "already applied" in outcome.summary:
@@ -1168,13 +1217,19 @@ def main() -> None:
             # application stops there and is recorded as skipped, with the
             # employer's own words as the reason.
             if getattr(profile, "requires_visa_sponsorship", False):
-                try:
-                    said = safety.no_sponsorship_statement(page.inner_text("body", timeout=5_000))
-                except Exception:
-                    said = ""
-                if said:
-                    tracker.update_status(key, STATUS_SKIPPED, notes=f"Skipped: no visa sponsorship -- {said}")
-                    logger.warning("SKIPPED: %s at %s does not sponsor visas -- %r", job.title, job.company, said)
+                disqualified, clause, shot = safety.check_visa_sponsorship_shield(
+                    page, profile, job_dir=job_dir
+                )
+                if disqualified:
+                    tracker.update_status(
+                        key,
+                        STATUS_DISQUALIFIED_POLICY_MISMATCH,
+                        notes=f"Disqualified: policy mismatch -- {clause}",
+                    )
+                    logger.warning(
+                        "SAFETY ABORT (DISQUALIFIED_POLICY_MISMATCH): %s at %s -- %r",
+                        job.title, job.company, clause,
+                    )
                     return
             fields = assistant.detect_form_fields(page)
             if not fields:

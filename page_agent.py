@@ -46,6 +46,7 @@ from interaction import (
     commit_draft_cards,
     fill_and_dispatch,
     resolve_ant_dropdown,
+    sweep_modals_and_policies,
 )
 from perception import (
     find_active_draft_cards,
@@ -723,11 +724,6 @@ class PageAgent:
         self._retried_after_error = False
         self._google_failed: set[str] = set()   # sites whose Google account they will not accept
         self._emailed_in: set[str] = set()      # sites where the email has been given on its own page
-
-    @staticmethod
-    def fill_and_dispatch(locator, value: str, timeout: Optional[float] = None, **kwargs):
-        """Fills an input and immediately dispatches bubbling input, change, and blur synthetic events."""
-        return fill_and_dispatch(locator, value, timeout=timeout, **kwargs)
         self._created_at: set[str] = set()      # sites where an account has been created
         self._profile_answer_library: Optional[dict] = None
         self.notes: list[str] = []                 # worth telling the owner, not worth stopping for
@@ -738,6 +734,11 @@ class PageAgent:
         self._choice_methods: dict[str, str] = {}
         self._reused_recipes: dict[str, tuple[str, str, str, str, str]] = {}
         self._current_host = ""
+
+    @staticmethod
+    def fill_and_dispatch(locator, value: str, timeout: Optional[float] = None, **kwargs):
+        """Fills an input and immediately dispatches bubbling input, change, and blur synthetic events."""
+        return fill_and_dispatch(locator, value, timeout=timeout, **kwargs)
 
     def forget_sign_in_attempts(self) -> None:
         """Google stays refused where the site itself rejected the account."""
@@ -1573,12 +1574,12 @@ class PageAgent:
             if safety.captcha_visible(page):
                 return Outcome("captcha", page, ["a CAPTCHA is showing -- only you can complete it"])
             if getattr(self.profile, "requires_visa_sponsorship", False):
-                try:
-                    said = safety.no_sponsorship_statement(tab.inner_text("body", timeout=5_000))
-                except Exception:
-                    said = ""
-                if said:
-                    return Outcome("no_sponsorship", page, [said])
+                disqualified, clause, shot = safety.check_visa_sponsorship_shield(
+                    tab, self.profile, job_dir=self.job_dir
+                )
+                if disqualified:
+                    logger.warning("VISA SPONSORSHIP SHIELD: Employer non-sponsorship declaration found: %s", clause)
+                    return Outcome("disqualified_policy_mismatch", page, [clause])
 
             snapshot = self.read_when_loaded(page)
             fingerprint = re.sub(r"\[ref=[\w-]+\]|\[active\]", "", snapshot)
@@ -1783,23 +1784,32 @@ class PageAgent:
     # -- answering ------------------------------------------------------------------
     def apply_answers(self, page, plan: PagePlan, controls: list[Control]) -> list[tuple[Answer, Control]]:
         """Gives the plan's answers the rules allow; returns the ones given.
-        The ones that could not be given are kept in self.failed."""
+        The ones that could not be given are kept in self.failed.
+        Implements Task 3.2: Dependent Cascading Fields (Topological Re-Scan)."""
         given: list[tuple[Answer, Control]] = []
         self.failed = []
-        by_ref = {c.ref: c for c in controls}
+        current_controls = list(controls)
+        by_ref = {c.ref: c for c in current_controls}
         signing = [a for a in plan.answers if self._is_signature(a, by_ref.get(a.ref))]
-        for answer in [a for a in plan.answers if a not in signing]:
+        queue: list[Answer] = [a for a in plan.answers if a not in signing]
+        processed_refs: set[str] = set()
+
+        while queue:
+            answer = queue.pop(0)
+            if answer.ref in processed_refs:
+                continue
             control = by_ref.get(answer.ref)
             if control is None:
                 logger.info("SKIPPED: %r is not on the page", answer.question[:60])
                 continue
-            refusal = self.refusal(page, answer, control, controls)
+            refusal = self.refusal(page, answer, control, current_controls)
             if refusal:
                 known_val, _ = self.known_answer(control)
                 if (known_val and _same_answer(control.answer, known_val) and _same_answer(answer.value, known_val)) or \
                    ("already answered from your profile" in refusal and control.role == "radio"):
                     logger.info("PRESERVED FROM PROFILE: %r = %r (ignored planner's %r)",
                                 control.question or answer.question, control.answer or "checked", answer.value)
+                    processed_refs.add(control.ref)
                     continue
                 logger.info("LEFT FOR YOU: %r -- %s", (control.question or answer.question)[:70], refusal)
                 plan.for_owner.append({"question": control.question or answer.question, "reason": refusal,
@@ -1807,6 +1817,7 @@ class PageAgent:
                 if control.role != "radio" and "already answered" in refusal \
                     and control.answer and not _same_answer(control.answer, answer.value):
                     self.failed.append(f"{control.question or answer.question} = {answer.value[:40]!r}")
+                processed_refs.add(control.ref)
                 continue
             try:
                 done = self.do(page, answer, control)
@@ -1829,6 +1840,55 @@ class PageAgent:
                 logger.info("ANSWERED: %r -> %r (from %s)", (control.question or answer.question)[:60],
                             answer.value[:50], answer.source or "?")
                 self._remember(control, answer)
+
+            processed_refs.add(control.ref)
+
+            # Task 3.2: Dependent Cascading Fields (Topological Re-Scan)
+            # After interacting with any dropdown, checkbox, or radio trigger:
+            is_trigger = control.role in ("combobox", "listbox", "radio", "checkbox", "switch") or answer.action in ("choose", "check")
+            if done and is_trigger:
+                try:
+                    # 1. 500ms debounce
+                    self.tab(page).wait_for_timeout(500)
+
+                    # 2. Re-scan DOM subtree / snapshot
+                    new_snapshot = self.snapshot(page)
+                    new_controls = parse_snapshot(new_snapshot)
+                    newly_mounted: list[Control] = []
+
+                    for nc in new_controls:
+                        if nc.ref not in by_ref:
+                            by_ref[nc.ref] = nc
+                            current_controls.append(nc)
+                            newly_mounted.append(nc)
+
+                    if newly_mounted:
+                        logger.info("CASCADE RE-SCAN: detected %d newly mounted field(s) after %r",
+                                    len(newly_mounted), (control.question or answer.question)[:50])
+                        # Prepend newly mounted required or conditional fields to the front of active input filling queue
+                        cascading_answers: list[Answer] = []
+                        for nc in newly_mounted:
+                            if nc.role in ANSWER_ROLES and not nc.disabled and nc.ref not in processed_refs:
+                                val, src = self.known_answer(nc)
+                                if not val:
+                                    val, src = self._attestation_answer(nc)
+                                action = "choose" if nc.role in ("combobox", "listbox", "radio") else (
+                                    "check" if nc.role in ("checkbox", "switch") else "fill"
+                                )
+                                cascading_answers.append(Answer(
+                                    ref=nc.ref,
+                                    question=nc.question or nc.name,
+                                    action=action,
+                                    value=val,
+                                    source=src or "cascading_field",
+                                ))
+                        if cascading_answers:
+                            queue = cascading_answers + queue
+                            logger.info("CASCADE RE-SCAN: prepended %d answerable cascading field(s) to front of queue",
+                                        len(cascading_answers))
+                except Exception as exc:
+                    logger.debug("Cascade re-scan error: %s", exc)
+
         if signing:
             given += self.sign(page, plan, signing, given)
         return given
@@ -3203,7 +3263,8 @@ class PageAgent:
         # step counter shows more steps to come.
         counter = re.search(r"(\d+)\s*(?:of|/)\s*(\d+)", plan.step or "")
         steps_remain = bool(counter) and int(counter.group(1)) < int(counter.group(2))
-        final = plan.next_kind == "final_submit" or (submit_word and not (steps_remain and plan.next_kind == "next_step"))
+        is_review = getattr(self.assistant, "is_review_step", lambda p: False)(tab)
+        final = plan.next_kind == "final_submit" or is_review or (submit_word and not (steps_remain and plan.next_kind == "next_step"))
         if plan.page_kind == "job_description" and plan.next_kind == "open_application":
             final = False
         if final:
@@ -3238,6 +3299,10 @@ class PageAgent:
             self.locate(page, control.ref).click(timeout=10_000)
         self.settle(page, 2_500)
         page = self.newest_tab(page, tabs_before)
+        try:
+            sweep_modals_and_policies(self.tab(page), self.profile)
+        except Exception as exc:
+            logger.debug("Post-navigation modal sweep: %s", exc)
         if final:
             self.final_pressed = True
             if self._site_confirms(self.tab(page)):
@@ -3252,7 +3317,8 @@ class PageAgent:
 
     def submit_gate(self, page, controls: list[Control], last_step: bool = True) -> str:
         """Why the application must not be sent now, or "" when it may."""
-        if not getattr(self.config, "auto_submit", False):
+        auto_enabled = bool(getattr(self.config, "auto_submit_verified_only", False))
+        if not auto_enabled and not getattr(self.config, "auto_submit", False):
             return "automatic submission is off -- the application is ready for you to submit"
         if safety.captcha_visible(page):
             return "a CAPTCHA is showing -- only you can complete it"
