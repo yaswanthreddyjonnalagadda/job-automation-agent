@@ -101,17 +101,19 @@ class JsonLogHandler(logging.Handler):
 
 
 def open_tracker(config):
-    """Postgres when it's up, SQLite otherwise.
+    """Use Postgres, with SQLite only for a transient connection outage.
 
-    Falling back rather than raising is deliberate: the tracker is a record of
-    what happened, and a stopped container must never take down a live
-    application mid-form. Both backends expose the same methods."""
+    Authentication, schema, and programming errors fail closed so tracking
+    cannot silently split between two databases."""
+    from db import is_transient_connection_error
     try:
         from db import get_tracker
         tracker = get_tracker()
         logger.info("Tracking to Postgres")
         return tracker
     except Exception as exc:
+        if not is_transient_connection_error(exc):
+            raise RuntimeError(f"Postgres tracking failed; refusing SQLite fallback: {exc}") from exc
         logger.warning(
             "Postgres unavailable (%s) -- falling back to SQLite at %s. "
             "Start it with `docker compose up -d`.",
@@ -453,6 +455,15 @@ def collect_evidence(assistant, page, job_dir: Path, step: int) -> dict:
     return paths
 
 
+def delete_screenshots(job_dir: Path) -> None:
+    """Remove visual evidence after a submission has been confirmed."""
+    for path in job_dir.glob("*.png"):
+        try:
+            path.unlink()
+        except OSError as exc:
+            logger.warning("Could not delete screenshot %s: %s", path, exc)
+
+
 def on_form_resume(assistant, prepared):
     """The resume actually on the employer's form.
 
@@ -657,32 +668,8 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
         if submitted:
             return STATUS_SUBMITTED
         status, message = STATUS_NEEDS_USER_REVIEW, "verified auto-submit did not complete -- please check the form"
-    elif getattr(config, "auto_submit", False) and status == STATUS_READY_TO_SUBMIT:
-        resume_on_form = bool(getattr(assistant, "attached_resume", None)) or report.get("resume_attached") is True
-        go, why = safety.ready_to_auto_submit(report, resume_on_form,
-                                               assistant.find_submit_button(page) is not None)
-        if go:
-            logger.info("AUTO_SUBMIT: %s -- submitting %s at %s", why, job.title, job.company)
-            if hasattr(tracker, "record_event"):
-                tracker.record_event(key, "auto_submit", f"submitting: {why}",
-                                     screenshot_path=evidence.get("screenshot", ""),
-                                     html_path=evidence.get("html", ""))
-            if assistant.click_verified_submit(page):
-                found = assistant.wait_for_submission_evidence(page, job.title)
-                status, note = safety.verification_status(found)
-                tracker.update_status(key, status, notes=note)
-                try:
-                    page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
-                except Exception:
-                    pass
-                logger.info("AUTO_SUBMIT result: %s -- %s", status, note)
-                if status == STATUS_SUBMITTED:
-                    return STATUS_SUBMITTED
-                message = note
-            else:
-                status, message = STATUS_NEEDS_USER_REVIEW, "the agent could not press Submit -- please check the form"
-        else:
-            logger.info("AUTO_SUBMIT: not yet -- %s", why)
+    # There is deliberately no legacy AUTO_SUBMIT fallback here. Every
+    # automatic submission must pass evaluate_auto_submit() above.
 
     if status == STATUS_READY_TO_SUBMIT and assistant.find_submit_button(page) is None:
         # Schwab's sign-in step was reported "ready to submit": nothing left
@@ -725,7 +712,8 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
 
 
 def run_page_agent(assistant, page, claude, config, profile, resume, job, tracker, key: str,
-                   job_dir: Path, resume_file: Path, args, signal_path: Path) -> None:
+                   job_dir: Path, resume_file: Path, args, signal_path: Path,
+                   experience_data: dict | None = None) -> None:
     """Works the application with the reading agent (page_agent.py).
 
     It reads each page, answers what the owner's facts answer, moves on, and
@@ -736,8 +724,11 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
     import page_agent
 
     made: dict = {}
+    experience_data = experience_data or {}
 
     def cover_letter():
+        if not getattr(config, "generate_cover_letters", False):
+            return None
         if "letter" not in made:
             made["letter"] = prepare_cover_letter(claude, resume, job, profile, job_dir, tracker, key)
             if made["letter"]:
@@ -759,6 +750,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
             except Exception:
                 pass
+            delete_screenshots(job_dir)
             message = "Submitted by the agent -- the site confirmed it" + (f". Worth checking: {notes}" if notes else "")
             tracker.update_status(key, STATUS_SUBMITTED, notes=message[:1000])
             logger.info("SUBMITTED: %s at %s -- the site confirmed it", job.title, job.company)
@@ -766,6 +758,13 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
         if outcome.kind == "no_sponsorship":
             tracker.update_status(key, STATUS_SKIPPED, notes=f"Skipped: no visa sponsorship -- {outcome.summary}")
             logger.warning("SKIPPED: %s at %s does not sponsor visas -- %r", job.title, job.company, outcome.summary)
+            return
+
+        if any("already sent" in r or "already applied" in r for r in outcome.reasons) or \
+                "already sent" in outcome.summary or "already applied" in outcome.summary:
+            message = "Already submitted on site -- confirmed by portal" + (f". Worth checking: {notes}" if notes else "")
+            tracker.update_status(key, STATUS_SUBMITTED, notes=message[:1000])
+            logger.info("ALREADY SUBMITTED: %s at %s -- the site confirmed it", job.title, job.company)
             return
 
         message = outcome.summary + (f" | worth checking: {notes}" if notes else "")
@@ -808,13 +807,14 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             importlib.reload(page_agent)
             agent.__class__ = page_agent.PageAgent
             agent.assistant = assistant
-            # The profile and Claude's instructions too: a corrected name or a
-            # new rule reached the code but not the run using it.
+            # The profile, application settings and Claude's instructions too:
+            # a corrected name or new authorization must reach the live run.
             try:
+                agent.config = config_module.get_app_config()
                 agent.profile = config_module.get_user_profile()
                 assistant._profile = agent.profile
             except Exception as exc:
-                logger.warning("Could not reload the profile: %s", exc)
+                logger.warning("Could not reload the profile or settings: %s", exc)
             try:
                 import claude_integration
                 importlib.reload(claude_integration)
@@ -842,6 +842,21 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             except Exception as exc:
                 logger.warning("Could not switch the brain over: %s", exc)
             logger.info("Reloaded the reading agent, your profile and the instructions")
+        elif decision == "fill_experience":
+            # The reading agent normally handles ordinary profile fields.
+            # Workday's repeated employment/education widget needs the
+            # structured, résumé-derived dates and searchable selections.
+            assistant.fill_experience_section(page, experience_data.get("experience", []))
+            assistant.fill_education_section(page, experience_data.get("education", []))
+            assistant.upload_resume(page, resume_file)
+            logger.info("Filled Workday experience and education from the structured resume")
+        elif decision == "reupload_resume":
+            assistant.upload_resume(page, resume_file)
+            logger.info("Retried the required resume upload")
+        elif decision == "fill_education":
+            assistant.fill_education_section(page, experience_data.get("education", []))
+            assistant.upload_resume(page, resume_file)
+            logger.info("Refilled Workday education and retried the required resume upload")
         # continue / refresh / anything else: read the page again and carry on
 
 
@@ -869,14 +884,23 @@ def submit_verified(assistant, page, tracker, key, job, job_dir: Path, decision)
         page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
     except Exception:
         pass
+    if status == STATUS_SUBMITTED:
+        delete_screenshots(job_dir)
     logger.info("AUTO_SUBMIT result: %s -- %s", status, note)
     return status == STATUS_SUBMITTED
 
 
 def brain_for(config, job=None):
-    """What works out the answers: the session the owner is talking to, or the
-    API. Everything the session does not take over falls through to the API."""
+    """The document writer, and optionally the old assisted page planner.
+
+    In profile mode Claude is document-only: it tailors the resume/CV, while
+    PageAgent reads the form and answers it from the saved profile without an
+    API or session call.
+    """
     api = ClaudeClient(config)
+    if getattr(config, "form_answer_mode", "profile") == "profile":
+        logger.info("BRAIN: Claude is document-only; form answers use the local profile planner")
+        return api
     if getattr(config, "agent_brain", "api") != "session":
         return api
     import session_planner
@@ -1059,8 +1083,15 @@ def main() -> None:
             # works out what to do there.
             logger.info("Working the application with the reading agent")
             page = assistant.open_job_page(resume_at or job.url)
+            page = assistant.open_embedded_form(page)
+            if assistant.on_job_description(page):
+                page = assistant.click_apply_button(page)
+                page = assistant.dismiss_apply_chooser(page)
+                page = assistant.open_embedded_form(page)
+            if hasattr(assistant, "autofill_from_resume"):
+                assistant.autofill_from_resume(page, attach_resume)
             run_page_agent(assistant, page, claude, config, profile, resume, job, tracker, key, job_dir,
-                           attach_resume, args, Path(args.signal_file))
+                           attach_resume, args, Path(args.signal_file), experience_data)
             return
 
         if resume_at:
@@ -1295,6 +1326,8 @@ def main() -> None:
                     page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
                 except Exception as exc:
                     logger.warning("Could not capture confirmation screenshot: %s", exc)
+                if status == STATUS_SUBMITTED:
+                    delete_screenshots(job_dir)
                 evidence = getattr(assistant, "_confirmation_evidence", "") or \
                     "the page confirmed it (see submitted_confirmation.png)"
                 status, note = safety.verification_status(evidence)

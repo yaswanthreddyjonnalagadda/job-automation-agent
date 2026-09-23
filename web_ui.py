@@ -233,6 +233,56 @@ def _end_any_run() -> int:
     return len(pids)
 
 
+def _save_env_values(values: dict[str, str]) -> None:
+    """Update selected local .env keys without rewriting unrelated settings."""
+    if any("\n" in value or "\r" in value for value in values.values()):
+        raise ValueError("credential values cannot contain line breaks")
+    path = BASE_DIR / ".env"
+    lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    remaining = dict(values)
+    output = []
+    for line in lines:
+        key = line.split("=", 1)[0].strip() if "=" in line and not line.lstrip().startswith("#") else ""
+        if key in remaining:
+            output.append(f"{key}={remaining.pop(key)}")
+        else:
+            output.append(line)
+    if output and output[-1].strip():
+        output.append("")
+    output.extend(f"{key}={value}" for key, value in remaining.items())
+    path.write_text("\n".join(output) + "\n", encoding="utf-8")
+
+
+@app.route("/settings", methods=["GET", "POST"])
+def settings():
+    env_path = BASE_DIR / ".env"
+    if request.method == "POST":
+        api_key = (request.form.get("anthropic_api_key") or "").strip()
+        values = {"ATS_EMAIL": (request.form.get("ats_email") or "").strip()}
+        if api_key:
+            values["ANTHROPIC_API_KEY"] = api_key
+        password = request.form.get("ats_password") or ""
+        if password:
+            values["ATS_PASSWORD"] = password
+        try:
+            _save_env_values(values)
+        except (OSError, ValueError) as exc:
+            return render_template_string(SETTINGS_HTML, error=f"Could not save settings: {exc}",
+                                          saved=False, ats_email=values["ATS_EMAIL"],
+                                          has_api_key=bool(api_key),
+                                          has_password=bool(password))
+        return redirect(url_for("settings", saved="1"))
+    from dotenv import dotenv_values
+    current = dotenv_values(env_path) if env_path.is_file() else {}
+    return render_template_string(
+        SETTINGS_HTML,
+        error=request.args.get("error"), saved=request.args.get("saved") == "1",
+        ats_email=current.get("ATS_EMAIL") or "",
+        has_api_key=bool(current.get("ANTHROPIC_API_KEY")),
+        has_password=bool(current.get("ATS_PASSWORD")),
+    )
+
+
 @app.post("/resume/<int:app_id>")
 def resume_application(app_id: int):
     """Picks an application back up where it stopped.
@@ -330,7 +380,8 @@ def send_signal(signal_file: str):
     decision = (request.form.get("decision") or "").strip()
     target = (BASE_DIR / "data" / signal_file).resolve()
     # Never let a crafted name write outside data/.
-    if not str(target).startswith(str((BASE_DIR / "data").resolve())):
+    root = (BASE_DIR / "data").resolve()
+    if target != root and root not in target.parents:
         abort(400)
     # "submit" is deliberately not accepted: the agent does not submit
     # applications, and this UI must not offer a button that looks like it does.
@@ -499,7 +550,7 @@ def evidence():
     output folder. Nothing outside output/ is readable."""
     target = Path(request.args.get("path", "")).resolve()
     root = (BASE_DIR / "output").resolve()
-    if not str(target).startswith(str(root)) or not target.is_file():
+    if (target != root and root not in target.parents) or not target.is_file():
         abort(404)
     if target.suffix.lower() == ".png":
         return send_file(target, mimetype="image/png")
@@ -527,7 +578,8 @@ def document(doc_id: int):
 def log():
     path = request.args.get("path", "")
     target = Path(path).resolve()
-    if not str(target).startswith(str((BASE_DIR / "logs").resolve())) or not target.is_file():
+    root = (BASE_DIR / "logs").resolve()
+    if (target != root and root not in target.parents) or not target.is_file():
         abort(404)
     return Response(target.read_text(encoding="utf-8", errors="replace"), mimetype="text/plain")
 
@@ -627,10 +679,49 @@ code { background:#eef1f5; padding:1px 6px; border-radius:5px; font-size:12px; }
 """
 
 
+SETTINGS_HTML = """
+<!doctype html><meta charset="utf-8"><title>Settings</title>
+<style>""" + BASE_CSS + """
+.settings { max-width:680px; }
+.settings label { display:block; margin:16px 0 6px; font-weight:600; }
+.settings input { width:100%; }
+.hint { color:var(--muted); font-size:13px; }
+.ok { background:#e3f5ea; color:#0f7b46; padding:11px 13px; border-radius:9px; margin-bottom:14px; }
+</style>
+<div class="wrap settings">
+  <p><a href="/">&larr; Back to applications</a></p>
+  <h1>Settings</h1>
+  <p class="sub">Credentials are stored locally in <code>.env</code>. Existing secrets are never shown here.</p>
+  {% if saved %}<div class="ok">Settings saved. Restart the dashboard before starting another application.</div>{% endif %}
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  <div class="card">
+    <form method="post" action="/settings">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="anthropic_api_key">Anthropic API key</label>
+      <input id="anthropic_api_key" type="password" name="anthropic_api_key"
+             placeholder="{% if has_api_key %}Saved; leave blank to keep it{% else %}sk-ant-...{% endif %}"
+             autocomplete="new-password">
+      <p class="hint">Used for resume tailoring and Claude features.</p>
+      <label for="ats_email">Employer ATS email</label>
+      <input id="ats_email" type="email" name="ats_email" value="{{ ats_email }}"
+             placeholder="you@example.com" autocomplete="username">
+      <label for="ats_password">Employer ATS password</label>
+      <input id="ats_password" type="password" name="ats_password"
+             placeholder="{% if has_password %}Saved; leave blank to keep it{% else %}Enter password{% endif %}"
+             autocomplete="new-password">
+      <p class="hint">For Workday, Greenhouse, Lever, or iCIMS. Do not use a LinkedIn, Indeed, Dice, or Google password.</p>
+      <button type="submit">Save credentials</button>
+    </form>
+  </div>
+</div>
+"""
+
+
 INDEX_HTML = """
 <!doctype html><meta charset="utf-8"><title>Job Applications</title>
 <style>""" + BASE_CSS + """</style>
 <div class="wrap">
+  <p><a href="/settings">Settings</a></p>
   <h1>Job Applications</h1>
   <p class="sub">Paste an employer's job link and the agent applies: it reads each page,
      answers from your profile, attaches your tailored resume and submits when every
@@ -667,6 +758,7 @@ INDEX_HTML = """
 
   <div class="card">
     <form class="apply" method="post" action="/apply">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="url" name="url" required
              placeholder="https://company.wd1.myworkdayjobs.com/... or jobs.lever.co/... or job-boards.greenhouse.io/...">
       <button type="submit">Apply</button>
@@ -699,10 +791,12 @@ INDEX_HTML = """
           <td class="actions"><div class="row-actions">
             {% if r.state == 'running' %}
             <form method="post" action="/reload-agent">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="ghost" title="Load edited agent code into this run without restarting it">Reload agent code</button>
             </form>
             <form method="post" action="/stop"
                   onsubmit="return confirm('Stop this application and close its browser? Nothing will be submitted, and you can start it again.')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <input type="hidden" name="url" value="{{ url }}">
               <button class="ghost">Stop</button>
             </form>
@@ -723,6 +817,7 @@ INDEX_HTML = """
         <div style="margin-top:8px">
           <code>{{ s }}</code>
           <form method="post" action="/signal/{{ s }}" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button name="decision" value="continue">Continue</button>
             <button class="ghost" name="decision" value="reload_code">Reload agent code</button>
             <button class="ghost" name="decision" value="skip">Skip</button>
@@ -748,14 +843,17 @@ INDEX_HTML = """
           <a href="/application/{{ a.id }}">details</a>
           {% if a.status != 'submitted' %}
             <form method="post" action="/resume/{{ a.id }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="ghost" title="{{ 'Reopen the part-filled form at ' + a.last_page_url[:80] if a.last_page_url else 'Start this application again from the posting' }} -- the resume and answers already stored are reused">Resume</button>
             </form>
             <form method="post" action="/stop-application/{{ a.id }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="ghost" title="Stop the run working on this application and close its browser. Nothing is submitted and the application is kept.">Stop</button>
             </form>
           {% endif %}
           <form method="post" action="/delete/{{ a.id }}"
                 onsubmit="return confirm('Delete {{ a.company }} -- {{ a.title[:60] }}?\n\nThis removes the application, its documents, its answers and its history. It cannot be undone.');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button class="ghost" title="Remove this application and everything filed under it">Delete</button>
           </form>
         </div></td>

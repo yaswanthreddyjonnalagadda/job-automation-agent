@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -33,6 +34,14 @@ from browser_automation import JobApplicationAssistant
 from config import get_app_config, get_user_profile
 from jd_analyzer import build_job_description, dedup_key_for_url, eligibility_summary, local_eligibility_flags
 from job_tracker import STATUS_FORM_FILLED, STATUS_SKIPPED, JobTracker
+
+
+def safe_output_name(value: str, fallback: str = "job") -> str:
+    """Turn job metadata into one harmless, bounded directory component."""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or "")).strip("._-")
+    if cleaned.upper() in {"CON", "PRN", "AUX", "NUL"} or cleaned == "":
+        return fallback
+    return cleaned[:80]
 from resume_parser import ResumeData, parse_resume
 
 
@@ -158,7 +167,7 @@ def process_job(
         tracker.update_status(job.dedup_key, STATUS_SKIPPED, notes=f"tailoring failed: {exc}")
         return
 
-    job_dir = config.output_dir / f"{company.replace(' ', '_')}_{title.replace(' ', '_')}"
+    job_dir = config.output_dir / f"{safe_output_name(company, 'company')}_{safe_output_name(title)}"
     job_dir.mkdir(parents=True, exist_ok=True)
     resume_out = job_dir / "tailored_resume.txt"
     cover_letter_out = job_dir / "cover_letter.txt"

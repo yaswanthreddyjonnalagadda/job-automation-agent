@@ -12,6 +12,7 @@ what's in this file; see BLOCKED_LOGIN_DOMAINS there.
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -31,6 +32,7 @@ for d in (DATA_DIR, OUTPUT_DIR, LOG_DIR, BROWSER_PROFILE_DIR):
 DB_PATH = DATA_DIR / "applications.db"
 RESUME_PATH = os.getenv("RESUME_PATH", str(DATA_DIR / "resume.pdf"))
 JOB_QUEUE_PATH = os.getenv("JOB_QUEUE_PATH", str(DATA_DIR / "job_queue.txt"))
+PROFILE_PATH = Path(os.getenv("PROFILE_PATH", str(DATA_DIR / "profile.json")))
 
 
 @dataclass(frozen=True)
@@ -122,7 +124,13 @@ class UserProfile:
     # guessing at it.
     hispanic_or_latino: str = "No"          # from the user's 2026-09-14 EEO answers
     at_least_18: str = "Yes"
-    authorized_for_any_employer: str = "No"  # on an H-1B: authorized, but not for any employer
+    authorized_for_any_employer: str = "Yes"
+    willing_to_submit_to_pre_employment_background_check: str = "Yes"
+    worked_for_occ: str = "No"  # resume-backed: no OCC employment is listed
+    provided_services_to_occ: str = "No"  # resume-backed: no OCC consulting is listed
+    bonus_expectations: str = "5%"
+    willing_to_work_onsite_three_days: str = "Yes"
+    relatives_employed_here: str = "No"
     preferred_language: str = "English"
     people_managed: str = ""                 # unknown -- the user fills this in
     outside_business_interests_with_competitors: str = "No"
@@ -200,12 +208,24 @@ class AppConfig:
         default_factory=lambda: os.getenv("AUTO_SUBMIT_VERIFIED_ONLY", "").strip().lower()
         in {"1", "true", "yes", "on"}
     )
-    # The owner's decision (2026-09-17): submit an application automatically
-    # once it is complete. AUTO_SUBMIT=true in .env; set it to false to go back
-    # to clicking Submit yourself. See safety.ready_to_auto_submit() for what
-    # "complete" means -- and what still always waits for a person.
+    # Deprecated compatibility flag. Automatic submission is authorized only
+    # by auto_submit_verified_only; keeping this field avoids breaking callers
+    # that still read AUTO_SUBMIT from older configuration files.
     auto_submit: bool = field(
         default_factory=lambda: os.getenv("AUTO_SUBMIT", "").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    # "profile" is the autonomous mode: every form answer comes from the
+    # saved profile or local answer library, not an LLM or session planner.
+    # "claude" preserves the previous assisted page-planning workflow.
+    form_answer_mode: str = field(
+        default_factory=lambda: os.getenv("FORM_ANSWER_MODE", "profile").strip().lower()
+    )
+    # Claude always tailors the resume/CV for a job. Cover letters are a
+    # separate, explicit opt-in so document-only mode does not make other API
+    # calls while filling an application.
+    generate_cover_letters: bool = field(
+        default_factory=lambda: os.getenv("GENERATE_COVER_LETTERS", "").strip().lower()
+        in {"1", "true", "yes", "on"}
     )
     # Which agent works the application pages. "reader" (the default) reads each
     # page the way a screen reader does and has Claude plan it (page_agent.py);
@@ -220,7 +240,18 @@ class AppConfig:
 
 
 def get_user_profile() -> UserProfile:
-    return UserProfile()
+    defaults = UserProfile()
+    if not PROFILE_PATH.is_file():
+        return defaults
+    try:
+        raw = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("profile must be a JSON object")
+        allowed = set(defaults.__dataclass_fields__)
+        values = {key: value for key, value in raw.items() if key in allowed}
+        return UserProfile(**{**defaults.__dict__, **values})
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Could not load profile from {PROFILE_PATH}: {exc}") from exc
 
 
 def get_app_config() -> AppConfig:

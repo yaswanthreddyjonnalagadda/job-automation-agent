@@ -1,0 +1,16 @@
+{
+  "full_name": "Your Name",
+  "first_name": "Your",
+  "last_name": "Name",
+  "email": "you@example.com",
+  "phone": "",
+  "address_line1": "",
+  "city": "",
+  "state": "",
+  "postal_code": "",
+  "country": "United States",
+  "requires_visa_sponsorship": false,
+  "legally_eligible_to_work": "Yes",
+  "accept_application_privacy_prompts": false,
+  "sign_attestations": false
+}

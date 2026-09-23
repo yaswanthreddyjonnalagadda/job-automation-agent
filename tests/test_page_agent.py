@@ -18,6 +18,7 @@ import config
 import page_agent
 import safety
 from browser_automation import JobApplicationAssistant
+from sites.workday import WorkdayAdapter
 
 
 @pytest.fixture(scope="module")
@@ -155,6 +156,60 @@ def test_the_page_is_read_as_questions_answers_and_choices(page):
     country = by_name["Country *"]
     assert country.role == "combobox" and "United States" in country.options and country.answer == ""
     assert by_name["Next"].role == "button" and by_name["First name *"].role == "textbox"
+
+
+def test_workday_answer_buttons_use_their_question_text():
+    snapshot = (Path(__file__).parents[1] / "output" /
+                "The_Options_Clearing_Corporation_Associate_Principal,_Cloud_Engineering" /
+                "pages" / "page_53.txt").read_text(encoding="utf-8")
+    controls = page_agent.parse_snapshot(snapshot)
+    questions = {control.question for control in controls if control.role == "button"}
+    assert "Have you ever worked for OCC as an intern or employee?*" in questions
+    assert "What are your bonus expectations?*" in questions
+    assert "No Required" not in questions
+
+
+def test_workday_empty_application_shell_is_treated_as_loading():
+    snapshot = (Path(__file__).parents[1] / "output" /
+                "The_Options_Clearing_Corporation_Associate_Principal,_Cloud_Engineering" /
+                "pages" / "page_02.txt").read_text(encoding="utf-8")
+    assert page_agent.workday_form_loading(snapshot)
+
+
+def test_occ_disclosures_have_profile_answers_and_consent_action(resume_file):
+    snapshot = (Path(__file__).parents[1] / "output" /
+                "The_Options_Clearing_Corporation_Associate_Principal,_Cloud_Engineering" /
+                "pages" / "page_08.txt").read_text(encoding="utf-8")
+    agent = make_agent(Planner(), resume_file)
+    controls = page_agent.parse_snapshot(snapshot)
+    gender = next(c for c in controls if "gender" in c.question.lower())
+    veteran = next(c for c in controls if "veteran status" in c.question.lower())
+    consent = next(c for c in controls if c.role == "checkbox" and "consent" in c.question.lower())
+    assert page_agent.is_workday_choice_button(gender)
+    assert agent.known_answer(gender)[0] == "Male"
+    assert page_agent.is_workday_choice_button(veteran)
+    assert agent.known_answer(veteran)[0] == "I am not a veteran"
+    assert agent._attestation_answer(consent)[0] == "checked"
+
+
+def test_empty_middle_name_overrides_historical_answer():
+    import dataclasses
+
+    agent = make_agent(Planner(), Path("resume.pdf"),
+                       profile=dataclasses.replace(config.get_user_profile(), middle_name=""))
+    control = page_agent.Control(ref="m", role="textbox", name="Middle Name")
+    assert agent.known_answer(control) == ("", "profile.middle_name")
+    required = page_agent.Control(ref="r", role="textbox", name="Middle Name *")
+    assert agent.known_answer(required) == ("N/A", "profile.middle_name")
+
+
+def test_paylocity_labels_survive_required_markers():
+    snapshot = (Path(__file__).parents[1] / "output" / "WinChoice_Senior_DevOps_Engineer" /
+                "pages" / "page_09.txt").read_text(encoding="utf-8")
+    controls = page_agent.parse_snapshot(snapshot)
+    questions = {control.question for control in controls}
+    assert "First Name" in questions and "Last Name" in questions
+    assert any("SMS" in question and "permission" in question for question in questions)
 
 
 def test_a_radio_button_carries_its_question():
@@ -346,6 +401,13 @@ def test_a_confirmation_the_agent_did_not_cause_is_not_recorded_as_its_submissio
     assert outcome.kind == "owner_needed" and "already sent" in outcome.summary
 
 
+def test_already_applied_page_is_detected_and_reported(page, resume_file):
+    page.set_content('<h3>Principal Engineer</h3><p>You\'ve already applied for this job.</p><a href="#">View My Applications</a>')
+    planner = SimpleNamespace(plan_page=lambda s, f, fb="": {"page_kind": "application_form", "next": {"kind": "none"}})
+    outcome = make_agent(planner, resume_file).run(page)
+    assert outcome.kind == "owner_needed" and "already sent" in outcome.summary
+
+
 def test_an_answer_that_does_not_stay_is_never_submitted_blank(page, resume_file):
     # The State list opens but ignores every choice.
     broken = STEP_2.replace("onclick=\"shown.textContent='Texas'; list.hidden = true\"", "") \
@@ -459,6 +521,17 @@ def test_a_resume_attached_in_an_earlier_run_counts_at_the_last_step(page, resum
     assert agent.run(page).kind == "submitted"
 
 
+def test_an_already_attached_resume_is_not_uploaded_again(page, resume_file):
+    """When a resume is already attached on the page (e.g. from an earlier pass
+    or when continuing after an error), attach_documents does not upload it again."""
+    agent = make_agent(Planner(), resume_file)
+    page.set_content(f'<div><p>Resume: {resume_file.name}</p><button>Select files</button></div>')
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    uploads = agent.attach_documents(page, agent.snapshot(page), controls)
+    assert uploads == []
+    assert agent.resume_uploaded is True
+
+
 def test_an_upload_is_recorded_for_later_runs(page, resume_file):
     serve(page)
     agent = make_agent(Planner(), resume_file)
@@ -527,6 +600,139 @@ def test_a_password_sign_in_that_typed_nothing_is_not_counted_as_tried(page, res
     controls = page_agent.parse_snapshot(agent.snapshot(page))
     assert agent.sign_in_step(page, controls) is False       # nothing done: the page is planned instead
     assert [c[0] for c in calls] == ["password"]
+
+
+def test_application_form_with_email_and_header_signin_link_does_not_trigger_login(page, resume_file):
+    """An application form with an Email field and a global navbar 'Sign In' link
+    (Dayforce 'Apply without an Account') is not mistaken for a login gate."""
+    page.set_content('''
+        <nav><a href="/login">Sign In</a></nav>
+        <h2>Application Information</h2>
+        <form>
+            <label>First Name <input type="text" id="fn"></label>
+            <label>Last Name <input type="text" id="ln"></label>
+            <label>Email Address <input type="email" id="em"></label>
+            <label>Phone Number <input type="tel" id="ph"></label>
+            <button type="submit">Save and Continue</button>
+        </form>
+    ''')
+    agent, calls = agent_with_fake_login(resume_file)
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    assert agent.sign_in_step(page, controls) is False
+    assert page.locator("#em").input_value() == ""
+    assert calls == []
+
+
+def test_dedicated_email_first_login_screen_fills_email_and_advances(page, resume_file):
+    """A dedicated sign-in screen asking for email first gives the email and advances."""
+    page.set_content('''
+        <h2>Sign In</h2>
+        <form onsubmit="event.preventDefault(); window.submittedEmail = em.value;">
+            <label>Email or Username <input type="email" id="em"></label>
+            <button type="submit">Next</button>
+        </form>
+    ''')
+    agent, calls = agent_with_fake_login(resume_file)
+    expected_email = agent.config.ats_email or agent.profile.email
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    assert agent.sign_in_step(page, controls) is True
+    assert page.evaluate("window.submittedEmail") == expected_email
+
+
+def test_recorded_account_uses_sign_in_instead_of_stale_registration(page, resume_file):
+    page.set_content('<button>Create Account</button><input type="password"><input type="password">')
+    agent, calls = agent_with_fake_login(resume_file)
+    agent.assistant.account_on_record = lambda: True
+    agent.assistant._create_account_control = lambda tab: tab.get_by_role("button", name="Create Account")
+    agent.assistant._goto_login_page = lambda tab: calls.append(("goto_login", tab.url)) or True
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+
+    assert agent.sign_in_step(page, controls) is True
+    assert [call[0] for call in calls] == ["goto_login"]
+
+
+def test_visible_registration_errors_override_a_transient_account_record(page, resume_file):
+    page.set_content('<button>Create Account</button><input type="password"><input type="password">'
+                     '<p>Error: Passwords do not match</p>')
+    agent, calls = agent_with_fake_login(resume_file)
+    agent.assistant.account_on_record = lambda: True
+    agent.assistant._create_account_control = lambda tab: tab.get_by_role("button", name="Create Account")
+    agent.assistant._goto_login_page = lambda tab: calls.append(("goto_login", tab.url)) or True
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+
+    assert agent.sign_in_step(page, controls) is False
+    assert [call[0] for call in calls] == ["password"]
+
+
+def test_workday_recorded_account_signs_in_instead_of_registering(page, resume_file):
+    """An account already on record: sign in, even though a registration form
+    is showing beside the sign-in one (the owner's rule)."""
+    page.set_content('''<h2>Create Account</h2><form>
+        <label>Email <input type="email"></label><label>Password <input type="password"></label>
+        <label>Verify New Password <input type="password"></label><button>Create Account</button>
+    </form><form data-automation-id="signInForm">
+        <label>Password <input type="password"></label><button>Sign In</button>
+    </form>''')
+    agent, calls = agent_with_fake_login(resume_file)
+    agent.assistant.adapter = lambda _tab: WorkdayAdapter()
+    agent.assistant.account_on_record = lambda: True
+    agent.assistant._create_account_control = lambda tab: tab.get_by_role("button", name="Create Account")
+    agent.assistant._goto_login_page = lambda tab: calls.append(("goto_login", tab.url)) or True
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+
+    assert agent.sign_in_step(page, controls) is True
+    assert [call[0] for call in calls] == ["goto_login"]
+
+
+def test_workday_registration_is_not_overridden_by_a_visible_sign_in_form(page):
+    page.set_content('''<h2>Create Account</h2><form>
+        <label>Password <input type="password"></label>
+        <label>Verify New Password <input type="password"></label><button>Create Account</button>
+    </form><form data-automation-id="signInForm">
+        <label>Password <input type="password"></label><button>Sign In</button>
+    </form>''')
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    calls = []
+    assistant.adapter = lambda _page: WorkdayAdapter()
+    assistant.fill_create_account_form = lambda *_args: calls.append("registration") or False
+    assistant.attempt_auto_login = lambda *_args, **_kwargs: calls.append("sign_in") or True
+
+    assert assistant.handle_auth_gate(page, "candidate@example.com") is False
+    assert calls == ["registration"]
+
+
+def test_workday_verification_state_does_not_trigger_password_handling(page):
+    page.set_content('''<h2>Verify your identity</h2>
+        <label>Verification Code <input type="text"></label>
+        <form data-automation-id="signInForm"><input type="password"><button>Sign In</button></form>''')
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    calls = []
+    assistant.adapter = lambda _page: WorkdayAdapter()
+    assistant.fill_create_account_form = lambda *_args: calls.append("registration") or True
+    assistant.attempt_auto_login = lambda *_args, **_kwargs: calls.append("sign_in") or True
+
+    assert assistant.handle_auth_gate(page, "candidate@example.com") is False
+    assert calls == []
+
+
+def test_workday_account_record_requires_candidate_home_or_application(page):
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant.adapter = lambda _page: WorkdayAdapter()
+
+    page.set_content('''<h2>Create Account</h2><form>
+        <input type="password"><input type="password"><button>Create Account</button>
+    </form>''')
+    assert not assistant._account_creation_is_confirmed(page)
+
+    page.set_content('<div data-automation-id="progressBarActiveStep">My Experience</div>')
+    assert assistant._account_creation_is_confirmed(page)
+
+
+def test_workday_registration_error_is_found_without_alert_markup(page):
+    page.set_content('<button>Create Account</button><p>Error: Passwords do not match</p>')
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+
+    assert assistant._account_form_has_validation_error(page)
 
 
 def test_linkedin_sign_in_is_never_used(page, resume_file):
@@ -836,3 +1042,276 @@ def test_a_page_that_asks_to_be_refreshed_is_refreshed(page, resume_file):
     assert agent._refreshed is False
     agent.run(page)
     assert agent._refreshed is True          # it did what the page asked
+
+
+def test_import_resume_button_is_found_and_uploaded(page, resume_file):
+    """Dayforce's '+ Import Resume' button under Resume Upload is recognized
+    and the resume is attached even when the section has no required asterisk."""
+    page.set_content('''
+        <section>
+            <h2>Resume Upload</h2>
+            <p>Attachment:</p>
+            <button id="import-btn">Import Resume</button>
+        </section>
+    ''')
+    agent = make_agent(Planner(), resume_file)
+    snapshot = agent.snapshot(page)
+    controls = page_agent.parse_snapshot(snapshot)
+    button_clicked = []
+    agent.do = lambda pg, ans, c: button_clicked.append((ans.action, c.name)) or True
+
+    given = agent.attach_documents(page, snapshot, controls)
+    assert len(given) == 1
+    assert given[0][0].action == "upload_resume"
+    assert given[0][1].name == "Import Resume"
+    assert button_clicked == [("upload_resume", "Import Resume")]
+
+
+def test_known_answer_supplies_mandatory_school_position_and_employer(page, resume_file):
+    """School *, Position Title *, Employer Name *, and State/Province * are all
+    answered from the profile."""
+    agent = make_agent(Planner(), resume_file)
+
+    school_box = page_agent.Control(ref="e1", role="textbox", name="School *")
+    pos_box = page_agent.Control(ref="e2", role="textbox", name="Position Title *")
+    emp_box = page_agent.Control(ref="e3", role="textbox", name="Employer Name *")
+    state_box = page_agent.Control(ref="e4", role="combobox", name="State/Province *")
+
+    assert agent.known_answer(school_box)[0] == "Eastern Illinois University"
+    assert agent.known_answer(pos_box)[0] == "Senior Network and Security Engineer"
+    assert agent.known_answer(emp_box)[0] == "Capital One"
+    assert agent.known_answer(state_box)[0] == "Virginia"
+
+
+def test_optional_cover_letter_is_skipped_when_not_required(page, resume_file):
+    """An optional 'Add Cover Letter' button with no asterisk is skipped
+    when the owner has not provided a cover letter."""
+    page.set_content('''
+        <section>
+            <h2>Cover Letter</h2>
+            <button>Add Cover Letter</button>
+        </section>
+    ''')
+    agent = make_agent(Planner(), resume_file)
+    agent.cover_letter = None
+    snapshot = agent.snapshot(page)
+    controls = page_agent.parse_snapshot(snapshot)
+
+    given = agent.attach_documents(page, snapshot, controls)
+    assert given == []
+
+
+def test_universal_concept_synonyms_across_diverse_ats_portals(page, resume_file):
+    """Verifies that the concept synonym engine recognizes diverse field namings
+    used across Workday, Dayforce, Greenhouse, Lever, Taleo, iCIMS, SuccessFactors."""
+    agent = make_agent(Planner(), resume_file)
+
+    # Job title variations
+    for name in ("Current Role *", "Designation", "Current Position Title (required)", "Role Title", "Headline"):
+        ctl = page_agent.Control(ref="t1", role="textbox", name=name)
+        assert agent.known_answer(ctl)[0] == "Senior Network and Security Engineer", f"Failed for {name}"
+
+    # Employer variations
+    for name in ("Company Name *", "Current Company", "Organization Name", "Current Organization"):
+        ctl = page_agent.Control(ref="e1", role="textbox", name=name)
+        assert agent.known_answer(ctl)[0] == "Capital One", f"Failed for {name}"
+
+    # School variations
+    for name in ("Alma Mater *", "Educational Institution", "University Name (required)", "College Name"):
+        ctl = page_agent.Control(ref="s1", role="textbox", name=name)
+        assert agent.known_answer(ctl)[0] == "Eastern Illinois University", f"Failed for {name}"
+
+    # Major variations
+    for name in ("Course of Study *", "Discipline", "Degree Subject", "Field of Study (required)"):
+        ctl = page_agent.Control(ref="m1", role="textbox", name=name)
+        assert agent.known_answer(ctl)[0] == "Computer Technology", f"Failed for {name}"
+
+    # Degree variations
+    for name in ("Highest Level of Education *", "Degree Level", "Educational Attainment"):
+        ctl = page_agent.Control(ref="d1", role="textbox", name=name)
+        assert agent.known_answer(ctl)[0] in ("Master's", "Master's Degree"), f"Failed for {name}"
+
+    # State dropdown with abbreviation normalization
+    state_ctl = page_agent.Control(
+        ref="st1", role="combobox", name="State / Province *",
+        options=["Select One", "DC", "MD", "VA"]
+    )
+    assert agent.known_answer(state_ctl)[0] == "VA"
+
+    # EEO / Work authorization variations
+    work_auth = page_agent.Control(ref="w1", role="combobox", name="Are you legally authorized to work in the United States? *")
+    assert agent.known_answer(work_auth)[0] == "Yes"
+
+    sponsorship = page_agent.Control(ref="sp1", role="combobox", name="Will you now or in the future require visa sponsorship? *")
+    assert agent.known_answer(sponsorship)[0] == "Yes"
+
+
+def test_recruiting_communications_privacy_modal_is_accepted_and_saved(page, resume_file):
+    """Inframark / Dayforce displays a 'Recruiting Communications' modal dialog with
+    'I agree to the Privacy Statement' checkbox and a Save button that enables once checked.
+    The agent accepts the checkbox and clicks Save to dismiss the modal."""
+    page.set_content('''
+        <h2>Application Information</h2>
+        <div role="dialog" aria-modal="true" aria-label="Recruiting Communications">
+            <h3>Recruiting Communications</h3>
+            <p>Important Notice Regarding Recruitment Communications from Inframark</p>
+            <label><input type="checkbox" id="agree-chk"> I agree to the Privacy Statement</label>
+            <button id="cancel-btn">Cancel</button>
+            <button id="save-btn" disabled onclick="this.closest('[role=dialog]').remove()">Save</button>
+        </div>
+        <script>
+            document.getElementById('agree-chk').addEventListener('change', function() {
+                document.getElementById('save-btn').disabled = !this.checked;
+            });
+        </script>
+    ''')
+    agent = make_agent(Planner(), resume_file)
+    accepted = agent.assistant.accept_consent_dialog(page)
+    assert accepted is True
+    assert page.locator("[role=dialog]").count() == 0
+
+
+def test_known_answer_accepts_privacy_consent_checkbox(page, resume_file):
+    agent = make_agent(Planner(), resume_file)
+    chk = page_agent.Control(ref="c1", role="checkbox", name="I agree to the Privacy Statement")
+    assert agent.known_answer(chk) == ("checked", "profile.accept_application_privacy_prompts")
+
+
+def test_dayforce_ant_design_dropdown_selection(page, resume_file):
+    """Dayforce uses Ant Design selects where the input is obscured by a selector div,
+    and options are rendered in a portal at the bottom of body."""
+    page.set_content('''
+        <div class="ant-form-item">
+            <label>Race/Ethnicity</label>
+            <div class="ant-select-selector" onclick="document.getElementById('portal-menu').style.display='block'">
+                <input type="search" role="combobox" aria-label="Race/Ethnicity" style="opacity:0;width:100%;height:100%;" id="race-input" />
+                <span class="ant-select-selection-item" id="race-val"></span>
+            </div>
+        </div>
+        <div id="portal-menu" class="ant-select-dropdown" style="display:none;">
+            <div class="ant-select-item ant-select-item-option" onclick="document.getElementById('race-val').textContent='Asian'; this.parentElement.style.display='none'">
+                <div class="ant-select-item-option-content">Asian (United States of America)</div>
+            </div>
+            <div class="ant-select-item ant-select-item-option">
+                <div class="ant-select-item-option-content">Two or More Races</div>
+            </div>
+        </div>
+    ''')
+    agent = make_agent(Planner(), resume_file)
+    controls = page_agent.parse_snapshot(page.locator("body").aria_snapshot(mode="ai"))
+    race_ctrl = next(c for c in controls if "Race/Ethnicity" in c.question or c.role == "combobox")
+    ok = agent.choose(page, race_ctrl, "Asian", controls)
+    assert ok is True
+    assert page.locator("#race-val").inner_text() == "Asian"
+
+
+def test_dayforce_state_province_combobox_select_and_parse(page, resume_file):
+    """Dayforce Ant Design selects open on mousedown and options live in a portal dropdown.
+    Selecting an option updates the UI and parse_snapshot detects the chosen value."""
+    page.set_content('''
+        <div class="ant-form-item">
+            <label>State/Province *</label>
+            <div class="ant-select-selector" onmousedown="document.getElementById('state-menu').style.display='block'">
+                <input type="search" role="combobox" aria-label="State/Province *" style="opacity:0;" id="state-input" />
+                <span class="ant-select-selection-item" id="state-val"></span>
+            </div>
+        </div>
+        <div id="state-menu" class="ant-select-dropdown" style="display:none;">
+            <div class="ant-select-item ant-select-item-option" onclick="document.getElementById('state-val').textContent='Virginia'; this.parentElement.style.display='none'">
+                <div class="ant-select-item-option-content">Virginia</div>
+            </div>
+            <div class="ant-select-item ant-select-item-option">
+                <div class="ant-select-item-option-content">Maryland</div>
+            </div>
+        </div>
+    ''')
+    agent = make_agent(Planner(), resume_file)
+    controls = page_agent.parse_snapshot(page.locator("body").aria_snapshot(mode="ai"))
+    state_ctrl = next(c for c in controls if "State/Province" in c.question or c.role == "combobox")
+    ok = agent.choose(page, state_ctrl, "Virginia", controls)
+    assert ok is True
+    assert page.locator("#state-val").inner_text() == "Virginia"
+    after_controls = page_agent.parse_snapshot(page.locator("body").aria_snapshot(mode="ai"))
+    after_state = next(c for c in after_controls if "State/Province" in c.question or c.role == "combobox")
+    assert after_state.answer == "Virginia"
+
+
+def test_dayforce_veteran_form_answers_matched_and_selected(page, resume_file):
+    """Dayforce groups veteran radios under VeteranFormAnswers and labels the negative choice
+    'I am not a protected veteran'."""
+    page.set_content('''
+        <fieldset>
+            <legend>VeteranFormAnswers</legend>
+            <label><input type="radio" name="VeteranFormAnswers" value="vet"> I identify as one or more of the classifications of protected veteran listed above</label>
+            <label><input type="radio" name="VeteranFormAnswers" value="not_vet" id="not-vet-radio"> I am not a protected veteran</label>
+            <label><input type="radio" name="VeteranFormAnswers" value="decline"> I do not wish to self-identify</label>
+        </fieldset>
+    ''')
+    agent = make_agent(Planner(), resume_file)
+    controls = page_agent.parse_snapshot(page.locator("body").aria_snapshot(mode="ai"))
+    vet_ctrl = controls[0]
+    val, src = agent.known_answer(vet_ctrl)
+    assert "not" in val.lower() and "veteran" in val.lower()
+    answer = page_agent.Answer(vet_ctrl.ref, vet_ctrl.question, "choose", val, src)
+    ok = agent.do(page, answer, vet_ctrl)
+    assert ok is True
+    assert page.locator("#not-vet-radio").is_checked()
+
+
+def test_unanswered_profile_field_prevents_premature_page_advancement(page, resume_file):
+    """If an unstarred EEO question like Race/Ethnicity has a known profile answer
+    that failed to fill, profile_plan must not silently advance to the next page."""
+    agent = make_agent(Planner(), resume_file)
+    controls = [
+        page_agent.Control(ref="r1", role="combobox", name="Race/Ethnicity"),
+        page_agent.Control(ref="g1", role="combobox", name="Gender"),
+        page_agent.Control(ref="btn1", role="button", name="Next"),
+    ]
+    # Simulate that Race/Ethnicity failed to fill and is still open
+    plan = agent.profile_plan(controls, required=set(), still_open=["Race/Ethnicity"])
+    # Agent must NOT advance (next_kind must not be next_step / open_application)
+    assert plan.next_ref == ""
+    assert any(item["question"] == "Race/Ethnicity" for item in plan.for_owner)
+
+
+def test_phone_dial_code_prioritizes_candidate_country(resume_file):
+    """When +1 matches multiple country options (e.g. Antigua, Bahamas, United States),
+    _pick must choose the option corresponding to the profile's country."""
+    agent = make_agent(Planner(), resume_file)
+    offered = [
+        ("ref1", "🇦🇬 +1 Antigua and Barbuda"),
+        ("ref2", "🇧🇸 +1 Bahamas"),
+        ("ref3", "🇺🇸 +1 United States"),
+    ]
+    pick = agent._pick(offered, "+1")
+    assert pick == 2
+    assert "United States" in offered[pick][1]
+
+
+def test_date_field_converts_month_year_and_skips_disabled(page, resume_file):
+    """Month Year strings like 'December 2022' convert to valid ISO date for <input type=date>,
+    and disabled inputs are safely skipped without timing out."""
+    page.set_content('''
+        <input type="date" id="start-date" />
+        <input type="date" id="end-date" disabled />
+    ''')
+    agent = make_agent(Planner(), resume_file)
+    
+    # 1. Active date input with Month Year
+    start_ctrl = page_agent.Control(ref="s1", role="textbox", name="Start Date")
+    # Point agent locate to start-date
+    agent.locate = lambda _page, _ref: page.locator("#start-date")
+    ans1 = page_agent.Answer("s1", "Start Date", "fill", "February 2025", "profile.start_date")
+    assert agent.do(page, ans1, start_ctrl) is True
+    assert page.locator("#start-date").input_value() == "2025-02-01"
+
+    # 2. Disabled date input (e.g. End Date when current job is Yes)
+    end_ctrl = page_agent.Control(ref="e1", role="textbox", name="End Date", disabled=True)
+    agent.locate = lambda _page, _ref: page.locator("#end-date")
+    ans2 = page_agent.Answer("e1", "End Date", "fill", "December 2022", "profile.end_date")
+    assert agent.do(page, ans2, end_ctrl) is True
+
+
+
+
+

@@ -66,6 +66,10 @@ class SiteAdapter:
         return False
 
     # -- account creation --------------------------------------------------
+    def candidate_account_state(self, page) -> str:
+        """Returns a platform-specific external-candidate account state."""
+        return ""
+
     def create_account_extras(self, assistant, page) -> None:
         """Platform-specific required bits of a Create Account form."""
         return None

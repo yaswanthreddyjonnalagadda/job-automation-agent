@@ -1284,7 +1284,27 @@ class JobApplicationAssistant:
 
         placeholder = re.compile(r"^\s*(-+\s*)?(no selection|select( one| an option)?|please select|choose( one)?|none selected)(\s*-+)?\s*\.*$")
         opts = ["" if placeholder.match(norm(o)) else norm(o) for o in options]
+
+        # Expand known domain synonyms (e.g. veteran status, disability, race)
+        expanded_candidates = list(candidates)
         for cand in candidates:
+            c_low = cand.strip().lower()
+            if re.search(r"\b(?:not|no|non)[-\s]+(?:a\s+)?veteran\b", c_low):
+                for syn in ("i am not a protected veteran", "not a protected veteran",
+                            "i do not identify as a protected veteran", "non-veteran", "no"):
+                    if syn not in expanded_candidates:
+                        expanded_candidates.append(syn)
+            elif re.search(r"\b(?:no|not|don'?t|do\s+not)\b.*?\bdisabilit", c_low):
+                for syn in ("no, i don't have a disability, or a history/record of having a disability",
+                            "no, i do not have a disability", "no"):
+                    if syn not in expanded_candidates:
+                        expanded_candidates.append(syn)
+            elif c_low == "asian":
+                for syn in ("asian (united states of america)", "asian (not hispanic or latino)"):
+                    if syn not in expanded_candidates:
+                        expanded_candidates.append(syn)
+
+        for cand in expanded_candidates:
             c = norm(cand)
             if not c:
                 continue
@@ -2517,18 +2537,41 @@ class JobApplicationAssistant:
                     return [e.getAttribute('aria-label') || '', by,
                             (host && host.textContent) || '', e.textContent || ''].join(' ');
                 }""") or dialog.inner_text() or ""
-                logger.debug("CONSENT_TEXT: %r", " ".join(text.split())[:160])
-                if not re.search(r"privacy|consent|data protection", text, re.IGNORECASE):
+                if not re.search(r"privacy|consent|data protection|recruiting communications", text, re.IGNORECASE):
                     continue
                 if re.search(r"cookie", text, re.IGNORECASE):
                     continue
                 if safety.is_attestation(text):
                     logger.info("LEFT_FOR_YOU: this pop-up asks you to certify something -- not accepting it")
                     continue
+
+                # If the privacy/consent dialog has an agreement checkbox (e.g. Dayforce: "I agree to the Privacy Statement"), check it
+                try:
+                    chk = dialog.locator("input[type=checkbox], [role=checkbox]").first
+                    if chk.count():
+                        checked = chk.is_checked() if hasattr(chk, "is_checked") else (chk.get_attribute("aria-checked") == "true")
+                        if not checked:
+                            try:
+                                chk.check(force=True, timeout=2_000)
+                            except Exception:
+                                chk.click(force=True, timeout=2_000)
+                            if hasattr(chk, "is_checked") and not chk.is_checked():
+                                lbl = dialog.locator("label:has-text('agree'), label:has-text('Privacy')").first
+                                if lbl.count():
+                                    lbl.click(force=True)
+                            page.wait_for_timeout(500)
+                except Exception as exc:
+                    logger.debug("Could not check consent checkbox: %s", exc)
+
                 # By role, not tag: ADP's Agree is an <sdf-button> web
                 # component, and a search for <button> elements found none.
-                agree = re.compile(r"^\s*(i agree|agree|i accept|accept|agree and continue|accept and continue)\s*$",
-                                   re.IGNORECASE)
+                agree = re.compile(
+                    r"^\s*(i agree|agree|i accept|accept|i acknowledge|acknowledge|"
+                    r"agree and continue|accept and continue|acknowledge and continue|"
+                    r"agree & continue|accept & continue|acknowledge & continue|"
+                    r"save|save and continue|save & continue|continue|ok|got it)\s*$",
+                    re.IGNORECASE,
+                )
                 button = dialog.get_by_role("button", name=agree).first
                 if not button.count():
                     button = dialog.locator("button, [role=button], sdf-button").filter(has_text=agree).first
@@ -2996,6 +3039,8 @@ class JobApplicationAssistant:
             "form[data-automation-id^='signInForm']",
             "form[data-automation-id*='signInForm']",
             "[data-behavior-click-outside-close='topmost'] form",
+            "[role='dialog'] form:has(input[type='password'])",
+            "[aria-modal='true'] form:has(input[type='password'])",
         ):
             loc = page.locator(selector).first
             try:
@@ -3004,6 +3049,24 @@ class JobApplicationAssistant:
             except Exception:
                 continue
         return None
+
+    def _has_sign_in_affordance(self, page: Page) -> bool:
+        """Whether the page offers a way into an existing account -- a visible
+        sign-in form, a 'Sign In' button/link, or 'Already have an account?'."""
+        if self._sign_in_scope(page) is not None:
+            return True
+        try:
+            if page.get_by_text(re.compile(r"already have an account", re.IGNORECASE)).count():
+                return True
+            name = re.compile(r"^\s*(sign in|log in|login)\s*$", re.IGNORECASE)
+            for role in ("button", "link"):
+                loc = page.get_by_role(role, name=name)
+                for i in range(min(loc.count(), 5)):
+                    if loc.nth(i).is_visible():
+                        return True
+        except Exception:
+            pass
+        return False
 
     def _goto_login_page(self, page: Page) -> bool:
         """Navigates to the tenant's standalone login page, carrying the
@@ -3291,11 +3354,37 @@ class JobApplicationAssistant:
         return False
 
     def handle_auth_gate(self, page: Page, email: str) -> bool:
-        """If the page is sitting on an employer ATS account gate, get past
-        it: two password fields means 'Create Account', one means 'Sign
-        In'. Does nothing when no password field is present, or when no
-        ATS_PASSWORD has been supplied."""
+        """Handle an employer ATS account gate without guessing its state."""
         try:
+            candidate_state = self.adapter(page).candidate_account_state(page)
+            if candidate_state == "verification":
+                logger.warning("ACCOUNT_HELD: Workday is asking for account verification")
+                return False
+            if candidate_state in ("registration", "registration_error"):
+                logger.info("ACCOUNT: Workday Candidate Home is in %s", candidate_state)
+                # An account already exists here and the page offers Sign In:
+                # sign in rather than registering again -- registration cannot
+                # succeed for an email that already has an account.
+                if self._read_ats_password() and self.account_on_record() and self._has_sign_in_affordance(page):
+                    logger.info("ACCOUNT: an account already exists here -- signing in instead of registering")
+                    if self._goto_login_page(page):
+                        return self.attempt_auto_login(page, email, "", scope=self._sign_in_scope(page))
+                    scope = self._sign_in_scope(page)
+                    if scope is not None:
+                        return self.attempt_auto_login(page, email, "", scope=scope)
+                self._create_form_attempted = False
+                # Do not fall back to create_ats_account here: its legacy path
+                # can tick a terms checkbox that requires the candidate.
+                return self.fill_create_account_form(page, email)
+
+            pw_count = page.locator("input[type='password']").count()
+            create_form = pw_count >= 2 and self._create_account_control(page) is not None
+            if create_form and self._account_form_has_validation_error(page):
+                logger.info("ACCOUNT: correcting visible registration validation errors")
+                self._create_form_attempted = False
+                if self.fill_create_account_form(page, email):
+                    return True
+                return False if self._create_form_attempted else self.create_ats_account(page, email)
             # A sign-in form wins outright: the account exists by then, and
             # re-registering just bounces back to this same gate.
             scope = self._sign_in_scope(page)
@@ -3309,7 +3398,6 @@ class JobApplicationAssistant:
                 logger.info("Sign In form present; signing in rather than creating an account")
                 return self.attempt_auto_login(page, email, "", scope=scope)
 
-            pw_count = page.locator("input[type='password']").count()
             if pw_count == 0:
                 return False
             if not self._read_ats_password():
@@ -3577,6 +3665,15 @@ class JobApplicationAssistant:
         self._resume_path = target
         if self._file_already_attached(page, target.name):
             return False  # already done on an earlier pass
+        # Workday's chooser offers this button before the real form. Its
+        # autofill control is not a file input; leave the chooser to the
+        # application reader so it can select the manual path.
+        try:
+            manual = page.get_by_role("button", name=re.compile(r"^\s*apply manually\s*$", re.IGNORECASE)).first
+            if manual.count() and manual.is_visible():
+                return False
+        except Exception:
+            pass
         # SuccessFactors application: uploading the resume makes the site parse
         # it and rebuild the form, wiping anything answered before. So it goes
         # first, before a single field is touched.
@@ -3586,10 +3683,16 @@ class JobApplicationAssistant:
                 self.expand_all_sections(page)
                 return True
         try:
-            prompt = page.get_by_text(
-                re.compile(r"autofill (from|with) (your |my )?resume", re.IGNORECASE)
+            prompt = page.get_by_role(
+                "button", name=re.compile(r"autofill\s+(from|with)\s+(your\s+|my\s+)?resume",
+                                            re.IGNORECASE)
             ).first
+            if prompt.count() == 0:
+                prompt = page.get_by_text(
+                    re.compile(r"autofill\s+(from|with)\s+(your\s+|my\s+)?resume", re.IGNORECASE)
+                ).first
             if prompt.count() == 0 or not prompt.is_visible():
+                logger.info("AUTOFILL: no visible resume autofill control found")
                 return False
             # The prompt's own upload box: the closest ancestor holding exactly
             # one file input. Stop if it widens to several -- that is the whole
@@ -3604,8 +3707,54 @@ class JobApplicationAssistant:
                 if n > 1:
                     break
             if file_input is None:
-                logger.info("Autofill prompt found but no upload box beside it")
-                return False
+                # Workday exposes the upload as a button and opens the native
+                # file chooser only after it is clicked; there is no file
+                # input beside the accessible prompt to locate beforehand.
+                try:
+                    with page.expect_file_chooser(timeout=8_000) as chooser:
+                        if not self._click_resiliently(prompt):
+                            clicked = page.evaluate(
+                                """pattern => {
+                                    const re = new RegExp(pattern, 'i');
+                                    const button = [...document.querySelectorAll('button')]
+                                        .find(node => re.test((node.innerText || node.textContent || '').trim()));
+                                    if (!button) return false;
+                                    button.click();
+                                    return true;
+                                }""",
+                                r"autofill\s+(from|with)\s+(your\s+|my\s+)?resume",
+                            )
+                            if not clicked:
+                                raise RuntimeError("resume autofill button was not found in the page DOM")
+                    chooser.value.set_files(str(target))
+                    logger.info("AUTOFILL: gave %s to the site's resume autofill", target.name)
+                    page.wait_for_timeout(6_000)
+                    return True
+                except Exception as chooser_exc:
+                    # Some Workday tenants create the file input only after
+                    # the button click instead of raising filechooser.
+                    try:
+                        if not self._click_resiliently(prompt):
+                            page.evaluate(
+                                """pattern => {
+                                    const re = new RegExp(pattern, 'i');
+                                    const button = [...document.querySelectorAll('button')]
+                                        .find(node => re.test((node.innerText || node.textContent || '').trim()));
+                                    if (!button) throw new Error('resume autofill button was not found');
+                                    button.click();
+                                }""",
+                                r"autofill\s+(from|with)\s+(your\s+|my\s+)?resume",
+                            )
+                        file_input = page.locator("input[type='file']:visible").first
+                        file_input.wait_for(state="visible", timeout=8_000)
+                        file_input.set_input_files(str(target), timeout=15_000)
+                        logger.info("AUTOFILL: gave %s to the post-click resume upload", target.name)
+                        page.wait_for_timeout(6_000)
+                        return True
+                    except Exception as input_exc:
+                        logger.info("AUTOFILL: resume control did not open an upload (%s; %s)",
+                                    chooser_exc, input_exc)
+                        return False
 
             count_filled = (
                 "() => [...document.querySelectorAll('input, textarea, select')]"
@@ -4199,12 +4348,87 @@ class JobApplicationAssistant:
             return False
         return self.fill_create_account_form(page, email)
 
+    @staticmethod
+    def _nonempty_texts(values) -> list[str]:
+        """Normalizes browser text results that may contain null entries."""
+        return [value.strip() for value in values if isinstance(value, str) and value.strip()]
+
+    @staticmethod
+    def _password_pair_matches(values, password: str) -> bool:
+        return len(values) >= 2 and all(value == password for value in values[:2])
+
+    @staticmethod
+    def _has_account_form_validation_error(error_texts) -> bool:
+        pattern = re.compile(
+            r"passwords? (?:do not|don't) match|please check (?:the )?box|field is required|"
+            r"(?:email|password).{0,30}(?:invalid|required)",
+            re.IGNORECASE,
+        )
+        return any(pattern.search(text or "") for text in error_texts)
+
+    def _visible_error_texts(self, page: Page) -> list[str]:
+        try:
+            alerts = page.locator("[role=alert], [class*=error i]")
+            texts = []
+            for index in range(alerts.count()):
+                alert = alerts.nth(index)
+                if alert.is_visible():
+                    text = alert.inner_text()
+                    if isinstance(text, str) and text.strip():
+                        texts.append(text.strip())
+            return texts
+        except Exception:
+            return []
+
+    def _account_form_has_validation_error(self, page: Page) -> bool:
+        error_texts = self._visible_error_texts(page)
+        try:
+            error_texts.append(page.locator("body").inner_text(timeout=3_000))
+        except Exception:
+            pass
+        return self._has_account_form_validation_error(error_texts)
+
+    @staticmethod
+    def _is_account_consent(label: str, context: str) -> bool:
+        """Allows only an explicit privacy acknowledgment checkbox.
+
+        Nearby privacy text does not turn terms and conditions into a privacy
+        consent: accepting those terms remains a candidate action.
+        """
+        label = " ".join((label or "").split())
+        if not label or safety.is_attestation(label):
+            return False
+        if re.search(r"\bterms?(?:\s+and\s+conditions?)?\b", label, re.IGNORECASE):
+            return False
+        return safety.is_privacy_consent(label)
+
+    @staticmethod
+    def _account_acknowledgment_is_authorized(label: str, profile) -> bool:
+        """Whether the owner authorized a terms or attestation checkbox."""
+        label = " ".join((label or "").split())
+        is_terms = bool(re.search(r"\bterms?(?:\s+and\s+conditions?)?\b", label, re.IGNORECASE))
+        return bool(
+            getattr(profile, "sign_attestations", False)
+            and (is_terms or safety.is_attestation(label))
+        )
+
+    def _account_creation_is_confirmed(self, page: Page) -> bool:
+        """Whether a platform visibly confirms a newly created account."""
+        adapter = self.adapter(page)
+        if getattr(adapter, "name", "") != "workday":
+            return True
+        state = adapter.candidate_account_state(page)
+        if state in ("application", "candidate_home", "sign_in"):
+            return True
+        parsed = urlparse(page.url)
+        return bool(parsed.path.rstrip("/").endswith("/login"))
+
     def fill_create_account_form(self, page: Page, email: str) -> bool:
         """Fills a careers-site Create Account form: email (and its retype),
         the .env password (and its retype), first/last name, country, and only
-        the agreement checkboxes the form requires. Marketing opt-ins ("hear
-        more about career opportunities") are left unticked. Records the
-        account when the site accepts it."""
+        the agreement checkboxes the owner has authorized. Marketing opt-ins
+        ("hear more about career opportunities") are left unticked. Records
+        the account when the site accepts it."""
         password = self._read_ats_password()
         if not password:
             logger.info("No ATS_PASSWORD set; leaving account creation to the user")
@@ -4228,17 +4452,34 @@ class JobApplicationAssistant:
                 "input[name*='username' i], input[id*='username' i]"
             ))
             for box in email_fields:
-                if not (box.input_value() or "").strip():
-                    box.fill(email)
-                    box.press("Tab")
-            for box in pw_fields:
-                box.fill(password)
+                # Workday's account form validates through React keyboard
+                # events; always replay the address so a stale controlled value
+                # cannot remain visibly correct but internally invalid.
+                box.click()
+                box.press("Control+A")
+                box.press("Backspace")
+                box.press_sequentially(email, delay=25)
                 box.press("Tab")
+                page.wait_for_timeout(500)
+            for box in pw_fields:
+                box.click()
+                box.press("Control+A")
+                box.press("Backspace")
+                box.press_sequentially(password, delay=25)
+                box.press("Tab")
+                page.wait_for_timeout(250)
+            password_values = [(box.input_value() or "") for box in pw_fields]
+            if not self._password_pair_matches(password_values, password):
+                logger.warning("ACCOUNT_CREATE_FAILED: password confirmation did not retain both entries")
+                return False
 
             if full_name:
                 for field in self.detect_form_fields(page):
                     value = {"first_name": full_name[0], "last_name": full_name[-1]}.get(field.matched_profile_key or "")
-                    if value and field.selector and not (page.locator(field.selector).first.input_value() or "").strip():
+                    current = ""
+                    if field.selector:
+                        current = page.locator(field.selector).first.input_value() or ""
+                    if value and field.selector and not current.strip():
                         page.fill(field.selector, value)
                         page.press(field.selector, "Tab")
             if profile is not None:
@@ -4248,11 +4489,11 @@ class JobApplicationAssistant:
 
             agree = self._profile is None or getattr(self._profile, "accept_application_privacy_prompts", True)
 
-            # Terms that must be OPENED to be accepted ("Read and accept the
-            # data privacy statement." -- IGT refused the form until it was).
+            # Privacy notices that must be opened before their explicit
+            # acceptance control becomes available.
             if agree:
                 # IGT's is an <a role="button" aria-haspopup="dialog">, not a link.
-                terms_text = re.compile(r"(read and )?accept.*(privacy|terms)|data privacy (statement|agreement)", re.IGNORECASE)
+                terms_text = re.compile(r"(read and )?accept.*privacy|data privacy (statement|agreement)", re.IGNORECASE)
                 terms = page.locator("a, button, [role=button], [role=link]").filter(has_text=terms_text)
                 terms = next((terms.nth(i) for i in range(min(terms.count(), 5)) if terms.nth(i).is_visible()), None)
                 if terms is not None:
@@ -4280,6 +4521,7 @@ class JobApplicationAssistant:
                             break
                     logger.info("ACCOUNT: data privacy statement %s", "accepted" if accepted else "opened, but no Accept button found")
                     page.wait_for_timeout(1_500)
+            needs_candidate_acknowledgment = False
             for box in visible(page.locator("input[type='checkbox']")):
                 label = ""
                 box_id = box.get_attribute("id")
@@ -4287,13 +4529,53 @@ class JobApplicationAssistant:
                     lab = page.locator(f"label[for={json.dumps(box_id)}]")
                     label = lab.first.inner_text() if lab.count() else ""
                 label = (label or box.evaluate("e => e.closest('label')?.innerText || e.parentElement?.innerText || ''")).lower()
+                try:
+                    context = box.evaluate("e => (e.closest('form') || e.parentElement)?.innerText || ''")
+                except Exception:
+                    context = label
                 if re.search(r"hear more|newsletter|campaign|marketing|job alert|promotion", label):
                     continue  # marketing opt-ins are the user's choice, not ours
-                if safety.is_attestation(label):
-                    logger.info("LEFT_FOR_YOU: account form asks you to certify %r", label.strip()[:70])
+                is_terms_acknowledgment = bool(re.search(
+                    r"\bterms?(?:\s+and\s+conditions?)?\b", label, re.IGNORECASE
+                ))
+                if safety.is_attestation(label) or is_terms_acknowledgment:
+                    if not box.is_checked():
+                        if self._account_acknowledgment_is_authorized(label, profile):
+                            box.check(timeout=3_000)
+                            logger.info("ACCOUNT: accepted owner-authorized account acknowledgment")
+                        else:
+                            needs_candidate_acknowledgment = True
+                            logger.info("LEFT_FOR_YOU: account form requires %r", label.strip()[:70])
                     continue
-                if agree and safety.is_privacy_consent(label) and not box.is_checked():
+                if agree and self._is_account_consent(label, context) and not box.is_checked():
                     box.check(timeout=3_000)
+                    logger.info("ACCOUNT: accepted required privacy acknowledgment")
+
+            if needs_candidate_acknowledgment:
+                logger.warning("ACCOUNT_HELD: a terms or attestation checkbox needs the candidate")
+                return False
+
+            # Workday re-renders as the name, country and terms are filled,
+            # which clears the keyboard-set password fields: re-enter and
+            # re-verify them here, right before submitting, so the form does
+            # not go through with an empty password ("Please enter your
+            # password").
+            pw_fields = visible(page.locator("input[type='password']"))
+            if len(pw_fields) >= 2:
+                for box in pw_fields:
+                    current = box.input_value() or ""
+                    if current == password:
+                        continue
+                    box.click()
+                    box.press("Control+A")
+                    box.press("Backspace")
+                    box.press_sequentially(password, delay=25)
+                    box.press("Tab")
+                    page.wait_for_timeout(250)
+                password_values = [(box.input_value() or "") for box in pw_fields]
+                if not self._password_pair_matches(password_values, password):
+                    logger.warning("ACCOUNT_CREATE_FAILED: password did not stay filled before submit")
+                    return False
 
             submit = page.get_by_role(
                 "button", name=re.compile(r"^\s*(create (my )?account|register|sign up|submit)\s*$", re.IGNORECASE)
@@ -4312,17 +4594,28 @@ class JobApplicationAssistant:
                 pass
 
             still_on_form = len(visible(page.locator("input[type='password']"))) >= 2
-            errors = [t.strip() for t in page.locator("[role=alert], [class*=error i]").all_inner_texts() if t.strip()]
-            if still_on_form:
+            errors = self._visible_error_texts(page)
+            has_validation_error = self._account_form_has_validation_error(page)
+            if not still_on_form and not has_validation_error:
+                page.wait_for_timeout(3_000)
+                still_on_form = len(visible(page.locator("input[type='password']"))) >= 2
+                errors = self._visible_error_texts(page)
+                has_validation_error = self._account_form_has_validation_error(page)
+            if still_on_form or has_validation_error:
                 logger.warning("ACCOUNT_CREATE_FAILED: the site kept the form open%s",
                                f" -- {' / '.join(errors)[:200]}" if errors else "")
                 return False
+            if not self._account_creation_is_confirmed(page):
+                logger.warning(
+                    "ACCOUNT_UNVERIFIED: Workday left registration without Candidate Home or application evidence"
+                )
+                return True
             logger.info("ACCOUNT_CREATED: new %s account for %s",
                         getattr(self, "employer", "") or urlparse(page.url).netloc, email)
             self.remember_account(page, email, "password")
             return True
         except Exception as exc:
-            logger.warning("ACCOUNT_CREATE_FAILED: %s", str(exc).splitlines()[0][:160])
+            logger.exception("ACCOUNT_CREATE_FAILED: %s", str(exc).splitlines()[0][:160])
             return False
 
     def create_ats_account(self, page: Page, email: str) -> bool:
@@ -4407,6 +4700,10 @@ class JobApplicationAssistant:
         root = scope if scope is not None else page
 
         pw_locator = root.locator("input[type='password']").first
+        try:
+            pw_locator.wait_for(state="visible", timeout=4_000)
+        except Exception:
+            pass
         if pw_locator.count() == 0 or not pw_locator.is_visible():
             # Not Google where the site has already refused that account.
             refused = domain in getattr(self, "google_refused_on", set())

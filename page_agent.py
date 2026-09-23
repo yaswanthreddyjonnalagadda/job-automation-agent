@@ -29,6 +29,7 @@ What it may never do is decided here, in code, whatever Claude proposes:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -39,6 +40,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import urlparse
 
+import concept_matcher
 import safety
 
 logger = logging.getLogger("page_agent")
@@ -72,7 +74,7 @@ ASKS_FOR_A_REFRESH = re.compile(r"something went wrong|please (refresh|reload) (
 CONFIRMATION_TEXT = re.compile(
     r"thank you for (applying|your application|your interest)|application (has been |was )?(received|submitted)|"
     r"(successfully|now) submitted|we('ve| have) received your application|your application is complete|"
-    r"you('ve| have) (successfully )?applied",
+    r"you('ve| have) (?:successfully |already )?applied",
     re.IGNORECASE)
 
 # What a site says when the account behind a sign-in cannot be used.
@@ -105,7 +107,10 @@ class Control:
     options: list[str] = field(default_factory=list)
     selected_option: str = ""
 
-    GENERIC_NAMES = re.compile(r"^(attach|choose file|upload( file)?|browse|add file|select file)$", re.IGNORECASE)
+    GENERIC_NAMES = re.compile(
+        r"^(attach|choose file|upload( file)?|browse|add file|select file|select one( required)?)$",
+        re.IGNORECASE,
+    )
 
     @property
     def holds_choices(self) -> bool:
@@ -116,9 +121,11 @@ class Control:
     def question(self) -> str:
         if self.group:
             return self.group
+        if re.fullmatch(r"(?:yes|no|select one) required", self.name.strip(), re.IGNORECASE) and self.context:
+            return self.context
         if self.name and not self.GENERIC_NAMES.match(self.name.strip()):
             return self.name
-        return self.container or self.name or self.context
+        return self.container or self.context or self.name
 
     @property
     def answer(self) -> str:
@@ -159,6 +166,7 @@ def parse_snapshot(snapshot: str) -> list[Control]:
     last_text_indent = -1
     radio_context = ""   # the question above a run of radio buttons with no group of their own
     unclickable = None   # a tick box with no reference: (role, name, checked, lines left to find it)
+    last_control_indent = -1
     for raw in (snapshot or "").splitlines():
         # A line whose text holds a colon comes wrapped in quotes:
         #   - 'heading "Apply: Network Engineer" [level=1] [ref=e2]'
@@ -180,14 +188,27 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         owner = next((ctl for _i, _l, ctl in reversed(stack) if ctl is not None), None)
 
         if role in ("text", "paragraph", "heading", "strong", "emphasis", "generic") and (value or name):
-            last_text = (value or name).strip()[:200]
-            last_text_indent = indent
+            candidate_text = (value or name).strip()[:200]
+            # Keep the field label when an accessibility tree emits its
+            # required marker as a later child ("First Name" then "(required)").
+            if not re.fullmatch(r"\(?\s*required\s*\)?|\*", candidate_text, re.IGNORECASE):
+                last_text = candidate_text
+                last_text_indent = indent
             # Schwab's veteran question draws its radio buttons with no label of
             # their own: each is followed by its text ("I AM NOT A PROTECTED
             # VETERAN"). That text is the button's name.
             if controls and not controls[-1].name and controls[-1].role in ("radio", "checkbox", "switch") \
                     and not controls[-1].value and role == "text":
-                controls[-1].name = (value or name).strip()[:200]
+                controls[-1].name = candidate_text
+            # Ant Design / React custom comboboxes render their selected value as a
+            # trailing generic/text element right after the combobox input.
+            if controls and controls[-1].role in ("combobox", "listbox") and not controls[-1].value \
+                    and role in ("generic", "text", "paragraph", "status") and candidate_text \
+                    and indent >= last_control_indent \
+                    and not candidate_text.endswith(":") and not candidate_text.endswith("*") \
+                    and not re.fullmatch(r"\(?\s*required\s*\)?|\*|select\s*one.*", candidate_text, re.IGNORECASE) \
+                    and not _same_question(candidate_text, controls[-1].name):
+                controls[-1].value = candidate_text
         control = None
         if unclickable is not None:
             # R+L draws "Current Job" as a box with no reference at all; the
@@ -230,12 +251,20 @@ def parse_snapshot(snapshot: str) -> list[Control]:
             if not shown and role in ("combobox", "listbox") and last_text and last_text_indent == indent \
                     and not _same_question(last_text, name):
                 shown = last_text
+            # If previous combobox tentatively adopted an upcoming field label as value, revert it
+            if controls and controls[-1].role in ("combobox", "listbox") and controls[-1].value \
+                    and name and _same_question(controls[-1].value, name):
+                controls[-1].value = ""
             control = Control(
                 ref=ref_m.group(1), role=role, name=name, value=shown,
                 checked="[checked]" in attrs or "[checked=true]" in attrs, selected="[selected]" in attrs,
                 disabled="[disabled]" in attrs, group=(parent_group or radio_context) if role == "radio" else "",
-                container=parent_group, context="" if name else last_text)
+                container=parent_group,
+                context=last_text if (not name or Control.GENERIC_NAMES.match(name.strip())
+                                      or re.fullmatch(r"(?:yes|no|select one) required", name.strip(), re.IGNORECASE))
+                else "")
             controls.append(control)
+            last_control_indent = indent
         # A named group is both a question for what is inside it and, when it
         # has a reference, a control the agent can act on.
         stack.append((indent, name if role in ("group", "radiogroup", "region") else "", control))
@@ -300,6 +329,24 @@ _STANDING_ANSWERS: tuple[tuple[re.Pattern, str], ...] = (
     (re.compile(r"sponsor", re.IGNORECASE), "requires_visa_sponsorship"),
     (re.compile(r"legally (eligible|authori[sz]ed)|authori[sz]ed to work|right to work", re.IGNORECASE),
      "legally_eligible_to_work"),
+    (re.compile(r"(citizen(ship)?|nationality|country of citizenship)", re.IGNORECASE),
+     "country_of_citizenship"),
+    (re.compile(r"protected veteran|veteran status", re.IGNORECASE), "veteran_status"),
+    (re.compile(r"disability status|self.identif(y|ication).{0,30}disab", re.IGNORECASE),
+     "disability_status"),
+    (re.compile(r"ethnic|race", re.IGNORECASE), "ethnicity"),
+    (re.compile(r"\bgender\b|sex at birth", re.IGNORECASE), "gender"),
+    (re.compile(r"hispanic|latino", re.IGNORECASE), "hispanic_or_latino"),
+    (re.compile(r"at least 18|over 18|eighteen years", re.IGNORECASE), "at_least_18"),
+    (re.compile(r"felony|criminal conviction|convicted of a crime", re.IGNORECASE), "felony_conviction"),
+    (re.compile(r"relocat", re.IGNORECASE), "open_to_relocation"),
+    (re.compile(r"willing to travel|travel (for|up to)", re.IGNORECASE), "willing_to_travel"),
+    (re.compile(r"available (to start|start date)|when can you start|notice period", re.IGNORECASE),
+     "availability_to_start"),
+    (re.compile(r"salary (expectation|range|requirement)|desired (pay|salary)|compensation expectation", re.IGNORECASE),
+     "salary_min"),
+    (re.compile(r"how did you hear|source of (this )?(job|application)", re.IGNORECASE),
+     "how_did_you_hear"),
     (re.compile(r"(ever )?(applied|been interviewed|interviewed) (at|with|for|here)|previously applied",
                 re.IGNORECASE), "applied_here_before"),
     (re.compile(r"(relative|family member).{0,40}(employ|work)", re.IGNORECASE), "relatives_employed_here"),
@@ -309,9 +356,9 @@ _STANDING_ANSWERS: tuple[tuple[re.Pattern, str], ...] = (
 
 # What a button that moves an application on is called, and what is never
 # pressed on the agent's own initiative.
-FORWARD_LABEL = re.compile(r"^(next|continue|save and continue|save & continue|save and next|next step|"
+FORWARD_LABEL = re.compile(r"^(apply|apply now|start application|begin application|apply manually|create account|next|continue|save and continue|save & continue|save and next|next step|"
                            r"submit|submit application|review|review and submit|proceed|"
-                           r"save and proceed|start application|begin)$", re.IGNORECASE)
+                           r"save and proceed|begin)$", re.IGNORECASE)
 
 
 def required_questions(snapshot: str) -> set[str]:
@@ -320,6 +367,20 @@ def required_questions(snapshot: str) -> set[str]:
     marked |= {m.strip() for m in re.findall(r'- generic \[ref=[\w-]+\]: ([^\n]{2,120}?) \*$',
                                              snapshot or "", re.MULTILINE)}
     return {" ".join(q.split()) for q in marked if q.strip()}
+
+
+def is_workday_choice_button(control: Control) -> bool:
+    """Whether a Workday custom dropdown is represented as an answer button.
+
+    A dropdown still showing its placeholder ("Select One") is an unanswered
+    choice field. Any such field with a real question is answerable; the
+    profile planner decides from the question whether it has an answer to give,
+    so a field with no profile/library answer is simply left for the owner.
+    """
+    if control.role != "button" or not control.value or not PLACEHOLDER.match(control.value):
+        return False
+    question = (control.question or "").strip()
+    return bool(question) and not control.GENERIC_NAMES.match(question)
 
 
 def _name_field(question: str) -> str:
@@ -336,6 +397,30 @@ def _name_field(question: str) -> str:
 
 def _plain(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def _recipe_question_key(question: str) -> str:
+    """An opaque, punctuation-insensitive key for a learned control."""
+    return hashlib.sha256(_plain(question).encode("utf-8")).hexdigest()
+
+
+def _recipe_options_signature(options: list[str]) -> str:
+    """Identifies the exact option list a learned action was proven against."""
+    normalised = [" ".join(str(option).split()).casefold() for option in options if str(option).strip()]
+    encoded = json.dumps(normalised, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _learnable_recipe_question(question: str) -> bool:
+    """Whether mechanics for this question are safe to retain and replay."""
+    if not question or safety.is_attestation(question) or safety.is_legal_status_question(question):
+        return False
+    return not bool(re.search(
+        r"\b(?:sponsor|authori[sz]ed to work|work authori[sz]ation|visa|immigration|"
+        r"export control|criminal|convict|felony|non-?compete|restrictive covenant)\b",
+        question,
+        re.IGNORECASE,
+    ))
 
 
 def _same_question(a: str, b: str) -> bool:
@@ -368,7 +453,25 @@ def _same_answer(a: str, b: str) -> bool:
     # "VA" is "Virginia": the form had it right and the agent reported it as wrong.
     if _STATE_CODES.get(a) == b or _STATE_CODES.get(b) == a:
         return True
-    return a == b or a.startswith(b + " ") or b.startswith(a + " ")
+    if a == b or a.startswith(b + " ") or b.startswith(a + " "):
+        return True
+    # Negative veteran status variants (e.g. "I am not a protected veteran" vs "I am not a veteran")
+    if re.search(r"\b(?:not|no|non)[-\s]+(?:a\s+)?(?:protected\s+)?veteran\b", a) and \
+       re.search(r"\b(?:not|no|non)[-\s]+(?:a\s+)?(?:protected\s+)?veteran\b", b):
+        return True
+    # Negative disability status variants
+    if re.search(r"\b(?:no|not|don'?t|do\s+not)\b.*?\bdisabilit", a) and \
+       re.search(r"\b(?:no|not|don'?t|do\s+not)\b.*?\bdisabilit", b):
+        return True
+    # Gender variants
+    if a in ("male", "man") and b in ("male", "man"):
+        return True
+    if a in ("female", "woman") and b in ("female", "woman"):
+        return True
+    # Ethnicity variants
+    if "asian" in a and "asian" in b and "caucasian" not in a and "caucasian" not in b:
+        return True
+    return False
 
 
 def still_loading(snapshot: str) -> bool:
@@ -396,6 +499,17 @@ def frames_loading(snapshot: str) -> bool:
         if not [c for c in children if re.sub(r"^- (text|generic)(\s*\[[^\]]*\])*:?\s*$", "", c)]:
             return True
     return False
+
+
+def workday_form_loading(snapshot: str) -> bool:
+    """True while Workday has drawn the application shell but not its fields."""
+    text = snapshot or ""
+    has_application = bool(re.search(r"Application Progress|current step \d+ of \d+", text, re.IGNORECASE))
+    has_forward_button = bool(re.search(r'button "Save and Continue"', text, re.IGNORECASE))
+    has_loading_groups = bool(re.search(r": Loading\s*$", text, re.MULTILINE | re.IGNORECASE))
+    has_field = bool(re.search(r"^- (textbox|combobox|listbox|radio|checkbox|spinbutton|slider)\b.*\[ref=",
+                               text, re.MULTILINE | re.IGNORECASE))
+    return has_application and has_forward_button and has_loading_groups and not has_field
 
 
 def choices_in(snapshot: str, under: str = "", any_list: bool = False) -> list[tuple[str, str]]:
@@ -577,6 +691,7 @@ class PageAgent:
         self.resume_file = Path(resume_file) if resume_file else None
         self.cover_letter = cover_letter
         self.resume_uploaded = False
+        self._resume_autofill_attempted = False
         self.final_pressed = False
         self.pages_read = 0
         self.written: dict[str, str] = {}          # question -> value the agent put there
@@ -597,10 +712,15 @@ class PageAgent:
         self._google_failed: set[str] = set()   # sites whose Google account they will not accept
         self._emailed_in: set[str] = set()      # sites where the email has been given on its own page
         self._created_at: set[str] = set()      # sites where an account has been created
+        self._profile_answer_library: Optional[dict] = None
         self.notes: list[str] = []                 # worth telling the owner, not worth stopping for
         self.corrected: set[str] = set()           # questions the agent put right from the profile
         self.owner_answers: dict[str, str] = {}    # answers the owner set while the agent waited
         self._paused_state: dict[str, str] = {}
+        self._pending_memories: list[dict] = []
+        self._choice_methods: dict[str, str] = {}
+        self._reused_recipes: dict[str, tuple[str, str, str, str, str]] = {}
+        self._current_host = ""
 
     def forget_sign_in_attempts(self) -> None:
         """Google stays refused where the site itself rejected the account."""
@@ -614,6 +734,16 @@ class PageAgent:
         self._retried_after_error = False
         self._code_tries = 0        # a resumed run may fetch a fresh code
         self._asked_for_new_code = False
+        # A resumed run gets a fresh page-read budget: the per-shape counter
+        # otherwise carries the old total and trips the "keeps asking the same
+        # things" guard on the very first read after a reload.
+        self._shapes = {}
+        self._woken = set()
+        self._opened_entries = set()
+        self._list_retries = 0
+        # Re-read the answer library: the owner may have added answers to
+        # data/profile_answers.json while the run waited.
+        self._profile_answer_library = None
 
     def _ensure_state(self) -> None:
         """Code reloaded into a run that is already going keeps its old object:
@@ -621,8 +751,12 @@ class PageAgent:
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
                               ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set), ("_list_retries", int), ("_shapes", dict),
-                             ("_refreshed", bool),
-                              ("_paused_state", dict), ("_signed_in_at", set), ("written", dict)):
+                              ("_refreshed", bool),
+                              ("_paused_state", dict), ("_signed_in_at", set), ("written", dict),
+                              ("_profile_answer_library", lambda: None),
+                              ("_resume_autofill_attempted", bool), ("_pending_memories", list),
+                              ("_choice_methods", dict), ("_reused_recipes", dict),
+                              ("_current_host", str)):
             if not hasattr(self, name):
                 setattr(self, name, default())
 
@@ -675,6 +809,13 @@ class PageAgent:
         tab = self.tab(page)
         email = getattr(self.config, "ats_email", "") or getattr(self.profile, "email", "")
         host = urlparse(tab.url).netloc
+        try:
+            candidate_state = self.assistant.adapter(tab).candidate_account_state(tab)
+        except Exception:
+            candidate_state = ""
+        if candidate_state == "verification":
+            logger.info("LOGIN: Workday Candidate Home needs verification; leaving it for account-code handling")
+            return False
         google = next((c for c in controls if c.role in PRESS_ROLES and self.GOOGLE_SIGN_IN.search(c.name or "")), None)
         if google is not None and host not in self._google_tried and host not in self._google_failed and email:
             self._google_tried.add(host)
@@ -698,7 +839,11 @@ class PageAgent:
         # A sign-in that asks for the email on its own page first (Workday's
         # does, after "Sign in with email"): give it, and press on. The password
         # is never typed here -- that is the sign-in code's, below.
-        if not self._password_box(tab) and email and host not in self._emailed_in:
+        is_app_form = any(
+            re.search(r"first\s*name|last\s*name|phone|resume|education|work\s*history", f"{c.name} {c.question}", re.IGNORECASE)
+            for c in controls if c.role in ("textbox", "searchbox", "combobox")
+        )
+        if not is_app_form and not self._password_box(tab) and email and host not in self._emailed_in:
             box = next((c for c in controls
                         if c.role in ("textbox", "searchbox") and not c.answer
                         and re.search(r"e-?mail|user ?name", f"{c.name} {c.question}", re.IGNORECASE)), None)
@@ -717,12 +862,36 @@ class PageAgent:
                     return True
                 except Exception as exc:
                     logger.warning("LOGIN: could not give the email (%s)", str(exc).splitlines()[0][:100])
-        # Two password boxes mean "create an account": its own step, which the
-        # sign-in code fills (password, repeat, the site's terms), and not a
-        # repeat of a sign-in already tried here.
-        making_account = self._password_boxes(tab) >= 2
+        # Workday's explicit Candidate Home state wins over password-box
+        # counts: the page can retain a stale sign-in form beside registration.
+        making_account = candidate_state in ("registration", "registration_error") or self._password_boxes(tab) >= 2
+        page_text = ""
+        if making_account:
+            try:
+                page_text = tab.inner_text("body", timeout=2_000)
+            except Exception:
+                page_text = ""
+            try:
+                account_exists = self.assistant.account_on_record() is True
+            except Exception:
+                account_exists = False
+            if account_exists and self.assistant._create_account_control(tab) is not None:
+                current_errors = re.search(
+                    r"passwords? (?:do not|don't) match|please check (?:the )?box|field is required|"
+                    r"(?:email|password).{0,30}(?:invalid|required)", page_text, re.IGNORECASE,
+                )
+                if not current_errors:
+                    # An account already exists here: sign in rather than
+                    # register again, even when a registration form is showing.
+                    logger.info("LOGIN: account already exists -- opening sign-in instead of registering")
+                    if self.assistant._goto_login_page(tab):
+                        return True
+                else:
+                    logger.info("LOGIN: visible registration errors override the unverified account record")
         if making_account and host in self._created_at:
-            return False
+            if not re.search(r"invalid|valid email|error|required", page_text, re.IGNORECASE):
+                return False
+            logger.info("LOGIN: retrying account creation after the site left a validation error")
         if self._password_box(tab) and (making_account or host not in self._signed_in_at):
             (self._created_at if making_account else self._signed_in_at).add(host)
             logger.info("LOGIN: %s on %s", "creating the account" if making_account else "signing in", host)
@@ -932,7 +1101,154 @@ class PageAgent:
             logger.warning("Could not complete the emailed code: %s", str(exc).splitlines()[0][:120])
             return False
 
-    # -- facts Claude may answer from ---------------------------------------------
+    # -- profile-only form planning -------------------------------------------------
+    def uses_profile_planner(self) -> bool:
+        """Whether this run must keep Claude out of the application form.
+
+        Tests and existing assisted users that do not have the new setting keep
+        their old planner.  AppConfig defaults the real application to
+        ``profile`` mode.
+        """
+        return str(getattr(self.config, "form_answer_mode", "claude") or "claude").lower() == "profile"
+
+    def _answer_library(self) -> dict:
+        """Explicit answers for questions that are not represented by fields.
+
+        ``data/profile_answers.json`` is intentionally local and ignored by
+        Git.  Keys are exact question text, or ``re:<regular expression>``.
+        Values are strings, numbers, booleans, or ``{"value": "..."}``.
+        A value here is an owner-approved profile answer, not an LLM draft.
+        """
+        if self._profile_answer_library is not None:
+            return self._profile_answer_library
+        path = Path("data/profile_answers.json")
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8-sig")) if path.is_file() else {}
+            self._profile_answer_library = loaded if isinstance(loaded, dict) else {}
+        except Exception as exc:
+            logger.warning("Could not read %s: %s", path, str(exc).splitlines()[0][:120])
+            self._profile_answer_library = {}
+        return self._profile_answer_library
+
+    def library_answer(self, question: str, exact_only: bool = False) -> str:
+        """The explicitly saved answer matching *question*, if any."""
+        for key, raw_value in self._answer_library().items():
+            if not isinstance(key, str):
+                continue
+            is_regex = key.startswith("re:")
+            if exact_only and is_regex:
+                continue
+            matches = _same_question(key, question) if not is_regex else False
+            if is_regex:
+                try:
+                    matches = bool(re.search(key[3:], question or "", re.IGNORECASE))
+                except re.error:
+                    logger.warning("Ignoring invalid answer-library pattern %r", key[:80])
+                    matches = False
+            if not matches:
+                continue
+            value = raw_value.get("value", "") if isinstance(raw_value, dict) else raw_value
+            if isinstance(value, bool):
+                return "Yes" if value else "No"
+            return str(value or "").strip()
+        return ""
+
+    def _attestation_answer(self, control: Control) -> tuple[str, str]:
+        """The globally authorised consent/signature answer for a control.
+
+        These are kept out of ``known_answer`` so ``sign()`` can still apply
+        declarations last, after every ordinary field on the page is filled.
+        """
+        question = f"{control.question} {control.name}".strip()
+        if safety.is_privacy_consent(question) and getattr(self.profile, "accept_application_privacy_prompts", False):
+            return "checked", "profile.accept_application_privacy_prompts"
+        if not safety.is_attestation(question) or not getattr(self.profile, "sign_attestations", False):
+            return "", ""
+        if control.role in ("textbox", "searchbox"):
+            name = str(getattr(self.profile, "full_name", "") or "").strip()
+            return (name, "profile.full_name") if name else ("", "")
+        return "checked", "profile.sign_attestations"
+
+    def profile_plan(self, controls: list[Control], required: set[str], still_open: list[str]) -> PagePlan:
+        """Build a deterministic page plan without calling Claude.
+
+        Known profile data is handled before this method.  This second pass
+        adds globally authorised consent/signature actions, identifies required
+        gaps, and presses only a plainly-labelled application control.
+        """
+        answers: list[Answer] = []
+        attestation_refs: set[str] = set()
+        for control in controls:
+            answerable_button = (control.role == "button" and control.GENERIC_NAMES.match(control.name.strip())
+                                 and bool(control.container or control.group or control.context)) \
+                or is_workday_choice_button(control)
+            if (control.role not in ANSWER_ROLES and not answerable_button) or control.disabled or control.answer:
+                continue
+            value, source = self._attestation_answer(control)
+            if not value or control.ref in attestation_refs:
+                continue
+            attestation_refs.add(control.ref)
+            action = "fill" if control.role in ("textbox", "searchbox", "spinbutton") else "check"
+            answers.append(Answer(control.ref, control.question, action, value, source))
+
+        unresolved: list[dict] = []
+        seen: set[str] = set()
+        for open_question in still_open:
+            question = open_question.rstrip("*").strip()
+            if not question or question in seen:
+                continue
+            seen.add(question)
+            control = next((c for c in controls if _same_question(c.question, question)), None)
+            if control is None:
+                continue
+            is_required = open_question.endswith("*") or "*" in control.question or "*" in control.name \
+                or any(_same_question(question, marked) for marked in required)
+            known_val, _ = self.known_answer(control)
+            has_known_answer = bool(known_val)
+            if not is_required and not has_known_answer:
+                continue
+            value, _source = self._attestation_answer(control)
+            if value:
+                continue
+            unresolved.append({
+                "question": question,
+                "reason": "could not fill known profile value automatically" if has_known_answer else "no matching profile field or data/profile_answers.json entry",
+                "required": is_required or has_known_answer,
+            })
+        if unresolved:
+            return PagePlan(page_kind="application_form", answers=answers, for_owner=unresolved)
+
+        forward = self.profile_forward(controls)
+        if forward is None:
+            return PagePlan(page_kind="application_form", answers=answers)
+        label = " ".join((forward.name or "").split())
+        opening = bool(re.fullmatch(r"apply(?: now)?|start application|begin application", label, re.IGNORECASE))
+        return PagePlan(
+            page_kind="job_description" if opening else "application_form",
+            step="profile-only",
+            answers=answers,
+            next_ref=forward.ref,
+            next_label=label,
+            next_kind="open_application" if opening else (
+                "final_submit" if safety.is_submit_label(label) else "next_step"
+            ),
+        )
+
+    def profile_forward(self, controls: list[Control]) -> Optional[Control]:
+        """The safest clearly-labelled application action on a local-plan page."""
+        options = [c for c in controls if c.role in PRESS_ROLES and c.name and not c.disabled
+                   and FORWARD_LABEL.match(" ".join(c.name.split())) and not NEVER_PRESS.search(c.name)]
+        if not options:
+            return None
+        priority = ("apply now", "apply", "start application", "begin application", "continue", "next",
+                    "review", "submit application", "submit")
+        for wanted in priority:
+            found = next((c for c in options if " ".join(c.name.split()).lower() == wanted), None)
+            if found is not None:
+                return found
+        return options[0] if len(options) == 1 else None
+
+    # -- facts a profile or assisted planner may answer from --------------------------
     def known_answer(self, control: Control) -> tuple[str, str]:
         """What the agent already knows for this box, and where it came from.
 
@@ -944,11 +1260,55 @@ class PageAgent:
         question = control.question
         if not question or safety.is_attestation(question):
             return "", ""
+
+        # 0. Privacy & Recruiting Communications consent checkbox (authorized by profile.accept_application_privacy_prompts)
+        if getattr(self.profile, "accept_application_privacy_prompts", True):
+            combined_text = f"{control.question} {control.name} {control.container} {control.context}".strip()
+            if (safety.is_privacy_consent(combined_text) or
+                re.search(r"i agree to the privacy statement|privacy policy|privacy statement", combined_text, re.IGNORECASE)) \
+                and not safety.is_attestation(combined_text):
+                if control.role in ("checkbox", "switch"):
+                    return "checked", "profile.accept_application_privacy_prompts"
+
+        # 1. Saved exact answer library (e.g. from data/profile_answers.json) takes priority
+        explicit = self.library_answer(question, exact_only=True)
+        if explicit:
+            return explicit, "profile.answer_library"
+
+        # 2. Universal Concept & Synonym Engine (zero-cost, zero-heavy-RAM, cross-ATS)
+        concept = concept_matcher.match_concept(
+            question=question,
+            container=control.container,
+            context=control.context,
+            name=control.name,
+        )
+        if concept:
+            val, src = concept_matcher.resolve_profile_value(
+                concept=concept,
+                profile=self.profile,
+                options=control.options,
+            )
+            if val:
+                return val, src
+            if concept == "MIDDLE_NAME":
+                replacement = "N/A" if "*" in question or "required" in question.lower() else ""
+                return replacement, "profile.middle_name"
+
+        # 3. Regex patterns from data/profile_answers.json
+        regex_explicit = self.library_answer(question)
+        if regex_explicit:
+            return regex_explicit, "profile.answer_library"
+
         field = _name_field(question) or _detail_field(question)
         if field:
             value = str(getattr(self.profile, field, "") or "").strip()
             if value:
                 return value, f"profile.{field}"
+            if field == "middle_name":
+                # An explicit empty profile value overrides historical answers.
+                # Only required fields receive a placeholder.
+                replacement = "N/A" if "*" in question or "required" in question.lower() else ""
+                return replacement, f"profile.{field}"
         for pattern, standing in _STANDING_ANSWERS:
             if not pattern.search(question):
                 continue
@@ -958,16 +1318,108 @@ class PageAgent:
             value = str(held or "").strip()
             if value:
                 return value, f"profile.{standing}"
+        if re.search(r"\b(country|nation)\b", question, re.IGNORECASE):
+            value = str(getattr(self.profile, "country", "") or "").strip()
+            if value:
+                return value, "profile.country"
+        if re.search(r"mobile|cell|phone number", question, re.IGNORECASE) and not re.search(
+                r"home|work|employer", question, re.IGNORECASE):
+            value = str(getattr(self.profile, "phone_mobile", "") or getattr(self.profile, "phone", "") or "").strip()
+            if value:
+                return value, "profile.phone_mobile"
+        if re.search(r"desired salary|salary desired|salary range", question, re.IGNORECASE):
+            minimum = str(getattr(self.profile, "salary_min", "") or "").strip()
+            maximum = str(getattr(self.profile, "salary_max", "") or "").strip()
+            if minimum and maximum:
+                return f"${int(float(minimum)):,} - ${int(float(maximum)):,}", "profile.salary_range"
+        if re.search(r"\b(state|province)\b", question, re.IGNORECASE) and not re.search(
+                r"education|school|university|employer|company", question, re.IGNORECASE):
+            value = str(getattr(self.profile, "state", "") or "").strip()
+            if value:
+                return value, "profile.state"
+        if re.search(r"authorized to work in the u\.s\. for any employer", question, re.IGNORECASE):
+            value = str(getattr(self.profile, "authorized_for_any_employer", "") or "").strip()
+            if value:
+                return value, "profile.authorized_for_any_employer"
+        if re.search(r"sms|text message|texting|mobile message", question, re.IGNORECASE):
+            preferred = str(getattr(self.profile, "preferred_contact_method", "") or "").strip().lower()
+            if preferred:
+                return ("Yes" if preferred in {"sms", "text", "text message", "phone"} else "No"), \
+                    "profile.preferred_contact_method"
+        if re.search(r"pre.employment background check", question, re.IGNORECASE):
+            value = str(getattr(self.profile, "willing_to_submit_to_pre_employment_background_check", "") or "").strip()
+            if value:
+                return value, "profile.willing_to_submit_to_pre_employment_background_check"
+        if re.search(r"worked for occ as an intern or employee", question, re.IGNORECASE):
+            return str(getattr(self.profile, "worked_for_occ", "") or "").strip(), "profile.worked_for_occ"
+        if re.search(r"provided services to occ as a consultant or contractor", question, re.IGNORECASE):
+            return str(getattr(self.profile, "provided_services_to_occ", "") or "").strip(), "profile.provided_services_to_occ"
+        if re.search(r"bonus expectations", question, re.IGNORECASE):
+            return str(getattr(self.profile, "bonus_expectations", "") or "").strip(), "profile.bonus_expectations"
+        if re.search(r"willing and able to work.*office location.*3 days|minimum of 3 days per week", question,
+                     re.IGNORECASE):
+            return str(getattr(self.profile, "willing_to_work_onsite_three_days", "") or "").strip(), \
+                "profile.willing_to_work_onsite_three_days"
+        if re.search(r"relatives currently employed by occ", question, re.IGNORECASE):
+            return str(getattr(self.profile, "relatives_employed_here", "") or "").strip(), \
+                "profile.relatives_employed_here"
+        if re.search(r"restrictive covenants|non.compete", question, re.IGNORECASE):
+            return str(getattr(self.profile, "bound_by_non_compete", "") or "").strip(), \
+                "profile.bound_by_non_compete"
+        if re.search(r"\b(today'?s? date|application date|current date)\b", question, re.IGNORECASE):
+            return date.today().isoformat(), "profile.application_date"
+        if re.search(r"highest level of education|education achieved|educational background|degrees?", question,
+                     re.IGNORECASE):
+            education = getattr(self.profile, "education", ()) or ()
+            if education:
+                summary = "; ".join(
+                    f"{level} in {field} from {school} ({year})"
+                    for level, field, school, year in education
+                )
+                return summary, "profile.education"
+        employer_slot = re.search(r"\bemployer\s+(\d+)\b", question, re.IGNORECASE)
+        if employer_slot:
+            index = int(employer_slot.group(1)) - 1
+            current = getattr(self.profile, "current_employer", "")
+            current_title = getattr(self.profile, "current_position_title", "")
+            current_dates = getattr(self.profile, "current_employment_dates", "")
+            current_location = getattr(self.profile, "current_employer_location", "")
+            history = getattr(self.profile, "reasons_for_leaving", ()) or ()
+            entries = [(current_title, current, current_dates, current_location)]
+            entries.extend(("Network Engineer", employer, "", "") for employer, _reason in history
+                           if employer != current)
+            if 0 <= index < len(entries):
+                title, employer, dates, location = entries[index]
+                details = ", ".join(part for part in (title, employer, dates, location) if part)
+                return details, "profile.work_history"
+            return "", ""
+        if re.search(r"(?:list|provide|enter).*work history|employment history|all work history|previous employment|"
+                     r"other employment history", question, re.IGNORECASE):
+            current = getattr(self.profile, "current_employer", "")
+            current_title = getattr(self.profile, "current_position_title", "")
+            current_dates = getattr(self.profile, "current_employment_dates", "")
+            history = getattr(self.profile, "reasons_for_leaving", ()) or ()
+            entries = [f"{current_title}, {current} ({current_dates})"] if current else []
+            entries.extend(f"{employer} (reason for leaving: {reason})" for employer, reason in history
+                           if employer != current)
+            if entries:
+                return "; ".join(entries), "profile.work_history"
         if re.search(r"employer|company|school|university|supervisor|reference|previous|this position|"
                      r"why (do|are) you", question, re.IGNORECASE):
             return "", ""
+        explicit = self.library_answer(question)
+        if explicit:
+            return explicit, "profile.answer_library"
         if self.tracker is not None and hasattr(self.tracker, "recall_answer") \
                 and not safety.is_legal_status_question(question):
             try:
+                host = self._learning_host()
                 for match in self.tracker.recall_answer(question, limit=3):
                     said = (match.get("answer") or "").strip()
                     if match.get("answered_by") == "user" and said \
-                            and _same_question(match.get("question") or "", question):
+                            and (not host or str(match.get("host") or "").lower() == host) \
+                            and _same_question(match.get("question") or "", question) \
+                            and (not control.options or any(_same_answer(said, option) for option in control.options)):
                         return said, "owner_earlier_answer"
             except Exception:
                 pass
@@ -979,9 +1431,20 @@ class PageAgent:
         anyone. Returns how many were filled and the questions still open.
         """
         filled, open_questions = 0, []
+        handled_groups: set[str] = set()
         for control in controls:
-            if control.role not in ANSWER_ROLES or control.disabled or control.answer:
+            answerable_button = (control.role == "button" and control.GENERIC_NAMES.match(control.name.strip())
+                                 and bool(control.container or control.group or control.context)) \
+                or is_workday_choice_button(control)
+            if (control.role not in ANSWER_ROLES and not answerable_button) or control.disabled or control.answer:
                 continue
+            group_key = control.group if control.role in ("radio", "checkbox", "switch") else ""
+            if group_key and group_key in handled_groups:
+                continue
+            if group_key and any(c.role == control.role and c.group == group_key and c.checked for c in controls):
+                continue
+            if group_key:
+                handled_groups.add(group_key)
             if control.question in self.owner_answers:
                 continue
             value, source = self.known_answer(control)
@@ -992,17 +1455,29 @@ class PageAgent:
                 star = "*" if any(_same_question(control.question, q) for q in required) else ""
                 open_questions.append(control.question + star)
                 continue
-            action = "fill" if control.role in ("textbox", "searchbox") else "choose"
-            if control.role in ("checkbox", "switch", "radio") or control.holds_choices:
-                action = "check"
+            action = "fill" if control.role in ("textbox", "searchbox", "spinbutton") else "choose"
+            # A radio group has one correct option.  ``choose`` selects that
+            # option by its label; ``check`` would blindly tick whichever
+            # radio happened to be visited first.
+            if control.role in ("checkbox", "switch") and not control.group:
+                action = "check" if value.strip().lower() not in ("no", "false", "0") else "uncheck"
             try:
                 answer = Answer(control.ref, control.question, action, value, source)
                 if self.do(page, answer, control):
                     filled += 1
+                    self.written[control.question] = answer.value
                     self._remember(control, answer)
                     logger.info("KNEW: %s = %r (%s)", control.question[:44], value[:34], source)
+                else:
+                    star = "*" if any(_same_question(control.question, q) for q in required) else ""
+                    open_questions.append(control.question + star)
+                    self.failed.append(f"{control.question[:60]} = {value[:40]!r}")
             except Exception as exc:
-                logger.debug("Could not fill %r: %s", control.question[:40], str(exc).splitlines()[0][:70])
+                star = "*" if any(_same_question(control.question, q) for q in required) else ""
+                open_questions.append(control.question + star)
+                self.failed.append(f"{control.question[:60]} = {value[:40]!r}")
+                logger.info("Could not answer %r automatically: %s", control.question[:60],
+                            str(exc).splitlines()[0][:100])
         return filled, open_questions
 
     def obvious_next(self, controls: list[Control]) -> Optional[Control]:
@@ -1059,6 +1534,21 @@ class PageAgent:
             tab = self.tab(page)
             if tab.is_closed():
                 return Outcome("gave_up", page, ["the browser window was closed"])
+            self._current_host = urlparse(getattr(tab, "url", "")).netloc.lower()
+            if not self._resume_autofill_attempted and self.resume_file \
+                    and hasattr(self.assistant, "autofill_from_resume"):
+                try:
+                    autofilled = self.assistant.autofill_from_resume(tab, self.resume_file)
+                    if autofilled:
+                        self._resume_autofill_attempted = True
+                        logger.info("AUTOFILL: resume parser was run before reading the application page")
+                        self.settle(page, 2_000)
+                        continue
+                    if not getattr(self.assistant, "on_job_description", lambda _page: False)(tab):
+                        self._resume_autofill_attempted = True
+                except Exception as exc:
+                    self._resume_autofill_attempted = True
+                    logger.info("AUTOFILL: resume parser could not run: %s", str(exc).splitlines()[0][:120])
             try:
                 self.assistant.dismiss_cookie_banner(tab)
             except Exception:
@@ -1105,28 +1595,35 @@ class PageAgent:
             if self.wake_loading_control(page, snapshot):
                 self.settle(page, 2_000)
                 continue
+            if hasattr(self.assistant, "accept_consent_dialog") and getattr(self.profile, "accept_application_privacy_prompts", True):
+                try:
+                    if self.assistant.accept_consent_dialog(tab):
+                        self.settle(page, 1_500)
+                        continue
+                except Exception as exc:
+                    logger.debug("Consent dialog check: %s", exc)
             # What the owner has already settled is filled in here, by the agent
-            # itself: his own details and the answers he has given before. Only
-            # what is left over is worth anybody else's time.
-            required = required_questions(snapshot)
-            knew, still_open = self.answer_what_is_known(page, controls, required)
-            if knew:
+            # itself: his own details and the answers he has given before.
+            # Answering can enable dependent fields (e.g. Country -> State/Province).
+            # Loop while newly enabled known fields continue to be filled.
+            for _pass in range(3):
+                required = required_questions(snapshot)
+                knew, still_open = self.answer_what_is_known(page, controls, required)
+                if not knew:
+                    break
                 self.settle(page, 800)
                 snapshot = self.read_when_loaded(page)
                 controls = parse_snapshot(snapshot)
                 still_open = [q for q in still_open
                               if not any(_same_question(c.question, q) and c.answer for c in controls)]
+                self._commit_learned_memory(controls)
             plan = None
-            if not still_open:
-                forward = self.obvious_next(controls)
-                if forward is not None:
-                    logger.info("KNEW THE WHOLE PAGE: %d filled in, pressing %r -- nobody was asked",
-                                knew, (forward.name or "")[:40])
-                    plan = PagePlan(page_kind="application_form",
-                                    step="answered from what the agent already knew",
-                                    next_ref=forward.ref, next_label=forward.name,
-                                    next_kind=("final_submit" if safety.is_submit_label(forward.name)
-                                               else "next_step"))
+            if self.uses_profile_planner():
+                # Autonomous mode is intentionally deterministic.  It never
+                # hands an application page, screening answer, or navigation
+                # choice to Claude/the session; unknown *required* questions
+                # are returned as a clear profile-data gap instead.
+                plan = self.profile_plan(controls, required, still_open)
             if plan is None:
                 self.follow_the_chosen_brain()
                 if still_open:
@@ -1181,7 +1678,7 @@ class PageAgent:
                                                       f"for you cannot be used, so it needs you"])
             if plan.page_kind == "captcha":
                 return Outcome("captcha", page, ["a CAPTCHA is showing -- only you can complete it"])
-            if plan.page_kind == "confirmation" and self._site_confirms(tab):
+            if (plan.page_kind == "confirmation" or self._site_confirms(tab)) and self._site_confirms(tab):
                 if self.final_pressed:
                     return Outcome("submitted", page, ["the site confirmed the application"])
                 return Outcome("owner_needed", page, ["the site says this application was already sent"])
@@ -1194,6 +1691,19 @@ class PageAgent:
             # every answer the agent gave is really there.
             self.settle(page, 800)
             after = parse_snapshot(self.snapshot(page))
+            self._commit_learned_memory(after)
+            # Pressing Next can land on a brand-new page (e.g. a sponsorship /
+            # work-authorization questionnaire) that this cycle's plan and
+            # controls never saw. Give it the same profile-correction pass
+            # before blockers() below judges it, so a legal-status question the
+            # profile already answers gets filled here rather than stopping
+            # the run to ask the owner something the agent already knows.
+            just_arrived = self.correct_from_profile(page, plan, after)
+            if just_arrived:
+                given += just_arrived
+                self.settle(page, 500)
+                after = parse_snapshot(self.snapshot(page))
+                self._commit_learned_memory(after)
             if given:
                 # Something was filled in, so pressing "Add" again is progress
                 # (the next job), not the loop the count is there to stop.
@@ -1209,6 +1719,33 @@ class PageAgent:
             # Only the last step must be complete before the agent presses on.
             about_to_send = plan.next_kind in ("final_submit", "none") or safety.is_submit_label(plan.next_label)
             blockers = self.blockers(page, plan, after, about_to_send=about_to_send)
+            if about_to_send:
+                required = required_questions(self.snapshot(page))
+                given_questions = set(self.written) | {answer.question for answer, _control in given}
+                missing_required = []
+                for control in after:
+                    question = control.question
+                    marked_required = "*" in question or any(_same_question(question, item) for item in required)
+                    if not question or not marked_required:
+                        continue
+                    answered = bool(control.answer)
+                    if control.role in ("radio", "checkbox", "switch") and control.group:
+                        answered = any(other.role == control.role and other.group == control.group and other.checked
+                                       for other in after)
+                    if control.role in ("radio", "checkbox", "switch"):
+                        answered = answered or any(other.role == control.role
+                                                  and _same_question(other.question, question)
+                                                  and other.checked for other in after)
+                    if control.role == "button" and re.search(r"resume|cv|curriculum|select files?", question,
+                                                               re.IGNORECASE):
+                        # Resume attachment has one authority: submit_gate, whose
+                        # check is richer than this one (earlier-run uploads count).
+                        continue
+                    if not answered and any(_same_question(question, item) for item in given_questions):
+                        answered = True
+                    if not answered and question not in missing_required:
+                        missing_required.append(question)
+                blockers += [f"required field is still blank: {question}" for question in missing_required]
             if blockers:
                 return Outcome("owner_needed", page, blockers)
 
@@ -1241,9 +1778,18 @@ class PageAgent:
                 continue
             refusal = self.refusal(page, answer, control, controls)
             if refusal:
+                known_val, _ = self.known_answer(control)
+                if (known_val and _same_answer(control.answer, known_val) and _same_answer(answer.value, known_val)) or \
+                   ("already answered from your profile" in refusal and control.role == "radio"):
+                    logger.info("PRESERVED FROM PROFILE: %r = %r (ignored planner's %r)",
+                                control.question or answer.question, control.answer or "checked", answer.value)
+                    continue
                 logger.info("LEFT FOR YOU: %r -- %s", (control.question or answer.question)[:70], refusal)
                 plan.for_owner.append({"question": control.question or answer.question, "reason": refusal,
                                        "required": "*" in (control.question or "")})
+                if control.role != "radio" and "already answered" in refusal \
+                    and control.answer and not _same_answer(control.answer, answer.value):
+                    self.failed.append(f"{control.question or answer.question} = {answer.value[:40]!r}")
                 continue
             try:
                 done = self.do(page, answer, control)
@@ -1252,9 +1798,8 @@ class PageAgent:
                 logger.info("Could not answer %r: %s", answer.question[:60], str(exc).splitlines()[0][:100])
             if not done:
                 question = (control.question or answer.question)[:70]
-                if "*" in (control.question or "") or "*" in (control.name or ""):
-                    self.failed.append(f"{question} = {answer.value[:40]!r}")
-                else:
+                self.failed.append(f"{question} = {answer.value[:40]!r}")
+                if "*" not in (control.question or "") and "*" not in (control.name or ""):
                     note = f"{question}: could not choose {answer.value[:40]!r} -- this form doesn't offer it"
                     if note not in self.notes:
                         self.notes.append(note)
@@ -1337,14 +1882,30 @@ class PageAgent:
         given: list[tuple[Answer, Control]] = []
         wanted = (("resume", re.compile(r"resume|\bcv\b", re.IGNORECASE), "upload_resume"),
                   ("cover letter", re.compile(r"cover letter", re.IGNORECASE), "upload_cover_letter"))
+        if self.resume_file and (self.resume_file.name in (snapshot or "") or
+                                 _section_holds_a_file(snapshot, "resume")):
+            self.resume_uploaded = True
+
         for what, matches, action in wanted:
             if action == "upload_resume" and (self.resume_uploaded or not self.resume_file):
                 continue
-            if action == "upload_cover_letter" and (self._letter_attached or self.cover_letter is None):
-                continue
+            if action == "upload_cover_letter":
+                is_required = any(matches.search(f"{c.container} {c.name}") and ("*" in c.name or "*" in c.container) for c in controls)
+                if not is_required and not self.cover_letter and not getattr(self.profile, "cover_letter", ""):
+                    continue
+                if self._letter_attached or self.cover_letter is None:
+                    continue
             control = next((c for c in controls
                             if c.role in PRESS_ROLES | {"button"} and matches.search(f"{c.container} {c.name}")
-                            and re.search(r"attach|upload|choose|add|browse|file", c.name or "", re.IGNORECASE)), None)
+                            and re.search(r"attach|upload|choose|add|browse|file|import", c.name or "", re.IGNORECASE)), None)
+            if control is None and action == "upload_resume" and (
+                    re.search(r"upload a file|resume upload", snapshot or "", re.IGNORECASE)
+                    and re.search(r"required|error", snapshot or "", re.IGNORECASE)):
+                generic_uploads = [c for c in controls
+                                   if c.role in PRESS_ROLES | {"button"}
+                                   and re.search(r"select files?|choose files?|attach|upload", c.name or "", re.IGNORECASE)]
+                if len(generic_uploads) == 1:
+                    control = generic_uploads[0]
             if control is None:
                 continue
             if _section_holds_a_file(snapshot, control.container or control.question):
@@ -1441,19 +2002,40 @@ class PageAgent:
         if safety.is_legal_status_question(question) or safety._SPONSORSHIP_Q.search(question) \
                 or safety._AUTHORIZED_Q.search(question):
             field_name = answer.source.split(".", 1)[1] if answer.source.startswith("profile.") else ""
-            if not field_name or not str(getattr(self.profile, field_name, "") or "").strip():
+            # An exact entry in the local answer library is an explicit owner
+            # profile answer too.  It is the route for employer-specific legal
+            # wording that has no dedicated UserProfile attribute.
+            approved_library_answer = answer.source == "profile.answer_library" and \
+                bool(self.library_answer(question))
+            if not approved_library_answer and (
+                not field_name or not str(getattr(self.profile, field_name, "") or "").strip()
+            ):
                 return "a legal or immigration question your profile doesn't state"
         current = control.answer
         if self._owner_gave(question):
             return "you answered this yourself -- left as you set it"
         if correcting:
             return ""
-        if action in ("fill", "choose") and current and not self._ours(question, current):
-            return f"already answered {current[:40]!r} -- not changing an answer the agent didn't give"
+        if action in ("fill", "choose") and current:
+            known_val, known_src = self.known_answer(control)
+            if known_val and _same_answer(current, known_val):
+                # Use exact comparison for the planner's value against the profile value:
+                # _same_answer considers "Yaswanth" ≈ "Yaswanth Reddy" via prefix matching,
+                # but the profile's canonical value must be preserved exactly.
+                if _plain(answer.value) != _plain(known_val):
+                    return f"already answered from your profile ({current!r}) -- not changing to {answer.value!r}"
+            if not self._ours(question, current):
+                return f"already answered {current[:40]!r} -- not changing an answer the agent didn't give"
         if control.role == "radio" and action == "check" and control.group:
             chosen = next((c.name for c in controls if c.role == "radio" and c.group == control.group and c.checked), "")
             if chosen and not self._ours(question, chosen):
                 return f"already answered {chosen[:40]!r} -- not changing an answer the agent didn't give"
+            if chosen:
+                known_val, _ = self.known_answer(control)
+                if known_val and _same_answer(chosen, known_val) and not _same_answer(control.name, known_val):
+                    return f"already answered from your profile ({chosen!r}) -- not changing to {control.name!r}"
+                if not self._ours(question, chosen):
+                    return f"already answered {chosen[:40]!r} -- not changing an answer the agent didn't give"
         if control.role in ("checkbox", "switch") and action == "uncheck" and control.checked                 and not self._ours(question, answer.value or "checked"):
             return "ticked by someone else -- not unticking it"
         return ""
@@ -1486,7 +2068,8 @@ class PageAgent:
             if field == "middle_name" and not wanted and shown:
                 # The owner has no middle name; the site's import put "Reddy"
                 # there, which is part of their first name.
-                fixes.append((control.question, "", "profile.middle_name", True))
+                replacement = "N/A" if "*" in control.question or "required" in control.question.lower() else ""
+                fixes.append((control.question, replacement, "profile.middle_name", True))
                 continue
             if wanted and shown.lower() != wanted.lower():
                 # Exactly: "Yaswanth" is not "Yaswanth Reddy", though one
@@ -1594,6 +2177,34 @@ class PageAgent:
 
     def do(self, page, answer: Answer, control: Control) -> bool:
         tab = self.tab(page)
+        if answer.action == "choose":
+            self._choice_methods.pop(control.ref, None)
+            recipe = self._recalled_form_recipe(control, answer)
+            if recipe is not None:
+                identity = self._recipe_identity(control, answer)
+                method = str(recipe.get("method") or "")
+                if method == "type_and_commit":
+                    if self.type_and_commit(page, control, answer.value):
+                        self._choice_methods[control.ref] = method
+                        if identity is not None:
+                            self._reused_recipes[control.ref] = identity
+                        return True
+                    if identity is not None:
+                        self._mark_recipe_failed(identity)
+                elif method == "native_select" and control.options:
+                    index = self.assistant._best_option(control.options, [answer.value])
+                    if index is not None:
+                        try:
+                            self.locate(page, control.ref).select_option(
+                                label=control.options[index], timeout=5_000
+                            )
+                            self._choice_methods[control.ref] = method
+                            if identity is not None:
+                                self._reused_recipes[control.ref] = identity
+                            return True
+                        except Exception:
+                            if identity is not None:
+                                self._mark_recipe_failed(identity)
         loc = self.locate(page, control.ref)
         if control.holds_choices and answer.action in ("choose", "check", "fill"):
             # The choices have no reference of their own: click the one that
@@ -1609,11 +2220,131 @@ class PageAgent:
             # what was asked for.
             return self.put_in_a_spinbutton(page, loc, answer.value)
         if answer.action == "fill":
-            loc.fill(answer.value, timeout=8_000)
+            # Detect <input type="date"> before calling fill(): Playwright's
+            # fill() raises "Malformed value" when given a non-ISO string (e.g.
+            # the profile's "Immediately") on a date widget.  Convert to a
+            # YYYY-MM-DD string; if the profile value is already date-like use
+            # it, otherwise fall back to today so the field is not left blank.
+            fill_value = answer.value
+            try:
+                if loc.is_disabled(timeout=1_000) or not loc.is_visible(timeout=1_000):
+                    logger.info("Field %r is disabled or hidden -- skipped", control.question[:50])
+                    return True
+            except Exception:
+                pass
+            try:
+                is_date_input = loc.evaluate(
+                    "el => el.tagName === 'INPUT' && (el.type === 'date' || el.type === 'month')",
+                    timeout=2_000
+                )
+            except Exception:
+                is_date_input = False
+
+            _MONTHS = {
+                "january": "01", "february": "02", "march": "03", "april": "04",
+                "may": "05", "june": "06", "july": "07", "august": "08",
+                "september": "09", "october": "10", "november": "11", "december": "12",
+                "jan": "01", "feb": "02", "mar": "03", "apr": "04",
+                "jun": "06", "jul": "07", "aug": "08", "sep": "09", "sept": "09",
+                "oct": "10", "nov": "11", "dec": "12",
+            }
+            import re as _re
+            _iso = _re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", fill_value.strip())
+            _mdy = _re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", fill_value.strip())
+            _my = _re.fullmatch(r"([A-Za-z]+)\s+(\d{4})", fill_value.strip())
+            _my_num = _re.fullmatch(r"(\d{1,2})/(\d{4})", fill_value.strip())
+            _bare_year = _re.fullmatch(r"(\d{4})", fill_value.strip())
+
+            if is_date_input:
+                if _iso:
+                    pass  # already correct ISO
+                elif _mdy:
+                    fill_value = f"{_mdy.group(3)}-{_mdy.group(1).zfill(2)}-{_mdy.group(2).zfill(2)}"
+                elif _my and _my.group(1).lower() in _MONTHS:
+                    m = _MONTHS[_my.group(1).lower()]
+                    fill_value = f"{_my.group(2)}-{m}-01"
+                elif _my_num:
+                    fill_value = f"{_my_num.group(2)}-{_my_num.group(1).zfill(2)}-01"
+                elif _bare_year:
+                    fill_value = f"{_bare_year.group(1)}-01-01"
+                else:
+                    from datetime import date as _date
+                    fill_value = _date.today().isoformat()
+                    logger.info(
+                        "DATE FIELD: profile says %r for %r, which is not a date -- "
+                        "substituting today (%s) so the field is not left blank",
+                        answer.value, control.question[:50], fill_value
+                    )
+            elif _my and _my.group(1).lower() in _MONTHS and re.search(r"date|month|graduat", control.question, re.IGNORECASE):
+                try:
+                    placeholder = (loc.get_attribute("placeholder", timeout=1_000) or "").lower()
+                except Exception:
+                    placeholder = ""
+                m = _MONTHS[_my.group(1).lower()]
+                if "yyyy" in placeholder or "mm" in placeholder or "/" in placeholder:
+                    if "dd" in placeholder:
+                        fill_value = f"{m}/01/{_my.group(2)}"
+                    else:
+                        fill_value = f"{m}/{_my.group(2)}"
+            try:
+                loc.fill(fill_value, timeout=2_500)
+            except Exception:
+                try:
+                    is_inert = loc.evaluate("""(el) => {
+                        return el.disabled || el.readOnly || el.getAttribute('aria-disabled') === 'true' ||
+                               Boolean(el.closest('[disabled], [aria-disabled="true"], .ant-picker-disabled, [aria-readonly="true"]')) ||
+                               window.getComputedStyle(el).pointerEvents === 'none' ||
+                               window.getComputedStyle(el).display === 'none' ||
+                               window.getComputedStyle(el).visibility === 'hidden';
+                    }""", timeout=1_000)
+                    if is_inert:
+                        logger.info("Field %r is inert/disabled -- skipped", control.question[:50])
+                        return True
+                except Exception:
+                    pass
+                try:
+                    if loc.is_disabled(timeout=1_000):
+                        logger.info("Field %r is disabled -- skipped", control.question[:50])
+                        return True
+                except Exception:
+                    pass
+                try:
+                    loc.evaluate("""(el, value) => {
+                        const setter = Object.getOwnPropertyDescriptor(
+                            HTMLInputElement.prototype, 'value') ?
+                            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set : null;
+                        if (setter) {
+                            setter.call(el, value);
+                        } else {
+                            el.value = value;
+                        }
+                        el.dispatchEvent(new InputEvent('input', {bubbles: true, composed: true, inputType: 'insertText', data: value}));
+                        el.dispatchEvent(new Event('change', {bubbles: true, composed: true}));
+                    }""", fill_value, timeout=1_000)
+                    logger.info("Field %r filled via JS fallback after loc.fill failure", control.question[:50])
+                    return True
+                except Exception:
+                    pass
+                raise
             try:
                 loc.press("Tab", timeout=2_000)
             except Exception:
                 pass
+            if re.fullmatch(r"city|zip code|postal code", control.question.strip(), re.IGNORECASE):
+                try:
+                    tab.wait_for_timeout(300)
+                    if (loc.input_value(timeout=2_000) or "").strip() != fill_value.strip():
+                        loc.evaluate("""(el, value) => {
+                            const setter = Object.getOwnPropertyDescriptor(
+                                HTMLInputElement.prototype, 'value').set;
+                            setter.call(el, value);
+                            el.dispatchEvent(new InputEvent('input', {bubbles: true, composed: true, inputType: 'insertText', data: value}));
+                            el.dispatchEvent(new Event('change', {bubbles: true, composed: true}));
+                            el.blur();
+                        }""", fill_value)
+                        tab.wait_for_timeout(300)
+                except Exception:
+                    pass
             return True
         if answer.action in ("check", "uncheck"):
             want = answer.action == "check"
@@ -1626,6 +2357,37 @@ class PageAgent:
             path = self.resume_file if answer.action == "upload_resume" else self._letter_file()
             if not path or not Path(path).is_file():
                 return False
+            # Workday's "Select files" button is only a visual trigger; its
+            # real file input is hidden inside the upload widget and does not
+            # reliably emit Playwright's filechooser event.
+            if answer.action == "upload_resume":
+                try:
+                    for depth in range(1, 8):
+                        nearby = loc.locator(
+                            f"xpath=ancestor::*[{depth}]"
+                        ).locator("input[type='file']")
+                        if nearby.count():
+                            nearby.last.set_input_files(str(path), timeout=15_000)
+                            self.resume_uploaded = True
+                            self._record_resume_attached()
+                            if hasattr(self.assistant, "attached_resume"):
+                                self.assistant.attached_resume = str(path)
+                            self.settle(page, 1_500)
+                            return True
+                except Exception as exc:
+                    logger.info("Nearby resume file input was unavailable: %s", str(exc).splitlines()[0][:120])
+            if answer.action == "upload_resume" and hasattr(self.assistant, "upload_via_chooser"):
+                try:
+                    if self.assistant.upload_via_chooser(
+                            page, r"select files?|upload a file|choose files?", Path(path)):
+                        self.resume_uploaded = True
+                        self._record_resume_attached()
+                        if hasattr(self.assistant, "attached_resume"):
+                            self.assistant.attached_resume = str(path)
+                        self.settle(page, 1_500)
+                        return True
+                except Exception as exc:
+                    logger.info("Browser upload helper could not attach the resume: %s", str(exc).splitlines()[0][:120])
             try:
                 loc.set_input_files(str(path), timeout=8_000)
             except Exception:
@@ -1642,11 +2404,42 @@ class PageAgent:
         if answer.action == "choose" and control.role in ("textbox", "searchbox", "spinbutton"):
             loc.fill(answer.value, timeout=8_000)     # a plain box, whatever the plan called it
             return True
-        if answer.action == "choose" and control.role in ("radio", "checkbox", "switch"):
-            group = [c for c in parse_snapshot(self.snapshot(page))
-                     if c.role == control.role and c.group and c.group == control.group] or [control]
+        if answer.action in ("choose", "check") and control.role in ("radio", "checkbox", "switch", "group", "radiogroup"):
+            snapshot_controls = parse_snapshot(self.snapshot(page))
+            if control.role in ("group", "radiogroup"):
+                group = [c for c in snapshot_controls
+                         if c.role in ("radio", "checkbox", "switch") and (c.group == control.question or c.container == control.question)]
+                if not group:
+                    group = [c for c in snapshot_controls if c.role in ("radio", "checkbox", "switch")]
+            else:
+                group = [c for c in snapshot_controls
+                         if c.role == control.role and c.group and c.group == control.group] or [control]
             index = self.assistant._best_option([c.name for c in group], [answer.value])
             if index is None:
+                role_filter = control.role if control.role in ("radio", "checkbox", "switch") else "radio"
+                all_radios = [c for c in snapshot_controls if c.role == role_filter]
+                fallback_idx = self.assistant._best_option([c.name for c in all_radios], [answer.value])
+                if fallback_idx is not None:
+                    group = all_radios
+                    index = fallback_idx
+            if index is None:
+                try:
+                    candidates = [answer.value]
+                    if re.search(r"\bnot\b.*\bveteran\b", answer.value, re.I):
+                        candidates.extend(["I am not a protected veteran", "Not a protected veteran", "No"])
+                    for cand in candidates:
+                        role_sel = control.role if control.role in ("radio", "checkbox") else "radio"
+                        radio_loc = tab.locator(f"input[type='{role_sel}']").filter(has_text=cand).first
+                        if not radio_loc.count():
+                            radio_loc = tab.locator("label").filter(has_text=cand).first
+                        if radio_loc.count():
+                            try:
+                                radio_loc.click(timeout=3_000)
+                            except Exception:
+                                radio_loc.click(force=True, timeout=2_000)
+                            return True
+                except Exception:
+                    pass
                 logger.info("No choice matching %r for %r among %s", answer.value, control.question[:50],
                             [c.name for c in group][:8])
                 return False
@@ -1655,6 +2448,13 @@ class PageAgent:
                 target.set_checked(True, timeout=5_000)
             except Exception:
                 target.click(timeout=5_000)
+                try:
+                    target.click(timeout=3_000)
+                except Exception:
+                    try:
+                        target.click(force=True, timeout=2_000)
+                    except Exception:
+                        target.evaluate("e => e.click()")
             return True
         if answer.action == "choose":
             return self.choose(page, control, answer.value, self._page_controls(page))
@@ -1663,6 +2463,7 @@ class PageAgent:
     def choose(self, page, control: Control, value: str, controls: list[Control] = ()) -> bool:
         tab = self.tab(page)
         loc = self.locate(page, control.ref)
+        self._choice_methods.pop(control.ref, None)
         # Some widgets only open from a button of their own ("Open the drop-down
         # list for Employer State or Province."), and typing into the box alone
         # leaves the form saying the field is empty.
@@ -1685,6 +2486,7 @@ class PageAgent:
                 if index is not None:
                     self.locate(page, offered[index][0]).click(timeout=5_000)
                     tab.wait_for_timeout(500)
+                    self._choice_methods[control.ref] = "opened_list"
                     return True
             except Exception as exc:
                 logger.debug("The list button did not help: %s", str(exc).splitlines()[0][:90])
@@ -1696,31 +2498,189 @@ class PageAgent:
                 return False
             try:
                 loc.select_option(label=control.options[index], timeout=5_000)
+                self._choice_methods[control.ref] = "native_select"
                 return True
             except Exception:
                 pass   # a listbox drawn by script: pick the option instead
         before = {ref for ref, _text in choices_in(self.snapshot(page), under=control.question, any_list=True)}
-        loc.click(timeout=5_000)
+        opened = False
+        try:
+            loc.evaluate("e => e.scrollIntoView({block: 'center'})")
+        except Exception:
+            pass
+
+        # In Ant Design and custom UI widgets, dispatch mousedown on the selector wrapper.
+        # Ant Design's rc-select opens specifically on mousedown, not click.
+        try:
+            loc.evaluate("""e => {
+                const box = e.closest('.ant-select-selector, [class*=select-selector], .ant-select, [role=combobox]') || e.parentElement;
+                for (const type of ['mousedown', 'mouseup', 'click']) {
+                    box.dispatchEvent(new MouseEvent(type, {bubbles: true, cancelable: true}));
+                }
+                e.focus();
+            }""")
+            opened = True
+        except Exception:
+            opened = False
+
+        if not opened:
+            try:
+                wrapper = loc.evaluate_handle(
+                    "el => el.closest('.ant-select-selector, .ant-select, [class*=select-selector], [role=combobox]') || el"
+                )
+                wrapper.as_element().click(timeout=2_000)
+                opened = True
+            except Exception:
+                try:
+                    loc.click(timeout=2_000)
+                    opened = True
+                except Exception:
+                    pass
+
+        def _check_portal(val: str) -> bool:
+            for selector in (
+                ".ant-select-dropdown:not(.ant-select-dropdown-hidden) [class*=ant-select-item-option]:visible",
+                ".ant-select-dropdown:not(.ant-select-dropdown-hidden) [role=option]:visible",
+                "[class*=ant-select-item-option]:visible",
+                "[class*=select-item-option]:visible",
+                "[class*=select__option]:visible",
+                "[data-automation-id='promptOption']",
+                "[role=listbox]:visible [role=option]:visible",
+                "[role=listbox]:visible li:visible",
+            ):
+                try:
+                    portal_opts = tab.locator(selector)
+                    count = portal_opts.count()
+                    if count > 0:
+                        labels = []
+                        for i in range(min(count, 80)):
+                            try:
+                                labels.append(" ".join((portal_opts.nth(i).inner_text(timeout=300) or "").split()))
+                            except Exception:
+                                labels.append("")
+                        if any(labels):
+                            pick = self.assistant._best_option(labels, [val])
+                            if pick is None:
+                                pick = closest_choice(labels, val)
+                            if pick is not None:
+                                try:
+                                    portal_opts.nth(pick).click(timeout=3_000)
+                                except Exception:
+                                    try:
+                                        portal_opts.nth(pick).click(force=True, timeout=2_000)
+                                    except Exception:
+                                        portal_opts.nth(pick).evaluate("e => e.click()")
+                                tab.wait_for_timeout(500)
+                                self._choice_methods[control.ref] = "portal_option"
+                                return True
+                except Exception:
+                    pass
+            return False
+
+        if _check_portal(value):
+            return True
+
+        # Try ArrowDown to trigger dropdown open if portal is not yet shown
+        try:
+            loc.press("ArrowDown")
+            tab.wait_for_timeout(400)
+            if _check_portal(value):
+                return True
+        except Exception:
+            pass
+
         # A long list takes a moment to appear: read at 0.7s, it was empty, and
         # School, Discipline and Veteran Status were all left blank.
-        offered = [(ref, text) for ref, text in self._wait_for_choices(page, under=control.question,
+        offered = [(ref, text) for ref, text in self._wait_for_choices(page, seconds=4.0, under=control.question,
                                                                        any_list=True) if ref not in before]
         index = self._pick(offered, value)
         if index is None:
+            self._dump_open_menu(page, control)
+            if _check_portal(value):
+                return True
+
+            # Workday renders its options as [data-automation-id='promptOption']
+            # elements that often carry no ARIA 'option' role, so neither the
+            # snapshot scan nor get_by_role finds them.
+            try:
+                prompts = tab.locator("[data-automation-id='promptOption']")
+                labels = []
+                for i in range(min(prompts.count(), 60)):
+                    try:
+                        labels.append(" ".join((prompts.nth(i).inner_text(timeout=500) or "").split()))
+                    except Exception:
+                        labels.append("")
+                pick = self.assistant._best_option(labels, [value]) if any(labels) else None
+                if pick is None and any(labels):
+                    pick = closest_choice(labels, value)
+                if pick is not None:
+                    prompts.nth(pick).click(timeout=5_000)
+                    tab.wait_for_timeout(500)
+                    self._choice_methods[control.ref] = "prompt_option"
+                    return True
+            except Exception:
+                pass
+            # Workday can render its opened menu outside the question's
+            # accessibility subtree, so the snapshot scan sees no options.
+            # Pick a matching visible menu item directly from the page.
+            try:
+                wanted = " ".join(value.split()).casefold()
+                for role in ("option", "menuitem", "menuitemradio"):
+                    for candidate in tab.get_by_role(role).all():
+                        label = " ".join((candidate.inner_text(timeout=500) or "").split()).casefold()
+                        if label == wanted:
+                            candidate.click(timeout=5_000)
+                            tab.wait_for_timeout(500)
+                            self._choice_methods[control.ref] = "visible_menu"
+                            return True
+            except Exception:
+                pass
             # A type-ahead list shows its choices once something is typed, and a
             # long list needs narrowing down.
-            for typed in self._search_terms(value):
+            search_terms = self._search_terms(value)
+            if re.search(r"address line 1|street address|mailing address", control.question, re.IGNORECASE):
+                city = str(getattr(self.profile, "city", "") or "").strip()
+                state = str(getattr(self.profile, "state", "") or "").strip()
+                postal = str(getattr(self.profile, "postal_code", "") or "").strip()
+                full_address = ", ".join(part for part in (value, city, state) if part)
+                if postal:
+                    full_address = f"{full_address} {postal}".strip()
+                if full_address and full_address not in search_terms:
+                    search_terms.insert(0, full_address)
+            # For state/province fields, prepend the two-letter abbreviation
+            # (e.g. "VA" for "Virginia") so type-ahead dropdowns that only show
+            # abbreviated options (like Dayforce) match on the first try.
+            abbrev = ""
+            if re.search(r"\b(state|province)\b", control.question, re.IGNORECASE) and \
+                    not re.search(r"education|school|employer|company", control.question, re.IGNORECASE):
+                abbrev = _STATE_CODES.get(value.strip().casefold(), "")
+                if abbrev and abbrev.upper() not in search_terms:
+                    search_terms.insert(0, abbrev.upper())
+            for typed in search_terms[:4]:
                 try:
                     # Typed, not set: a list that searches as you type only
                     # answers to real keystrokes.
                     typing = self.locate(page, control.ref)
-                    typing.click(timeout=4_000)
+                    try:
+                        typing.evaluate("e => { e.scrollIntoView({block: 'center'}); e.focus(); }")
+                    except Exception:
+                        pass
+                    try:
+                        typing.click(timeout=1_500)
+                    except Exception:
+                        pass
                     if control.role in ("combobox", "searchbox", "textbox"):
-                        typing.fill("", timeout=3_000)
+                        try:
+                            typing.fill("", timeout=1_500)
+                        except Exception:
+                            pass
                     tab.keyboard.type(typed, delay=40)
+                    tab.wait_for_timeout(400)
                 except Exception:
                     break
-                offered = [c for c in self._wait_for_choices(page, under=control.question, any_list=True)
+                if _check_portal(value) or (abbrev and _check_portal(abbrev)):
+                    return True
+                offered = [c for c in self._wait_for_choices(page, seconds=2.0, under=control.question, any_list=True)
                            if c[0] not in before]
                 index = self._pick(offered, value)
                 if index is not None:
@@ -1737,11 +2697,55 @@ class PageAgent:
                 logger.info("CHOICE: %r is not offered for %r -- taking 'Other'", value[:40], control.question[:40])
                 index = other
         if index is None:
+            if re.search(r"\b(state|province)\b", control.question, re.IGNORECASE):
+                candidates = [value]
+                if value.casefold() == "virginia":
+                    candidates.append("VA")
+                for typed in candidates:
+                    try:
+                        loc.evaluate("e => { e.scrollIntoView({block: 'center'}); e.focus(); }")
+                        try:
+                            loc.click(timeout=1_500)
+                        except Exception:
+                            pass
+                        loc.press("Control+A")
+                        loc.press_sequentially(typed, delay=50)
+                        tab.wait_for_timeout(400)
+                        if _check_portal(typed) or _check_portal(value):
+                            return True
+                        tab.keyboard.press("ArrowDown")
+                        tab.keyboard.press("Enter")
+                        tab.wait_for_timeout(500)
+                        current = next((c for c in parse_snapshot(self.snapshot(page))
+                                        if c.ref == control.ref or _same_question(c.question, control.question)), None)
+                        if current is not None and (_same_answer(current.answer, value) or
+                                                    _same_answer(current.answer, typed)):
+                            logger.info("Committed state/province %r for %r", typed, control.question[:50])
+                            self._choice_methods[control.ref] = "type_and_commit"
+                            return True
+                    except Exception:
+                        continue
+            if re.search(r"address line 1|street address|mailing address", control.question, re.IGNORECASE):
+                try:
+                    loc.click(timeout=4_000)
+                    loc.press("Control+A")
+                    loc.press_sequentially(value, delay=45)
+                    loc.press("Tab")
+                    tab.wait_for_timeout(700)
+                    current = next((c for c in parse_snapshot(self.snapshot(page))
+                                    if _same_question(c.question, control.question)), None)
+                    if current is not None and _same_answer(current.answer, value):
+                        logger.info("Accepted typed address %r without an exact autocomplete match", value[:60])
+                        self._choice_methods[control.ref] = "typed_value"
+                        return True
+                except Exception:
+                    pass
             # Some widgets never put their list where the page's structure can
             # be read (R+L's "Employer State or Province"). A person types and
             # presses Down then Enter; so does the agent, and then checks the
             # form has stopped calling the field empty.
             if self.type_and_commit(page, control, value):
+                self._choice_methods[control.ref] = "type_and_commit"
                 return True
             tab.keyboard.press("Escape")
             logger.info("No choice matching %r for %r among %s", value, control.question[:50],
@@ -1749,7 +2753,43 @@ class PageAgent:
             return False
         self.locate(page, offered[index][0]).click(timeout=5_000)
         tab.wait_for_timeout(500)
+        self._choice_methods[control.ref] = "list_option"
         return True
+
+    def _dump_open_menu(self, page, control) -> None:
+        """Diagnostic: capture the visible custom-widget DOM of an opened
+        dropdown whose options could not be read, so its structure can be
+        inspected and driven. Runs at most once per run."""
+        if getattr(self, "_menu_dumped", False):
+            return
+        self._menu_dumped = True
+        tab = self.tab(page)
+        try:
+            info = tab.evaluate(r"""() => {
+                const vis = e => !!(e.offsetParent || e.getClientRects().length);
+                const short = s => (s || '').replace(/\s+/g, ' ').trim().slice(0, 90);
+                const out = [];
+                const seen = new Set();
+                for (const e of document.querySelectorAll('[data-automation-id], [role], li, [class*=popup i], [class*=menu i], [class*=option i]')) {
+                    if (!vis(e)) continue;
+                    const role = e.getAttribute('role') || '';
+                    const aid = e.getAttribute('data-automation-id') || '';
+                    const cls = (e.className && e.className.toString) ? e.className.toString().slice(0, 60) : '';
+                    if (!aid && !['option','listbox','menu','menuitem','listitem','combobox','button'].includes(role)
+                        && !/popup|menu|option|dropdown/i.test(cls)) continue;
+                    const key = e.tagName + '|' + role + '|' + aid + '|' + short(e.textContent);
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    out.push(`${e.tagName.toLowerCase()} role='${role}' aid='${aid}' cls='${cls}' :: ${short(e.textContent)}`);
+                }
+                return out.slice(0, 150).join('\n');
+            }""")
+            folder = self.job_dir if self.job_dir else Path("output")
+            path = Path(folder) / f"dropdown_dump_{control.ref}.txt"
+            path.write_text(f"question={control.question!r}\nurl={tab.url}\n\n{info}\n", encoding="utf-8")
+            logger.info("DROPDOWN_DUMP written to %s", path)
+        except Exception as exc:
+            logger.info("DROPDOWN_DUMP failed: %s", str(exc).splitlines()[0][:120])
 
     def put_in_a_spinbutton(self, page, loc, value: str) -> bool:
         """Get a value into a box that keeps its own count, and check it took."""
@@ -1834,6 +2874,17 @@ class PageAgent:
         names = [text for _ref, text in offered]
         if not names:
             return None
+        # Dialing code matching (e.g. "+1"):
+        # When value is a dialing code, multiple countries might offer "+1" (e.g. Antigua, Bahamas, US).
+        # Prioritize matching the candidate's profile country (e.g. United States).
+        if re.fullmatch(r"\+?\d{1,4}", value.strip()):
+            code = value.strip() if value.strip().startswith("+") else f"+{value.strip()}"
+            country = (getattr(self.profile, "country", "") or "United States").lower()
+            for i, name in enumerate(names):
+                lower_name = name.lower()
+                if (code in name or value.strip() in name) and (country in lower_name or "united states" in lower_name or "usa" in lower_name):
+                    logger.info("Matched dial code %r to profile country choice: %r", value, name)
+                    return i
         index = self.assistant._best_option(names, [value])
         if index is None:
             index = closest_choice(names, value)
@@ -1896,17 +2947,119 @@ class PageAgent:
             self._letter = self.cover_letter()
         return self._letter[1] if self._letter else None
 
-    def _remember(self, control: Control, answer: Answer) -> None:
-        if self.tracker is None or not hasattr(self.tracker, "record_answer") or not self.key:
-            return
-        if answer.action not in ("fill", "choose", "check") or answer.source.startswith("profile."):
+    def _learning_host(self) -> str:
+        return (self._current_host or urlparse(getattr(self.job, "url", "")).netloc).lower()
+
+    def _recipe_identity(self, control: Control, answer: Answer) -> Optional[tuple[str, str, str, str, str]]:
+        question = control.question or answer.question
+        if answer.action != "choose" or control.role not in ("textbox", "searchbox", "combobox", "listbox", "spinbutton") \
+                or not _learnable_recipe_question(question):
+            return None
+        host = self._learning_host()
+        if not host:
+            return None
+        return (
+            host,
+            _recipe_question_key(question),
+            control.role,
+            _recipe_options_signature(control.options),
+            answer.action,
+        )
+
+    def _recalled_form_recipe(self, control: Control, answer: Answer) -> Optional[dict]:
+        identity = self._recipe_identity(control, answer)
+        if identity is None or self.tracker is None or not hasattr(self.tracker, "recall_form_recipe"):
+            return None
+        try:
+            return self.tracker.recall_form_recipe(*identity)
+        except Exception as exc:
+            logger.debug("Could not recall a form recipe: %s", str(exc).splitlines()[0][:100])
+            return None
+
+    def _mark_recipe_failed(self, identity: tuple[str, str, str, str, str]) -> None:
+        if self.tracker is None or not hasattr(self.tracker, "mark_form_recipe_failed"):
             return
         try:
-            self.tracker.record_answer(self.key, urlparse(getattr(self.job, "url", "")).netloc,
-                                       control.question, answer.value, options=control.options or None,
-                                       answered_by="claude")
+            self.tracker.mark_form_recipe_failed(*identity)
         except Exception as exc:
-            logger.debug("Could not record the answer: %s", exc)
+            logger.debug("Could not mark a form recipe failed: %s", str(exc).splitlines()[0][:100])
+
+    @staticmethod
+    def _answer_verification_state(answer: Answer, before: Control, after: list[Control]) -> Optional[bool]:
+        """True only when the snapshot visibly confirms an answer persisted."""
+        if answer.action in ("upload_resume", "upload_cover_letter"):
+            return None
+        by_ref = {control.ref: control for control in after}
+        by_question: dict[str, list[Control]] = {}
+        for control in after:
+            by_question.setdefault(control.question, []).append(control)
+        now = by_ref.get(before.ref) or next(iter(by_question.get(before.question, [])), None)
+        if now is None:
+            return None
+        if answer.action == "choose" and before.role in ("radio", "checkbox", "switch"):
+            group = [control for control in after
+                     if control.role == before.role and before.group and control.group == before.group]
+            return any(control.checked and _same_answer(control.name, answer.value) for control in group) or \
+                (not group and now.checked)
+        if answer.action in ("check", "uncheck"):
+            if now.role == "radio" and now.group:
+                checked = any(control.checked for control in by_question.get(now.group, []) if control.ref == before.ref) \
+                    or now.checked
+            else:
+                checked = now.checked
+            return checked if answer.action == "check" else not checked
+        shown = now.answer.strip().lower()
+        wanted = answer.value.strip().lower()
+        digits = re.sub(r"\D", "", wanted)
+        return bool(shown) and (wanted in shown or shown in wanted or _same_answer(shown, wanted)
+                                or (len(digits) >= 7 and digits[-10:] in re.sub(r"\D", "", shown)))
+
+    def _commit_learned_memory(self, after: list[Control]) -> None:
+        """Makes a recipe durable only after a later snapshot proves it worked."""
+        pending, self._pending_memories = self._pending_memories, []
+        for item in pending:
+            answer, control = item["answer"], item["control"]
+            verified = self._answer_verification_state(answer, control, after)
+            identity = item.get("recipe")
+            if verified is not True:
+                if verified is False and item.get("reused_recipe") and identity is not None:
+                    self._mark_recipe_failed(identity)
+                continue
+            if identity is not None and self.tracker is not None and hasattr(self.tracker, "record_form_recipe"):
+                try:
+                    self.tracker.record_form_recipe(*identity, item["method"])
+                except Exception as exc:
+                    logger.debug("Could not save a verified form recipe: %s", str(exc).splitlines()[0][:100])
+            if item.get("record_answer") and self.tracker is not None and hasattr(self.tracker, "record_answer"):
+                try:
+                    self.tracker.record_answer(
+                        self.key, self._learning_host(), control.question, answer.value,
+                        options=control.options or None, answered_by="verified_agent",
+                    )
+                except Exception as exc:
+                    logger.debug("Could not record the verified answer: %s", str(exc).splitlines()[0][:100])
+
+    def _remember(self, control: Control, answer: Answer) -> None:
+        question = control.question or answer.question
+        if not _learnable_recipe_question(question):
+            return
+        recipe = self._recipe_identity(control, answer)
+        record_answer = bool(
+            self.tracker is not None and hasattr(self.tracker, "record_answer") and self.key
+            and answer.action in ("fill", "choose", "check")
+            and not answer.source.startswith("profile.")
+            and answer.source != "owner_earlier_answer"
+        )
+        if recipe is None and not record_answer:
+            return
+        self._pending_memories.append({
+            "answer": answer,
+            "control": control,
+            "method": self._choice_methods.pop(control.ref, "default"),
+            "recipe": recipe,
+            "reused_recipe": self._reused_recipes.pop(control.ref, None) is not None,
+            "record_answer": record_answer,
+        })
 
     # -- what stops the run -----------------------------------------------------------
     def blockers(self, page, plan: PagePlan, controls: list[Control], about_to_send: bool = True) -> list[str]:
@@ -2148,7 +3301,8 @@ class PageAgent:
         """
         deadline = time.time() + wait_seconds
         snapshot = self.snapshot(page)
-        while (frames_loading(snapshot) or still_loading(snapshot)) and time.time() < deadline:
+        while (frames_loading(snapshot) or still_loading(snapshot) or workday_form_loading(snapshot)) \
+            and time.time() < deadline:
             self.tab(page).wait_for_timeout(1_000)
             snapshot = self.snapshot(page)
         return snapshot

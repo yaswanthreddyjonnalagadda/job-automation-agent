@@ -37,19 +37,38 @@ def already_submitted(job: dict) -> bool:
     The same job arrives with different tracking parameters and sometimes a
     differently-worded title, so the tracker is asked by URL and by
     company+title. Sending an employer a second copy is one of the things the
-    assistant must never do."""
+    assistant must never do.
+
+    When the Postgres tracker is unreachable (e.g. Docker is not running) this
+    falls back to the SQLite tracker so the run is never blocked by a DB outage."""
+    from db import get_tracker, is_transient_connection_error
     try:
-        from db import get_tracker
         tracker = get_tracker()
-    except Exception as exc:  # no database: fall through rather than block a run
-        logger.warning("Could not check for duplicates (%s)", str(exc).splitlines()[0][:100])
-        return False
-    found = tracker.find_submitted(url=job.get("url", ""), company=job.get("company", ""),
-                                   title=job.get("title", ""))
-    if found:
-        logger.error("DUPLICATE: %s at %s was already submitted (%s) -- not applying again",
-                     found.title, found.company, found.updated_at)
-    return bool(found)
+        found = tracker.find_submitted(url=job.get("url", ""), company=job.get("company", ""),
+                                       title=job.get("title", ""))
+        if found:
+            logger.error("DUPLICATE: %s at %s was already submitted (%s) -- not applying again",
+                         found.title, found.company, found.updated_at)
+        return bool(found)
+    except Exception as exc:
+        if is_transient_connection_error(exc):
+            # Postgres is down (Docker not started etc.) -- fall back to SQLite.
+            logger.warning(
+                "Postgres unavailable (%s); falling back to SQLite for duplicate check",
+                str(exc).splitlines()[0][:120],
+            )
+            from job_tracker import JobTracker
+            from jd_analyzer import dedup_key_for_url
+            from config import DATA_DIR
+            sqlite_tracker = JobTracker(DATA_DIR / "applications.db")
+            key = dedup_key_for_url(job.get("url", ""))
+            record = sqlite_tracker.get(key)
+            if record and record.status == "submitted":
+                logger.error("DUPLICATE (SQLite): %s at %s was already submitted (%s) -- not applying again",
+                             job.get("title"), job.get("company"), record.updated_at)
+                return True
+            return False
+        raise RuntimeError(f"Could not check for duplicate applications: {exc}") from exc
 
 
 def skipped_for_sponsorship(job: dict) -> bool:
@@ -76,7 +95,7 @@ def skipped_for_sponsorship(job: dict) -> bool:
                        url=job.get("url", ""))
         tracker.update_status(key, "skipped", notes=f"Skipped: no visa sponsorship -- {said}")
     except Exception as exc:
-        logger.warning("Could not record the skip (%s)", str(exc).splitlines()[0][:100])
+        raise RuntimeError(f"Could not record the skipped application: {exc}") from exc
     return True
 
 
@@ -149,9 +168,14 @@ def main() -> int:
         open_url = urls[at + 1] if at + 1 < len(urls) else ""
         urls = urls[:at] + urls[at + 2:]
 
+    auto = False
+    if "--auto" in urls:
+        auto = True
+        urls = [u for u in urls if u != "--auto"]
+
     failures = 0
     for url in urls:
-        if run_one(unquote(url) if "%" not in url else url, open_url=open_url) != 0:
+        if run_one(unquote(url) if "%" not in url else url, auto=auto or True, open_url=open_url) != 0:
             failures += 1
     return 1 if failures else 0
 

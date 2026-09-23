@@ -56,7 +56,7 @@ def _degree_candidates(degree: str) -> list[str]:
     return [degree]
 
 
-def _split_month_year(date_str: str) -> tuple[str, str]:
+def _split_month_year(date_str: str | None) -> tuple[str, str]:
     """'02/2025' -> ('2', '2025'). Empty/malformed input -> ('', '').
 
     The month is deliberately NOT zero-padded: a two-character month makes
@@ -67,7 +67,7 @@ def _split_month_year(date_str: str) -> tuple[str, str]:
         return "", ""
     month, _, year = date_str.partition("/")
     month = month.strip()
-    return (str(int(month)) if month.isdigit() else ""), year.strip()
+    return (str(int(month)) if month.isdigit() else ""), (year or "").strip()
 
 # Maps our known profile fields to likely form field identifiers (name/id/
 # placeholder/label substrings, lowercased). Extend as you encounter new ATS
@@ -123,8 +123,44 @@ _FIELD_HINT_PATTERNS: dict[str, list[re.Pattern]] = {
 class WorkdayAdapter(SiteAdapter):
     name = "workday"
     hosts = ("myworkdayjobs.com", "myworkday.com", "wd1.myworkdayjobs", "wd103.myworkdayjobs")
-    confirmation_phrases = ("your application has been submitted", "application submitted")
+    confirmation_phrases = ("your application has been submitted", "application submitted", "already applied")
     portal_list_patterns = ("/candidate_home", "/applications")
+
+    _REGISTRATION_ERROR = re.compile(
+        r"passwords? (?:do not|don't) match|please check (?:the )?box|field is required|"
+        r"(?:email|password).{0,30}(?:invalid|required)",
+        re.IGNORECASE,
+    )
+    _VERIFICATION_CODE = re.compile(
+        r"(?:verification|security|one[- ]time|access)\s*code|enter\s+(?:the\s+)?code",
+        re.IGNORECASE,
+    )
+
+    def candidate_account_state(self, page) -> str:
+        """Classifies Workday Candidate Home screens from visible structure."""
+        try:
+            body = page.locator("body").inner_text(timeout=3_000) or ""
+            password_count = page.locator("input[type=password]:visible").count()
+        except Exception:
+            return ""
+        if self._VERIFICATION_CODE.search(body):
+            return "verification"
+        registration = bool(re.search(r"\bcreate account\b", body, re.IGNORECASE)) and (
+            password_count >= 2 or bool(re.search(r"\bverify new password\b", body, re.IGNORECASE))
+        )
+        if registration:
+            return "registration_error" if self._REGISTRATION_ERROR.search(body) else "registration"
+        sign_in = password_count == 1 and (
+            bool(re.search(r"\bsign in\b", body, re.IGNORECASE))
+            or page.locator("form[data-automation-id^='signInForm']:visible").count() > 0
+        )
+        if sign_in:
+            return "sign_in"
+        if page.locator("[data-automation-id='progressBarActiveStep']:visible").count() > 0:
+            return "application"
+        if re.search(r"\b(?:candidate home|my applications)\b", body, re.IGNORECASE):
+            return "candidate_home"
+        return ""
 
     def attachment_is_empty(self, page, kind: str):
         """Workday lists an attached file with a delete button beside it."""
@@ -186,16 +222,29 @@ class WorkdayAdapter(SiteAdapter):
 
     def fill_education_section(self, assistant, page: Page, education: list[dict]) -> None:
         self.delete_all_entries(assistant, page, "Education", "Certifications")
+        # Some Workday tenants collect only school, degree and field of study.
+        # Avoid a 30-second locator wait per row when this optional date control
+        # is not rendered at all (as on Verizon's form).
+        has_completion_year = page.locator(
+            "input[data-automation-id='dateSectionYear-input'][id*='education']"
+        ).count() > 0
         for i, edu in enumerate(education):
             self._ensure_entry_slot(assistant, page, "Education", "input[id$='--schoolName']", i)
             self.fill_by_id_suffix(assistant, page, "--schoolName", i, edu.get("school", ""))
             degree = edu.get("degree", "")
             if degree:
                 self.select_from_button_dropdown(assistant, page, "--degree", i, _degree_candidates(degree))
-            self.fill_by_id_suffix(assistant, page, "--fieldOfStudy", i, edu.get("field", ""))
-            _, end_year = _split_month_year(edu.get("end", ""))
-            # Education's date part is 'lastYearAttended', not 'endDate'.
-            self.fill_date_spinner(assistant, page, "education", "lastYearAttended", i, "", end_year)
+            # Field of Study is a Workday searchable multiselect, not a
+            # text field.  Typing into it can look correct while Workday
+            # still treats it as blank; type only to filter, then commit an
+            # option from the tenant's list.
+            field = edu.get("field", "")
+            if field:
+                self.select_from_searchable_input(assistant, page, "--fieldOfStudy", [field], i)
+            if has_completion_year:
+                _, end_year = _split_month_year(edu.get("end", ""))
+                # Education's date part is 'lastYearAttended', not 'endDate'.
+                self.fill_date_spinner(assistant, page, "education", "lastYearAttended", i, "", end_year)
         logger.info("Filled %d education entries", len(education))
 
         # Dates belong in the correction pass too: a year that verified as
@@ -205,10 +254,13 @@ class WorkdayAdapter(SiteAdapter):
             page.wait_for_timeout(wait_ms)
             for i, edu in enumerate(education):
                 self.fill_by_id_suffix(assistant, page, "--schoolName", i, edu.get("school", ""))
-                self.fill_by_id_suffix(assistant, page, "--fieldOfStudy", i, edu.get("field", ""))
-                _, end_year = _split_month_year(edu.get("end", ""))
-                if end_year and not self._date_year_is(assistant, page, "education", "lastYearAttended", i, end_year):
-                    self.fill_date_spinner(assistant, page, "education", "lastYearAttended", i, "", end_year)
+                field = edu.get("field", "")
+                if field and not self._multiselect_selection(page, "--fieldOfStudy", index=i):
+                    self.select_from_searchable_input(assistant, page, "--fieldOfStudy", [field], i)
+                if has_completion_year:
+                    _, end_year = _split_month_year(edu.get("end", ""))
+                    if end_year and not self._date_year_is(assistant, page, "education", "lastYearAttended", i, end_year):
+                        self.fill_date_spinner(assistant, page, "education", "lastYearAttended", i, "", end_year)
         logger.info("Final correction pass done for education")
 
     def _date_year_is(self, assistant, page: Page, section_key: str, date_key: str, index: int, year: str) -> bool:
@@ -501,13 +553,15 @@ class WorkdayAdapter(SiteAdapter):
         except Exception:
             return False
 
-    def select_from_searchable_input(self, assistant, page: Page, id_suffix: str, candidates: list[str]) -> bool:
+    def select_from_searchable_input(
+        self, assistant, page: Page, id_suffix: str, candidates: list[str], index: int = 0
+    ) -> bool:
         """Picks a value from a type-ahead combobox (an <input> that filters
         a list as you type, e.g. 'How Did You Hear About Us?'). Types the
         candidate, then clicks the matching option -- typing alone doesn't
         register a selection on these widgets."""
         try:
-            field = page.locator(f"input[id$='{id_suffix}']").first
+            field = page.locator(f"input[id$='{id_suffix}']").nth(index)
             if field.count() == 0:
                 logger.warning("Searchable input %r not found", id_suffix)
                 return False
@@ -517,7 +571,7 @@ class WorkdayAdapter(SiteAdapter):
             # Never re-drive a widget that already holds a value: these
             # retries toggle selections, so a second pass over a correctly
             # filled field is how a good answer gets cleared.
-            existing = assistant._multiselect_selection(page, id_suffix, multiselect_id)
+            existing = self._multiselect_selection(page, id_suffix, multiselect_id, index)
             if existing:
                 logger.info("%s already holds %r; leaving it alone", id_suffix, existing)
                 return True
@@ -551,7 +605,7 @@ class WorkdayAdapter(SiteAdapter):
                             continue
 
                     page.wait_for_timeout(800)
-                    if self._searchable_value_committed(assistant, page, id_suffix, cand, multiselect_id):
+                    if self._searchable_value_committed(assistant, page, id_suffix, cand, multiselect_id, index):
                         logger.info("Selected %r in %s (via %s)", cand, id_suffix, strategy)
                         return True
                     logger.info(
@@ -576,7 +630,7 @@ class WorkdayAdapter(SiteAdapter):
                 page.wait_for_timeout(1_200)
                 if self._click_matching_option(assistant, page, field, pick, id_suffix):
                     page.wait_for_timeout(800)
-                    if self._searchable_value_committed(assistant, page, id_suffix, pick, multiselect_id):
+                    if self._searchable_value_committed(assistant, page, id_suffix, pick, multiselect_id, index):
                         logger.info("Selected %r in %s (semantic)", pick, id_suffix)
                         return True
             return False
@@ -656,7 +710,7 @@ class WorkdayAdapter(SiteAdapter):
         return False
 
     @staticmethod
-    def _multiselect_selection(page: Page, id_suffix: str, multiselect_id: str = "") -> str:
+    def _multiselect_selection(page: Page, id_suffix: str, multiselect_id: str = "", index: int = 0) -> str:
         """The value a Workday multiselect currently holds, as the text of
         its selected-item pill ('' when empty).
 
@@ -671,7 +725,7 @@ class WorkdayAdapter(SiteAdapter):
                 if box.count() == 0:
                     box = page.locator(f"[data-uxi-multiselect-id='{multiselect_id}']").first
             else:
-                box = page.locator(f"input[id$='{id_suffix}']").first
+                box = page.locator(f"input[id$='{id_suffix}']").nth(index)
             if box.count() == 0:
                 return ""
             return (
@@ -687,7 +741,7 @@ class WorkdayAdapter(SiteAdapter):
         except Exception:
             return ""
 
-    def _searchable_value_committed(self, assistant, page: Page, id_suffix: str, cand: str, multiselect_id: str = ""
+    def _searchable_value_committed(self, assistant, page: Page, id_suffix: str, cand: str, multiselect_id: str = "", index: int = 0
     ) -> bool:
         """True when the widget actually holds the value. Clicking an option
         can look successful -- no exception, no error -- while committing
@@ -699,7 +753,7 @@ class WorkdayAdapter(SiteAdapter):
         if multiselect_id:
             page.keyboard.press("Escape")
             page.wait_for_timeout(600)
-        selection = assistant._multiselect_selection(page, id_suffix, multiselect_id)
+        selection = self._multiselect_selection(page, id_suffix, multiselect_id, index)
         if not selection:
             # Not every combobox uses a pill; simpler ones leave the chosen
             # text in the input. But raw text is NOT proof of a committed
@@ -715,7 +769,7 @@ class WorkdayAdapter(SiteAdapter):
             # retry typed over it. Matching the value against what was asked
             # for is the reliable signal; the human reviews before submitting.
             try:
-                typed = (page.locator(f"input[id$='{id_suffix}']").first.input_value() or "").strip()
+                typed = (page.locator(f"input[id$='{id_suffix}']").nth(index).input_value() or "").strip()
             except Exception:
                 typed = ""
             term = cand.split(",")[0].strip().lower()

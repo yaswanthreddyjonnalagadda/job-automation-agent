@@ -32,6 +32,7 @@ def client(monkeypatch):
     monkeypatch.setattr(web_ui.threading, "Thread",
                         lambda target, args=(), daemon=None: type("T", (), {"start": lambda s: target(*args)})())
     web_ui._RUNS.clear()
+    web_ui.app.config["TESTING"] = True
     c = web_ui.app.test_client()
     c.started = started
     return c
@@ -126,6 +127,23 @@ def test_reload_agent_says_so_when_nothing_is_waiting(client, tmp_path, monkeypa
     monkeypatch.setattr(web_ui, "BASE_DIR", tmp_path)
     response = client.post("/reload-agent", follow_redirects=True)
     assert "nothing to reload" in response.get_data(as_text=True).lower()
+
+
+def test_settings_save_credentials_without_redisplaying_secrets(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(web_ui, "BASE_DIR", tmp_path)
+    (tmp_path / ".env").write_text("ANTHROPIC_API_KEY=old-key\nATS_PASSWORD=old-pass\n", encoding="utf-8")
+    page = client.get("/settings")
+    csrf = page.get_data(as_text=True).split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+    response = client.post("/settings", data={
+        "csrf_token": csrf, "anthropic_api_key": "", "ats_email": "person@example.com",
+        "ats_password": "new-pass",
+    })
+    assert response.status_code == 302
+    saved = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert "ANTHROPIC_API_KEY=old-key" in saved
+    assert "ATS_EMAIL=person@example.com" in saved
+    assert "ATS_PASSWORD=new-pass" in saved
+    assert "old-pass" not in page.get_data(as_text=True)
 
 
 def test_a_live_run_survives_the_dashboard_restarting(tmp_path, monkeypatch):

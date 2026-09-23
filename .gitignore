@@ -11,6 +11,11 @@ data/*.db
 data/_*.json
 data/_*.txt
 
+# Explicit answers for employer-specific questions. This is personal data and
+# may include legal, demographic, salary, and availability answers.
+data/profile_answers.json
+data/profile.json
+
 __pycache__/
 *.py[cod]
 venv/

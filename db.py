@@ -22,7 +22,8 @@ Connection settings come from POSTGRES_* in .env. Start the server with
 from __future__ import annotations
 
 import hashlib
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+import re
+from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 import json
 import logging
 from contextlib import contextmanager
@@ -36,6 +37,15 @@ from psycopg.types.json import Json
 from psycopg.rows import dict_row
 
 logger = logging.getLogger(__name__)
+
+
+def is_transient_connection_error(exc: BaseException) -> bool:
+    """Whether SQLite fallback is safe for this PostgreSQL failure."""
+    if not isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError)):
+        return False
+    message = str(exc).lower()
+    return not re.search(r"authentication|password|role .* does not exist|database .* does not exist|"
+                         r"schema|relation .* does not exist|permission denied|syntax error", message)
 
 # Application lifecycle states (kept identical to the SQLite tracker so the
 # rest of the codebase doesn't care which backend is in use).
@@ -102,6 +112,22 @@ CREATE INDEX IF NOT EXISTS idx_form_answers_question_fts
     ON form_answers USING GIN (to_tsvector('english', question));
 CREATE INDEX IF NOT EXISTS idx_form_answers_options ON form_answers USING GIN (options);
 CREATE INDEX IF NOT EXISTS idx_form_answers_host ON form_answers(host);
+
+CREATE TABLE IF NOT EXISTS learned_form_recipes (
+    host              TEXT NOT NULL,
+    question_key      TEXT NOT NULL,
+    role              TEXT NOT NULL,
+    options_signature TEXT NOT NULL,
+    action            TEXT NOT NULL,
+    method            TEXT NOT NULL,
+    successful_uses   INTEGER NOT NULL DEFAULT 1,
+    failed_uses       INTEGER NOT NULL DEFAULT 0,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (host, question_key, role, options_signature, action)
+);
+CREATE INDEX IF NOT EXISTS idx_learned_form_recipes_host
+    ON learned_form_recipes(host, updated_at DESC);
 """
 
 
@@ -509,6 +535,8 @@ class PostgresTracker:
             app = conn.execute(
                 "SELECT id FROM applications WHERE dedup_key = %s", (dedup_key,)
             ).fetchone()
+            if not app:
+                raise KeyError(f"Unknown application dedup_key: {dedup_key}")
             conn.execute(
                 """
                 INSERT INTO form_answers
@@ -520,7 +548,7 @@ class PostgresTracker:
                         answered_by = EXCLUDED.answered_by
                 """,
                 (
-                    app["id"] if app else None, host, question, answer,
+                    app["id"], host, question, answer,
                     json.dumps(options) if options is not None else None,
                     answered_by,
                 ),
@@ -560,6 +588,76 @@ class PostgresTracker:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    # ------------------------------------------------------------------
+    # Read-back-verified form interaction recipes
+    # ------------------------------------------------------------------
+    def record_form_recipe(
+        self,
+        host: str,
+        question_key: str,
+        role: str,
+        options_signature: str,
+        action: str,
+        method: str,
+    ) -> None:
+        """Records a proven control interaction without storing its answer."""
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO learned_form_recipes
+                    (host, question_key, role, options_signature, action, method)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (host, question_key, role, options_signature, action) DO UPDATE
+                    SET method = EXCLUDED.method,
+                        successful_uses = learned_form_recipes.successful_uses + 1,
+                        updated_at = now()
+                """,
+                (host, question_key, role, options_signature, action, method),
+            )
+
+    def recall_form_recipe(
+        self,
+        host: str,
+        question_key: str,
+        role: str,
+        options_signature: str,
+        action: str,
+    ) -> Optional[dict[str, Any]]:
+        """Returns only a recipe with more verified successes than failures."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT host, question_key, role, options_signature, action, method,
+                       successful_uses, failed_uses, updated_at
+                FROM learned_form_recipes
+                WHERE host = %s AND question_key = %s AND role = %s
+                  AND options_signature = %s AND action = %s
+                  AND successful_uses > failed_uses
+                """,
+                (host, question_key, role, options_signature, action),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def mark_form_recipe_failed(
+        self,
+        host: str,
+        question_key: str,
+        role: str,
+        options_signature: str,
+        action: str,
+    ) -> None:
+        """Disables an obsolete recipe after it no longer produces the value."""
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE learned_form_recipes
+                SET failed_uses = failed_uses + 1, updated_at = now()
+                WHERE host = %s AND question_key = %s AND role = %s
+                  AND options_signature = %s AND action = %s
+                """,
+                (host, question_key, role, options_signature, action),
+            )
+
 
 def dsn_from_env() -> str:
     """Builds the connection string from POSTGRES_* in .env."""
@@ -578,7 +676,9 @@ def dsn_from_env() -> str:
             "POSTGRES_PASSWORD is not set in .env -- run the setup or start the "
             "container with `docker compose up -d`."
         )
-    return f"postgresql://{user}:{password}@{host}:{port}/{name}"
+    return "postgresql://{}:{}@{}:{}/{}?connect_timeout=2".format(
+        quote(user, safe=""), quote(password, safe=""), host, port, quote(name, safe="")
+    )
 
 
 def get_tracker() -> PostgresTracker:

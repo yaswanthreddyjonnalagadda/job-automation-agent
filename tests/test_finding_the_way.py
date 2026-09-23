@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 import safety
+import page_agent
 from browser_automation import JobApplicationAssistant
 
 
@@ -201,6 +202,11 @@ def test_never_clicked_on_claudes_say_so(page, agent, label):
 def test_ordinary_steps_are_allowed(page, agent, label):
     page.set_content(FORM)
     assert agent.safe_to_click_for_claude(page, label)
+
+
+def test_profile_forward_accepts_workday_manual_application(page, agent):
+    page.set_content(FORM)
+    assert page_agent.FORWARD_LABEL.match("Apply Manually")
 
 
 def test_apply_is_allowed_only_from_a_posting(page, agent):

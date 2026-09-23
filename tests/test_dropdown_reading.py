@@ -814,6 +814,22 @@ def test_a_pop_up_asking_to_certify_is_still_left_alone(page, agent):
     assert page.title() != "agreed"
 
 
+def test_consent_dialog_with_checkbox_and_save_button_is_accepted_and_saved(page, agent):
+    page.set_content('''
+    <html><body>
+      <div role="dialog" aria-modal="true">
+        <h2>Recruiting Communications</h2>
+        <p>Important Notice Regarding Recruitment Communications. Privacy Statement.</p>
+        <label><input type="checkbox" id="chk"> I agree to the Privacy Statement</label>
+        <button onclick="document.title='saved'; this.closest('div[role=dialog]').remove()">Save</button>
+      </div>
+    </body></html>
+    ''')
+    assert agent.accept_consent_dialog(page)
+    assert page.title() == "saved"
+    assert page.locator("div[role=dialog]").count() == 0
+
+
 def test_a_next_drawn_as_a_plain_box_is_found(page, agent):
     """Casey's older ADP pages draw Next into a <div class="appGo"> after the
     page loads. A search for buttons and links found nothing, so the run took
