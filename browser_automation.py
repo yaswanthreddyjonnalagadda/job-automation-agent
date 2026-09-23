@@ -1332,7 +1332,7 @@ class JobApplicationAssistant:
             # Only ever matches a disability list: the candidates are disability answers.
             (r"please select one of the options below", [g("disability_status"), "No, I do not have a disability"]),
             (r"disabilit", [g("disability_status"), "No, I do not have a disability"]),
-            (r"\brace\b|ethnicit", [g("ethnicity")]),
+            (r"(?<!regardless of )\brace\b|ethnicit", [g("ethnicity")]),
             (r"^\s*(gender|sex)\b", [g("gender")]),
         ]
         return [(re.compile(p, re.IGNORECASE), cands if callable(cands) else [c for c in cands if c])

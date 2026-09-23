@@ -92,9 +92,16 @@ def test_concept_matching_eeo_and_disclosures():
     assert match_concept("Are you willing to take a drug test?") == "DRUG_TEST"
     assert match_concept("Are you bound by any non-compete agreement?") == "NON_COMPETE"
     assert match_concept("How did you hear about this opportunity?") == "HOW_DID_YOU_HEAR"
+    assert match_concept("Are you Hispanic or Latino (A person of Cuban, Mexican, Chicano, Puerto Rican, South or Central American, or other Spanish culture or origin, regardless of race)?*") == "HISPANIC_OR_LATINO"
+    assert match_concept("Are you Hispanic or Latino?") == "HISPANIC_OR_LATINO"
+    assert match_concept("Race / Ethnicity") == "ETHNICITY_RACE"
 
 
 def test_negative_guards():
+    # Hispanic/Latino questions containing "regardless of race" should NOT match ETHNICITY_RACE
+    eeo_hispanic = "Are you Hispanic or Latino (A person of Cuban, Mexican, Chicano, Puerto Rican, South or Central American, or other Spanish culture or origin, regardless of race)?*"
+    assert match_concept(eeo_hispanic) != "ETHNICITY_RACE"
+
     # Supervisor should NOT match candidate name or candidate job title
     assert match_concept("Supervisor Name") != "FIRST_NAME"
     assert match_concept("Supervisor Name") != "LAST_NAME"
@@ -167,4 +174,10 @@ def test_resolve_profile_value():
     # With state option matching
     val, _ = resolve_profile_value("STATE_PROVINCE", profile, options=["Select One", "VA", "MD", "DC"])
     assert val == "VA"
+
+    # With Hispanic or Latino option matching
+    profile.hispanic_or_latino = "No"
+    val, src = resolve_profile_value("HISPANIC_OR_LATINO", profile, options=["Hispanic or Latino", "Not Hispanic or Latino", "Decline"])
+    assert val == "Not Hispanic or Latino"
+    assert src == "profile.hispanic_or_latino"
 

@@ -222,10 +222,16 @@ CONCEPTS: dict[str, dict[str, Any]] = {
             r"^\W*sex\W*$",
         ],
     },
+    "HISPANIC_OR_LATINO": {
+        "patterns": [
+            r"\b(?:hispanic\s*or\s*latino|hispanic/latino|hispanic|latino|spanish\s*origin)\b",
+        ],
+    },
     "ETHNICITY_RACE": {
         "patterns": [
-            r"\b(?:ethnic(?:ity)?|race|racial\s*origin|ethnic\s*background|hispanic\s*or\s*latino)\b",
+            r"\b(?:ethnic(?:ity)?|race|racial\s*origin|ethnic\s*background)\b",
         ],
+        "negative": r"hispanic|latino",
     },
     "LEGAL_AGE_18": {
         "patterns": [
@@ -590,6 +596,22 @@ def resolve_profile_value(
     elif concept == "GENDER":
         val = str(getattr(profile, "gender", "") or "").strip()
         src = "profile.gender"
+    elif concept == "HISPANIC_OR_LATINO":
+        val = str(getattr(profile, "hispanic_or_latino", "") or "No").strip()
+        src = "profile.hispanic_or_latino"
+        if options:
+            matched_opt = best_option_match(val, options)
+            if matched_opt:
+                return matched_opt, src
+            val_lower = val.lower()
+            if val_lower in ("no", "not hispanic or latino", "not hispanic/latino", "not hispanic"):
+                for opt in options:
+                    if re.search(r"\bnot\s+hispanic\b|\bno\b", opt, re.IGNORECASE) and not re.search(r"\byes\b", opt, re.IGNORECASE):
+                        return opt, src
+            elif val_lower in ("yes", "hispanic or latino", "hispanic/latino", "hispanic"):
+                for opt in options:
+                    if re.search(r"\byes\b|^hispanic\b", opt, re.IGNORECASE) and not re.search(r"\bnot\b", opt, re.IGNORECASE):
+                        return opt, src
     elif concept == "ETHNICITY_RACE":
         val = str(getattr(profile, "ethnicity", "") or "").strip()
         src = "profile.ethnicity"
