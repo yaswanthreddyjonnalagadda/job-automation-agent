@@ -252,30 +252,38 @@ class AgentValues:
         """Who put the current value there (provenance.EMPTY/AGENT/OWNER/SITE/UNKNOWN)."""
         import provenance
 
-        if not (current_value or "").strip():
-            return provenance.EMPTY
-        if self.is_ours(page, ref, current_value):
-            return provenance.AGENT
-        seen = provenance.owner_edited(page, ref)
-        if seen is True:
-            return provenance.OWNER
-        if seen is False:
-            return provenance.SITE
-        return provenance.UNKNOWN
+        return provenance.origin(page, ref, value=current_value,
+                                 agent_wrote=self.is_ours(page, ref, current_value))
 
     def may_correct(self, page, ref: str, current_value: str) -> bool:
         """True when a value that contradicts the owner's profile may be put
-        right from the profile: the agent or the site put it there, never
-        the owner, and the owner's pre-fill policy allows correcting the
-        site. The caller decides what contradicts the profile; this decides
-        who may be overruled."""
-        import provenance
+        right from the profile (see may_overrule)."""
         from config import site_prefill_policy
 
-        who = self.origin(page, ref, current_value)
-        if who in (provenance.EMPTY, provenance.AGENT):
-            return True
-        return who == provenance.SITE and site_prefill_policy() == "correct"
+        return may_overrule(self.origin(page, ref, current_value), site_prefill_policy())
+
+
+def may_overrule(origin: str, policy: str) -> bool:
+    """The one rule for a value already on the form that contradicts the
+    owner's profile: may the agent put it right from the profile?
+
+      EMPTY, AGENT -- yes: nothing to overrule, or the agent's own answer;
+      OWNER        -- never: what the owner entered stands;
+      SITE         -- only when the owner's policy is "correct"
+                      (SITE_PREFILL_POLICY; "leave" keeps the site's value);
+      UNKNOWN      -- never: with no observer on the page the site cannot be
+                      told from the owner.
+
+    `origin` comes from provenance.origin(). The caller decides what
+    contradicts the profile; this is the only place that decides who may be
+    overruled -- the rules engine, the page agent and the address sweep all
+    ask it.
+    """
+    import provenance
+
+    if origin in (provenance.EMPTY, provenance.AGENT):
+        return True
+    return origin == provenance.SITE and policy == "correct"
 
 
 # --------------------------------------------------------------------------

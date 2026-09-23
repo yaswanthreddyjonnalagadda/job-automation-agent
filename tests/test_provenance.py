@@ -96,6 +96,30 @@ def test_the_agents_own_answer_may_always_be_rewritten(observed):
     assert values.may_correct(observed, "#city", "Fairfx")
 
 
+@pytest.mark.parametrize("origin,policy,allowed", [
+    (provenance.EMPTY, "leave", True),
+    (provenance.AGENT, "leave", True),       # the agent may put its own answer right
+    (provenance.SITE, "correct", True),
+    (provenance.SITE, "leave", False),
+    (provenance.OWNER, "correct", False),    # never, whatever the policy
+    (provenance.UNKNOWN, "correct", False),  # cannot tell the site from the owner
+])
+def test_one_rule_decides_who_may_be_overruled(origin, policy, allowed):
+    assert safety.may_overrule(origin, policy) is allowed
+
+
+def test_no_other_module_decides_it():
+    """One decision, one place (RFC-001): the policy's value is read only in
+    safety.may_overrule, so an exception cannot be pasted into four modules again."""
+    import re
+
+    root = Path(__file__).resolve().parents[1]
+    decides = re.compile(r"""site_prefill_policy\(\)\s*[!=]=|policy\s*[!=]=\s*["'](correct|leave)["']""")
+    offenders = [p.name for p in sorted(root.glob("*.py")) + sorted((root / "sites").glob("*.py"))
+                 if p.name not in ("safety.py", "config.py") and decides.search(p.read_text(encoding="utf-8"))]
+    assert offenders == []
+
+
 def test_the_observer_survives_the_page_being_rewritten(observed):
     """document.open() -- which set_content uses -- erases listeners."""
     observed.set_content(FORM)

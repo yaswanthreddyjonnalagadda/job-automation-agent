@@ -195,13 +195,8 @@ class WorkdayAdapter(SiteAdapter):
             self.fill_by_id_suffix(assistant, page, "--jobTitle", i, job.get("title", ""))
             self.fill_by_id_suffix(assistant, page, "--companyName", i, job.get("company", ""))
             self.fill_by_id_suffix(assistant, page, "--location", i, job.get("location", ""))
-            try:
-                card_slot = page.locator("div[data-automation-id*='experience' i], fieldset").nth(i)
-                if card_slot.count():
-                    from interaction import wipe_and_enforce_location_sweep
-                    wipe_and_enforce_location_sweep(page, scope=card_slot, profile=getattr(assistant, "_profile", None))
-            except Exception:
-                pass
+            # The entry's own location stays: the owner's address sweep is
+            # never run on a work entry (it wrote the owner's home into each).
             start_month, start_year = _split_month_year(job.get("start", ""))
             self.fill_date_spinner(assistant, page, "workExperience", "startDate", i, start_month, start_year)
             if job.get("current"):
@@ -238,13 +233,6 @@ class WorkdayAdapter(SiteAdapter):
         for i, edu in enumerate(education):
             self._ensure_entry_slot(assistant, page, "Education", "input[id$='--schoolName']", i)
             self.fill_by_id_suffix(assistant, page, "--schoolName", i, edu.get("school", ""))
-            try:
-                card_slot = page.locator("div[data-automation-id*='education' i], fieldset").nth(i)
-                if card_slot.count():
-                    from interaction import wipe_and_enforce_location_sweep
-                    wipe_and_enforce_location_sweep(page, scope=card_slot, profile=getattr(assistant, "_profile", None))
-            except Exception:
-                pass
             degree = edu.get("degree", "")
             if degree:
                 self.select_from_button_dropdown(assistant, page, "--degree", i, _degree_candidates(degree))

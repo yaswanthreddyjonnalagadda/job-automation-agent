@@ -384,7 +384,7 @@ Rules -- follow every one:
    "upload_cover_letter". A resume already shown as attached needs nothing.
 8. Radio buttons and checkboxes: action "check" with the ref of the button whose label -- its name, or the
    text right after it -- is the answer. For "choose", give the value exactly as one of the offered choices when choices are listed; for a
-   dropdown whose choices aren't listed, give the value to search for (e.g. "United States").
+   dropdown whose choices aren't listed, give the value to search for (e.g. the country's name).
 9. Names: use profile.first_name, profile.middle_name and profile.last_name exactly as given -- never split
    the full name yourself. An empty middle name means there is none: leave that box empty.
 10. Phone numbers: use the digits as in the profile; where a country code is asked separately, use the

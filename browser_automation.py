@@ -29,6 +29,7 @@ from urllib.parse import quote, urlparse
 
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 
+import geo_reference
 import provenance
 import safety
 from config import AppConfig, UserProfile, resume_to_attach
@@ -824,10 +825,6 @@ class JobApplicationAssistant:
             logger.warning("Could not fill %s: %s", what or selector, str(exc).splitlines()[0][:120])
             return False
 
-    # The two-letter code a phone widget uses for the profile's country.
-    _DIAL_COUNTRY = {"+1": ("us", "United States"), "+44": ("gb", "United Kingdom"),
-                     "+91": ("in", "India"), "+61": ("au", "Australia")}
-
     def set_phone_country(self, page: Page, profile) -> int:
         """Chooses the phone number's country wherever a form asks for it.
 
@@ -837,8 +834,13 @@ class JobApplicationAssistant:
         the flag button was never recognised -- so the form refused with
         "Select a country". Only a country not yet chosen is set.
         """
-        code = (getattr(profile, "phone_country_code", "") or "+1").strip()
-        iso, country = self._DIAL_COUNTRY.get(code, ("us", getattr(profile, "country", "United States")))
+        code = str(getattr(profile, "phone_country_code", "") or "").strip()
+        country = str(getattr(profile, "country", "") or "").strip()
+        if not country:
+            return 0   # the profile names no country: the owner chooses
+        # The two-letter code a phone widget uses, and every spelling of it.
+        iso = (geo_reference.country_code(country) or "").lower()
+        spellings = geo_reference.country_spellings(country)
         done = 0
 
         # 1. intl-tel-input: a flag button that opens a searchable list.
@@ -849,7 +851,7 @@ class JobApplicationAssistant:
                 if not button.is_visible():
                     continue
                 current = (button.get_attribute("title") or button.get_attribute("aria-label") or "").lower()
-                if country.lower() in current:
+                if any(name.lower() in current for name in spellings):
                     continue  # already the right country
                 button.click(timeout=4_000)
                 page.wait_for_timeout(500)
@@ -860,7 +862,7 @@ class JobApplicationAssistant:
                     search.fill(country)
                     page.wait_for_timeout(500)
                 option = scope.locator(f".iti__country[data-country-code={json.dumps(iso)}]").first
-                if option.count():
+                if iso and option.count():
                     option.scroll_into_view_if_needed(timeout=3_000)
                     option.click(timeout=4_000)
                     page.wait_for_timeout(400)
@@ -869,7 +871,7 @@ class JobApplicationAssistant:
                     except Exception:
                         pass
                     now = (button.get_attribute("title") or button.get_attribute("aria-label") or "")
-                    if country.lower() in now.lower():
+                    if any(name.lower() in now.lower() for name in spellings):
                         logger.info("PROFILE_ANSWER: phone country -> %r", now.strip()[:40])
                         done += 1
                 else:
@@ -899,7 +901,7 @@ class JobApplicationAssistant:
                 page.wait_for_timeout(900)
                 options = page.locator("[class*=select__option]:visible, [role=option]:visible")
                 texts = [t.strip() for t in options.all_inner_texts()]
-                index = self._best_option(texts, [country, f"{country} of America", f"{country} {code}"])
+                index = self._best_option(texts, spellings + ([f"{name} {code}" for name in spellings] if code else []))
                 if index is None:
                     page.keyboard.press("Escape")
                     continue
@@ -1298,7 +1300,9 @@ class JobApplicationAssistant:
             return str(getattr(profile, name, default) or default)
 
         sponsorship = bool(getattr(profile, "requires_visa_sponsorship", False))
-        country = g("country", "United States")
+        country = g("country")
+        dial = g("phone_country_code")
+        country_spellings = geo_reference.country_spellings(country) if country else []
         rules = [
             # On a work visa you ARE authorized, but only for the sponsoring
             # employer, so "for any employer" is No while plain "authorized" is Yes.
@@ -1344,14 +1348,15 @@ class JobApplicationAssistant:
             (r"years of (relevant |related |professional )?experience|how many years",
              [str(getattr(profile, "years_experience", "") or ""),
               f"{getattr(profile, 'years_experience', '')} years"]),
+            # Every spelling of the profile's country, with its dialling code
+            # in the ways forms write it ("+1 X", "X (+1)", "(+1) X").
             (r"country code|dial\w*\s*code|phone country|country dial",
-             [f"{g('phone_country_code', '+1')} {country} of America",
-              f"{country} of America ({g('phone_country_code', '+1')})",
-              f"{country} ({g('phone_country_code', '+1')})",
-              f"({g('phone_country_code', '+1')}) {country}",
-              f"{country} of America", country, g('phone_country_code', '+1')]),
-            (r"^\s*country(/region)?( of residence)?\s*:?\s*\*?\s*$", [country, "United States of America"]),
-            (r"^\s*\*?\s*(state|province)(/province)?(/region)?\s*:?\s*\*?\s*$", [g("state"), "VA", "Virginia (VA)"]),
+             ([f"{dial} {name}" for name in country_spellings] + [f"{name} ({dial})" for name in country_spellings]
+              + [f"({dial}) {name}" for name in country_spellings] if dial else [])
+             + country_spellings + ([dial] if dial else [])),
+            (r"^\s*country(/region)?( of residence)?\s*:?\s*\*?\s*$", country_spellings),
+            (r"^\s*\*?\s*(state|province)(/province)?(/region)?\s*:?\s*\*?\s*$",
+             geo_reference.us_state_spellings(g("state")) if g("state") else []),
             (r"veteran", [g("veteran_status"), "I am not a protected veteran", "not a protected veteran"]),
             (r"hispanic or latino", ["Not Hispanic/Latino", "Not Hispanic or Latino", "Not Hispanic",
                                      g("hispanic_or_latino", "No")]
@@ -1537,7 +1542,7 @@ class JobApplicationAssistant:
                         .map(e => {
                             // A select is answered when its chosen option is a real
                             // one. Not "past the first option": Schwab's (iCIMS)
-                            // Country list holds only the chosen "United States",
+                            // Country list holds only the one chosen country,
                             // so it read as blank and was chosen again every pass.
                             const chosen = e.tagName === 'SELECT' ? e.options[e.selectedIndex] : null;
                             // The first option counts only when the site chose it
@@ -1569,7 +1574,7 @@ class JobApplicationAssistant:
                                 // "State *" -- while aria-label repeats the
                                 // answer with it ("Country United States").
                                 // What the button shows is the answer:
-                                // "United States", or a placeholder such as
+                                // the chosen country, or a placeholder such as
                                 // "\u2013Select\u2013" when there is none.
                                 const shown = (e.innerText || '')
                                     .replace(/[\u2013\u2014\u2039\u203a<>]/g, ' ').trim();
@@ -1618,17 +1623,21 @@ class JobApplicationAssistant:
                         pass
                     c["value"] = ""
 
-            # Never preserve hallucinated parser location values (Afghanistan, Badakhshān)
+            # A country or state the site put here that contradicts the profile
+            # (a resume parser's guess, a list's first entry) is cleared so the
+            # profile's answer goes in below. Never one the owner set, and not
+            # at all when SITE_PREFILL_POLICY=leave (AgentValues.may_correct).
             if c["value"] and re.search(r"^\s*country(/region)?( of residence)?\s*:?\s*\*?\s*$|^\s*\*?\s*(state|province)(/province)?(/region)?\s*:?\s*\*?\s*$", c["question"] or "", re.IGNORECASE):
-                val_low = c["value"].strip().lower()
-                if val_low in ("afghanistan", "badakhshān", "badakhshan", "badakhshan province") or (
-                    re.search(r"country", c["question"] or "", re.I) and val_low not in ("united states", "united states of america", "usa", "us")
-                ) or (
-                    re.search(r"state|province", c["question"] or "", re.I) and val_low not in ("virginia", "va", "virginia (va)")
-                ):
-                    logger.info("Resetting hallucinated location value %r in %r", c["value"], c["question"][:40])
+                wanted = self._rule_for(c["question"], rules) or []
+                selector = f"[id={json.dumps(c['id'])}]"
+                contradicts = bool(wanted) and not any(
+                    geo_reference.same_place(c["value"], w) for w in wanted) \
+                    and self._best_option([c["value"]], wanted) is None
+                if contradicts and self.values.may_correct(page, selector, c["value"]):
+                    logger.info("CORRECTING %r: %r was put there by the site and your profile says %r",
+                                c["question"][:40], c["value"][:40], wanted[0][:40])
                     try:
-                        page.locator(f"[id={json.dumps(c['id'])}]").fill("")
+                        page.locator(selector).fill("")
                     except Exception:
                         pass
                     c["value"] = ""

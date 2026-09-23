@@ -1352,3 +1352,65 @@ def test_the_same_question_is_answered_for_an_owner_anywhere(resume_file):
     countries = ["- Select -", "Afghanistan", "Iceland", "India", "Indonesia", "United States"]
     control = page_agent.Control(ref="c", role="combobox", name="Region of Residence *", options=countries)
     assert agent.known_answer(control)[0] == "India"
+
+
+# --- a pre-filled place is put right from the profile, never over the owner -----
+
+_SITE_DEFAULT_COUNTRY = ('<label for=c>Country *</label><select id=c><option>- Select -</option>'
+                         '<option selected>Afghanistan</option><option>Albania</option><option>Algeria</option>'
+                         '<option>Andorra</option><option>Angola</option><option>United States</option></select>')
+
+
+def test_a_country_the_site_defaulted_to_is_put_right_and_reported(page, resume_file):
+    import provenance
+
+    page.set_content(_SITE_DEFAULT_COUNTRY)
+    provenance.install_on_page(page)
+    agent = make_agent(Planner(), resume_file, profile=_somewhere_profile(country="United States"))
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    plan = page_agent.PagePlan.from_json({"page_kind": "application_form", "answers": [], "next": {"kind": "none"}})
+    agent.correct_from_profile(page, plan, controls)
+    assert page.locator("#c").evaluate("el => el.options[el.selectedIndex].text") == "United States"
+    assert any("Afghanistan" in note and "United States" in note for note in agent.notes)   # shown at hand-over
+
+
+def test_a_country_the_owner_typed_is_never_corrected(page, resume_file):
+    import provenance
+
+    page.set_content('<label for=c>Country *</label><input id=c role=combobox value="">')
+    provenance.install_on_page(page)
+    provenance.set_agent_busy(page, False)
+    page.fill("#c", "Afghanistan")                   # the owner's own, trusted typing
+    provenance.set_agent_busy(page, True)
+    agent = make_agent(Planner(), resume_file, profile=_somewhere_profile(country="United States"))
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    plan = page_agent.PagePlan.from_json({"page_kind": "application_form", "answers": [], "next": {"kind": "none"}})
+    agent.correct_from_profile(page, plan, controls)
+    assert page.locator("#c").input_value() == "Afghanistan"
+
+
+def test_a_work_entrys_country_is_not_corrected_to_the_owners(page, resume_file):
+    import provenance
+
+    page.set_content('<fieldset><legend>Work Experience 1</legend>'
+                     + _SITE_DEFAULT_COUNTRY.replace("Afghanistan", "India") + '</fieldset>')
+    provenance.install_on_page(page)
+    agent = make_agent(Planner(), resume_file, profile=_somewhere_profile(country="United States"))
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    plan = page_agent.PagePlan.from_json({"page_kind": "application_form", "answers": [], "next": {"kind": "none"}})
+    agent.correct_from_profile(page, plan, controls)
+    assert page.locator("#c").evaluate("el => el.options[el.selectedIndex].text") == "India"
+
+
+def test_leave_policy_leaves_a_site_default_for_the_owner(page, resume_file, monkeypatch):
+    import provenance
+
+    monkeypatch.setenv("SITE_PREFILL_POLICY", "leave")
+    page.set_content(_SITE_DEFAULT_COUNTRY)
+    provenance.install_on_page(page)
+    agent = make_agent(Planner(), resume_file, profile=_somewhere_profile(country="United States"))
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    plan = page_agent.PagePlan.from_json({"page_kind": "application_form", "answers": [], "next": {"kind": "none"}})
+    agent.correct_from_profile(page, plan, controls)
+    assert page.locator("#c").evaluate("el => el.options[el.selectedIndex].text") == "Afghanistan"
+    assert any("Afghanistan" in note and "leave" in note for note in agent.notes)   # the owner is told

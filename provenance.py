@@ -119,6 +119,24 @@ def owner_edited(target: Any, selector: str = "") -> Optional[bool]:
         return None
 
 
+def origin(target: Any, selector: str = "", *, value: str = "", agent_wrote: bool = False) -> str:
+    """Who put `value` in this control: EMPTY, AGENT, OWNER, SITE or UNKNOWN.
+
+    `agent_wrote` is the caller's own record (safety.AgentValues) of having
+    written exactly this value there; the rest is what the observer saw.
+    """
+    if not str(value or "").strip():
+        return EMPTY
+    if agent_wrote:
+        return AGENT
+    seen = owner_edited(target, selector)
+    if seen is True:
+        return OWNER
+    if seen is False:
+        return SITE
+    return UNKNOWN
+
+
 def _frames(page: Any) -> list:
     frames = getattr(page, "frames", None)
     if frames:

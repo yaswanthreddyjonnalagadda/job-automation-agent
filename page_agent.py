@@ -41,7 +41,8 @@ from typing import Callable, Optional
 from urllib.parse import urlparse
 
 import concept_matcher
-from config import resume_to_attach
+import geo_reference
+from config import resume_to_attach, site_prefill_policy
 from interaction import (
     click_resiliently,
     commit_draft_cards,
@@ -453,19 +454,15 @@ def _same_question(a: str, b: str) -> bool:
     return a == b or (min(len(a), len(b)) >= 25 and (a.startswith(b[:60]) or b.startswith(a[:60])))
 
 
-# What a form writes instead of the state's name.
-_STATE_CODES = {
-    "alabama": "al", "alaska": "ak", "arizona": "az", "arkansas": "ar", "california": "ca", "colorado": "co",
-    "connecticut": "ct", "delaware": "de", "florida": "fl", "georgia": "ga", "hawaii": "hi", "idaho": "id",
-    "illinois": "il", "indiana": "in", "iowa": "ia", "kansas": "ks", "kentucky": "ky", "louisiana": "la",
-    "maine": "me", "maryland": "md", "massachusetts": "ma", "michigan": "mi", "minnesota": "mn",
-    "mississippi": "ms", "missouri": "mo", "montana": "mt", "nebraska": "ne", "nevada": "nv",
-    "new hampshire": "nh", "new jersey": "nj", "new mexico": "nm", "new york": "ny", "north carolina": "nc",
-    "north dakota": "nd", "ohio": "oh", "oklahoma": "ok", "oregon": "or", "pennsylvania": "pa",
-    "rhode island": "ri", "south carolina": "sc", "south dakota": "sd", "tennessee": "tn", "texas": "tx",
-    "utah": "ut", "vermont": "vt", "virginia": "va", "washington": "wa", "west virginia": "wv",
-    "wisconsin": "wi", "wyoming": "wy", "district of columbia": "dc",
-}
+# What a form writes instead of the state's name ("va" for "virginia").
+_STATE_CODES = geo_reference.us_state_map()
+
+
+# Where the owner lives, in the order a form's lists depend on each other.
+_RESIDENCE_ORDER = {"COUNTRY": 0, "STATE_PROVINCE": 1, "CITY": 2}
+# A work or education entry: its places belong to the entry, not to the owner.
+_ENTRY_CONTEXT = re.compile(r"experience|employment|employer|work history|education|school|"
+                            r"university|college|degree|reference", re.IGNORECASE)
 
 
 def _same_answer(a: str, b: str) -> bool:
@@ -1500,18 +1497,10 @@ class PageAgent:
                                  and bool(control.container or control.group or control.context)) \
                 or is_workday_choice_button(control)
 
-            is_corrupted_location = False
-            if control.answer:
-                ans_low = control.answer.strip().lower()
-                q_low = (control.question or "").lower()
-                if ans_low in ("afghanistan", "badakhshān", "badakhshan", "badakhshan province"):
-                    is_corrupted_location = True
-                elif re.search(r"\b(country|country\s*/\s*region)\b", q_low) and ans_low not in ("united states", "united states of america", "usa", "us"):
-                    is_corrupted_location = True
-                elif re.search(r"\b(state|province|state\s*/\s*province)\b", q_low) and ans_low not in ("virginia", "va", "virginia (va)"):
-                    is_corrupted_location = True
-
-            if (control.role not in ANSWER_ROLES and not answerable_button) or control.disabled or (control.answer and not is_corrupted_location):
+            # Only empty boxes here. A box that already holds something the
+            # profile contradicts is put right in correct_from_profile, which
+            # checks who put the value there before changing it.
+            if (control.role not in ANSWER_ROLES and not answerable_button) or control.disabled or control.answer:
                 continue
             group_key = control.group if control.role in ("radio", "checkbox", "switch") else ""
             if group_key and group_key in handled_groups:
@@ -2181,10 +2170,7 @@ class PageAgent:
                 if _plain(answer.value) != _plain(known_val):
                     return f"already answered from your profile ({current!r}) -- not changing to {answer.value!r}"
             if not self._ours(question, current):
-                if current.strip().lower() in ("afghanistan", "badakhshān", "badakhshan", "badakhshan province"):
-                    pass  # Parser hallucination: allow agent to overwrite with canonical profile value
-                else:
-                    return f"already answered {current[:40]!r} -- not changing an answer the agent didn't give" 
+                return f"already answered {current[:40]!r} -- not changing an answer the agent didn't give"
         if control.role == "radio" and action == "check" and control.group:
             chosen = next((c.name for c in controls if c.role == "radio" and c.group == control.group and c.checked), "")
             if chosen and not self._ours(question, chosen):
@@ -2234,6 +2220,46 @@ class PageAgent:
                 # Exactly: "Yaswanth" is not "Yaswanth Reddy", though one
                 # begins the other.
                 fixes.append((control.question, wanted, f"profile.{field}", True))
+        # Where the owner lives, on any kind of control: a country, state or
+        # city the site put there (a resume parser's guess, a list's first
+        # entry) that contradicts the profile is put right from it -- country
+        # first, since a state list depends on the country chosen. Never in a
+        # work or education entry: those places belong to the entry, not to
+        # the owner. A value the owner set is refused below. With
+        # SITE_PREFILL_POLICY=leave the site's value stays and the owner is
+        # told about it at the hand-over instead.
+        policy = site_prefill_policy()
+        located = []
+        for control in controls:
+            if control.role not in ("combobox", "listbox", "textbox", "searchbox") or control.disabled:
+                continue
+            shown = control.answer.strip()
+            if not shown or not control.question or _ENTRY_CONTEXT.search(
+                    f"{control.question} {control.container} {control.context}"):
+                continue
+            concept = concept_matcher.confirm_concept(concept_matcher.match_concept(
+                question=control.question, container=control.container,
+                context=control.context, name=control.name), control.options)
+            if concept not in _RESIDENCE_ORDER:
+                continue
+            wanted, source = self.known_answer(control)
+            if not wanted or geo_reference.same_place(shown, wanted) or _same_answer(shown, wanted):
+                continue
+            who = provenance.origin(self.locate(page, control.ref), value=shown,
+                                    agent_wrote=self._ours(control.question, shown))
+            if not safety.may_overrule(who, policy):
+                # The owner's own value stands silently; anything else they
+                # should see before submitting.
+                why = {provenance.SITE: "the site filled it and SITE_PREFILL_POLICY=leave",
+                       provenance.UNKNOWN: "who set it could not be seen"}.get(who)
+                if why:
+                    self.notes.append(f"left {control.question[:70]!r} as {shown[:40]!r} ({why}); "
+                                      f"your {source} says {wanted[:40]!r}")
+                continue
+            located.append((_RESIDENCE_ORDER[concept], control.question, wanted, source))
+        for _order, question, wanted, source in sorted(located):
+            if not any(_same_question(question, q) for q, _v, _s, _e in fixes):
+                fixes.append((question, wanted, source, False))
         for item in answered_fields(controls):
             question = item["label"]
             if not question or not safety.legal_answer_conflicts([item], self.profile):
@@ -2872,8 +2898,9 @@ class PageAgent:
         if index is None:
             if re.search(r"\b(state|province)\b", control.question, re.IGNORECASE):
                 candidates = [value]
-                if value.casefold() == "virginia":
-                    candidates.append("VA")
+                state_code = geo_reference.us_state_code(value)
+                if state_code and state_code.casefold() != value.casefold():
+                    candidates.append(state_code)
                 for typed in candidates:
                     try:
                         loc.evaluate("e => { e.scrollIntoView({block: 'center'}); e.focus(); }")
@@ -3047,15 +3074,13 @@ class PageAgent:
         names = [text for _ref, text in offered]
         if not names:
             return None
-        # Dialing code matching (e.g. "+1"):
-        # When value is a dialing code, multiple countries might offer "+1" (e.g. Antigua, Bahamas, US).
-        # Prioritize matching the candidate's profile country (e.g. United States).
+        # A dialling code ("+1") is offered by several countries: take the one
+        # the profile names. With no country in the profile, nothing is assumed.
         if re.fullmatch(r"\+?\d{1,4}", value.strip()):
             code = value.strip() if value.strip().startswith("+") else f"+{value.strip()}"
-            country = (getattr(self.profile, "country", "") or "United States").lower()
+            country = geo_reference.country_code(str(getattr(self.profile, "country", "") or ""))
             for i, name in enumerate(names):
-                lower_name = name.lower()
-                if (code in name or value.strip() in name) and (country in lower_name or "united states" in lower_name or "usa" in lower_name):
+                if country and (code in name or value.strip() in name) and geo_reference.country_code(name) == country:
                     logger.info("Matched dial code %r to profile country choice: %r", value, name)
                     return i
         index = self.assistant._best_option(names, [value])

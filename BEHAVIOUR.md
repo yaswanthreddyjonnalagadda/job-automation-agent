@@ -19,7 +19,8 @@ the result, and hand the finished application over.
 | Never clicks Submit | `browser_automation.py` has no `click_submit`; `refuse_to_submit()` answers a `submit` signal; wizard navigation skips any submit-labelled button; the web UI has no Submit button | `test_the_agent_has_no_way_to_click_submit`, `test_wizard_navigation_never_presses_a_submit_button` |
 | Signs attestations and e-signatures only when the owner allows it (`sign_attestations` in the profile; the owner's decision of 2026-09-17), last on the page and only when every other answer came from the profile | `safety.is_attestation()` finds them; `page_agent.PageAgent.sign()` signs or leaves them; pending ones are listed for the user | `test_signature_fields_are_left_for_the_user`, `test_attestation_checkboxes_are_left_for_the_user` |
 | Never guesses | answers come from `UserProfile` or the posting; an empty profile field means the question is left for the user; a dropdown answer must match an offered option | `test_people_managed_is_left_blank_when_the_profile_is_silent`, `test_field_of_study_is_never_swapped_for_another_subject` |
-| Never overwrites the user | `safety.AgentValues` records what the agent wrote; anything else on the page is left alone | `test_a_users_answer_is_never_overwritten`, `test_site_prefilled_values_count_as_the_users` |
+| Never overwrites the user | `safety.AgentValues` records what the agent wrote and `provenance.py` observes what a person typed or chose; a value the owner entered is never changed. A value the *site* filled in is left alone too, except the owner's own details (name, country, state, city, and the sponsorship/authorization answers) where they contradict the profile -- see "Values the site filled in" below. `safety.may_overrule()` is the only place this is decided | `test_a_users_answer_is_never_overwritten`, `test_site_prefilled_values_count_as_the_users`, `test_the_owners_own_choice_is_never_overwritten`, `test_a_country_the_owner_typed_is_never_corrected`, `test_one_rule_decides_who_may_be_overruled` |
+| Never assumes a place | countries and states come from the profile and `reference/geo.json`; no place name is written into the code, and a place the profile leaves empty is left for the user | `test_no_logic_module_spells_a_place`, `test_nothing_is_assumed_when_the_profile_names_no_place` |
 | Never types a Google password | `safety.password_allowed()` blocks Google/Apple/Microsoft and LinkedIn/Indeed/Dice; Google sign-in only picks the account | `test_passwords_are_refused_on_identity_providers` |
 | Never bypasses a CAPTCHA | `safety.captcha_visible()` detects one, stops the sign-in/account step, and reports it | `test_captcha_is_detected_not_solved` |
 | Never submits duplicates | `apply.already_submitted()` and `db.find_submitted()` match by URL (ignoring tracking parameters) and by company+title | `test_a_previously_submitted_job_is_refused` |
@@ -27,18 +28,55 @@ the result, and hand the finished application over.
 
 ## What it learns from you
 
-Anything on the form the agent did not write is treated as **your** answer: it
-is never overwritten, and it is remembered (`form_answers`, marked
-`answered_by=user`). On the next application the same question -- however that
-employer words it -- is answered from what you gave last time, before Claude is
-asked for anything. An answer you typed outranks one the agent drafted, and a
-remembered answer is only reused when it is among the options the new form
-actually offers.
+Anything **you** type or choose on the form is your answer: it is never
+overwritten, and it is remembered (`form_answers`, marked `answered_by=user`).
+On the next application the same question -- however that employer words it --
+is answered from what you gave last time, before Claude is asked for anything.
+An answer you typed outranks one the agent drafted, and a remembered answer is
+only reused when it is among the options the new form actually offers. What
+the site filled in by itself (a resume parser's guess) is not learned as
+yours.
 
 Fixed facts live in `config.py` (`UserProfile`) and are filled on every
 application without asking: citizenship, clearance, years of experience,
 salary range, education, EEO answers. A pay-band dropdown is answered with the
 band that overlaps your range; a band outside it is left for you.
+
+## Values the site filled in
+
+Many forms arrive partly filled: a resume parser guesses a country, or a list
+shows its first entry (an alphabetical country list starts with Afghanistan or
+the Åland Islands). The agent tells these apart from your own answers by
+watching the page: a small observer (`provenance.py`) records every control a
+person really types into or changes while the agent is waiting for you -- the
+browser marks such input as trusted, and a site's scripts cannot produce it.
+So every value on the form is known to be empty, the agent's, **yours**, or
+**the site's**; on a page the observer cannot see into, it is unknown.
+
+* **Yours** is never changed, whatever it says.
+* **The site's**, where it contradicts your profile's country, state or city:
+  with `SITE_PREFILL_POLICY=correct` (the default) the agent puts it right from
+  your profile, country first (the state list depends on it), and lists each
+  correction at hand-over ("corrected 'Country' from 'Afghanistan' to ...").
+  With `SITE_PREFILL_POLICY=leave` it keeps the site's value and lists it for
+  you to fix.
+* **Unknown** is left as it is and listed for you.
+* Your name, and the sponsorship and work-authorization answers, are put right
+  from your profile whenever the site's contradict them (your standing rule,
+  whatever `SITE_PREFILL_POLICY` says), unless you set them yourself; each
+  correction is listed at hand-over.
+* A work or education entry's location belongs to that job or school and is
+  never replaced with your home address.
+
+Which question a dropdown asks is confirmed by what it offers: a list of
+countries is a country question even when its label says "Region of
+Residence", so a state is never offered to a country list.
+
+## Which resume it attaches
+
+`RESUME_SOURCE=tailored` (the default) attaches the resume tailored to this job
+-- the one the verified auto-submit gate checks by SHA-256. `RESUME_SOURCE=master`
+attaches your standard resume, `assets/master_resume.pdf`, instead.
 
 ## Before it stops
 
@@ -105,6 +143,8 @@ job that was declined.
 | Path | Contents |
 |---|---|
 | `safety.py` | the rules above, in one place |
+| `provenance.py` | who put each value on the form: the observer of a person's own input |
+| `geo_reference.py`, `reference/geo.json` | countries and US states as data (ISO 3166, regenerated by `reference/build_geo.py`) |
 | `browser_automation.py` | reusable browser and form handling; no company names |
 | `sites/` | per-platform selectors and workarounds: Workday (its whole repeated-entry wizard), SuccessFactors, Eightfold, Greenhouse, Lever, Ashby, generic fallback |
 | `job_sources.py` | reading a posting (Workday, Greenhouse, Lever, Ashby, Eightfold, schema.org, plain page) |
