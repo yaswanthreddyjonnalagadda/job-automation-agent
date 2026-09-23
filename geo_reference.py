@@ -71,22 +71,25 @@ def _data() -> dict:
     return json.loads(_DATA_PATH.read_text(encoding="utf-8"))
 
 
-@lru_cache(maxsize=1)
+def _spellings(entry: dict) -> list[str]:
+    return list(entry.get("names", [])) + list(entry.get("aliases", []))
+
+
+@lru_cache(maxsize=2)
+def _index(table: str) -> dict[str, str]:
+    index: dict[str, str] = {}
+    for code, entry in _data()[table].items():
+        for name in _spellings(entry):
+            index.setdefault(normalize(name), code)
+    return index
+
+
 def _country_index() -> dict[str, str]:
-    index: dict[str, str] = {}
-    for code, names in _data()["countries"].items():
-        for name in names:
-            index.setdefault(normalize(name), code)
-    return index
+    return _index("countries")
 
 
-@lru_cache(maxsize=1)
 def _us_state_index() -> dict[str, str]:
-    index: dict[str, str] = {}
-    for code, names in _data()["us_states"].items():
-        for name in names:
-            index.setdefault(normalize(name), code)
-    return index
+    return _index("us_states")
 
 
 def _lookup(text: str, index: dict[str, str]) -> Optional[str]:
@@ -107,16 +110,45 @@ def us_state_code(text: str) -> Optional[str]:
 
 
 def country_names(code: str) -> tuple[str, ...]:
-    return tuple(_data()["countries"].get((code or "").upper(), ()))
+    """Every spelling of a country: ISO names first, then other forms' spellings."""
+    return tuple(_spellings(_data()["countries"].get((code or "").upper(), {})))
 
 
 def us_state_names(code: str) -> tuple[str, ...]:
-    return tuple(_data()["us_states"].get((code or "").upper(), ()))
+    return tuple(_spellings(_data()["us_states"].get((code or "").upper(), {})))
+
+
+def country_spellings(text: str) -> list[str]:
+    """The given spelling first, then the country's ISO spellings, longest
+    (most specific) first: "United States" -> "United States",
+    "United States of America". For building option candidates -- the short
+    aliases ("US") are left out because they match too much by prefix."""
+    given = str(text or "").strip()
+    code = country_code(given)
+    formal = sorted(_data()["countries"].get(code or "", {}).get("names", []), key=len, reverse=True)
+    out = [given] if given else []
+    for name in formal:
+        if name not in out:
+            out.append(name)
+    return out
+
+
+def us_state_spellings(text: str) -> list[str]:
+    """The given spelling, then the state's name, USPS code and "Name (CODE)"."""
+    given = str(text or "").strip()
+    code = us_state_code(given)
+    out = [given] if given else []
+    if code:
+        name = _data()["us_states"][code]["names"][0]
+        for spelling in (name, code, f"{name} ({code})"):
+            if spelling not in out:
+                out.append(spelling)
+    return out
 
 
 def us_state_map() -> dict[str, str]:
     """Lower-case state name -> lower-case USPS code, for older callers."""
-    return {normalize(names[0]): code.lower() for code, names in _data()["us_states"].items()}
+    return {normalize(entry["names"][0]): code.lower() for code, entry in _data()["us_states"].items()}
 
 
 def same_country(a: str, b: str) -> bool:
@@ -165,8 +197,8 @@ def place_names() -> frozenset[str]:
     out, since they collide with ordinary words)."""
     names = set()
     for table in ("countries", "us_states"):
-        for spellings in _data()[table].values():
-            for name in spellings:
+        for entry in _data()[table].values():
+            for name in _spellings(entry):
                 norm = normalize(name)
                 if len(norm) > 3:
                     names.add(norm)

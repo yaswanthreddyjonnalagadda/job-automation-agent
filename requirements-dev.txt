@@ -8,3 +8,8 @@ hypothesis>=6.100
 langgraph>=0.2
 aiosqlite>=0.20
 cryptography>=42.0
+
+# ISO 3166 names: regenerates reference/geo.json (reference/build_geo.py) and
+# lets tests/test_no_place_literals.py recognise any province or region.
+# Pinned: geo.json is generated from this version; bump the two together.
+pycountry==26.2.16
