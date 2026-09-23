@@ -416,6 +416,13 @@ def decide_next_step(assistant, page, step: int, experience_data: dict, filled_e
     if not filled_experience and experience_data and assistant.has_experience_section(page):
         return "fill_experience"
 
+    # Pre-navigation sweep: commit unfinalized experience/education cards before advancing
+    try:
+        from interaction import commit_draft_cards
+        commit_draft_cards(page)
+    except Exception:
+        pass
+
     if assistant.has_next_step(page):
         return "continue"
 

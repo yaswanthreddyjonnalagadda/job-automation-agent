@@ -41,6 +41,18 @@ from typing import Callable, Optional
 from urllib.parse import urlparse
 
 import concept_matcher
+from interaction import (
+    click_resiliently,
+    commit_draft_cards,
+    fill_and_dispatch,
+    resolve_ant_dropdown,
+)
+from perception import (
+    find_active_draft_cards,
+    is_ant_dropdown,
+    is_field_active,
+    read_control_attributes,
+)
 import safety
 
 logger = logging.getLogger("page_agent")
@@ -711,6 +723,11 @@ class PageAgent:
         self._retried_after_error = False
         self._google_failed: set[str] = set()   # sites whose Google account they will not accept
         self._emailed_in: set[str] = set()      # sites where the email has been given on its own page
+
+    @staticmethod
+    def fill_and_dispatch(locator, value: str, timeout: Optional[float] = None, **kwargs):
+        """Fills an input and immediately dispatches bubbling input, change, and blur synthetic events."""
+        return fill_and_dispatch(locator, value, timeout=timeout, **kwargs)
         self._created_at: set[str] = set()      # sites where an account has been created
         self._profile_answer_library: Optional[dict] = None
         self.notes: list[str] = []                 # worth telling the owner, not worth stopping for
@@ -851,7 +868,7 @@ class PageAgent:
                 self._emailed_in.add(host)
                 logger.info("LOGIN: this sign-in asks for the email first -- giving it")
                 try:
-                    self.locate(page, box.ref).fill(email, timeout=8_000)
+                    fill_and_dispatch(self.locate(page, box.ref), email, timeout=8_000)
                     go = next((c for c in controls if c.role in PRESS_ROLES and re.match(
                         r"^(sign ?in|log ?in|continue|next|submit)$",
                         " ".join((c.name or "").split()), re.IGNORECASE)), None)
@@ -1087,7 +1104,7 @@ class PageAgent:
             if len(boxes) > 1:
                 tab.keyboard.type(code, delay=150)   # a box per digit: they advance themselves
             else:
-                first.fill(code, timeout=5_000)
+                fill_and_dispatch(first, code, timeout=5_000)
             tab.wait_for_timeout(800)
             press = next((c for c in parse_snapshot(self.snapshot(page))
                           if c.role in PRESS_ROLES and re.match(
@@ -2287,7 +2304,7 @@ class PageAgent:
                     else:
                         fill_value = f"{m}/{_my.group(2)}"
             try:
-                loc.fill(fill_value, timeout=2_500)
+                fill_and_dispatch(loc, fill_value, timeout=2_500)
             except Exception:
                 try:
                     is_inert = loc.evaluate("""(el) => {
@@ -2402,7 +2419,7 @@ class PageAgent:
             self.settle(page, 1_500)
             return True
         if answer.action == "choose" and control.role in ("textbox", "searchbox", "spinbutton"):
-            loc.fill(answer.value, timeout=8_000)     # a plain box, whatever the plan called it
+            fill_and_dispatch(loc, answer.value, timeout=8_000)     # a plain box, whatever the plan called it
             return True
         if answer.action in ("choose", "check") and control.role in ("radio", "checkbox", "switch", "group", "radiogroup"):
             snapshot_controls = parse_snapshot(self.snapshot(page))
@@ -2502,6 +2519,15 @@ class PageAgent:
                 return True
             except Exception:
                 pass   # a listbox drawn by script: pick the option instead
+
+        # Ant Design rc-select dropdown resolution: dispatch mousedown on wrapper,
+        # wait for detached portal at document.body, match option case-insensitively,
+        # click and verify portal hides.
+        if is_ant_dropdown(loc):
+            if resolve_ant_dropdown(self.tab(page), loc, value):
+                self._choice_methods[control.ref] = "ant_dropdown"
+                return True
+
         before = {ref for ref, _text in choices_in(self.snapshot(page), under=control.question, any_list=True)}
         opened = False
         try:
@@ -2802,7 +2828,7 @@ class PageAgent:
                 return False
 
         def by_setting():
-            loc.fill(value, timeout=5_000)
+            fill_and_dispatch(loc, value, timeout=5_000)
 
         def by_typing():
             loc.focus(timeout=3_000)
@@ -3113,6 +3139,20 @@ class PageAgent:
     def press_next(self, page, plan: PagePlan, controls: list[Control]) -> tuple[str, object, str]:
         """("moved" | "submitted" | "retry" | "stop", page, what happened)."""
         tab = self.tab(page)
+
+        # Pre-navigation sweep: scan DOM for inline resume-parsed experience or
+        # education cards stuck in active 'Edit' or 'Draft' modes. Autonomously
+        # click internal card buttons ('Update', 'Save Entry', 'Done', etc.) and
+        # wait for network settlement before evaluating the final 'Next' button.
+        try:
+            committed = commit_draft_cards(tab)
+            if committed:
+                logger.info("PRE-NAVIGATION: committed %d active draft card(s)", committed)
+                self.settle(page, 1_500)
+                controls = parse_snapshot(self.snapshot(page))
+        except Exception as exc:
+            logger.debug("Pre-navigation card commit sweep encountered an issue: %s", exc)
+
         by_ref = {c.ref: c for c in controls}
         control = by_ref.get(plan.next_ref)
         if plan.next_kind == "none" or control is None:

@@ -31,6 +31,19 @@ from playwright.sync_api import BrowserContext, Page, sync_playwright
 
 import safety
 from config import AppConfig, UserProfile
+from interaction import (
+    CARD_COMMIT_TEXT_PATTERN,
+    click_resiliently,
+    commit_draft_cards,
+    fill_and_dispatch,
+    resolve_ant_dropdown,
+)
+from perception import (
+    find_active_draft_cards,
+    is_ant_dropdown,
+    is_field_active,
+    read_control_attributes,
+)
 from sites import adapter_for
 
 logger = logging.getLogger(__name__)
@@ -196,6 +209,11 @@ class JobApplicationAssistant:
         self._context: Optional[BrowserContext] = None
         # Every value the agent puts on a page, so it never overwrites the user.
         self.values = safety.AgentValues()
+
+    @staticmethod
+    def fill_and_dispatch(locator, value: str, timeout: Optional[float] = None, **kwargs):
+        """Fills an input and immediately dispatches bubbling input, change, and blur synthetic events."""
+        return fill_and_dispatch(locator, value, timeout=timeout, **kwargs)
 
     def _page_hint(self):
         """A stand-in page for adapter lookups when a helper was handed
@@ -715,7 +733,7 @@ class JobApplicationAssistant:
             if not field.is_editable(timeout=2_000):
                 logger.info("Skipping locked field %s (value %r)", what or selector, current[:40])
                 return False
-            field.fill(value, timeout=8_000)
+            fill_and_dispatch(field, value, timeout=8_000)
             # A key press plus leaving the field makes React-style forms
             # (Eightfold) register the value; fill() alone left CBTS validating
             # a filled box as blank.
@@ -1935,6 +1953,26 @@ class JobApplicationAssistant:
         did you hear" were left blank on every pass. The wrapper is what a
         person clicks, and Ant opens on mousedown rather than click.
         """
+        # When dealing with an Ant dropdown, dispatch mousedown on the parent
+        # .ant-select-selector wrapper instead of a direct click on the obscured <input>.
+        if is_ant_dropdown(field):
+            try:
+                dispatched = field.evaluate("""e => {
+                    const box = e.closest('.ant-select-selector, [class*=select-selector], .ant-select, [role=combobox]') || e.parentElement;
+                    if (box) {
+                        box.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}));
+                        box.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true}));
+                        box.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                        const inp = box.querySelector('input') || e;
+                        if (inp && inp.focus) inp.focus();
+                        return true;
+                    }
+                    return false;
+                }""")
+                if dispatched:
+                    return True
+            except Exception:
+                pass
         try:
             field.click(timeout=4_000)
             return True
@@ -1969,6 +2007,11 @@ class JobApplicationAssistant:
         field = page.locator(f"[id={json.dumps(control['id'])}]")
         if field.count() == 0:
             field = page.locator(f"[data-menu-id={json.dumps(control['id'])}]")
+        if candidates and is_ant_dropdown(field):
+            if resolve_ant_dropdown(page, field, candidates[0], candidates=candidates):
+                logger.info("Answered Ant Design combobox %r with %r", control.get("question", "")[:40], candidates[0])
+                page.wait_for_timeout(500)
+                return
         wants_dial_code = bool(re.search(r"country code|dial|phone|^\s*\*?\s*country",
                                          control.get("question", ""), re.I))
         scope = page.locator(f"[id={json.dumps(control['listbox'])}]") if control["listbox"] else page
@@ -2639,7 +2682,7 @@ class JobApplicationAssistant:
                 logger.info("LEFT_FOR_YOU: %r is a signature/attestation -- the agent never fills it",
                             label_fragment[:70])
                 return False
-            field.fill(value, timeout=5_000)
+            fill_and_dispatch(field, value, timeout=5_000)
             logger.info("Filled %r with %r", label_fragment, value[:60])
             return True
         except Exception as exc:
@@ -3544,7 +3587,7 @@ class JobApplicationAssistant:
                 field = page.locator(f"input[id$='{id_suffix}'], textarea[id$='{id_suffix}']").first
                 if field.count() == 0 or (field.input_value() or "").strip():
                     continue
-                field.fill(value, timeout=5_000)
+                fill_and_dispatch(field, value, timeout=5_000)
                 logger.info("Filled text field %r", id_suffix)
             except Exception as exc:
                 logger.warning("Could not fill text field %r: %s", id_suffix, exc)
@@ -3837,7 +3880,7 @@ class JobApplicationAssistant:
                 if (control.input_value() or "").strip():
                     logger.info("Cover letter box already has text; leaving it alone")
                     return True
-                control.fill(Path(letter_txt).read_text(encoding="utf-8"), timeout=5_000)
+                fill_and_dispatch(control, Path(letter_txt).read_text(encoding="utf-8"), timeout=5_000)
                 logger.info("Pasted cover letter into the form's text box")
             return True
         except Exception as exc:
@@ -4480,7 +4523,7 @@ class JobApplicationAssistant:
                     if field.selector:
                         current = page.locator(field.selector).first.input_value() or ""
                     if value and field.selector and not current.strip():
-                        page.fill(field.selector, value)
+                        fill_and_dispatch(page.locator(field.selector), value)
                         page.press(field.selector, "Tab")
             if profile is not None:
                 self.answer_standard_questions(page, profile)  # country of residence
@@ -4941,7 +4984,7 @@ class JobApplicationAssistant:
                         logger.info("PLATFORM_ANSWER: %r -> %r", q.question_text[:60], answer[:40])
                         filled += 1
                 elif q.input_type == "textarea":
-                    page.fill(q.selector, answer)
+                    fill_and_dispatch(page.locator(q.selector), answer)
                     filled += 1
                 elif q.input_type == "select":
                     if self._select_option_safely(page, q.selector, answer, q.question_text):
@@ -5057,7 +5100,7 @@ class JobApplicationAssistant:
             if tag == "select":
                 el.select_option(label=value)
             else:
-                el.fill(value)
+                fill_and_dispatch(el, value)
             return True
         except Exception as exc:
             logger.warning("Could not fill field matching %s: %s", hints, exc)
@@ -5080,7 +5123,7 @@ class JobApplicationAssistant:
         for attempt in range(retries + 1):
             try:
                 if attempt == 0:
-                    el.fill(value)
+                    fill_and_dispatch(el, value)
                 else:
                     # Some masked inputs (e.g. date pickers) ignore a
                     # directly-set value and only respond to real keystrokes.
@@ -5598,6 +5641,7 @@ class JobApplicationAssistant:
     # Dayforce will not let the wizard advance while one is open: the agent
     # pressed Next, the page ignored it, and the run called that the last step.
     _SECTION_SAVE_SELECTORS = (
+        "button:has-text('Save Entry')",
         "button:has-text('Update')",
         "button:has-text('Save')",
         "button:has-text('Done')",
@@ -5611,7 +5655,8 @@ class JobApplicationAssistant:
         safety.is_submit_label() is checked all the same, and anything that
         reads as a submit is left alone.
         """
-        committed = 0
+        # Sweep active resume/experience/education draft cards in edit mode
+        committed = commit_draft_cards(page)
         for selector in self._SECTION_SAVE_SELECTORS:
             buttons = page.locator(selector)
             for i in range(min(buttons.count(), 4)):
