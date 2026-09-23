@@ -46,17 +46,22 @@ def _variants(text: str) -> list[str]:
     "Virginia (VA)" -> "virginia va", "virginia"
     "United States (+1)" / "United States +1" -> "united states"
     "VA - Virginia" -> "va", "virginia"
+    "1 item selected, United States of America (+1)" -> ..., "united states of america"
 
     A parenthetical is dropped, never used on its own: "Asian (United States
     of America)" is an ethnicity, not a country.
     """
+    def trimmed(part: str) -> list[str]:
+        return [part,
+                re.sub(r"\([^)]*\)", " ", part),               # drop a parenthetical
+                re.sub(r"\+\s*\d[\d\s-]*", " ", part)]         # drop a dialling code
+
     raw = str(text or "").strip()
-    out = [raw]
-    out.append(re.sub(r"\([^)]*\)", " ", raw))                 # drop a parenthetical
-    out.append(re.sub(r"\+\s*\d[\d\s-]*", " ", raw))           # drop a dialling code
+    out = trimmed(raw)
     for sep in (" - ", " – ", " — ", ", ", " | "):
         if sep in raw:
-            out.extend(raw.split(sep))
+            for part in raw.split(sep):
+                out.extend(trimmed(part))
     seen, result = set(), []
     for item in out:
         norm = normalize(item)

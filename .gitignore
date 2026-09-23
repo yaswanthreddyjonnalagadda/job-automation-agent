@@ -27,6 +27,7 @@ data/*.doc
 
 # Editor/tool scratch.
 .pytest_cache/
+.hypothesis/
 .vscode/
 
 # Forensic dumps from the circuit breaker (state_machine.py): page HTML and
