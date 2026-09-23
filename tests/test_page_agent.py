@@ -158,10 +158,21 @@ def test_the_page_is_read_as_questions_answers_and_choices(page):
     assert by_name["Next"].role == "button" and by_name["First name *"].role == "textbox"
 
 
+def _recorded_page(*parts: str) -> str:
+    """A page recorded during a real run.
+
+    Recordings live in output/, which is gitignored because they carry
+    personal answers. Where one is missing -- on CI or a fresh clone -- the
+    test is skipped instead of failing with FileNotFoundError.
+    """
+    path = Path(__file__).parents[1].joinpath("output", *parts)
+    if not path.is_file():
+        pytest.skip("needs the local recording output/" + "/".join(parts))
+    return path.read_text(encoding="utf-8")
+
+
 def test_workday_answer_buttons_use_their_question_text():
-    snapshot = (Path(__file__).parents[1] / "output" /
-                "The_Options_Clearing_Corporation_Associate_Principal,_Cloud_Engineering" /
-                "pages" / "page_53.txt").read_text(encoding="utf-8")
+    snapshot = _recorded_page("The_Options_Clearing_Corporation_Associate_Principal,_Cloud_Engineering", "pages", "page_53.txt")
     controls = page_agent.parse_snapshot(snapshot)
     questions = {control.question for control in controls if control.role == "button"}
     assert "Have you ever worked for OCC as an intern or employee?*" in questions
@@ -170,16 +181,12 @@ def test_workday_answer_buttons_use_their_question_text():
 
 
 def test_workday_empty_application_shell_is_treated_as_loading():
-    snapshot = (Path(__file__).parents[1] / "output" /
-                "The_Options_Clearing_Corporation_Associate_Principal,_Cloud_Engineering" /
-                "pages" / "page_02.txt").read_text(encoding="utf-8")
+    snapshot = _recorded_page("The_Options_Clearing_Corporation_Associate_Principal,_Cloud_Engineering", "pages", "page_02.txt")
     assert page_agent.workday_form_loading(snapshot)
 
 
 def test_occ_disclosures_have_profile_answers_and_consent_action(resume_file):
-    snapshot = (Path(__file__).parents[1] / "output" /
-                "The_Options_Clearing_Corporation_Associate_Principal,_Cloud_Engineering" /
-                "pages" / "page_08.txt").read_text(encoding="utf-8")
+    snapshot = _recorded_page("The_Options_Clearing_Corporation_Associate_Principal,_Cloud_Engineering", "pages", "page_08.txt")
     agent = make_agent(Planner(), resume_file)
     controls = page_agent.parse_snapshot(snapshot)
     gender = next(c for c in controls if "gender" in c.question.lower())
@@ -204,8 +211,7 @@ def test_empty_middle_name_overrides_historical_answer():
 
 
 def test_paylocity_labels_survive_required_markers():
-    snapshot = (Path(__file__).parents[1] / "output" / "WinChoice_Senior_DevOps_Engineer" /
-                "pages" / "page_09.txt").read_text(encoding="utf-8")
+    snapshot = _recorded_page("WinChoice_Senior_DevOps_Engineer", "pages", "page_09.txt")
     controls = page_agent.parse_snapshot(snapshot)
     questions = {control.question for control in controls}
     assert "First Name" in questions and "Last Name" in questions

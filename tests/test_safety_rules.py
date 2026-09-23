@@ -437,3 +437,27 @@ def test_a_sponsorship_conflict_holds_the_application_and_never_auto_submits():
     assert status == "needs_user_review" and "sponsorship" in message
     go, why = safety.ready_to_auto_submit(report, resume_on_form=True, submit_button_found=True)
     assert go is False
+
+
+# ---------------------------------------------------------------- log redaction
+def test_redaction_never_breaks_a_log_line():
+    """Redacting the template "Could not read ATS_PASSWORD: %s" used to drop
+    the %s while its argument stayed attached, so the line failed to format."""
+    import logging
+
+    lines = []
+
+    class Keep(logging.Handler):
+        def emit(self, record):
+            lines.append(record.getMessage())
+
+    log = logging.getLogger("test.redaction")
+    log.propagate = False
+    log.addHandler(Keep())
+    safety.install_log_redaction("test.redaction")
+    safety.install_log_redaction("test.redaction")   # a second install adds nothing
+    log.warning("Could not read ATS_PASSWORD: %s", "no .env here")
+    log.warning("Reached %s on %s", "someone@example.com", "(555) 010-0000")
+    assert lines[0].startswith("Could not read ATS_PASSWORD=***")
+    assert "someone@example.com" not in lines[1] and "010-0000" not in lines[1]
+    assert sum(isinstance(f, safety.RedactingFilter) for f in log.filters) == 1

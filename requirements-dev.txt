@@ -1,0 +1,10 @@
+# Test and development dependencies. Install with:
+#   pip install -r requirements.txt -r requirements-dev.txt
+pytest>=8.0
+hypothesis>=6.100
+
+# Only for tests/test_agent_v2.py (the agent_v2 prototype). Without them
+# those tests are skipped, not failed.
+langgraph>=0.2
+aiosqlite>=0.20
+cryptography>=42.0

@@ -9,6 +9,10 @@ import tempfile
 from pathlib import Path
 import pytest
 
+# agent_v2 is an unwired prototype with its own dependencies (requirements-dev.txt).
+for _module in ("langgraph", "aiosqlite", "cryptography"):
+    pytest.importorskip(_module)
+
 from agent_v2.config import MAX_NODE_ATTEMPTS, AppConfig
 from agent_v2.core.parser import DOMParser, FormElement
 from agent_v2.graph.state import AutomationState

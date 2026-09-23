@@ -755,7 +755,7 @@ def redact(text: str) -> str:
         if value.lower().startswith("sk-ant-"):
             return "sk-ant-***"
         if re.match(r"(?i)\s*(password|api[_\-]?key|token|secret)\s*[=:]", value):
-            key = re.split(r"[=:]", value, 1)[0]
+            key = re.split(r"[=:]", value, maxsplit=1)[0]
             return f"{key}=***"
         if "@" in value:
             name, _, domain = value.partition("@")
@@ -767,29 +767,34 @@ def redact(text: str) -> str:
 
 
 class RedactingFilter(logging.Filter):
-    """Logging filter that runs every message through redact()."""
+    """Logging filter that runs every message through redact().
+
+    The finished message is redacted, never the format string on its own.
+    Redacting the template "Could not read ATS_PASSWORD: %s" turned it into
+    "ATS_PASSWORD=***": the %s placeholder was gone but its argument was
+    still attached, so formatting the record failed later. Normal runs
+    printed a logging error instead of the line, and tests failed or passed
+    depending on which test file happened to import apply_flow first.
+    """
 
     def filter(self, record: "logging.LogRecord") -> bool:
         try:
-            record.msg = redact(str(record.msg))
-            # Only text is redacted: turning numbers into strings would break
-            # %d formatting in the message.
-            if isinstance(record.args, tuple):
-                record.args = tuple(redact(a) if isinstance(a, str) else a for a in record.args)
-            elif isinstance(record.args, dict):
-                record.args = {k: (redact(v) if isinstance(v, str) else v) for k, v in record.args.items()}
+            message = record.getMessage()
         except Exception:
-            pass
+            message = str(record.msg)
+        record.msg = redact(message)
+        record.args = ()
         return True
 
 
 def install_log_redaction(logger_name: str = "") -> None:
-    """Adds the redacting filter to a logger and each of its handlers."""
+    """Adds the redacting filter to a logger and each of its handlers, once."""
     target = logging.getLogger(logger_name)
-    flt = RedactingFilter()
-    target.addFilter(flt)
+    if not any(isinstance(f, RedactingFilter) for f in target.filters):
+        target.addFilter(RedactingFilter())
     for handler in target.handlers:
-        handler.addFilter(flt)
+        if not any(isinstance(f, RedactingFilter) for f in handler.filters):
+            handler.addFilter(RedactingFilter())
 
 
 def profile_values(profile) -> dict:
