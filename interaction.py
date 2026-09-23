@@ -200,11 +200,294 @@ def resolve_ant_dropdown(
             return True
 
 
+def wipe_and_enforce_location_sweep(
+    page: Page,
+    scope: Optional[Any] = None,
+    profile: Optional[Any] = None,
+    country: Optional[str] = None,
+    state: Optional[str] = None,
+    city: Optional[str] = None,
+    record_callback: Optional[Callable[[str, str], None]] = None,
+) -> bool:
+    """Wipe-and-Enforce Sweep for cascading location field dependencies.
+    Resolves runtime bugs where automatic resume parsers hallucinate Country to 'Afghanistan'
+    and State/Province to 'Badakhshān' while City is set to 'Fairfax'.
+
+    Rules:
+    1. Topological Execution Order: Never fill location fields simultaneously.
+       Strict hierarchical sequence: Country -> State/Province -> City.
+    2. Clear and Reset: For Country, explicitly clear incorrect default selection.
+       Use fill_and_dispatch to force-select canonical profile country (e.g. 'United States').
+    3. Network Quiescence: Right after updating Country, block execution and wait
+       for browser network layer to settle (networkidle state + 1000ms buffer).
+    4. Dependent Repopulation: Once network settles, clear corrupted State/Province field,
+       verify correct options in dropdown portal ('Virginia' / 'VA'), and use
+       fill_and_dispatch to select true profile state. Then populate City ('Fairfax').
+    """
+    if profile is None:
+        try:
+            import config
+            profile = config.get_user_profile()
+        except Exception:
+            profile = None
+
+    canonical_country = country or (getattr(profile, "country", None) if profile else None) or "United States"
+    canonical_state = state or (getattr(profile, "state", None) if profile else None) or "Virginia"
+    canonical_city = city or (getattr(profile, "city", None) if profile else None) or "Fairfax"
+
+    finder_script = r"""(scopeEl) => {
+        let root = document;
+        if (scopeEl) {
+            if (scopeEl.nodeType === Node.ELEMENT_NODE) {
+                root = scopeEl;
+            } else if (scopeEl.element && scopeEl.element.nodeType === Node.ELEMENT_NODE) {
+                root = scopeEl.element;
+            } else if (scopeEl.parentElement) {
+                root = scopeEl.parentElement;
+            }
+        }
+        const candidates = Array.from(root.querySelectorAll(
+            'select, input:not([type="hidden"]):not([type="radio"]):not([type="checkbox"]):not([type="file"]):not([type="submit"]):not([type="button"])'
+        ));
+        
+        const getMeta = (el) => {
+            let meta = (el.getAttribute('aria-label') || '') + ' ' +
+                       (el.getAttribute('placeholder') || '') + ' ' +
+                       (el.getAttribute('name') || '') + ' ' +
+                       (el.getAttribute('id') || '') + ' ' +
+                       (el.getAttribute('data-automation-id') || '');
+            if (el.id) {
+                const lbl = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+                if (lbl) meta += ' ' + (lbl.innerText || lbl.textContent || '');
+            }
+            const parentLabel = el.closest('label');
+            if (parentLabel) meta += ' ' + (parentLabel.innerText || parentLabel.textContent || '');
+            const container = el.closest(
+                '.form-group, .form-item, tr, fieldset, div[class*="field"], div[class*="input"], ' +
+                'div[class*="form"], div[class*="entry"], [data-automation-id*="form"], [data-automation-id*="country"], [data-automation-id*="state"]'
+            );
+            if (container) {
+                const heading = container.querySelector('label, [class*="label"], legend, [class*="title"], [class*="prompt"]');
+                if (heading) meta += ' ' + (heading.innerText || heading.textContent || '');
+            }
+            return meta.toLowerCase();
+        };
+
+        const getVal = (el) => {
+            if (el.tagName.toLowerCase() === 'select') {
+                return (el.options[el.selectedIndex]?.text || el.value || '').trim();
+            }
+            return (el.value || el.getAttribute('value') || '').trim();
+        };
+
+        let cEl = null;
+        let sEl = null;
+        let cityEl = null;
+
+        // 1. Explicit hallucination check
+        for (const el of candidates) {
+            const val = getVal(el).toLowerCase();
+            if (val.includes('afghanistan')) {
+                cEl = el;
+            } else if (val.includes('badakhsh') || val.includes('badakhshan')) {
+                sEl = el;
+            }
+        }
+
+        // 2. Metadata pattern matching
+        const countryNegative = /citizenship|nationality|phone|dial|country\s*code/;
+        const stateNegative = /statement|united states|country/;
+        const cityNegative = /employer|company|school/;
+
+        for (const el of candidates) {
+            const meta = getMeta(el);
+            if (!cEl && /\b(country|country\s*\/\s*region|country\s+or\s+region|residence\s*country|domicile|nation)\b/.test(meta) && !countryNegative.test(meta)) {
+                cEl = el;
+            } else if (!sEl && /\b(state|province|state\s*\/\s*province|state\s+or\s+province|province\s*\/\s*territory|region|state\s*\/\s*region)\b/.test(meta) && !stateNegative.test(meta)) {
+                sEl = el;
+            } else if (!cityEl && /\b(city|town|city\s*\/\s*town|city\s+of\s+residence)\b/.test(meta)) {
+                if (scopeEl || !cityNegative.test(meta)) {
+                    cityEl = el;
+                }
+            }
+        }
+
+        const mark = (el, prefix) => {
+            if (!el) return null;
+            if (!el.id) {
+                el.id = prefix + '_' + Math.random().toString(36).substr(2, 9);
+            }
+            return {
+                id: el.id,
+                tagName: el.tagName.toLowerCase(),
+                value: getVal(el)
+            };
+        };
+
+        return {
+            country: mark(cEl, '__sweep_country'),
+            state: mark(sEl, '__sweep_state'),
+            city: mark(cityEl, '__sweep_city')
+        };
+    }"""
+
+    try:
+        loc_info = page.evaluate(finder_script, scope)
+    except Exception as exc:
+        logger.debug("Location sweep element inspection failed: %s", exc)
+        return False
+
+    if not loc_info or not any(loc_info.values()):
+        return False
+
+    c_canonical_variants = ("united states", "united states of america", "usa", "us")
+    s_canonical_variants = ("virginia", "va", "virginia (va)")
+    country_updated = False
+
+    # --- Rule 1 & Rule 2: Country First (Topological Order + Clear and Reset) ---
+    if loc_info.get("country"):
+        c_data = loc_info["country"]
+        c_id = c_data["id"]
+        c_tag = c_data["tagName"]
+        c_val = c_data["value"]
+        c_loc = page.locator(f"#{c_id}").first
+
+        if c_val.lower() not in c_canonical_variants:
+            logger.info("LOCATION_SWEEP: Clearing corrupted/hallucinated Country %r -> forcing %r", c_val, canonical_country)
+            if c_tag == "select":
+                matched_label = None
+                try:
+                    opt_texts = c_loc.locator("option").all_inner_texts()
+                    for opt in opt_texts:
+                        if opt.strip().lower() in c_canonical_variants:
+                            matched_label = opt.strip()
+                            break
+                except Exception:
+                    pass
+                if matched_label:
+                    c_loc.select_option(label=matched_label)
+                else:
+                    try:
+                        c_loc.select_option(label=canonical_country)
+                    except Exception:
+                        c_loc.select_option(value="US")
+                c_loc.evaluate("""el => {
+                    el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+                    el.dispatchEvent(new Event('blur', { bubbles: true, cancelable: true }));
+                }""")
+            else:
+                fill_and_dispatch(c_loc, "")
+                fill_and_dispatch(c_loc, canonical_country)
+                try:
+                    pop_opts = page.locator("[role='option']:visible, [class*='option']:visible, [class*='item']:visible, li:visible")
+                    count = min(pop_opts.count(), 30)
+                    for i in range(count):
+                        txt = (pop_opts.nth(i).inner_text(timeout=500) or "").strip().lower()
+                        if txt in c_canonical_variants:
+                            click_resiliently(pop_opts.nth(i))
+                            break
+                except Exception:
+                    pass
+
+            if record_callback:
+                record_callback(f"#{c_id}", canonical_country)
+            country_updated = True
+
+    # --- Rule 3: Network Quiescence ---
+    if country_updated or loc_info.get("country"):
+        logger.info("LOCATION_SWEEP: Country step complete. Waiting for network layer to settle...")
+        try:
+            page.wait_for_load_state("networkidle", timeout=7_000)
+        except Exception:
+            pass
+        page.wait_for_timeout(1_000)
+
+    # --- Rule 4: Dependent Repopulation (State and City) ---
+    try:
+        loc_info = page.evaluate(finder_script, scope)
+    except Exception:
+        pass
+
+    if loc_info and loc_info.get("state"):
+        s_data = loc_info["state"]
+        s_id = s_data["id"]
+        s_tag = s_data["tagName"]
+        s_val = s_data["value"]
+        s_loc = page.locator(f"#{s_id}").first
+
+        if s_val.lower() not in s_canonical_variants:
+            logger.info("LOCATION_SWEEP: Clearing corrupted State/Province %r -> selecting %r", s_val, canonical_state)
+            if s_tag == "select":
+                matched_label = None
+                try:
+                    opt_texts = s_loc.locator("option").all_inner_texts()
+                    for opt in opt_texts:
+                        if opt.strip().lower() in s_canonical_variants:
+                            matched_label = opt.strip()
+                            break
+                except Exception:
+                    pass
+                if matched_label:
+                    s_loc.select_option(label=matched_label)
+                else:
+                    try:
+                        s_loc.select_option(label=canonical_state)
+                    except Exception:
+                        s_loc.select_option(value="VA")
+                s_loc.evaluate("""el => {
+                    el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+                    el.dispatchEvent(new Event('blur', { bubbles: true, cancelable: true }));
+                }""")
+            else:
+                fill_and_dispatch(s_loc, "")
+                fill_and_dispatch(s_loc, canonical_state)
+                try:
+                    pop_opts = page.locator("[role='option']:visible, [class*='option']:visible, [class*='item']:visible, li:visible")
+                    count = min(pop_opts.count(), 40)
+                    for i in range(count):
+                        txt = (pop_opts.nth(i).inner_text(timeout=500) or "").strip().lower()
+                        if txt in s_canonical_variants:
+                            click_resiliently(pop_opts.nth(i))
+                            break
+                except Exception:
+                    pass
+
+            if record_callback:
+                record_callback(f"#{s_id}", canonical_state)
+
+    if loc_info and loc_info.get("city"):
+        city_data = loc_info["city"]
+        city_id = city_data["id"]
+        city_loc = page.locator(f"#{city_id}").first
+        city_val = city_data["value"]
+
+        if city_val.lower() != canonical_city.lower() or not city_val:
+            logger.info("LOCATION_SWEEP: Populating City with %r (was %r)", canonical_city, city_val)
+            fill_and_dispatch(city_loc, canonical_city)
+            if record_callback:
+                record_callback(f"#{city_id}", canonical_city)
+        else:
+            try:
+                city_loc.evaluate("""el => {
+                    el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+                    el.dispatchEvent(new Event('blur', { bubbles: true, cancelable: true }));
+                }""")
+            except Exception:
+                pass
+
+    return True
+
+
+
 def commit_draft_cards(page: Page, timeout_ms: int = 4_000) -> int:
     """Pre-navigation sweep: scans DOM for inline resume-parsed experience or education
-    cards stuck in active 'Edit' or 'Draft' modes. Autonomously locates and clicks all
-    internal card buttons matching 'Update', 'Save Entry', 'Done', etc., and waits
-    for network and DOM settlement before evaluating page progression.
+    cards stuck in active 'Edit' or 'Draft' modes. Enforces Wipe-and-Enforce Location Sweep
+    on card containers to prevent committing hallucinated location values, locates and
+    clicks all internal card buttons matching 'Update', 'Save Entry', 'Done', etc.,
+    and waits for network and DOM settlement before evaluating page progression.
 
     Returns the count of cards committed.
     """
@@ -233,21 +516,36 @@ def commit_draft_cards(page: Page, timeout_ms: int = 4_000) -> int:
                 if safety.is_submit_label(label):
                     continue
 
+                # Deduplication: never click the exact same card commit button twice in one sweep
+                is_already_clicked = btn.evaluate("""el => {
+                    if (el.getAttribute('data-draft-committed') === 'true') return true;
+                    el.setAttribute('data-draft-committed', 'true');
+                    return false;
+                }""")
+                if is_already_clicked:
+                    continue
+
                 # Ensure button is internal to a card or form section with inputs
-                is_internal = btn.evaluate("""el => {
+                scope_handle = btn.evaluate_handle("""el => {
                     const card = el.closest(
-                        '[data-automation-id*=\"experience\" i], [data-automation-id*=\"education\" i], ' +
-                        '[class*=\"card\" i], [class*=\"entry\" i], [class*=\"item\" i], ' +
-                        '[class*=\"form-section\" i], fieldset, form, div[role=\"group\"], ' +
-                        '.ant-modal-content, [role=\"dialog\"]'
+                        '[data-automation-id*="experience" i], [data-automation-id*="education" i], ' +
+                        '[class*="card" i], [class*="entry" i], [class*="item" i], ' +
+                        '[class*="form-section" i], fieldset, form, div[role="group"], ' +
+                        '.ant-modal-content, [role="dialog"]'
                     );
                     const scope = card || el.parentElement;
                     const hasInputs = scope && scope.querySelectorAll('input, select, textarea').length > 0;
-                    return Boolean(hasInputs);
+                    return hasInputs ? scope : null;
                 }""")
 
-                if not is_internal:
+                if not scope_handle or not scope_handle.as_element():
                     continue
+
+                # WIPE-AND-ENFORCE SWEEP on the card before committing
+                try:
+                    wipe_and_enforce_location_sweep(page, scope=scope_handle)
+                except Exception as exc:
+                    logger.debug("Location sweep on draft card failed: %s", exc)
 
                 logger.info("Committing active draft card with button %r", label)
                 click_resiliently(btn, timeout_ms=timeout_ms)

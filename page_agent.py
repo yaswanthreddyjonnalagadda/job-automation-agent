@@ -47,6 +47,7 @@ from interaction import (
     fill_and_dispatch,
     resolve_ant_dropdown,
     sweep_modals_and_policies,
+    wipe_and_enforce_location_sweep,
 )
 from perception import (
     find_active_draft_cards,
@@ -85,9 +86,9 @@ ASKS_FOR_A_REFRESH = re.compile(r"something went wrong|please (refresh|reload) (
                                 r"try (again|reloading)", re.IGNORECASE)
 
 CONFIRMATION_TEXT = re.compile(
-    r"thank you for (applying|your application|your interest)|application (has been |was )?(received|submitted)|"
-    r"(successfully|now) submitted|we('ve| have) received your application|your application is complete|"
-    r"you('ve| have) (?:successfully |already )?applied",
+    r"thank you for (applying|your application|your interest)|application (has been |was )?(received|submitted|sent)|"
+    r"your application has been sent|(successfully|now) (submitted|sent)|we('ve| have) received your application|"
+    r"your application is complete|you('ve| have) (?:successfully |already )?applied",
     re.IGNORECASE)
 
 # What a site says when the account behind a sign-in cannot be used.
@@ -311,6 +312,8 @@ def host_of(url: str) -> str:
 _DETAIL_FIELDS = (
     (re.compile(r"^\W*(street |home |mailing )?address(\s*(line\s*)?1)?\W*$", re.IGNORECASE), "address_line1"),
     (re.compile(r"^\W*(city|town)\b", re.IGNORECASE), "city"),
+    (re.compile(r"^\W*(state|province|state\s*\/\s*province|region)\b", re.IGNORECASE), "state"),
+    (re.compile(r"^\W*(country|country\s*\/\s*region|residence\s*country)\b", re.IGNORECASE), "country"),
     (re.compile(r"^\W*(zip|postal)\s*(code)?\b", re.IGNORECASE), "postal_code"),
     (re.compile(r"^\W*e-?mail\b", re.IGNORECASE), "email"),
 )
@@ -360,8 +363,12 @@ _STANDING_ANSWERS: tuple[tuple[re.Pattern, str], ...] = (
      "salary_min"),
     (re.compile(r"how did you hear|source of (this )?(job|application)", re.IGNORECASE),
      "how_did_you_hear"),
-    (re.compile(r"(ever )?(applied|been interviewed|interviewed) (at|with|for|here)|previously applied",
+    (re.compile(r"(ever )?(applied|been interviewed|interviewed) (at|with|for|here|in the past)|previously applied",
                 re.IGNORECASE), "applied_here_before"),
+    (re.compile(r"(ever )?(been )?employed (at|with|by|here)|previously worked (at|with|by|here)|former employee",
+                re.IGNORECASE), "previously_employed_here"),
+    (re.compile(r"willing to work weekends?|work weekends?|weekend work|weekend availability",
+                re.IGNORECASE), "willing_to_work_weekends"),
     (re.compile(r"(relative|family member).{0,40}(employ|work)", re.IGNORECASE), "relatives_employed_here"),
     (re.compile(r"drug (screen|test)|physical exam|pre-?employment screening", re.IGNORECASE),
      "willing_drug_test_and_physical"),
@@ -743,6 +750,26 @@ class PageAgent:
     def fill_and_dispatch(locator, value: str, timeout: Optional[float] = None, **kwargs):
         """Fills an input and immediately dispatches bubbling input, change, and blur synthetic events."""
         return fill_and_dispatch(locator, value, timeout=timeout, **kwargs)
+
+    @staticmethod
+    def wipe_and_enforce_location_sweep(
+        page,
+        scope: Optional[Any] = None,
+        profile: Optional[Any] = None,
+        country: Optional[str] = None,
+        state: Optional[str] = None,
+        city: Optional[str] = None,
+        record_callback: Optional[Callable[[str, str], None]] = None,
+    ):
+        return wipe_and_enforce_location_sweep(
+            page,
+            scope=scope,
+            profile=profile,
+            country=country,
+            state=state,
+            city=city,
+            record_callback=record_callback,
+        )
 
     def forget_sign_in_attempts(self) -> None:
         """Google stays refused where the site itself rejected the account."""
@@ -1454,11 +1481,37 @@ class PageAgent:
         """
         filled, open_questions = 0, []
         handled_groups: set[str] = set()
-        for control in controls:
+
+        # Topological sorting: Country -> State -> City -> Others
+        def _ctrl_prio(ctrl):
+            q_txt = (ctrl.question or "").lower()
+            if re.search(r"^\s*country(/region)?( of residence)?\s*:?\s*\*?\s*$", q_txt):
+                return 0
+            if re.search(r"^\s*\*?\s*(state|province)(/province)?(/region)?\s*:?\s*\*?\s*$", q_txt):
+                return 1
+            if re.search(r"^\s*\*?\s*(city|town)\s*:?\s*\*?\s*$", q_txt):
+                return 2
+            return 3
+
+        sorted_controls = sorted(controls, key=_ctrl_prio)
+
+        for control in sorted_controls:
             answerable_button = (control.role == "button" and control.GENERIC_NAMES.match(control.name.strip())
                                  and bool(control.container or control.group or control.context)) \
                 or is_workday_choice_button(control)
-            if (control.role not in ANSWER_ROLES and not answerable_button) or control.disabled or control.answer:
+
+            is_corrupted_location = False
+            if control.answer:
+                ans_low = control.answer.strip().lower()
+                q_low = (control.question or "").lower()
+                if ans_low in ("afghanistan", "badakhshān", "badakhshan", "badakhshan province"):
+                    is_corrupted_location = True
+                elif re.search(r"\b(country|country\s*/\s*region)\b", q_low) and ans_low not in ("united states", "united states of america", "usa", "us"):
+                    is_corrupted_location = True
+                elif re.search(r"\b(state|province|state\s*/\s*province)\b", q_low) and ans_low not in ("virginia", "va", "virginia (va)"):
+                    is_corrupted_location = True
+
+            if (control.role not in ANSWER_ROLES and not answerable_button) or control.disabled or (control.answer and not is_corrupted_location):
                 continue
             group_key = control.group if control.role in ("radio", "checkbox", "switch") else ""
             if group_key and group_key in handled_groups:
@@ -1490,6 +1543,14 @@ class PageAgent:
                     self.written[control.question] = answer.value
                     self._remember(control, answer)
                     logger.info("KNEW: %s = %r (%s)", control.question[:44], value[:34], source)
+                    # Quiescence check: if Country was updated, let network settle before filling dependent fields
+                    if re.search(r"^\s*country(/region)?( of residence)?\s*:?\s*\*?\s*$", control.question or "", re.I):
+                        logger.info("LOCATION_SWEEP: Country answered; waiting for network quiescence...")
+                        try:
+                            self.tab(page).wait_for_load_state("networkidle", timeout=7_000)
+                        except Exception:
+                            pass
+                        self.settle(page, 1_000)
                 else:
                     star = "*" if any(_same_question(control.question, q) for q in required) else ""
                     open_questions.append(control.question + star)
@@ -1564,6 +1625,10 @@ class PageAgent:
                     if autofilled:
                         self._resume_autofill_attempted = True
                         logger.info("AUTOFILL: resume parser was run before reading the application page")
+                        try:
+                            wipe_and_enforce_location_sweep(tab, profile=self.profile)
+                        except Exception as exc:
+                            logger.debug("Sweep after resume autofill failed: %s", exc)
                         self.settle(page, 2_000)
                         continue
                     if not getattr(self.assistant, "on_job_description", lambda _page: False)(tab):
@@ -2114,7 +2179,10 @@ class PageAgent:
                 if _plain(answer.value) != _plain(known_val):
                     return f"already answered from your profile ({current!r}) -- not changing to {answer.value!r}"
             if not self._ours(question, current):
-                return f"already answered {current[:40]!r} -- not changing an answer the agent didn't give"
+                if current.strip().lower() in ("afghanistan", "badakhshān", "badakhshan", "badakhshan province"):
+                    pass  # Parser hallucination: allow agent to overwrite with canonical profile value
+                else:
+                    return f"already answered {current[:40]!r} -- not changing an answer the agent didn't give" 
         if control.role == "radio" and action == "check" and control.group:
             chosen = next((c.name for c in controls if c.role == "radio" and c.group == control.group and c.checked), "")
             if chosen and not self._ours(question, chosen):

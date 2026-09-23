@@ -181,3 +181,71 @@ def test_resolve_profile_value():
     assert val == "Not Hispanic or Latino"
     assert src == "profile.hispanic_or_latino"
 
+
+def test_chobani_screening_questions():
+    """Verify specific questions seen on the live Chobani job application."""
+    profile = SimpleNamespace(
+        country="United States",
+        state="Virginia",
+        applied_here_before="No",
+        previously_employed_here="No",
+        willing_to_work_weekends="Yes",
+        felony_conviction="No",
+    )
+
+    # 1. Interviewed in the past
+    q_interview = "Have you interviewed with Chobani in the past?*"
+    c_interview = match_concept(q_interview)
+    assert c_interview == "APPLIED_BEFORE"
+    val, src = resolve_profile_value(c_interview, profile)
+    assert val == "No"
+    assert src == "profile.applied_here_before"
+
+    # 2. Willing to work weekends
+    q_weekends = "Are you willing to work weekends?"
+    c_weekends = match_concept(q_weekends)
+    assert c_weekends == "WEEKEND_WORK"
+    val, src = resolve_profile_value(c_weekends, profile)
+    assert val == "Yes"
+    assert src == "profile.willing_to_work_weekends"
+
+    # 3. Country / Region of Residence (must NOT match State/Province)
+    q_country = "Country/Region of Residence:*"
+    c_country = match_concept(q_country)
+    assert c_country == "COUNTRY"
+    val, src = resolve_profile_value(c_country, profile)
+    assert val == "United States"
+    assert src == "profile.country"
+
+    # 4. Previously employed
+    q_employed = "Have you ever been employed by Chobani?*"
+    c_employed = match_concept(q_employed)
+    assert c_employed == "PREVIOUSLY_EMPLOYED"
+    val, src = resolve_profile_value(c_employed, profile)
+    assert val == "No"
+    assert src == "profile.previously_employed_here"
+
+
+def test_boolean_truthiness_resolution():
+    """Ensure string 'No' is never treated as truthy in boolean fields."""
+    profile = SimpleNamespace(
+        applied_here_before="No",
+        felony_conviction="No",
+        previously_employed_here="No",
+        bound_by_non_compete="No",
+        relatives_employed_here="No",
+        open_to_relocation="Yes",
+        at_least_18="Yes",
+        willing_drug_test_and_physical="Yes",
+    )
+
+    assert resolve_profile_value("APPLIED_BEFORE", profile)[0] == "No"
+    assert resolve_profile_value("CRIMINAL_CONVICTION", profile)[0] == "No"
+    assert resolve_profile_value("PREVIOUSLY_EMPLOYED", profile)[0] == "No"
+    assert resolve_profile_value("NON_COMPETE", profile)[0] == "No"
+    assert resolve_profile_value("RELATIVES_EMPLOYED", profile)[0] == "No"
+    assert resolve_profile_value("RELOCATION", profile)[0] == "Yes"
+    assert resolve_profile_value("LEGAL_AGE_18", profile)[0] == "Yes"
+    assert resolve_profile_value("DRUG_TEST", profile)[0] == "Yes"
+
+

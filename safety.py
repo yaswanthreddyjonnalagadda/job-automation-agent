@@ -242,7 +242,10 @@ class AgentValues:
 
     def may_write(self, page, ref: str, current_value: str) -> bool:
         """True when the field is empty, or holds a value the agent wrote."""
-        return not (current_value or "").strip() or self.is_ours(page, ref, current_value)
+        val_clean = (current_value or "").strip().lower()
+        if not val_clean or val_clean in ("afghanistan", "badakhshān", "badakhshan", "badakhshan province"):
+            return True
+        return self.is_ours(page, ref, current_value)
 
 
 # --------------------------------------------------------------------------

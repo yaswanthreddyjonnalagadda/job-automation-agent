@@ -84,6 +84,7 @@ class UserProfile:
     felony_conviction: str = ""
     previously_employed_here: str = ""
     applied_here_before: str = ""
+    willing_to_work_weekends: str = "Yes"
     relatives_employed_here: str = ""
     willing_drug_test_and_physical: str = ""
     veteran_status: str = ""

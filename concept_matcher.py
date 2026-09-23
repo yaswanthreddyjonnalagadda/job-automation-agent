@@ -45,6 +45,21 @@ STATE_MAP = {
 REV_STATE_MAP = {v: k.title() for k, v in STATE_MAP.items()}
 
 
+def _is_yes(val: Any, default: bool = False) -> bool:
+    """Safely determines if a profile attribute represents affirmative consent/yes."""
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    s = str(val).strip().lower()
+    if s in ("yes", "true", "1", "y"):
+        return True
+    if s in ("no", "false", "0", "n", ""):
+        return False
+    return default
+
+
+
 # Concepts and their matching patterns, negative guards, and container boosts
 CONCEPTS: dict[str, dict[str, Any]] = {
     "FIRST_NAME": {
@@ -119,24 +134,24 @@ CONCEPTS: dict[str, dict[str, Any]] = {
         ],
         "negative": r"employer|company|school|university|previous|supervisor",
     },
+    "COUNTRY": {
+        "patterns": [
+            r"\b(?:country\s*(?:\/|\s+or\s+)?region(?:\s*of\s*residence)?|country\s*of\s*residence|residence\s*country|country|nation|domicile)\b",
+        ],
+        "negative": r"citizenship|nationality|employer|school",
+    },
     "STATE_PROVINCE": {
         "patterns": [
             r"\b(?:state\s*\/\s*province|state\s+or\s+province|province\s*\/\s*territory|state|province|region|territory)\b",
             r"\bstate\s*of\s*residence\b",
         ],
-        "negative": r"employer|company|school|university|previous|statement|united\s*states",
+        "negative": r"employer|company|school|university|previous|statement|united\s*states|country",
     },
     "POSTAL_CODE": {
         "patterns": [
             r"\b(?:zip\s*(?:code)?|postal\s*(?:code)?|postcode|pin\s*(?:code)?|pincode|zip\s*\/\s*postal)\b",
         ],
         "negative": r"employer|company|school|university|previous",
-    },
-    "COUNTRY": {
-        "patterns": [
-            r"\b(?:country\s*of\s*residence|residence\s*country|country|nation|domicile)\b",
-        ],
-        "negative": r"citizenship|nationality|employer|school",
     },
     "CURRENT_JOB_TITLE": {
         "patterns": [
@@ -311,8 +326,20 @@ CONCEPTS: dict[str, dict[str, Any]] = {
     },
     "APPLIED_BEFORE": {
         "patterns": [
-            r"\b(?:(?:ever\s+)?(?:applied|been\s+interviewed|interviewed)\s+(?:at|with|for|here)|previously\s+applied|former\s+employee|worked\s+here\s+before)\b",
+            r"\b(?:(?:ever\s+)?(?:applied|been\s+interviewed|interviewed)\s+(?:at|with|for|here|in\s+the\s+past)|previously\s+applied|interviewed\s+with\b.*?\bin\s+the\s+past)\b",
         ],
+    },
+    "PREVIOUSLY_EMPLOYED": {
+        "patterns": [
+            r"\b(?:(?:ever\s+been|previously)\s+employed(?:\s+by|\s+with|\s+at|\s+here)?|worked\s+here\s+before|former\s+employee)\b",
+        ],
+        "negative": r"applied|interviewed",
+    },
+    "WEEKEND_WORK": {
+        "patterns": [
+            r"\b(?:willing\s+to\s+work\s+weekends?|work\s+weekends?|weekend\s+work|weekend\s+availability|work\s+on\s+weekends?)\b",
+        ],
+        "negative": r"weekday|mon-fri",
     },
     "RELATIVES_EMPLOYED": {
         "patterns": [
@@ -616,19 +643,19 @@ def resolve_profile_value(
         val = str(getattr(profile, "ethnicity", "") or "").strip()
         src = "profile.ethnicity"
     elif concept == "LEGAL_AGE_18":
-        val = "Yes" if getattr(profile, "at_least_18", True) else "No"
+        val = "Yes" if _is_yes(getattr(profile, "at_least_18", True), default=True) else "No"
         src = "profile.at_least_18"
     elif concept == "BACKGROUND_CHECK":
-        val = str(getattr(profile, "willing_to_submit_to_pre_employment_background_check", "Yes") or "Yes").strip()
+        val = "Yes" if _is_yes(getattr(profile, "willing_to_submit_to_pre_employment_background_check", "Yes"), default=True) else "No"
         src = "profile.willing_to_submit_to_pre_employment_background_check"
     elif concept == "DRUG_TEST":
-        val = "Yes" if getattr(profile, "willing_drug_test_and_physical", True) else "No"
+        val = "Yes" if _is_yes(getattr(profile, "willing_drug_test_and_physical", True), default=True) else "No"
         src = "profile.willing_drug_test_and_physical"
     elif concept == "CRIMINAL_CONVICTION":
-        val = "No" if not getattr(profile, "felony_conviction", False) else "Yes"
+        val = "Yes" if _is_yes(getattr(profile, "felony_conviction", False), default=False) else "No"
         src = "profile.felony_conviction"
     elif concept == "RELOCATION":
-        val = "Yes" if getattr(profile, "open_to_relocation", True) else "No"
+        val = "Yes" if _is_yes(getattr(profile, "open_to_relocation", True), default=True) else "No"
         src = "profile.open_to_relocation"
     elif concept == "TRAVEL":
         val = str(getattr(profile, "willing_to_travel", "") or "").strip()
@@ -648,13 +675,19 @@ def resolve_profile_value(
         val = str(getattr(profile, "how_did_you_hear", "") or "LinkedIn").strip()
         src = "profile.how_did_you_hear"
     elif concept == "APPLIED_BEFORE":
-        val = "No" if not getattr(profile, "applied_here_before", False) else "Yes"
+        val = "Yes" if _is_yes(getattr(profile, "applied_here_before", False), default=False) else "No"
         src = "profile.applied_here_before"
+    elif concept == "PREVIOUSLY_EMPLOYED":
+        val = "Yes" if _is_yes(getattr(profile, "previously_employed_here", False), default=False) else "No"
+        src = "profile.previously_employed_here"
+    elif concept == "WEEKEND_WORK":
+        val = "Yes" if _is_yes(getattr(profile, "willing_to_work_weekends", True), default=True) else "No"
+        src = "profile.willing_to_work_weekends"
     elif concept == "RELATIVES_EMPLOYED":
-        val = str(getattr(profile, "relatives_employed_here", "No") or "No").strip()
+        val = "Yes" if _is_yes(getattr(profile, "relatives_employed_here", False), default=False) else "No"
         src = "profile.relatives_employed_here"
     elif concept == "NON_COMPETE":
-        val = str(getattr(profile, "bound_by_non_compete", "No") or "No").strip()
+        val = "Yes" if _is_yes(getattr(profile, "bound_by_non_compete", False), default=False) else "No"
         src = "profile.bound_by_non_compete"
     elif concept == "PREFERRED_CONTACT":
         val = str(getattr(profile, "preferred_contact_method", "Email") or "Email").strip()

@@ -38,6 +38,7 @@ from interaction import (
     fill_and_dispatch,
     resolve_ant_dropdown,
     sweep_modals_and_policies,
+    wipe_and_enforce_location_sweep,
 )
 from perception import (
     find_active_draft_cards,
@@ -215,6 +216,27 @@ class JobApplicationAssistant:
     def fill_and_dispatch(locator, value: str, timeout: Optional[float] = None, **kwargs):
         """Fills an input and immediately dispatches bubbling input, change, and blur synthetic events."""
         return fill_and_dispatch(locator, value, timeout=timeout, **kwargs)
+
+    @staticmethod
+    def wipe_and_enforce_location_sweep(
+        page: Page,
+        scope: Optional[Any] = None,
+        profile: Optional[UserProfile] = None,
+        country: Optional[str] = None,
+        state: Optional[str] = None,
+        city: Optional[str] = None,
+        record_callback: Optional[Callable[[str, str], None]] = None,
+    ):
+        """Executes Wipe-and-Enforce Sweep for location fields in strict topological order: Country -> State -> City."""
+        return wipe_and_enforce_location_sweep(
+            page,
+            scope=scope,
+            profile=profile,
+            country=country,
+            state=state,
+            city=city,
+            record_callback=record_callback,
+        )
 
     def _page_hint(self):
         """A stand-in page for adapter lookups when a helper was handed
@@ -1054,8 +1076,23 @@ class JobApplicationAssistant:
             "portfolio_url": p("portfolio_url"),
         }
         actually_filled: list[DetectedField] = []
+
+        # Topological Wipe-and-Enforce Sweep for location fields (Country -> State -> City)
+        try:
+            self.wipe_and_enforce_location_sweep(
+                page,
+                profile=profile,
+                record_callback=lambda sel, val: self.values.record(page, sel, val, "profile:location_sweep"),
+            )
+        except Exception as exc:
+            logger.debug("Location sweep in fill_detected_fields: %s", exc)
+
         for field in fields:
             if not field.matched_profile_key or not field.selector:
+                continue
+            if field.matched_profile_key in ("country", "state", "city"):
+                # Location fields are filled topologically via wipe_and_enforce_location_sweep
+                actually_filled.append(field)
                 continue
             value = values.get(field.matched_profile_key, "")
             if not value:
@@ -1553,6 +1590,19 @@ class JobApplicationAssistant:
             logger.warning("Standard-question scan failed: %s", exc)
             controls = []
 
+        # Topological sorting: Country -> State -> City -> Others
+        def _loc_prio(ctrl):
+            q_txt = (ctrl.get("question") or "").lower()
+            if re.search(r"^\s*country(/region)?( of residence)?\s*:?\s*\*?\s*$", q_txt):
+                return 0
+            if re.search(r"^\s*\*?\s*(state|province)(/province)?(/region)?\s*:?\s*\*?\s*$", q_txt):
+                return 1
+            if re.search(r"^\s*\*?\s*(city|town)\s*:?\s*\*?\s*$", q_txt):
+                return 2
+            return 3
+
+        controls = sorted(controls, key=_loc_prio)
+
         for c in controls:
             if c["value"] and re.search(r"degree obtained|field of study", c["question"] or "", re.IGNORECASE):
                 wanted = self._education_answer(page, c, profile)
@@ -1563,6 +1613,22 @@ class JobApplicationAssistant:
                     except Exception:
                         pass
                     c["value"] = ""
+
+            # Never preserve hallucinated parser location values (Afghanistan, Badakhshān)
+            if c["value"] and re.search(r"^\s*country(/region)?( of residence)?\s*:?\s*\*?\s*$|^\s*\*?\s*(state|province)(/province)?(/region)?\s*:?\s*\*?\s*$", c["question"] or "", re.IGNORECASE):
+                val_low = c["value"].strip().lower()
+                if val_low in ("afghanistan", "badakhshān", "badakhshan", "badakhshan province") or (
+                    re.search(r"country", c["question"] or "", re.I) and val_low not in ("united states", "united states of america", "usa", "us")
+                ) or (
+                    re.search(r"state|province", c["question"] or "", re.I) and val_low not in ("virginia", "va", "virginia (va)")
+                ):
+                    logger.info("Resetting hallucinated location value %r in %r", c["value"], c["question"][:40])
+                    try:
+                        page.locator(f"[id={json.dumps(c['id'])}]").fill("")
+                    except Exception:
+                        pass
+                    c["value"] = ""
+
             if c["value"]:
                 continue
             candidates = (self._rule_for(c["question"], rules) or self._education_answer(page, c, profile)
@@ -3773,6 +3839,7 @@ class JobApplicationAssistant:
             if self.upload_via_chooser(page, r"^\s*(upload|attach|add) (a |your )?(resume|cv)\s*$", target):
                 page.wait_for_timeout(6_000)
                 self.expand_all_sections(page)
+                self.wipe_and_enforce_location_sweep(page, profile=getattr(self, "_profile", None))
                 return True
         try:
             prompt = page.get_by_role(
@@ -5380,7 +5447,12 @@ class JobApplicationAssistant:
         if handler is None:
             logger.info('No fill_experience_section handler for this site')
             return None
-        return handler(self, page, experiences)
+        res = handler(self, page, experiences)
+        try:
+            self.wipe_and_enforce_location_sweep(page, profile=getattr(self, "_profile", None))
+        except Exception as exc:
+            logger.debug("Sweep after fill_experience_section failed: %s", exc)
+        return res
 
 
     def fill_education_section(self, page, education):
@@ -5391,7 +5463,12 @@ class JobApplicationAssistant:
         if handler is None:
             logger.info('No fill_education_section handler for this site')
             return None
-        return handler(self, page, education)
+        res = handler(self, page, education)
+        try:
+            self.wipe_and_enforce_location_sweep(page, profile=getattr(self, "_profile", None))
+        except Exception as exc:
+            logger.debug("Sweep after fill_education_section failed: %s", exc)
+        return res
 
 
 
@@ -5875,6 +5952,8 @@ class JobApplicationAssistant:
         # Ashby / Lever wording
         "application was successfully submitted", "successfully submitted your application",
         "your application was submitted",
+        # SuccessFactors wording
+        "your application has been sent", "application has been sent", "application was sent",
     )
 
     def submission_confirmed(self, page: Page, job_title: str = "") -> bool:
