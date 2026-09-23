@@ -1843,8 +1843,6 @@ class PageAgent:
                 stick_tries = 0
             if moved == "submitted":
                 return Outcome("submitted", page, ["the site confirmed the application"])
-            if moved == "blocked_validation_loop":
-                return Outcome("blocked_validation_loop", page, [feedback])
             if moved == "stop":
                 return Outcome("owner_needed", page, [feedback])
         return Outcome("gave_up", page, ["too many pages in one run"])
@@ -3344,7 +3342,11 @@ class PageAgent:
         counter = re.search(r"(\d+)\s*(?:of|/)\s*(\d+)", plan.step or "")
         steps_remain = bool(counter) and int(counter.group(1)) < int(counter.group(2))
         is_review = getattr(self.assistant, "is_review_step", lambda p: False)(tab)
-        final = plan.next_kind == "final_submit" or is_review or (submit_word and not (steps_remain and plan.next_kind == "next_step"))
+        # The review heuristic answers yes whenever a button reads "Submit",
+        # so it must not outvote a step counter that shows more steps to come
+        # (Schwab's step 2 of 5 is exactly that button).
+        final = plan.next_kind == "final_submit" or (is_review and not steps_remain) \
+            or (submit_word and not (steps_remain and plan.next_kind == "next_step"))
         if plan.page_kind == "job_description" and plan.next_kind == "open_application":
             final = False
         if final:
@@ -3377,7 +3379,11 @@ class PageAgent:
                 key=getattr(self, "key", ""),
                 console_logs=getattr(tab, "_console_logs", []),
             )
-            return "blocked_validation_loop", page, f"Circuit breaker tripped: {state} (evidence in {dump_dir})"
+            # A page that will not move on needs the owner, like every other
+            # stop: the run hands the open browser over instead of ending
+            # with the application abandoned. The evidence is kept either way.
+            return "stop", page, (f"the page did not change after three tries -- stuck in a validation loop "
+                                  f"({state}); evidence in {dump_dir}")
 
         before = re.sub(r"\[ref=[\w-]+\]|\[active\]", "", self.snapshot(page))
         tabs_before = len(tab.context.pages)

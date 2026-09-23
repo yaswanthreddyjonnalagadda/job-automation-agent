@@ -780,14 +780,17 @@ COVER_LETTER_FORM = """<html><body><h1>Apply</h1><p>Step 1 of 1</p>
                 localStorage.resume = resume.files.length ? resume.files[0].name : '';
                 location.href='/done'; return false;">
   <fieldset><legend>Resume/CV*</legend><input type="file" id="resume" aria-label="Attach"></fieldset>
-  <fieldset><legend>Cover Letter</legend><input type="file" id="cover" aria-label="Attach"></fieldset>
+  <fieldset><legend>Cover Letter*</legend><input type="file" id="cover" aria-label="Attach"></fieldset>
   <button type="submit">Submit Application</button>
 </form></body></html>"""
 
 
 def test_the_cover_letter_is_attached_where_the_form_asks_for_one(page, resume_file, tmp_path):
     """Harbinger's "Cover Letter" section has one control, called "Attach",
-    and the cover letter was forgotten again."""
+    and the cover letter was forgotten again. Since the owner's lazy rule
+    (attach only where the form requires a letter), the section here is
+    required; test_optional_cover_letter_is_skipped_when_not_required covers
+    the optional case."""
     letter = tmp_path / "Yaswanth_Jonnalagadda_Cover_Letter.pdf"
     letter.write_bytes(b"%PDF-1.4 letter")
     page.route("https://jobs.example.com/**", lambda route: route.fulfill(
@@ -809,8 +812,8 @@ def test_the_cover_letter_is_attached_where_the_form_asks_for_one(page, resume_f
 
 
 def test_a_document_already_attached_is_not_attached_again(page, resume_file):
-    filled = COVER_LETTER_FORM.replace('<legend>Cover Letter</legend>',
-                                       '<legend>Cover Letter</legend><p>Cover_Letter.pdf</p>')
+    filled = COVER_LETTER_FORM.replace('<legend>Cover Letter*</legend>',
+                                       '<legend>Cover Letter*</legend><p>Cover_Letter.pdf</p>')
     page.route("https://jobs.example.com/**", lambda route: route.fulfill(
         status=200, content_type="text/html",
         body=DONE if route.request.url.endswith("/done") else filled))
