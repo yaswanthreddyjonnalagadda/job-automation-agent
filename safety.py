@@ -192,12 +192,16 @@ def captcha_visible(page) -> bool:
 # Never overwrite what the user typed
 # --------------------------------------------------------------------------
 class AgentValues:
-    """Remembers every value the agent itself put on a page.
+    """Remembers every value the agent itself put on a page, and decides
+    whether a value already on the form may be replaced.
 
-    A field that already holds something is only rewritten when the agent is
-    the one that put it there (correcting its own earlier answer). Anything
-    else -- typed by the user, or pre-filled by the site from the resume --
-    is left exactly as it is.
+    A value the agent wrote may always be rewritten (correcting its own
+    earlier answer). A value the owner entered never is. A value the site
+    put there -- a resume parser's guess, the first entry of a list -- may
+    be corrected from the profile only when provenance.py observed that no
+    person touched it and the owner's pre-fill policy allows it. With no
+    observer on the page there is no way to tell the site from the owner,
+    and the value is left alone, exactly as before.
     """
 
     def __init__(self) -> None:
@@ -242,10 +246,36 @@ class AgentValues:
 
     def may_write(self, page, ref: str, current_value: str) -> bool:
         """True when the field is empty, or holds a value the agent wrote."""
-        val_clean = (current_value or "").strip().lower()
-        if not val_clean or val_clean in ("afghanistan", "badakhshān", "badakhshan", "badakhshan province"):
+        return not (current_value or "").strip() or self.is_ours(page, ref, current_value)
+
+    def origin(self, page, ref: str, current_value: str) -> str:
+        """Who put the current value there (provenance.EMPTY/AGENT/OWNER/SITE/UNKNOWN)."""
+        import provenance
+
+        if not (current_value or "").strip():
+            return provenance.EMPTY
+        if self.is_ours(page, ref, current_value):
+            return provenance.AGENT
+        seen = provenance.owner_edited(page, ref)
+        if seen is True:
+            return provenance.OWNER
+        if seen is False:
+            return provenance.SITE
+        return provenance.UNKNOWN
+
+    def may_correct(self, page, ref: str, current_value: str) -> bool:
+        """True when a value that contradicts the owner's profile may be put
+        right from the profile: the agent or the site put it there, never
+        the owner, and the owner's pre-fill policy allows correcting the
+        site. The caller decides what contradicts the profile; this decides
+        who may be overruled."""
+        import provenance
+        from config import site_prefill_policy
+
+        who = self.origin(page, ref, current_value)
+        if who in (provenance.EMPTY, provenance.AGENT):
             return True
-        return self.is_ours(page, ref, current_value)
+        return who == provenance.SITE and site_prefill_policy() == "correct"
 
 
 # --------------------------------------------------------------------------

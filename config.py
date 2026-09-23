@@ -222,6 +222,12 @@ class AppConfig:
     # See resume_to_attach().
     resume_source: str = field(
         default_factory=lambda: os.getenv("RESUME_SOURCE", "tailored").strip().lower())
+    # What the agent does with a value the site put on the form (a resume
+    # parser's guess, a list's first entry) that contradicts the profile:
+    # "correct" (the default) puts it right from the profile and lists the
+    # correction at hand-over; "leave" leaves it for the owner. A value the
+    # owner entered is never changed either way. See site_prefill_policy().
+    site_prefill_policy: str = field(default_factory=lambda: site_prefill_policy())
 
 
 def get_user_profile() -> UserProfile:
@@ -237,6 +243,13 @@ def get_user_profile() -> UserProfile:
         return UserProfile(**{**defaults.__dict__, **values})
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Could not load profile from {PROFILE_PATH}: {exc}") from exc
+
+
+def site_prefill_policy() -> str:
+    """"correct" or "leave": what happens to a site's value that contradicts
+    the profile (SITE_PREFILL_POLICY in .env; "correct" unless set)."""
+    value = os.getenv("SITE_PREFILL_POLICY", "correct").strip().lower()
+    return value if value in ("correct", "leave") else "correct"
 
 
 def resume_to_attach(tailored, app_config=None) -> Optional[Path]:

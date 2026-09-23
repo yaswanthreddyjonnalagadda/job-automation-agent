@@ -29,6 +29,7 @@ from urllib.parse import quote, urlparse
 
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 
+import provenance
 import safety
 from config import AppConfig, UserProfile, resume_to_attach
 from interaction import (
@@ -274,6 +275,9 @@ class JobApplicationAssistant:
                            channel, str(exc).splitlines()[0][:120])
             self._release_profile(profile_dir)
             self._context = self._launch("", profile_dir)
+        # Record which form controls a person changes, so a value the site put
+        # there is never mistaken for the owner's answer (provenance.py).
+        provenance.install(self._context)
         return self
 
     def _choose_channel(self) -> str:
@@ -6341,10 +6345,12 @@ class JobApplicationAssistant:
                         }
                     }
                     const label = (labelOf(el) || '').replace(/\\s+/g, ' ').trim();
+                    const seen = window.__jaaProvenance;
                     out.push({
                         ref: el.id || el.name || '',
                         label: label.slice(0, 160),
                         value: String(value).slice(0, 200),
+                        owner: seen ? seen.ownerEdited(el) : null,
                         required: el.required || el.getAttribute('aria-required') === 'true' || /\\*\\s*$/.test(label),
                         type: el.tagName === 'SELECT' ? 'select' : type || 'text',
                     });
@@ -6359,8 +6365,13 @@ class JobApplicationAssistant:
         for item in items:
             ref = item.get("ref") or ""
             selector = f"[id={json.dumps(ref)}]" if ref else ""
-            item["source"] = "agent" if selector and self.values.is_ours(page, selector, item.get("value", "")) \
-                else "site/user"
+            # "agent", "user" (a person changed it), "site" (nobody did), or
+            # "site/user" on a page without the provenance observer.
+            owner = item.pop("owner", None)
+            if selector and self.values.is_ours(page, selector, item.get("value", "")):
+                item["source"] = "agent"
+            else:
+                item["source"] = "user" if owner is True else "site" if owner is False else "site/user"
             fields.append(item)
         return fields
 
@@ -6624,6 +6635,23 @@ class JobApplicationAssistant:
             logger.debug("Could not raise the browser window: %s", exc)
 
     def wait_for_signal(
+        self, signal_path: Path, poll_seconds: float = 2.0, timeout_seconds: float = 1800.0,
+        page: Optional[Page] = None, left_form_seconds: float = 600.0,
+    ) -> str:
+        """Waits for the owner (see _wait_for_signal), with the page marked as
+        the owner's turn, so every control they change is recorded as theirs."""
+        if page is not None:
+            provenance.set_agent_busy(page, False)
+        try:
+            return self._wait_for_signal(signal_path, poll_seconds, timeout_seconds, page, left_form_seconds)
+        finally:
+            if page is not None:
+                try:
+                    provenance.set_agent_busy(page, True)
+                except Exception:
+                    pass
+
+    def _wait_for_signal(
         self, signal_path: Path, poll_seconds: float = 2.0, timeout_seconds: float = 1800.0,
         page: Optional[Page] = None, left_form_seconds: float = 600.0,
     ) -> str:

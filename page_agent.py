@@ -56,6 +56,7 @@ from perception import (
     is_field_active,
     read_control_attributes,
 )
+import provenance
 import safety
 
 logger = logging.getLogger("page_agent")
@@ -2166,6 +2167,10 @@ class PageAgent:
         if self._owner_gave(question):
             return "you answered this yourself -- left as you set it"
         if correcting:
+            # A correction may overrule the site, never a person: the
+            # provenance observer saw the owner change this control.
+            if provenance.owner_edited(self.locate(page, control.ref)) is True:
+                return "you changed this yourself -- left as you set it"
             return ""
         if action in ("fill", "choose") and current:
             known_val, known_src = self.known_answer(control)
@@ -2297,12 +2302,14 @@ class PageAgent:
     def remember_page_state(self, page) -> None:
         """What the page shows as the agent stops to wait, so anything the owner
         changes meanwhile is known to be theirs."""
+        provenance.set_agent_busy(self.tab(page), False)
         try:
             self._paused_state = {f["label"]: f["value"] for f in answered_fields(parse_snapshot(self.snapshot(page)))}
         except Exception:
             self._paused_state = {}
 
     def note_owner_changes(self, page) -> None:
+        provenance.set_agent_busy(self.tab(page), True)
         try:
             now = {f["label"]: f["value"] for f in answered_fields(parse_snapshot(self.snapshot(page)))}
         except Exception:

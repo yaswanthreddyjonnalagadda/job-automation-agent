@@ -576,8 +576,11 @@ def learn_user_answers(assistant, page, tracker, key, profile) -> int:
     """Records what the user filled in by hand, so the next application answers
     it by itself.
 
-    Only values the agent did not write are learned, and only where they are
-    not already in the profile. Legal attestations and signatures are never
+    Only values a person entered are learned: never the agent's own, and --
+    where the provenance observer ran -- never a value the site put there that
+    nobody touched (a parser's guess would otherwise be remembered as the
+    owner's answer and reused), and only where they are not already in the
+    profile. Legal attestations and signatures are never
     stored: those are the user's to give every time.
     """
     if not hasattr(tracker, "record_answer"):
@@ -587,8 +590,8 @@ def learn_user_answers(assistant, page, tracker, key, profile) -> int:
     learned = 0
     for field in assistant.read_back_fields(page):
         label, value = (field.get("label") or "").strip(), (field.get("value") or "").strip()
-        if field.get("source") == "agent" or not label or not value or len(label) < 6:
-            continue
+        if field.get("source") in ("agent", "site") or not label or not value or len(label) < 6:
+            continue   # the agent's own answer, or one the site put there that nobody touched
         if value.lower() in known or safety.is_attestation(label) or safety.is_attestation(value):
             continue
         if safety.is_legal_status_question(label):
