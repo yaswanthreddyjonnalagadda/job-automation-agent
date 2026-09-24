@@ -218,6 +218,56 @@ def test_paylocity_labels_survive_required_markers():
     assert any("SMS" in question and "permission" in question for question in questions)
 
 
+def test_a_label_styled_as_a_button_is_still_found_for_its_own_section():
+    """Greenhouse's resume upload is a <label> wired to a hidden file input,
+    not a real button -- Chromium's accessibility tree gives it role
+    "generic", never a press role, so before this it never became a Control
+    at all (24 September: Rubrik/Greenhouse, "Resume/CV *" -> "Attach
+    file"). Playwright's own snapshot already flags such an element
+    [cursor=pointer]. Two of them can carry the identical name (a form with
+    both a resume and a cover letter upload), so they must still be told
+    apart by the section each sits in, not merely detected as *a* button."""
+    snapshot = """- generic [ref=e1]:
+  - generic [ref=e2]: Resume/CV *
+  - generic [ref=e3] [cursor=pointer]: Attach file
+- generic [ref=e4]:
+  - generic [ref=e5]: Cover Letter
+  - generic [ref=e6] [cursor=pointer]: Attach file"""
+    controls = page_agent.parse_snapshot(snapshot)
+    buttons = [c for c in controls if c.role == "button"]
+    assert len(buttons) == 2, "a plain label with no [cursor=pointer] must not turn into a button too"
+    assert all(b.name == "Attach file" for b in buttons)
+    by_question = {b.question: b.ref for b in buttons}
+    assert by_question == {"Resume/CV *": "e3", "Cover Letter": "e6"}
+
+
+def test_greenhouse_attach_file_label_is_matched_to_the_resume_not_the_cover_letter(resume_file):
+    """The real Rubrik/Greenhouse recording behind the 24 September report:
+    the resume was never attached because attach_documents() only looked at
+    button/press-role controls and Greenhouse's trigger has none. This
+    exercises the real, unmodified attach_documents() against that
+    recording -- do() is stubbed so no browser is needed, since the point
+    here is control discovery, not the click itself."""
+    snapshot = _recorded_page("Rubrik_Job_Board_Software_Engineer_-_Cloud_Infrastructure", "pages", "page_01.txt")
+    controls = page_agent.parse_snapshot(snapshot)
+
+    agent = page_agent.PageAgent.__new__(page_agent.PageAgent)
+    agent.resume_file = resume_file
+    agent.resume_uploaded = False
+    agent._letter_attached = False
+    agent.cover_letter = None
+    calls = []
+    agent.do = lambda page, answer, control: calls.append((answer, control)) or True
+
+    given = agent.attach_documents(page=None, snapshot=snapshot, controls=controls)
+
+    assert len(given) == 1, "the resume's Attach file control was not found"
+    answer, control = given[0]
+    assert answer.action == "upload_resume"
+    assert control.question == "Resume/CV *"
+    assert calls and calls[0][1] is control
+
+
 def test_a_radio_button_carries_its_question():
     snapshot = """- group "Are you at least 18 years old? *" [ref=e5]:
   - radio "Yes" [ref=e6]

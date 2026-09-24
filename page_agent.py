@@ -126,7 +126,7 @@ class Control:
     selected_option: str = ""
 
     GENERIC_NAMES = re.compile(
-        r"^(attach|choose file|upload( file)?|browse|add file|select file|select one( required)?)$",
+        r"^(attach( file)?|choose file|upload( file)?|browse|add file|select file|select one( required)?)$",
         re.IGNORECASE,
     )
 
@@ -200,6 +200,11 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         attrs = m.group("attrs") or ""
         value = _unquote(m.group("value") or "")
         ref_m = re.search(r"\[ref=([\w-]+)\]", attrs)
+        # Captured before the text-tracking block below can overwrite
+        # last_text with THIS line's own text -- needed because a clickable
+        # generic (unlike a real button) is one of the roles that block
+        # updates, and would otherwise see its own label as its context.
+        preceding_text = last_text
         while stack and stack[-1][0] >= indent:
             stack.pop()
         parent_group = next((label for _i, label, _ctl in reversed(stack) if label), "")
@@ -257,8 +262,22 @@ def parse_snapshot(snapshot: str) -> list[Control]:
             if "[selected]" in attrs:
                 owner.selected_option = name or value
         # Choices drawn by script have references of their own, and are clicked.
+        # A styled <label>/<div> wired to a hidden file input (Greenhouse's
+        # "Attach file", and the same pattern elsewhere) carries no ARIA
+        # press role at all, so it never reached ANSWER_ROLES/PRESS_ROLES --
+        # the resume upload silently had nothing to click (24 September:
+        # Rubrik/Greenhouse, "Resume/CV *" -> "Attach file"). The snapshot
+        # already flags it [cursor=pointer]; when its own text is one of the
+        # generic attach/upload names, treat it as a button, using the same
+        # nearby-label lookup (`context`) a real generic-named button
+        # already relies on to say which of several identical "Attach file"
+        # controls (resume vs. cover letter) it is.
+        clickable_generic = bool(
+            ref_m and role in ("generic", "text") and "[cursor=pointer]" in attrs
+            and Control.GENERIC_NAMES.match((name or value or "").strip())
+        )
         if ref_m and (role in ANSWER_ROLES or role in PRESS_ROLES or role in OPTION_ROLES
-                      or role in ("radiogroup", "group", "list", "region")):
+                      or role in ("radiogroup", "group", "list", "region") or clickable_generic):
             if role == "radio" and not (controls and controls[-1].role == "radio"):
                 radio_context = last_text
             shown = value if value and not value.endswith(":") else ""
@@ -273,13 +292,16 @@ def parse_snapshot(snapshot: str) -> list[Control]:
             if controls and controls[-1].role in ("combobox", "listbox") and controls[-1].value \
                     and name and _same_question(controls[-1].value, name):
                 controls[-1].value = ""
+            control_name = (name or value).strip() if clickable_generic else name
             control = Control(
-                ref=ref_m.group(1), role=role, name=name, value=shown,
+                ref=ref_m.group(1), role=("button" if clickable_generic else role),
+                name=control_name, value="" if clickable_generic else shown,
                 checked="[checked]" in attrs or "[checked=true]" in attrs, selected="[selected]" in attrs,
                 disabled="[disabled]" in attrs, group=(parent_group or radio_context) if role == "radio" else "",
                 container=parent_group,
-                context=last_text if (not name or Control.GENERIC_NAMES.match(name.strip())
-                                      or re.fullmatch(r"(?:yes|no|select one) required", name.strip(), re.IGNORECASE))
+                context=(preceding_text if clickable_generic else last_text) if (
+                    clickable_generic or not name or Control.GENERIC_NAMES.match(name.strip())
+                    or re.fullmatch(r"(?:yes|no|select one) required", name.strip(), re.IGNORECASE))
                 else "")
             controls.append(control)
             last_control_indent = indent
@@ -2038,7 +2060,8 @@ class PageAgent:
                 if self._letter_attached or self.cover_letter is None:
                     continue
             control = next((c for c in controls
-                            if c.role in PRESS_ROLES | {"button"} and matches.search(f"{c.container} {c.name}")
+                            if c.role in PRESS_ROLES | {"button"}
+                            and matches.search(f"{c.container} {c.context} {c.name}")
                             and re.search(r"attach|upload|choose|add|browse|file|import", c.name or "", re.IGNORECASE)), None)
             if control is None and action == "upload_resume" and (
                     re.search(r"upload a file|resume upload", snapshot or "", re.IGNORECASE)
