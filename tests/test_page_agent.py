@@ -1464,3 +1464,62 @@ def test_leave_policy_leaves_a_site_default_for_the_owner(page, resume_file, mon
     agent.correct_from_profile(page, plan, controls)
     assert page.locator("#c").evaluate("el => el.options[el.selectedIndex].text") == "Afghanistan"
     assert any("Afghanistan" in note and "leave" in note for note in agent.notes)   # the owner is told
+
+
+# --- a resume the form asks for holds the hand-over until it is on the form -------
+
+_UPLOADS = ('<div><label for=cv style="display:block">Resume/CV <span>*</span></label>'
+            '<input type=file id=cv style="display:none">'
+            '<label for=cv style="cursor:pointer;display:inline-block">Attach file</label>'
+            '<button type=button>Paste</button></div>'
+            '<div><label for=cl style="display:block">Cover Letter</label>'
+            '<input type=file id=cl style="display:none">'
+            '<label for=cl style="cursor:pointer;display:inline-block">Attach file</label>'
+            '<button type=button>Paste</button></div><button>Submit</button>')
+_UPLOAD_NOBODY_RECOGNISES = ('<label for=cv style="display:block">Resume/CV <span>*</span></label>'
+                             '<input type=file id=cv style="display:none">'
+                             '<div style="cursor:pointer" onclick="cv.click()">Drop your file here</div>'
+                             '<button>Submit</button>')
+_NO_RESUME_FIELD = ('<label for=n style="display:block">First name <span>*</span></label>'
+                    '<input id=n aria-label="First name"><button>Submit</button>')
+
+
+def _gate_on(page, resume_file, html, auto_submit=False):
+    page.set_content(html)
+    agent = make_agent(Planner(), resume_file, auto_submit=auto_submit)
+    return agent, agent.submit_gate(page, page_agent.parse_snapshot(agent.snapshot(page)))
+
+
+def test_a_resume_the_form_asks_for_holds_the_handover_until_it_is_attached(page, resume_file):
+    """24 September (Rubrik/Greenhouse): the tailored resume was never attached, yet with
+    automatic submission off the gate answered "ready for you to submit" before it looked at
+    the resume, so the run handed over as READY TO SUBMIT with a form the site would refuse."""
+    _, gate = _gate_on(page, resume_file, _UPLOADS)
+    assert "resume is not attached" in gate
+
+
+def test_the_handover_stands_once_the_resume_is_attached(page, resume_file):
+    page.set_content(_UPLOADS)
+    agent = make_agent(Planner(), resume_file, auto_submit=False)
+    snapshot = agent.snapshot(page)
+    assert agent.attach_documents(page, snapshot, page_agent.parse_snapshot(snapshot))
+    assert page.locator("#cv").evaluate("el => el.files.length") == 1
+    assert "automatic submission is off" in agent.submit_gate(page, page_agent.parse_snapshot(agent.snapshot(page)))
+
+
+def test_a_required_resume_label_holds_the_handover_though_its_trigger_is_not_recognised(page, resume_file):
+    """The class behind that report: an upload the agent cannot name must not read as
+    "the form asks for no resume"."""
+    _, gate = _gate_on(page, resume_file, _UPLOAD_NOBODY_RECOGNISES)
+    assert "resume is not attached" in gate
+
+
+def test_a_form_that_asks_for_no_resume_is_still_ready_without_one(page, resume_file):
+    _, gate = _gate_on(page, resume_file, _NO_RESUME_FIELD)
+    assert "automatic submission is off" in gate
+
+
+def test_automatic_submission_still_needs_the_resume_whatever_the_form_shows(page, resume_file):
+    """The unattended path is not loosened: it never sends without the tailored resume."""
+    _, gate = _gate_on(page, resume_file, _NO_RESUME_FIELD, auto_submit=True)
+    assert "resume is not attached" in gate

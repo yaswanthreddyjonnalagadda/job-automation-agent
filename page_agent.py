@@ -328,6 +328,23 @@ def _section_holds_a_file(snapshot: str, section: str) -> bool:
     return False
 
 
+_UPLOAD_VERB = re.compile(r"attach|upload|choose|add|browse|file|import", re.IGNORECASE)
+_RESUME_WORDS = re.compile(r"resume|\bcv\b", re.IGNORECASE)
+# A resume/CV label marked required, as the snapshot shows it: seen even when the
+# upload beside it is not one the agent recognises.
+_REQUIRED_RESUME_LABEL = re.compile(
+    r"^\s*-\s*(?:generic|text|heading|legend|label|paragraph)\b[^:\n]*:\s*"
+    r"(?:resume|cv|curriculum vitae)\b[^*\n]{0,30}\*\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+def _upload_control(controls: list[Control], section: re.Pattern) -> Optional[Control]:
+    """The button that opens the file chooser for the section `section` names."""
+    return next((c for c in controls
+                 if c.role in PRESS_ROLES | {"button"}
+                 and section.search(f"{c.container} {c.context} {c.name}")
+                 and _UPLOAD_VERB.search(c.name or "")), None)
+
+
 def host_of(url: str) -> str:
     return urlparse(url or "").netloc
 
@@ -2059,10 +2076,7 @@ class PageAgent:
                     continue
                 if self._letter_attached or self.cover_letter is None:
                     continue
-            control = next((c for c in controls
-                            if c.role in PRESS_ROLES | {"button"}
-                            and matches.search(f"{c.container} {c.context} {c.name}")
-                            and re.search(r"attach|upload|choose|add|browse|file|import", c.name or "", re.IGNORECASE)), None)
+            control = _upload_control(controls, matches)
             if control is None and action == "upload_resume" and (
                     re.search(r"upload a file|resume upload", snapshot or "", re.IGNORECASE)
                     and re.search(r"required|error", snapshot or "", re.IGNORECASE)):
@@ -3503,6 +3517,9 @@ class PageAgent:
         """Why the application must not be sent now, or "" when it may."""
         auto_enabled = bool(getattr(self.config, "auto_submit_verified_only", False))
         if not auto_enabled and not getattr(self.config, "auto_submit", False):
+            # The owner sends it, but not a form still without the resume it asks for.
+            if last_step and self._tailored_resume_missing(page) and self._form_asks_for_a_resume(page, controls):
+                return "the tailored resume is not attached"
             return "automatic submission is off -- the application is ready for you to submit"
         if safety.captcha_visible(page):
             return "a CAPTCHA is showing -- only you can complete it"
@@ -3515,11 +3532,22 @@ class PageAgent:
             pending = []
         if pending:
             return f"your declaration or signature is needed: {pending[0][:90]}"
-        if last_step and self.resume_file and not (self.resume_uploaded or getattr(self, "resume_seen", False)
-                                                    or self._resume_on_page(page)
-                                                    or self._resume_attached_before()):
+        if last_step and self._tailored_resume_missing(page):
             return "the tailored resume is not attached"
         return ""
+
+    def _tailored_resume_missing(self, page) -> bool:
+        return bool(self.resume_file) and not (
+            self.resume_uploaded or getattr(self, "resume_seen", False)
+            or self._resume_on_page(page) or self._resume_attached_before())
+
+    def _form_asks_for_a_resume(self, page, controls: list[Control]) -> bool:
+        if _upload_control(controls, _RESUME_WORDS) is not None:
+            return True
+        try:
+            return bool(_REQUIRED_RESUME_LABEL.search(self.snapshot(page)))
+        except Exception:
+            return False
 
     # -- small helpers --------------------------------------------------------------------
     @staticmethod

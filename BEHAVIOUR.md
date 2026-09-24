@@ -79,6 +79,12 @@ Residence", so a state is never offered to a country list.
 -- the one the verified auto-submit gate checks by SHA-256. `RESUME_SOURCE=master`
 attaches your standard resume, `assets/master_resume.pdf`, instead.
 
+A form that asks for a resume (an upload it recognises, or a "Resume/CV *"
+label) and does not show the tailored resume at its last step is never handed
+over as `ready_to_submit`, whether or not automatic submission is on: the run
+stops as `needs_user_review` with "the tailored resume is not attached". A form
+with no resume field is unaffected.
+
 ## Before it stops
 
 `apply_flow.hand_over()` runs, in order:
