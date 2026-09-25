@@ -18,8 +18,12 @@ flow must never bypass it, and where the two ever seem to disagree,
    the session persists in the browser profile afterward. Never automate
    login for Google, Microsoft, Apple, LinkedIn, Indeed, or Dice. An ATS
    account may use the configured credentials, but a broken login is
-   surfaced to the human, not auto-recovered (no automated password reset,
-   no OTP interception, no credential vault).
+   surfaced to the human, not auto-recovered (no credential vault, no
+   generated passwords). One owner-approved exception: when the page says an
+   account already exists for the owner's own email, sign in with the existing
+   `ATS_PASSWORD`, and if the site rejects it, reset the password to that same
+   value with the one-time code emailed to the owner (see `BEHAVIOUR.md`,
+   "An account that already exists").
 4. **Compliance Audit** -- scan the posting for non-sponsorship language
    against the profile's visa-sponsorship requirement; stop and record the
    job as skipped on a conflict, before spending any tokens on tailoring.

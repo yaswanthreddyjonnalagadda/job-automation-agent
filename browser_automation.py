@@ -3531,6 +3531,8 @@ class JobApplicationAssistant:
             if candidate_state == "verification":
                 logger.warning("ACCOUNT_HELD: Workday is asking for account verification")
                 return False
+            if self._read_ats_password() and self._account_exists_message(page):
+                return self.sign_in_to_existing_account(page, email)
             if candidate_state in ("registration", "registration_error"):
                 logger.info("ACCOUNT: Workday Candidate Home is in %s", candidate_state)
                 # An account already exists here and the page offers Sign In:
@@ -4815,6 +4817,8 @@ class JobApplicationAssistant:
                 errors = self._visible_error_texts(page)
                 has_validation_error = self._account_form_has_validation_error(page)
             if still_on_form or has_validation_error:
+                if self._account_exists_message(page, include_body=True):
+                    return self.sign_in_to_existing_account(page, email)
                 logger.warning("ACCOUNT_CREATE_FAILED: the site kept the form open%s",
                                f" -- {' / '.join(errors)[:200]}" if errors else "")
                 return False
@@ -4885,7 +4889,8 @@ class JobApplicationAssistant:
             logger.warning("Account creation failed on %s: %s", domain, exc)
             return False
 
-    def attempt_auto_login(self, page: Page, email: str, password: str, scope=None) -> bool:
+    def attempt_auto_login(self, page: Page, email: str, password: str, scope=None,
+                           create_if_missing: bool = True) -> bool:
         """Fills and submits a login form -- ONLY for domains not in
         BLOCKED_LOGIN_DOMAINS. Raises BlockedLoginDomainError otherwise.
         Returns False (no-op) if no credentials are configured or no
@@ -4928,7 +4933,8 @@ class JobApplicationAssistant:
         # Don't try saved credentials on an employer we have no account with:
         # IGT rejected them twice before anyone checked. Create the account
         # instead when the page offers to.
-        if self.account_on_record() is False and self._create_account_control(page) is not None:
+        if create_if_missing and self.account_on_record() is False \
+                and self._create_account_control(page) is not None:
             return self.create_account_from_link(page, email)
 
         email_locator = self._find_login_email_input(root)
@@ -4966,14 +4972,14 @@ class JobApplicationAssistant:
                 page.wait_for_load_state("domcontentloaded", timeout=15000)
                 page.wait_for_timeout(3000)
                 logger.info("Attempted auto-login on %s", domain)
-                return self._after_login_attempt(page, email)
+                return self._after_login_attempt(page, email, create_if_missing)
 
         # Some ATS login forms submit on Enter even when no button matches.
         pw_locator.press("Enter")
         page.wait_for_load_state("domcontentloaded", timeout=15000)
         page.wait_for_timeout(3000)
         logger.info("Attempted auto-login on %s via Enter key", domain)
-        return self._after_login_attempt(page, email)
+        return self._after_login_attempt(page, email, create_if_missing)
 
     @staticmethod
     def _email_already_given(page: Page, email: str) -> bool:
@@ -4994,9 +5000,11 @@ class JobApplicationAssistant:
         except Exception:
             return False
 
-    def _after_login_attempt(self, page: Page, email: str) -> bool:
+    def _after_login_attempt(self, page: Page, email: str, create_if_missing: bool = True) -> bool:
         """Records a successful sign-in; on a rejected one, stops retrying and
-        creates the account if the page offers that."""
+        creates the account if the page offers that (and the caller has not
+        already learned that the account exists)."""
+        self._last_login_rejected = False
         body = ""
         try:
             body = (page.locator("body").inner_text(timeout=5_000) or "").lower()
@@ -5011,8 +5019,10 @@ class JobApplicationAssistant:
             self.remember_account(page, email, "password")
             return True
         if rejected:
+            self._last_login_rejected = True
             logger.warning("LOGIN_REJECTED: the site didn't accept %s -- not retrying", email)
-            if self.account_on_record() is not True and self._create_account_control(page) is not None:
+            if create_if_missing and self.account_on_record() is not True \
+                    and self._create_account_control(page) is not None:
                 return self.create_account_from_link(page, email)
         return False
 
@@ -6198,6 +6208,234 @@ class JobApplicationAssistant:
                 self._click_resiliently(resend.first, timeout_ms=5_000)
                 page.wait_for_timeout(3_000)
         return False
+
+    # ------------------------------------------------------------------
+    # An account that already exists for the owner's email
+    # ------------------------------------------------------------------
+    RECOVERY_WAIT_SECONDS = 25
+    _ACCOUNT_EXISTS = re.compile(
+        r"\b(?:account|user|profile)\b(?: (?:with|for) (?:this|that|the|your)"
+        r"(?: e-?mail(?: address)?| user ?name)?)?[^.\n]{0,40}\balready (?:exists?|registered|in use|taken)|"
+        r"\b(?:e-?mail(?: address)?|user ?name)\b(?: is| has)? already "
+        r"(?:registered|in use|taken|associated|exists?|been used)|"
+        r"\balready have an account (?:with|for) (?:this|that|the) (?:e-?mail|user ?name)",
+        re.IGNORECASE)
+    _SIGN_IN_ENTRY = re.compile(r"^\s*(?:sign ?in|log ?in)\s*$|already have an account", re.IGNORECASE)
+    _FORGOT = re.compile(
+        r"forgot(?:ten)?(?: your| my)? pass ?word|reset(?: your| my)? pass ?word|"
+        r"trouble (?:signing|logging) in|can'?t (?:sign|log) in", re.IGNORECASE)
+    _SEND_STEP = re.compile(
+        r"^\s*(?:send(?: me)?(?: a| the)?(?: code| email| link| instructions)?|continue|next|submit|"
+        r"reset(?: password)?|request(?: a)?(?: code)?)\s*$", re.IGNORECASE)
+    _CONFIRM_STEP = re.compile(
+        r"^\s*(?:reset(?: password)?|save(?: password)?|update(?: password)?|change(?: password)?|"
+        r"submit|continue|verify|confirm|next)\s*$", re.IGNORECASE)
+    _LINK_ONLY = re.compile(
+        r"(?:reset|password) link|link (?:has been |was )?(?:sent|emailed)|click (?:on )?the link|"
+        r"emailed you a link", re.IGNORECASE)
+    _CODE_REFUSED = re.compile(r"invalid|incorrect|expired|didn'?t match|not valid|wrong code", re.IGNORECASE)
+    _PASSWORD_REFUSED = re.compile(
+        r"does not meet|must (?:contain|be|include|have)|too (?:short|weak|common)|cannot (?:be|reuse)|"
+        r"same as|previous password|recent password|not allowed|requirements|do not match|don'?t match",
+        re.IGNORECASE)
+    _RESET_DONE = re.compile(
+        r"password (?:has been |was )?(?:reset|updated|changed|set)|successfully", re.IGNORECASE)
+
+    def _account_exists_message(self, page: Page, include_body: bool = False) -> bool:
+        """Whether the page says an account already exists for the email given.
+        Alerts and errors always count; the whole page only straight after a
+        create attempt, when what it says is the site's answer to it."""
+        texts = self._visible_error_texts(page)
+        if include_body:
+            try:
+                texts.append(page.locator("body").inner_text(timeout=3_000) or "")
+            except Exception:
+                pass
+        return any(self._ACCOUNT_EXISTS.search(" ".join((text or "").split())) for text in texts)
+
+    @staticmethod
+    def _visible_password_boxes(page: Page) -> list:
+        boxes = page.locator("input[type='password']")
+        try:
+            return [boxes.nth(i) for i in range(boxes.count()) if boxes.nth(i).is_visible()]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _first_visible(page: Page, roles: tuple, pattern):
+        for role in roles:
+            found = page.get_by_role(role, name=pattern)
+            for i in range(min(found.count(), 5)):
+                try:
+                    if found.nth(i).is_visible():
+                        return found.nth(i)
+                except Exception:
+                    continue
+        return None
+
+    @staticmethod
+    def _page_says(page: Page, pattern) -> bool:
+        try:
+            return bool(pattern.search(page.locator("body").inner_text(timeout=3_000) or ""))
+        except Exception:
+            return False
+
+    def _press_step(self, page: Page, near) -> None:
+        button = self._first_visible(page, ("button",), self._CONFIRM_STEP)
+        if button is not None:
+            self._click_resiliently(button, timeout_ms=8_000)
+        else:
+            near.press("Enter")
+
+    @staticmethod
+    def _type_new_password(boxes: list, password: str) -> bool:
+        """The owner's existing password into every new-password box -- never any other."""
+        for box in boxes:
+            fill_and_dispatch(box, password)
+        return all((box.input_value() or "") == password for box in boxes)
+
+    def _open_sign_in(self, page: Page) -> bool:
+        """Gets to the sign-in form of the site the page is on."""
+        def on_sign_in() -> bool:
+            return self._sign_in_scope(page) is not None or len(self._visible_password_boxes(page)) == 1
+
+        if on_sign_in():
+            return True
+        for role in ("link", "button"):
+            found = page.get_by_role(role, name=self._SIGN_IN_ENTRY)
+            for i in range(min(found.count(), 5)):
+                try:
+                    if found.nth(i).is_visible() and self._click_resiliently(found.nth(i), timeout_ms=5_000):
+                        page.wait_for_timeout(1_500)
+                        if on_sign_in():
+                            return True
+                except Exception:
+                    continue
+        try:
+            if self.adapter(page).name == "workday" and self._goto_login_page(page):
+                return on_sign_in()
+        except Exception:
+            pass
+        return False
+
+    def sign_in_to_existing_account(self, page: Page, email: str) -> bool:
+        """The site says an account already exists for the owner's email.
+
+        The owner's rule: sign in with the existing ATS_PASSWORD; if the site
+        rejects it, reset the password to that same ATS_PASSWORD with the
+        one-time code emailed to the owner (read from the Gmail this browser is
+        signed in to). Employer ATS sites only, once per site per run, and
+        never a generated or different password. Anything else is left to the
+        owner.
+        """
+        domain = urlparse(page.url).netloc.lower()
+        if not safety.password_allowed(page.url):
+            logger.warning("ACCOUNT_HELD: %s is not a site the agent signs in to", domain)
+            return False
+        password = self._read_ats_password()
+        if not password or not email:
+            logger.info("No ATS credentials configured; leaving the existing account to the user")
+            return False
+        tried = self.__dict__.setdefault("_existing_account_tried", set())
+        if domain in tried:
+            logger.info("ACCOUNT: the existing %s account was already tried this run -- leaving it to the user",
+                        domain)
+            return False
+        tried.add(domain)
+        if safety.captcha_visible(page):
+            logger.warning("ACCOUNT_HELD: a CAPTCHA is showing -- only you can complete it")
+            return False
+        logger.info("ACCOUNT: an account already exists on %s -- signing in with the existing password", domain)
+        if not self._open_sign_in(page):
+            logger.warning("ACCOUNT_HELD: found no way into the sign-in form on %s", domain)
+            return False
+        if self.attempt_auto_login(page, email, password, scope=self._sign_in_scope(page),
+                                   create_if_missing=False):
+            return True
+        if not getattr(self, "_last_login_rejected", False):
+            return False
+        return self._reset_password_with_emailed_code(page, email, password)
+
+    def _reset_password_with_emailed_code(self, page: Page, email: str, password: str) -> bool:
+        domain = urlparse(page.url).netloc.lower()
+        if not safety.password_allowed(page.url) or safety.captcha_visible(page):
+            return False
+        forgot = self._first_visible(page, ("link", "button"), self._FORGOT)
+        if forgot is None:
+            logger.info("RECOVERY: %s offers no forgot-password step -- leaving it to the user", domain)
+            return False
+        logger.info("RECOVERY: %s rejected the password -- resetting it to the existing one with an emailed code",
+                    domain)
+        self._click_resiliently(forgot, timeout_ms=5_000)
+        page.wait_for_timeout(1_500)
+        box = self._find_login_email_input(page)
+        if box is not None and not (box.input_value() or "").strip():
+            box.fill(email)
+        send = self._first_visible(page, ("button",), self._SEND_STEP)
+        if send is not None:
+            self._click_resiliently(send, timeout_ms=8_000)
+        elif box is not None:
+            box.press("Enter")
+
+        field, deadline = None, time.time() + self.RECOVERY_WAIT_SECONDS
+        while time.time() < deadline:
+            field = self._passcode_field(page)
+            if field is not None:
+                break
+            if self._page_says(page, self._LINK_ONLY):
+                logger.info("RECOVERY: %s sends a link, not a code -- leaving it to the user", domain)
+                return False
+            page.wait_for_timeout(1_000)
+        if field is None:
+            logger.info("RECOVERY: no code step appeared on %s -- leaving it to the user", domain)
+            return False
+
+        typed, previous = False, ""
+        for _attempt in (1, 2):
+            code = self.passcode_from_gmail(page, previous=previous)
+            if not code:
+                logger.info("RECOVERY: no code arrived in Gmail -- leaving it to the user")
+                return False
+            field = self._passcode_field(page) or field
+            field.click()
+            field.fill("")
+            field.press_sequentially(code, delay=40)
+            boxes = self._visible_password_boxes(page)
+            if boxes:
+                typed = self._type_new_password(boxes, password)
+                if not typed:
+                    return False
+            self._press_step(page, field)
+            page.wait_for_timeout(2_000)
+            if field.is_visible() and self._page_says(page, self._CODE_REFUSED):
+                logger.warning("RECOVERY: %s refused the code", domain)
+                previous = code
+                continue
+            break
+        else:
+            return False
+
+        if not typed:
+            boxes = self._visible_password_boxes(page)
+            if not boxes:
+                logger.info("RECOVERY: no new-password step appeared on %s -- leaving it to the user", domain)
+                return False
+            if not self._type_new_password(boxes, password):
+                return False
+            self._press_step(page, boxes[0])
+            page.wait_for_timeout(2_000)
+
+        still_asking = len(self._visible_password_boxes(page)) >= 2
+        if still_asking and (self._page_says(page, self._PASSWORD_REFUSED)
+                             or not self._page_says(page, self._RESET_DONE)):
+            logger.warning("RECOVERY_REJECTED: %s did not take the existing password as the new one "
+                           "-- leaving it to the user", domain)
+            return False
+        logger.info("RECOVERY_OK: %s now has the existing password", domain)
+        scope = self._sign_in_scope(page)
+        if scope is not None or len(self._visible_password_boxes(page)) == 1:
+            return self.attempt_auto_login(page, email, password, scope=scope, create_if_missing=False)
+        return True
 
     def find_submit_button(self, page: Page):
         """Locates the application's own final Submit button so the agent knows
