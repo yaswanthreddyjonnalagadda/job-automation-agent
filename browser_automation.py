@@ -3461,6 +3461,9 @@ class JobApplicationAssistant:
         return self._sign_in_with_google(page, button, email, host,
                                          lambda: self.find_google_sign_in(page))
 
+    GOOGLE_PRESSES = 2                    # a press the site does not answer is made once more
+    GOOGLE_RESPONSE_WAIT_MS = 3_000       # how long a site gets to answer one
+
     def _sign_in_with_google(self, page: Page, button, email: str, host: str, header_link) -> bool:
         """Clicks 'Sign in using Google' and picks the user's account on
         Google's chooser. Never types a Google password: if Google asks for
@@ -3468,11 +3471,26 @@ class JobApplicationAssistant:
         that window is left for the user and the agent waits for them."""
         context = page.context
         pages_before = set(context.pages)
+        url_before = page.url
+        self.google_press_ignored = False
         logger.info("LOGIN: using the site's Google sign-in on %s", host)
-        self._click_resiliently(button, timeout_ms=5_000)
-        page.wait_for_timeout(3_000)
-        new_pages = [pg for pg in context.pages if pg not in pages_before]
-        google = new_pages[-1] if new_pages else page
+        # The site has answered a press when a window opened, the page moved on, or the
+        # page stopped offering Google. ADP's button is sometimes dead for a whole page
+        # load and answers nothing; that must not read as a sign-in that worked.
+        google = None
+        for press in range(1, self.GOOGLE_PRESSES + 1):
+            self._click_resiliently(button, timeout_ms=5_000)
+            page.wait_for_timeout(self.GOOGLE_RESPONSE_WAIT_MS)
+            new_pages = [pg for pg in context.pages if pg not in pages_before]
+            if new_pages or page.url != url_before or header_link() is None:
+                google = new_pages[-1] if new_pages else page
+                break
+            logger.info("LOGIN: %s has not reacted to its Google button (press %d of %d)",
+                        host, press, self.GOOGLE_PRESSES)
+        if google is None:
+            self.google_press_ignored = True
+            logger.warning("LOGIN_FAILED: %s did not react to its Google button", host)
+            return False
         try:
             google.wait_for_load_state("domcontentloaded", timeout=15_000)
         except Exception:
