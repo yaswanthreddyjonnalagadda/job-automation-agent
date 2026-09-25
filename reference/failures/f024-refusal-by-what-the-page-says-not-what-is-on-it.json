@@ -1,0 +1,12 @@
+{
+  "id": "f024",
+  "date": "2026-09-25",
+  "class": "A refusal decided by what a page says about itself, not by what is on it",
+  "symptom": "A Praxis application (Greenhouse) was filled and submitted by the agent, then stopped one step short of done: the site emailed an 8-character code, and the agent handed the owner a list of steps (open the inbox, copy the code, type it) instead of entering it, against the owner's rule that the agent does the work.",
+  "site": "Greenhouse job boards (any site whose emailed code is worded as 'to confirm you're a human')",
+  "root_cause": "The rule for a code 'asked for to prove a human' matched the site's wording ('confirm you're a human', 'not a robot', ...). Wording is not a challenge: the code proves the applicant controls the mailbox, which the owner had let the agent read, while a CAPTCHA (a widget on the page) is what tests whether a person is there. The wording was written as the definition of a human check on 17 September, from a page (Harbinger) that also carried a real reCAPTCHA, and was never questioned against a page that did not.",
+  "why_tests_missed": "The test built the refusal from the wording alone (a page with the sentence and no challenge on it) and asserted 'refused', so it confirmed the rule instead of checking it against the owner's intent; no test had a page with the sentence and no CAPTCHA, or a CAPTCHA with a differently worded code.",
+  "fix": "why_not() refuses a code when a CAPTCHA is on the page (safety.captcha_visible), and no longer looks at the wording; the wording pattern is gone. Callers pass captcha and email by name, so a run that is hot-reloaded keeps working with the earlier copy of the module. The owner's decision of 25 September 2026 is recorded in BEHAVIOUR.md and CLAUDE.md section 5.",
+  "tests": ["tests/test_emailed_code_rule.py", "tests/test_page_agent.py::test_a_code_the_site_says_confirms_a_human_is_entered_when_no_captcha_is_showing", "tests/test_page_agent.py::test_a_code_beside_a_real_captcha_is_never_entered"],
+  "prevention": "Decide a refusal from something observable on the page (a challenge frame, an actual CAPTCHA), never from the page's description of itself; test it with the same words with and without the observable thing. And when a rule makes the agent hand work back to the owner, ask whether that is what the owner meant before writing it down as a safety rule."
+}

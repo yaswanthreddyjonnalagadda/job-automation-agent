@@ -963,9 +963,23 @@ def test_a_code_split_across_one_box_per_digit_is_typed(page, resume_file):
     assert page.evaluate("document.body.dataset.verified") == "482913"   # Verify was pressed
 
 
-def test_a_code_asked_for_to_prove_a_human_is_never_entered(page, resume_file):
-    """Harbinger's page says the code is there to confirm a human is applying."""
+def test_a_code_the_site_says_confirms_a_human_is_entered_when_no_captcha_is_showing(page, resume_file):
+    """Greenhouse's page says the code is there to confirm a human is applying. It is an emailed code for the
+    owner's own application, and the owner decided (25 September 2026) that the agent enters it itself: it
+    once stopped a Praxis application one step short of done. What stays the owner's is a CAPTCHA."""
     page.set_content(HUMAN_CHECK_PAGE)
+    agent = _code_agent(page, resume_file)
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    assert agent.complete_account_code(page, controls, agent.snapshot(page)) is True
+    assert page.locator("#c").input_value() == "482913"
+
+
+def test_a_code_beside_a_real_captcha_is_never_entered(page, resume_file):
+    """Harbinger's page puts the code beside a reCAPTCHA: the challenge is the owner's, and the agent does not
+    go on to the code past it."""
+    page.set_content(HUMAN_CHECK_PAGE.replace(
+        "<label", '<iframe title="recaptcha challenge expires in two minutes" width="300" height="300" '
+                  'srcdoc="<p>challenge</p>"></iframe><label', 1))
     agent = _code_agent(page, resume_file)
     controls = page_agent.parse_snapshot(agent.snapshot(page))
     assert agent.complete_account_code(page, controls, agent.snapshot(page)) is False

@@ -6229,13 +6229,9 @@ class JobApplicationAssistant:
     def why_not_read_a_code(self, page: Page, email: str = "") -> Optional[str]:
         """emailed_codes.why_not for the page in front of the agent: None when it may read a code from the
         owner's mail, else why not."""
-        try:
-            text = page.locator("body").inner_text(timeout=5_000) or ""
-        except Exception:
-            text = ""
         profile = self._owner_profile()
         email = email or (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
-        return emailed_codes.why_not(profile, page.url, text, safety.captcha_visible(page), email)
+        return emailed_codes.why_not(profile, page.url, captcha=safety.captcha_visible(page), email=email)
 
     def passcode_from_gmail(self, page: Page, previous: str = "", wait_seconds: int = 150,
                             length: int = 0) -> str:

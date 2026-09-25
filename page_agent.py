@@ -1136,9 +1136,6 @@ class PageAgent:
     ACCOUNT_CODE = re.compile(
         r"(verification|security|confirmation|one[- ]?time|access)\s*code|passcode|\botp\b|"
         r"code (was )?(sent|emailed) to", re.IGNORECASE)
-    # A code a site asks for to prove a human is applying: never the agent's. The wording lives with the one
-    # rule for when a code may be read (emailed_codes.py), not here.
-    HUMAN_CHECK = emailed_codes.HUMAN_CHECK
 
     def open_entry_for_missing_field(self, page, snapshot: str, controls: list[Control]) -> bool:
         """Opens a collapsed entry the page is complaining about.
@@ -1254,9 +1251,10 @@ class PageAgent:
 
         The owner approved this on 2026-09-15 for account setup and sign-in
         (browser_automation.complete_emailed_passcode), and R+L Carriers' form
-        asks for exactly that. A code a site asks for to prove a human is
-        applying is refused -- Harbinger's says so beside its reCAPTCHA, and
-        that one is the owner's to enter.
+        asks for exactly that; so does Greenhouse's "enter the code to confirm
+        you're a human", which the owner decided on 2026-09-25 the agent enters
+        too. Whether it may is emailed_codes.why_not: a CAPTCHA on the page (as
+        beside Harbinger's code) keeps it the owner's, the site's wording does not.
         """
         # R+L Carriers gives the code a box per digit ("Enter verification code
         # digit 1 of six."), so one box or six, they are all the same step.
@@ -1265,8 +1263,8 @@ class PageAgent:
                  and self.ACCOUNT_CODE.search(f"{c.question} {c.container}")]
         if not boxes or self._code_tries >= 3:
             return False
-        why = emailed_codes.why_not(self.profile, page.url, snapshot, safety.captcha_visible(page),
-                                    getattr(self.config, "ats_email", "") or "")
+        why = emailed_codes.why_not(self.profile, page.url, captcha=safety.captcha_visible(page),
+                                    email=getattr(self.config, "ats_email", "") or "")
         if why:
             logger.info("CODE: a code was emailed to you, but %s", why)
             return False

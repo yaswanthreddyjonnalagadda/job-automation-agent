@@ -6,7 +6,7 @@
   "site": "Any employer site that emails a code (Workday reset, Greenhouse security code, R+L Carriers form)",
   "root_cause": "Each step that needed a code was written when it was needed and copied only the conditions its author had in mind. Nothing made the steps share the decision, so the rule the owner gave (only where mail reads are allowed, only on employer sites, never a code that proves a human) was true of some steps and not others, and a new condition (the per-account read limit) would have had to be added three times.",
   "why_tests_missed": "Each step's tests checked its own behaviour with the mail reader stubbed out, so no test asked the same question of every step, and none looked at whether a reset was requested before the code could be read.",
-  "fix": "emailed_codes.why_not() holds the rule; passcode_from_gmail, which every reader of a code goes through, asks it before it opens the mail; the reset asks before it presses Forgot; the human-check wording lives only in emailed_codes.py; reads are counted per account for 24 hours in login_guard (six).",
+  "fix": "emailed_codes.why_not() holds the rule; passcode_from_gmail, which every reader of a code goes through, asks it before it opens the mail; the reset asks before it presses Forgot; the human-check wording lived only in emailed_codes.py (later removed: see f024); reads are counted per account for 24 hours in login_guard (six).",
   "tests": ["tests/test_emailed_code_rule.py", "tests/test_existing_account.py"],
   "prevention": "When the same yes/no question is asked in more than one module, give it one function and route every asker through the thing they all share (here the mail reader), then test each asker against the same table of cases with the real reader, not a stub."
 }
