@@ -6493,17 +6493,18 @@ class JobApplicationAssistant:
         domain = urlparse(page.url).netloc.lower()
         if not safety.password_allowed(page.url) or safety.captcha_visible(page):
             return False
+        if getattr(self.adapter(page), "name", "") == "workday":
+            # Workday resets by an emailed link that lasts about two hours and allows five requests in 24
+            # hours; the agent cannot follow a link, so a request only spends one of the five. (Asked first:
+            # this is the reason whatever the owner has allowed, and it is the more useful thing to say.)
+            self._login_paused = ("Workday resets a password with a link it emails you (valid about 2 hours, five "
+                                  "requests in 24 hours): use 'Forgot your password?' yourself, then press Continue")
+            logger.info("RECOVERY: %s -- not requested by the agent", self._login_paused)
+            return False
         why = self.why_not_read_a_code(page, email)        # before Forgot is pressed: a request is spent by it
         if why:
             self._login_paused = why
             logger.info("RECOVERY: %s -- not requested by the agent", why)
-            return False
-        if getattr(self.adapter(page), "name", "") == "workday":
-            # Workday resets by an emailed link that lasts about two hours and allows five requests in 24
-            # hours; the agent cannot follow a link, so a request only spends one of the five.
-            self._login_paused = ("Workday resets a password with a link it emails you (valid about 2 hours, five "
-                                  "requests in 24 hours): use 'Forgot your password?' yourself, then press Continue")
-            logger.info("RECOVERY: %s -- not requested by the agent", self._login_paused)
             return False
         held = login_guard.may_request_reset(domain, email)
         if held:
