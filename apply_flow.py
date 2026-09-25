@@ -1179,6 +1179,9 @@ def main() -> None:
             # works out what to do there.
             logger.info("Working the application with the reading agent")
             page = assistant.open_job_page(resume_at or job.url)
+            # The browser opens behind whatever the owner is using: bring it up now, so they can watch
+            # the run, not only at a hand-over.
+            assistant.raise_window(page)
             page = assistant.open_embedded_form(page)
             if assistant.on_job_description(page):
                 page = assistant.click_apply_button(page)
