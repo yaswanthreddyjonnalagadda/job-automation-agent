@@ -1892,7 +1892,7 @@ class PageAgent:
                         "the agent could not answer these itself: " + "; ".join(still_open[:12])
                 # A dropdown that draws its list only when opened is read by opening
                 # it, so Claude is told the choices instead of guessing at them.
-                hidden = self.read_hidden_choices(page, controls, snapshot)
+                hidden = self.read_hidden_choices(page, controls, snapshot, only=still_open)
                 asked = feedback
                 if hidden:
                     snapshot = self.read_when_loaded(page)
@@ -3320,7 +3320,11 @@ class PageAgent:
                 break
         return offered
 
-    def read_hidden_choices(self, page, controls: list[Control], snapshot: str) -> str:
+    MAX_PEEKS_PER_READ = 6        # dropdowns opened in one look at a page: each costs a moment
+    MAX_CHOICES_GIVEN = 30        # a longer list (Schools, Countries) is typed into, not handed to the planner
+
+    def read_hidden_choices(self, page, controls: list[Control], snapshot: str,
+                            only: Optional[list[str]] = None) -> str:
         """The choices of blank dropdowns that draw their list only when opened,
         as words for the planner ("" when there is none to read).
 
@@ -3330,18 +3334,40 @@ class PageAgent:
         question went back to the owner. Opening the list shows them; the list is
         closed again and nothing is chosen here -- choosing stays with the planner's
         answer and `choose()`.
+
+        Praxis's two required dropdowns are named by their question, not by a prompt,
+        so they were never opened, and Claude answered "No" and "Yes" to lists that
+        say "Never Employed by Praxis" and "I have read, authorize and acknowledge".
+        A blank dropdown that names its own question is opened too when it is one
+        the agent could not answer itself (`only`: the questions it could not).
         """
         notes: list[str] = []
+        peeked_now = 0
         for control in controls:
             if control.role not in ("button", "combobox", "listbox") or control.disabled or control.options \
-                    or control.answer or not _PROMPT_NAME.match((control.name or control.value or "").strip()):
+                    or control.answer:
                 continue
+            if not _PROMPT_NAME.match((control.name or control.value or "").strip()):
+                # Named by its question: only a dropdown (never a button) the agent could not answer.
+                if control.role == "button" or not only \
+                        or not any(_same_question(control.question, q) for q in only):
+                    continue
+                try:
+                    if is_ant_dropdown(self.locate(page, control.ref)):
+                        continue                  # read whole by its own reader (interaction.resolve_ant_dropdown)
+                except Exception:
+                    continue
             label = label_above(snapshot, control.ref) or control.context or control.container
+            if not _PROMPT_NAME.match((control.name or control.value or "").strip()):
+                label = control.question
             key = f"{self._current_host}|{(label or control.ref)[:80]}"
-            if self._peeked.get(key, 0) >= 2 or len(notes) >= 4:
+            if self._peeked.get(key, 0) >= 2 or len(notes) >= 4 or peeked_now >= self.MAX_PEEKS_PER_READ:
                 continue
             self._peeked[key] = self._peeked.get(key, 0) + 1
+            peeked_now += 1
             choices = self._open_and_read(page, control, label)
+            if len(choices) > self.MAX_CHOICES_GIVEN:
+                continue
             if choices:
                 logger.info("CHOICES: read %d from %r by opening it", len(choices), (label or control.name)[:60])
                 notes.append(f"the choices for {label or control.name!r} (the {control.name!r} control, ref {control.ref}) "

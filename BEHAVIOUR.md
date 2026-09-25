@@ -209,6 +209,14 @@ so the answer comes from your profile and the choices offered -- not from a gues
 at what the list might hold. If your profile settles no answer, or none of the
 choices fits, the question is still left for you and listed at hand-over.
 
+The same is done for any blank dropdown that carries its question as its own name
+(Greenhouse's) when the agent could not answer it from your profile: a form asking
+"Are you a former employee?" may offer "Never Employed by Praxis", not "No", and
+the agent now gives Claude the form's own words before it answers. It opens at most
+six dropdowns in one look at a page, leaves alone a list of more than thirty choices
+(Schools, Countries -- those are typed into), and leaves Ant Design lists to their
+own reader.
+
 ## When you press Continue
 
 Pressing Continue on the dashboard gives the agent its three tries at moving on
