@@ -171,6 +171,45 @@ def same_place(a: str, b: str) -> bool:
     return same_country(a, b) or same_us_state(a, b)
 
 
+def _regions(parts: list[str]) -> tuple[set[str], set[str]]:
+    """The US states and the countries a town's later parts name. A part that is a
+    state's spelling is a state even where it is also a country's code ("VA" is
+    Virginia here, not the Vatican; "IN" Indiana, not India)."""
+    states: set[str] = set()
+    countries: set[str] = set()
+    for part in parts:
+        state = us_state_code(part)
+        if state:
+            states.add(state)
+            continue
+        country = country_code(part)
+        if country:
+            countries.add(country)
+    return states, countries
+
+
+def same_locality(a: str, b: str) -> bool:
+    """True when two spellings name the same town: "Fairfax, VA" and
+    "Fairfax, Virginia, United States".
+
+    Both give the town first and a region after it. The town's name is the same
+    words; the state, in any spelling, is the same state on both sides (named on
+    one side only is not enough: several states have a Fairfax); a country
+    left out of one side is not a difference, one named on both must agree.
+    """
+    first, second = str(a or "").split(","), str(b or "").split(",")
+    if len(first) < 2 or len(second) < 2:
+        return False
+    town = normalize(first[0])
+    if not town or town != normalize(second[0]):
+        return False
+    states_a, countries_a = _regions(first[1:])
+    states_b, countries_b = _regions(second[1:])
+    if states_a != states_b or (countries_a and countries_b and countries_a != countries_b):
+        return False
+    return bool(states_a or (countries_a and countries_b))
+
+
 def is_placeholder(option: str) -> bool:
     return bool(_PLACEHOLDER.match(str(option or "")))
 
