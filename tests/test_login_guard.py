@@ -240,7 +240,7 @@ def test_a_reset_is_asked_for_once_a_day_elsewhere(page, monkeypatch):
     assert page.evaluate("window.forgot") == 0
 
 
-def test_pressing_continue_in_the_agent_lets_it_try_again():
+def a_paused_agent():
     import config
     import page_agent
     login_guard.record_sign_in(HOST, EMAIL, ok=False)
@@ -250,5 +250,29 @@ def test_pressing_continue_in_the_agent_lets_it_try_again():
                                  config.UserProfile(email=EMAIL), SimpleNamespace(raw_text="x"),
                                  SimpleNamespace(title="t", company="c", url=f"https://{HOST}/x"), resume_file=None)
     agent._current_host = HOST
+    return agent
+
+
+def test_pressing_continue_in_the_agent_lets_it_try_again():
+    agent = a_paused_agent()
     agent.forget_sign_in_attempts()
     assert login_guard.may_sign_in(HOST, EMAIL) is None
+
+
+@pytest.mark.parametrize("decision", ["reload_code", "refresh", "reupload_resume", "fill_education"])
+def test_only_the_owners_continue_lifts_a_hold_not_a_reload_or_a_refresh(decision):
+    """A code reload or a refresh says nothing about whether the owner looked at the account."""
+    agent = a_paused_agent()
+    agent.forget_sign_in_attempts(owner_acted=(decision == "continue"))
+    assert login_guard.may_sign_in(HOST, EMAIL)                 # still held
+    agent.forget_sign_in_attempts(owner_acted=True)             # the owner's Continue
+    assert login_guard.may_sign_in(HOST, EMAIL) is None
+
+
+def test_apply_flow_hands_the_owners_decision_to_the_agent():
+    """Both resume points pass the decision on, and only Continue counts as the owner's action."""
+    from pathlib import Path
+    source = (Path(__file__).parents[1] / "apply_flow.py").read_text(encoding="utf-8")
+    assert source.count('forget_sign_in_attempts(owner_acted=(decision == "continue"))') == 2
+    assert "forget_sign_in_attempts(owner_acted=False)" in source
+    assert "forget_sign_in_attempts()" not in source
