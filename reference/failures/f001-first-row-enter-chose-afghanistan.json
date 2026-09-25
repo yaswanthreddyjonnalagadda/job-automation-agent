@@ -1,0 +1,12 @@
+{
+  "id": "f001",
+  "date": "2026-09-23",
+  "class": "An answer judged by what the widget echoed, not by what the form kept",
+  "symptom": "A country dropdown that should have taken \"United States\" ended on \"Afghanistan\", the first row of the list.",
+  "site": "Dayforce (Ant Design select)",
+  "root_cause": "The agent typed the answer and pressed Enter in a single-choice list, which takes whichever row is first, and a long list is virtual: only the rows in view exist, so the wanted row was never on the page to be found.",
+  "why_tests_missed": "The fixtures used short native selects, where every option is present and typing then Enter happens to work.",
+  "fix": "interaction.resolve_ant_dropdown reads the whole list (scrolling it), matches a real row's label (a place in any spelling), clicks it, and confirms the select shows it. Nothing else is tried in a single-choice list: no row means the answer was not given.",
+  "tests": ["tests/test_ant_select.py::test_the_country_far_down_the_list_is_the_one_chosen"],
+  "prevention": "Never type-and-Enter in a single-choice list. Read the list whole, match a label exactly, click it, then confirm the widget now shows it; if it does not, the answer was not given."
+}

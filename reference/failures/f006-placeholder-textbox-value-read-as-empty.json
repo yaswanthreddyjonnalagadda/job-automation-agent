@@ -1,0 +1,12 @@
+{
+  "id": "f006",
+  "date": "2026-09-24",
+  "class": "The same fact in another shape: a value read as empty because of how the page draws it",
+  "symptom": "The agent retyped Email and Mobile Number on every pass and stopped with \"could not set: Email\" on a form that was in fact filled in.",
+  "site": "ADP WorkforceNow (Willdan)",
+  "root_cause": "A text box that carries a placeholder is drawn by the accessibility snapshot with its value as a child line (\"- text: jane@example.com\") rather than after its colon, and the parser only read the colon form. A phone box the site began with only its dial code (\"+1\") was also read as an answer.",
+  "why_tests_missed": "No fixture had a text box with a placeholder and a value, so only the colon form was ever parsed.",
+  "fix": "parse_snapshot reads the first child text line of an empty text box as its value; a value that is only a dial code is not an answer.",
+  "tests": ["tests/test_google_sign_in_and_value_readback.py"],
+  "prevention": "Read a field's value through every shape the page can draw it in, and test the reader with the real browser's snapshot over every placeholder shape and value, not with hand-written snapshots alone."
+}

@@ -1,0 +1,12 @@
+{
+  "id": "f004",
+  "date": "2026-09-24",
+  "class": "A secret in a log line",
+  "symptom": "The Gmail reader logged the first 60 characters of the mail row it found; a subject such as \"Your verification code is 482913\" put the one-time code in the log.",
+  "site": "Gmail (the owner's signed-in tab)",
+  "root_cause": "A log line quoted the content of a message that carries a secret. safety.redact masks keys, passwords, emails and phone numbers, not a short code, so nothing downstream caught it.",
+  "why_tests_missed": "The no-secrets-in-logs test replaced the Gmail reader with a fake, so the line that logged the preview never ran.",
+  "fix": "The line now says only that a code was found.",
+  "tests": ["tests/test_existing_account.py::test_the_gmail_reader_does_not_log_the_code_from_the_mail_it_read"],
+  "prevention": "Never log the content of a message, page or field that can carry a secret; log that something happened. Test secrets-in-logs against the real reader on a stand-in inbox, not against a fake of it."
+}
