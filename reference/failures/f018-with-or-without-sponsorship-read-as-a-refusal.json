@@ -1,0 +1,12 @@
+{
+  "id": "f018",
+  "date": "2026-09-25",
+  "class": "A phrase matched without the words that reverse its meaning",
+  "symptom": "The sponsorship guard disqualified a job (DISQUALIFIED_POLICY_MISMATCH) whose page asks \"Are you authorized to work in the United States (with or without sponsorship)?\" - a screening question that accepts candidates who need sponsorship.",
+  "site": "Praxis Precision Medicines (job page)",
+  "root_cause": "The non-sponsorship pattern matched \"without ... sponsorship\" anywhere, including inside \"with or without sponsorship\", where the \"with or\" makes the phrase inclusive. The pattern was written for \"without the need for sponsorship\" and never saw the inclusive form.",
+  "why_tests_missed": "The guard's tests used exclusionary wording only; none used the inclusive question, and the shield was never run on a page that asks it.",
+  "fix": "safety.py (owner-approved, 25 September 2026): \"without\" preceded by \"with or\", \"with and/or\" or \"with/or\" is not a refusal. Plain \"without sponsorship\", \"without the need for sponsorship\", \"unable to sponsor\", \"no sponsorship\", \"citizens only\" and the rest still block, and a real refusal elsewhere on the same page still stops the run.",
+  "tests": ["tests/test_inclusive_sponsorship_wording.py"],
+  "prevention": "Test every safety pattern with the wording that reverses it as well as the wording it targets, and run the guard on a real page containing each. Keep the block on the wording that truly excludes the candidate."
+}
