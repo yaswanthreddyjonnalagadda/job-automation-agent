@@ -866,6 +866,7 @@ class PageAgent:
         self._paused_state: dict[str, str] = {}
         self._pending_memories: list[dict] = []
         self._choice_methods: dict[str, str] = {}
+        self._chosen_instead: dict[str, str] = {}     # ref -> the owner-approved alternative chosen in place of the value
         self._reused_recipes: dict[str, tuple[str, str, str, str, str]] = {}
         self._current_host = ""
 
@@ -944,7 +945,7 @@ class PageAgent:
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict),
                               ("_profile_answer_library", lambda: None),
                               ("_resume_autofill_attempted", bool), ("_pending_memories", list),
-                              ("_choice_methods", dict), ("_reused_recipes", dict),
+                              ("_choice_methods", dict), ("_reused_recipes", dict), ("_chosen_instead", dict),
                               ("_current_host", str)):
             if not hasattr(self, name):
                 setattr(self, name, default())
@@ -2083,6 +2084,11 @@ class PageAgent:
                         self.notes.append(note)
                     logger.info("LEFT BLANK: %s", note)
             if done:
+                # An owner-approved alternative was chosen in its place: the answer is what is on the page,
+                # or the check that it stayed would call it a different answer and re-read the page for ever.
+                instead = self._chosen_instead.pop(control.ref, None)
+                if instead:
+                    answer.value = instead
                 given.append((answer, control))
                 self.written[control.question or answer.question] = answer.value
                 self.assistant.values.record(self.tab(page), f"aria:{control.question}", answer.value,
@@ -2841,7 +2847,34 @@ class PageAgent:
             return self.choose(page, control, answer.value, self._page_controls(page))
         return False
 
+    def _alternatives_for(self, value: str) -> list[str]:
+        """The substitutes the OWNER approved for this value (profile.answer_alternatives), in their order.
+        Nothing else is ever substituted: a field of study is a fact the application certifies."""
+        mapping = getattr(self.profile, "answer_alternatives", None) or {}
+        key = _plain(value)
+        for name, alternatives in mapping.items():
+            if _plain(str(name)) == key and isinstance(alternatives, (list, tuple)):
+                return [str(a) for a in alternatives if str(a).strip() and _plain(str(a)) != key]
+        return []
+
     def choose(self, page, control: Control, value: str, controls: list[Control] = ()) -> bool:
+        """Chooses `value` from the control's list. Where the list does not offer it, tries the
+        substitutes the owner has approved for that value, in order, and nothing else; the hand-over
+        says when one was used."""
+        if self._choose_exact(page, control, value, controls):
+            return True
+        for alternative in self._alternatives_for(value):
+            if self._choose_exact(page, control, alternative, controls):
+                self._chosen_instead[control.ref] = alternative
+                note = (f"{(control.question or control.name)[:60]}: {value!r} is not offered, so your listed "
+                        f"alternative {alternative!r} was chosen")
+                if note not in self.notes:
+                    self.notes.append(note)
+                logger.info("CHOICE: %s", note)
+                return True
+        return False
+
+    def _choose_exact(self, page, control: Control, value: str, controls: list[Control] = ()) -> bool:
         tab = self.tab(page)
         loc = self.locate(page, control.ref)
         self._choice_methods.pop(control.ref, None)
