@@ -118,7 +118,19 @@ sign-in and says so in the log ("did not react to its Google button").
 A value already in a box -- one the agent typed, one you typed, or one the
 site filled in -- is read as that box's value however the page draws it, so it
 is not typed again. A phone box that holds only its country's dial code ("+1")
-is still empty, and is filled.
+is still empty, and is filled. That dial-code picker is never "corrected" to your
+country: a "+1" is the prefix your number takes, not where you live.
+
+## A town the form spells another way
+
+Your profile says "Fairfax, VA"; a form's own search may offer "Fairfax, Virginia,
+United States" and find nothing for "VA". The agent treats them as one town -- the
+same name, the same state in any spelling, a country left out or named on both
+sides in agreement -- and clicks that row. Another Fairfax (a different state, or
+"Fairfax Station") is never taken for it. Where a list cannot be read and the agent
+has to type and press Enter as a last resort, the answer counts only if the box
+still holds it after leaving the box, and a row that turns out to be a different
+town is taken out again and left for you.
 
 ## Dropdowns that show their choices only when opened
 

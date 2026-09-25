@@ -524,7 +524,20 @@ _ENTRY_CONTEXT = re.compile(r"experience|employment|employer|work history|educat
                             r"university|college|degree|reference", re.IGNORECASE)
 
 
+_DIAL_CODE = re.compile(r"\+\s?\d{1,4}")
+
+
+def _holds_dial_code(control: "Control") -> bool:
+    """A phone's country-code picker ("+1" beside the number) is labelled "Country"
+    and shows a dial code. That answers which prefix the number takes, never where
+    the owner lives: "correcting" it to a country name retyped it on every pass."""
+    return bool(_DIAL_CODE.fullmatch((control.selected_option or control.value or "").strip()))
+
+
 def _same_answer(a: str, b: str) -> bool:
+    # "Fairfax, VA" is "Fairfax, Virginia, United States": one town, two spellings.
+    if geo_reference.same_locality(a, b):
+        return True
     a, b = _plain(a), _plain(b)
     if not a or not b:
         return False
@@ -687,7 +700,12 @@ def closest_choice(choices: list[str], wanted: str) -> Optional[int]:
     The profile says "I am not a veteran"; the form offers "I am not a
     protected veteran". A choice that reverses the meaning ("I identify as
     ...") is never taken: a yes/no in the answer must appear in the choice too.
+    A town is the choice that names the same town in another spelling ("Fairfax,
+    VA" is "Fairfax, Virginia, United States", and no other Fairfax).
     """
+    for i, choice in enumerate(choices):
+        if geo_reference.same_locality(wanted, choice):
+            return i
     want = set(_plain(wanted).split()) - {"i", "a", "an", "the", "of", "or", "am", "is", "are", "to", "my"}
     if not want:
         return None
@@ -2346,7 +2364,7 @@ class PageAgent:
         # The owner's name as they write it. Forms were filled "Yaswanth" /
         # "Reddy Jonnalagadda", split from the full name.
         for control in controls:
-            if control.role not in ("textbox", "searchbox") or control.disabled:
+            if control.role not in ("textbox", "searchbox") or control.disabled or _holds_dial_code(control):
                 continue
             field = _name_field(control.question) or _detail_field(control.question)
             if not field:
@@ -2374,7 +2392,8 @@ class PageAgent:
         policy = site_prefill_policy()
         located = []
         for control in controls:
-            if control.role not in ("combobox", "listbox", "textbox", "searchbox") or control.disabled:
+            if control.role not in ("combobox", "listbox", "textbox", "searchbox") or control.disabled \
+                    or _holds_dial_code(control):
                 continue
             shown = control.answer.strip()
             if not shown or not control.question or _ENTRY_CONTEXT.search(
@@ -3194,6 +3213,10 @@ class PageAgent:
                 tab.wait_for_timeout(400)
                 tab.keyboard.press("Enter")
                 tab.wait_for_timeout(1_200)
+                # Leave the box before judging it: text that was typed but never
+                # chosen stays in the box until then, and was read as the answer.
+                tab.keyboard.press("Tab")
+                tab.wait_for_timeout(600)
             except Exception as exc:
                 logger.debug("Could not type %r into %r: %s", typed, control.question[:40],
                              str(exc).splitlines()[0][:80])
@@ -3205,6 +3228,21 @@ class PageAgent:
             if took and not complaint.search(snapshot):
                 logger.info("CHOSE %r for %r by typing and pressing Enter", value[:30], control.question[:40])
                 return True
+            if shown is not None and shown.answer and not took:
+                # Enter took whichever row was showing, and it is not what was asked
+                # for ("Fairfax Station" for "Fairfax"): a wrong answer is worse than
+                # none, so it is taken out again.
+                try:
+                    box = self.locate(page, control.ref)
+                    box.click(timeout=2_000)
+                    box.press("Control+A")
+                    for _ in range(2):
+                        box.press("Backspace")
+                    tab.wait_for_timeout(400)
+                    logger.info("REMOVED: %r was not %r for %r -- left empty", shown.answer[:50], value[:30],
+                                control.question[:40])
+                except Exception as exc:
+                    logger.debug("Could not remove a wrong choice: %s", str(exc).splitlines()[0][:80])
         return False
 
     def _wait_for_choices(self, page, seconds: float = 8.0, under: str = "",
