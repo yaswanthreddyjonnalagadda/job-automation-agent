@@ -106,6 +106,12 @@ PLACEHOLDER = re.compile(
     r"^[\s\-–—]*(no selection|select( one| an option)?|please select|choose( one)?|make a selection|"
     r"none selected)?[\s\-–—.]*$", re.IGNORECASE)
 
+# Every required question the agent had to leave for the owner, once each, with why and where.
+# Plain JSON like the answer library beside it (data/profile_answers.json), so both can be read,
+# edited and carried to the next project. The owner's answer goes in the library, under the
+# entry's "answer_key".
+UNANSWERED_FILE = Path("data/unanswered_questions.json")
+
 
 # ---------------------------------------------------------------------------
 # Reading the page
@@ -846,6 +852,8 @@ class PageAgent:
         self._google_reloads: dict[str, int] = {}   # times a site's dead Google button was answered with a fresh load
         self._emailed_in: set[str] = set()      # sites where the email has been given on its own page
         self._created_at: set[str] = set()      # sites where an account has been created
+        self.unanswered_path: Path = UNANSWERED_FILE
+        self._logged_unanswered: set[tuple[str, str]] = set()   # (question, site) already counted this run
         self._profile_answer_library: Optional[dict] = None
         self.notes: list[str] = []                 # worth telling the owner, not worth stopping for
         self.corrected: set[str] = set()           # questions the agent put right from the profile
@@ -3519,6 +3527,61 @@ class PageAgent:
         })
 
     # -- what stops the run -----------------------------------------------------------
+    def record_unanswered(self, question: str, reason: str, controls: list[Control]) -> None:
+        """Keeps a required question the agent had to leave for the owner in
+        data/unanswered_questions.json: one entry per question, with why it was left,
+        the choices the form offered, where it was met, and the line that answers it
+        (the entry's "answer_key", for data/profile_answers.json). An entry shows its
+        answer once the library has one. Never stops the run: the file is a record."""
+        try:
+            path = Path(getattr(self, "unanswered_path", UNANSWERED_FILE))
+            clean = " ".join(re.sub(r"\s*\*\s*$", "", question or "").split())
+            key = _plain(clean)[:160]
+            if not key:
+                return
+            site = getattr(self, "_current_host", "") or ""
+            company = str(getattr(getattr(self, "job", None), "company", "") or "")
+            counted = getattr(self, "_logged_unanswered", None)
+            if counted is None:
+                counted = self._logged_unanswered = set()
+            first_time_this_run = (key, site) not in counted
+            counted.add((key, site))
+            try:
+                data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            except (OSError, ValueError):
+                data = {}
+            if not isinstance(data, dict):
+                data = {}
+            entry = data.get(key)
+            if not isinstance(entry, dict):
+                entry = {"question": clean, "required": True, "first_seen": date.today().isoformat(),
+                         "times": 0, "sites": [], "companies": [], "options": []}
+            control = next((c for c in controls if _same_question(c.question, question)), None)
+            choices = [o for o in (control.options if control else []) if o.strip() and not PLACEHOLDER.match(o)]
+            if first_time_this_run:
+                entry["times"] = int(entry.get("times") or 0) + 1
+            entry["last_seen"] = date.today().isoformat()
+            entry["reason"] = safety.redact(reason or "")[:300]
+            for field_name, value in (("sites", site), ("companies", company)):
+                if value and value not in entry.setdefault(field_name, []):
+                    entry[field_name].append(value)
+            for option in choices:
+                if option not in entry.setdefault("options", []):
+                    entry["options"].append(option)
+            words = _plain(clean).split()[:10]
+            entry["answer_key"] = "re:" + r"\s+".join(re.escape(w) for w in words)
+            data[key] = entry
+            # What the owner has answered since shows beside the question.
+            for held in data.values():
+                if isinstance(held, dict) and held.get("question"):
+                    held["answer"] = self.library_answer(str(held["question"])) or None
+            path.parent.mkdir(parents=True, exist_ok=True)
+            scratch = path.with_name(path.name + ".tmp")
+            scratch.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            scratch.replace(path)
+        except Exception as exc:
+            logger.debug("Could not record an unanswered question: %s", str(exc).splitlines()[0][:100])
+
     def blockers(self, page, plan: PagePlan, controls: list[Control], about_to_send: bool = True) -> list[str]:
         """What must stop the run. Before a submit that includes a required
         question nobody has answered; mid-form it does not -- R+L asks "have
@@ -3553,6 +3616,7 @@ class PageAgent:
             still_blank = not any(c.question == question and c.answer for c in controls)
             if required and still_blank:
                 note = f"needs your answer: {question[:90]} ({item.get('reason', '')})"
+                self.record_unanswered(question, str(item.get("reason", "")), controls)
                 if about_to_send:
                     reasons.append(note)
                 elif note not in self.notes:
