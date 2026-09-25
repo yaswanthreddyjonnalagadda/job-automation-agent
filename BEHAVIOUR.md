@@ -42,6 +42,19 @@ application without asking: citizenship, clearance, years of experience,
 salary range, education, EEO answers. A pay-band dropdown is answered with the
 band that overlaps your range; a band outside it is left for you.
 
+## Questions it could not answer
+
+Each required question the agent leaves for you is kept, once, in
+`data/unanswered_questions.json`: the question as the form words it, why it was
+left, the choices the form offered, every site and company it came up on, how
+many times, and the line that answers it (`answer_key`). Add that line and your
+answer to `data/profile_answers.json` and the agent answers it itself from then
+on, on every form that asks it in any wording the pattern covers; the entry then
+shows the answer. Both files are plain JSON kept on your machine (not committed),
+so the whole set can be carried to the next project. Nothing personal is written
+into the reasons (emails and phone numbers are masked), and a file that is
+damaged or cannot be written never stops a run.
+
 ## Values the site filled in
 
 Many forms arrive partly filled: a resume parser guesses a country, or a list
