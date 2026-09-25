@@ -30,6 +30,7 @@ from urllib.parse import quote, urlparse
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 
 import geo_reference
+import login_guard
 import provenance
 import safety
 from config import AppConfig, UserProfile, resume_to_attach
@@ -4670,11 +4671,10 @@ class JobApplicationAssistant:
         adapter = self.adapter(page)
         if getattr(adapter, "name", "") != "workday":
             return True
-        state = adapter.candidate_account_state(page)
-        if state in ("application", "candidate_home", "sign_in"):
-            return True
-        parsed = urlparse(page.url)
-        return bool(parsed.path.rstrip("/").endswith("/login"))
+        # Candidate Home or the application itself. A Sign In page is not proof: Workday shows it
+        # when the account was made, when it was not, and when it still needs verifying, and an
+        # account saved as existing on that evidence sent the next run to sign in to nothing.
+        return adapter.candidate_account_state(page) in ("application", "candidate_home")
 
     def fill_create_account_form(self, page: Page, email: str) -> bool:
         """Fills a careers-site Create Account form: email (and its retype),
@@ -4697,6 +4697,12 @@ class JobApplicationAssistant:
         if len(pw_fields) < 2:
             return False  # not a Create Account form
         self._create_form_attempted = True
+        site = urlparse(page.url).netloc.lower()
+        held = login_guard.may_create_account(site, email)
+        if held:
+            self._login_paused = held
+            logger.warning("ACCOUNT_HELD: %s -- leaving it to the user", held)
+            return False
         profile = getattr(self, "_profile", None)
         full_name = (getattr(profile, "full_name", "") or "").split()
         try:
@@ -4846,6 +4852,7 @@ class JobApplicationAssistant:
                     logger.warning("ACCOUNT_CREATE_FAILED: no Create Account button found")
                     return False
             self._click_resiliently(button, timeout_ms=8_000)
+            login_guard.record_account_attempt(site, email)
             page.wait_for_timeout(5_000)
             try:
                 page.wait_for_load_state("domcontentloaded", timeout=15_000)
@@ -4870,6 +4877,10 @@ class JobApplicationAssistant:
                 logger.warning(
                     "ACCOUNT_UNVERIFIED: Workday left registration without Candidate Home or application evidence"
                 )
+                # Not signed in, so a sign-in now would only spend an attempt on an account that may be
+                # waiting for its email to be verified: the owner says when (Continue).
+                login_guard.hold_for_verification(site, email)
+                self._login_paused = login_guard.may_sign_in(site, email) or ""
                 return True
             logger.info("ACCOUNT_CREATED: new %s account for %s",
                         getattr(self, "employer", "") or urlparse(page.url).netloc, email)
@@ -4981,6 +4992,16 @@ class JobApplicationAssistant:
                 and self._create_account_control(page) is not None:
             return self.create_account_from_link(page, email)
 
+        # Every wrong password counts towards a lock (Workday: 5 in a row, 30 minutes), the page says the
+        # same for a wrong password, no account, an unverified one and a locked one, and the count used to
+        # start again with every run. login_guard remembers what has been spent.
+        paused = login_guard.may_sign_in(domain, email)
+        self._login_paused = paused or ""
+        if paused:
+            self._last_login_rejected = False
+            logger.warning("LOGIN_PAUSED: %s", paused)
+            return False
+
         email_locator = self._find_login_email_input(root)
         if email_locator is None:
             # The second page of a two-step sign-in: iCIMS (login.icims.com)
@@ -5058,10 +5079,14 @@ class JobApplicationAssistant:
                              r"don't recognize|not recognized|no account", body)
         pw_visible = page.locator("input[type='password']").first
         still_login = pw_visible.count() > 0 and pw_visible.is_visible()
+        host = urlparse(page.url).netloc.lower()
         if not rejected and not still_login:
             logger.info("LOGIN_OK: signed in as %s", email)
+            login_guard.record_sign_in(host, email, ok=True)
             self.remember_account(page, email, "password")
             return True
+        # A sign-in that did not get in counts, whether or not the page said why.
+        login_guard.record_sign_in(host, email, ok=False)
         if rejected:
             self._last_login_rejected = True
             logger.warning("LOGIN_REJECTED: the site didn't accept %s -- not retrying", email)
@@ -6404,6 +6429,18 @@ class JobApplicationAssistant:
         domain = urlparse(page.url).netloc.lower()
         if not safety.password_allowed(page.url) or safety.captcha_visible(page):
             return False
+        if getattr(self.adapter(page), "name", "") == "workday":
+            # Workday resets by an emailed link that lasts about two hours and allows five requests in 24
+            # hours; the agent cannot follow a link, so a request only spends one of the five.
+            self._login_paused = ("Workday resets a password with a link it emails you (valid about 2 hours, five "
+                                  "requests in 24 hours): use 'Forgot your password?' yourself, then press Continue")
+            logger.info("RECOVERY: %s -- not requested by the agent", self._login_paused)
+            return False
+        held = login_guard.may_request_reset(domain, email)
+        if held:
+            self._login_paused = held
+            logger.info("RECOVERY: %s -- leaving it to the user", held)
+            return False
         forgot = self._first_visible(page, ("link", "button"), self._FORGOT)
         if forgot is None:
             logger.info("RECOVERY: %s offers no forgot-password step -- leaving it to the user", domain)
@@ -6416,6 +6453,7 @@ class JobApplicationAssistant:
         if box is not None and not (box.input_value() or "").strip():
             box.fill(email)
         send = self._first_visible(page, ("button",), self._SEND_STEP)
+        login_guard.record_reset_request(domain, email)
         if send is not None:
             self._click_resiliently(send, timeout_ms=8_000)
         elif box is not None:
@@ -6476,6 +6514,7 @@ class JobApplicationAssistant:
                            "-- leaving it to the user", domain)
             return False
         logger.info("RECOVERY_OK: %s now has the existing password", domain)
+        login_guard.clear_hold(domain, email)      # the rejection that led here is over: try the new password
         scope = self._sign_in_scope(page)
         if scope is not None or len(self._visible_password_boxes(page)) == 1:
             return self.attempt_auto_login(page, email, password, scope=scope, create_if_missing=False)

@@ -1,0 +1,12 @@
+{
+  "id": "f017",
+  "date": "2026-09-25",
+  "class": "A limited resource spent without a memory of what was spent",
+  "symptom": "The owner's Workday accounts were being locked: every run, restart and Continue tried the sign-in again, and each account-creation and password-reset attempt was forgotten when the run ended.",
+  "site": "Workday tenants (*.myworkdayjobs.com), and any site that locks on wrong passwords",
+  "root_cause": "The counters (once per site per run) lived in the run and were reset on every resume. Workday counts each wrong password towards a lock (NVIDIA support: 5 in a row, 30 minutes; some tenants 3), gives the same message for a wrong password, no account, an unverified account and a locked one, and limits forgot-password to 5 requests in 24 hours with a link that lasts about 2 hours, so nothing the agent saw could say which case it was in.",
+  "why_tests_missed": "The sign-in tests exercised one attempt in one run; none simulated a second run, a Continue, or the same account over a day.",
+  "fix": "login_guard keeps a record across runs (data/_login_attempts.json): after a rejection no sign-in until the owner presses Continue, at most two rejections per account per 24 hours, no sign-in on a new account the site did not sign in (verify first), no password reset requested from Workday, at most one elsewhere per day, at most two account creations per day. The hand-over says why it held back.",
+  "tests": ["tests/test_login_guard.py"],
+  "prevention": "When a site limits attempts, keep the count outside the run, stop after the first ambiguous rejection, and let the owner decide when to try again. Research the site's lockout policy before automating its sign-in."
+}
