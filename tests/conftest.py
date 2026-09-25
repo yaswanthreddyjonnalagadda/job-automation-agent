@@ -24,3 +24,11 @@ def _skip_a_test_that_asks_for_a_profile_nobody_supplied(monkeypatch):
         return real()
 
     monkeypatch.setattr(config, "get_user_profile", guarded)
+
+
+@pytest.fixture(autouse=True)
+def _keep_sign_in_attempts_out_of_the_owners_data(monkeypatch, tmp_path):
+    # The record of sign-in attempts lives in data/ and is kept across runs; a test must neither read
+    # the owner's history nor add to it.
+    import login_guard
+    monkeypatch.setattr(login_guard, "LOGIN_ATTEMPTS_FILE", tmp_path / "_login_attempts.json")

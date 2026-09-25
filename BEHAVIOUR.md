@@ -128,6 +128,34 @@ under an overlay so a normal click ticks nothing: the agent then forces the tick
 then uses the page's own click, and checks the box really is ticked. If it cannot
 tick a box it must, it does not press Create Account: it stops and says which box.
 
+An account counts as created only when the site shows Candidate Home or the
+application. Landing on a Sign In page proves nothing (the site shows it when the
+account was made, when it was not, and when it still needs verifying), so nothing
+is saved as an account then, and the sign-in waits (see the next section).
+
+## Signing in without locking your accounts
+
+How Workday works, as researched on 25 September 2026: each employer's site
+(`*.myworkdayjobs.com/<tenant>`) has its own candidate accounts, so the same email is
+a separate account everywhere. Every wrong password counts towards a lock (NVIDIA's
+support: 5 in a row, 30 minutes; some tenants 3). The Sign In page says the same
+thing -- "You may have entered the wrong email address or password or your account
+might be locked" -- for a wrong password, no account, an account not yet verified and
+a locked one, so a rejection never tells the agent which. "Forgot your password" mails
+a link (not a code) that lasts about two hours, with five requests allowed in 24 hours.
+Whether a new account must have its email verified first is the employer's setting.
+
+So the agent keeps count across runs (`data/_login_attempts.json`, on your machine):
+* after a rejected sign-in it does not try again until you press Continue, and after
+  two rejections on one account in 24 hours it stops for the day whatever you press;
+* after it creates an account and the site does not sign it in, it does not try to
+  sign in: it tells you to verify the account from the email it was sent, then press
+  Continue;
+* it never asks Workday for a password reset (it cannot follow the emailed link, and
+  each request spends one of the five); elsewhere it asks at most once a day;
+* it makes at most two attempts a day to create an account on one site.
+Each time it holds back, the hand-over says why and what to do.
+
 ## Signing in with Google
 
 Where a site offers "Sign in with Google", the agent uses it and only picks
@@ -281,7 +309,9 @@ open in two browsers.
   over, so a part-finished application survives a reload.
 * **Structured logs** — each run also writes `logs/run_<timestamp>.jsonl`.
 * **No secrets in logs** — every log line passes through `safety.redact()`,
-  which masks API keys, passwords, email addresses and phone numbers.
+  which masks API keys, passwords, email addresses and phone numbers. The page text
+  the agent saves and hands to Claude (or to this session) hides what is typed into a
+  password, passcode, one-time-code or PIN box: it reads `[hidden]`.
 * **Dashboard** — each application's page shows progress, what is still
   outstanding, the field-by-field comparison, evidence links and the full event
   history. It is served on 127.0.0.1 only.

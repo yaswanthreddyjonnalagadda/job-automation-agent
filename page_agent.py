@@ -42,6 +42,7 @@ from urllib.parse import urlparse
 
 import concept_matcher
 import geo_reference
+import login_guard
 from config import resume_to_attach, site_prefill_policy
 from interaction import (
     click_resiliently,
@@ -53,6 +54,7 @@ from interaction import (
 )
 from perception import (
     find_active_draft_cards,
+    hide_secrets,
     is_ant_dropdown,
     is_ant_single_select,
     is_field_active,
@@ -901,6 +903,9 @@ class PageAgent:
         self._signed_in_at = set()
         self._emailed_in = set()
         self._pressed = {}          # a resumed run may press on again
+        # The owner has looked at whatever held the sign-in back (a rejection, an account to verify):
+        # it may try again. The day's limit on rejected sign-ins still applies (login_guard).
+        login_guard.owner_resumed(getattr(self, "_current_host", "") or "")
         self._google_reloads = {}   # ... and give a dead Google button its fresh loads again
         self._retried_after_error = False
         self._code_tries = 0        # a resumed run may fetch a fresh code
@@ -946,7 +951,9 @@ class PageAgent:
         return getattr(page, "top", None) or page
 
     def snapshot(self, page) -> str:
-        return self.tab(page).locator("body").aria_snapshot(mode="ai", timeout=20_000)
+        # The one place the page is read: a secret box's value never leaves it (it is saved to disk
+        # and handed to the planner from here).
+        return hide_secrets(self.tab(page).locator("body").aria_snapshot(mode="ai", timeout=20_000))
 
     def locate(self, page, ref: str):
         return self.tab(page).locator(f"aria-ref={ref}")
@@ -1110,6 +1117,13 @@ class PageAgent:
                     return True
             except Exception as exc:
                 logger.warning("LOGIN: %s", str(exc).splitlines()[0][:120])
+            # Held back on purpose (login_guard): the owner is told why, and what to do.
+            reason = str(getattr(self.assistant, "_login_paused", "") or "")
+            if reason:
+                note = f"sign-in on {host} is paused to protect the account: {reason}"
+                if note not in self.notes:
+                    self.notes.append(note)
+                    logger.info("LOGIN: %s", note[:200])
         return False
 
     # A code emailed to the owner for their own account or email address.
