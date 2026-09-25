@@ -122,8 +122,9 @@ rules -- attestations, sponsorship, CAPTCHAs, submitting only when every check
 passes -- decide what is done with an answer, whoever proposed it. The key
 (`GEMINI_API_KEY`) travels in a request header, never in an address, and is never
 written to a log. If it is missing, the run says so before it starts; if it does
-not look like a Google key (39 characters starting `AIza`) it says that too,
-without printing it. When Google refuses or is busy the agent waits and asks
+not look like a Google key (`AIza` and 39 characters, or `AQ.` and longer) it says
+that too, without printing it. If Google has retired the model (`GEMINI_MODEL`),
+the message says so and where to change it. When Google refuses or is busy the agent waits and asks
 again (it waits as long as Google asks for a per-minute limit), and a page it
 still cannot get an answer for is handed to you as before.
 

@@ -286,15 +286,39 @@ def test_gemini_mode_without_a_key_is_refused_up_front(google):
         apply_flow.brain_for(make_config(google, gemini_api_key=""), SimpleNamespace(company="c", title="t"))
 
 
+NEWER_KEY = "AQ." + "Ab8RN6" * 8 + "-_"                     # Google's newer key format: "AQ." and 50 more characters
+
+
 def test_a_key_that_does_not_look_like_a_google_key_is_said_so_without_being_shown(google, caplog):
     caplog.set_level(logging.INFO)
     short = "x" * 35                                       # 4 short of a Google key, as one was once pasted
     problem = gemini.key_problem(short)
-    assert problem and "39" in problem and "AIza" in problem and short not in problem
+    assert problem and "39" in problem and "AIza" in problem and "AQ." in problem and short not in problem
     assert gemini.key_problem(KEY) is None
     assert gemini.key_problem("") and gemini.key_problem(f'"{KEY}"') and gemini.key_problem(f" {KEY}")
     gemini.GeminiBrain(make_config(google, gemini_api_key=short), documents=Documents())
     assert "AIza" in caplog.text and short not in caplog.text
+
+
+def test_both_kinds_of_google_key_are_accepted(google, caplog):
+    """The owner's key was the newer kind ("AQ." ...): the check I first wrote knew only "AIza" and would have
+    called a working key wrong. It goes by what a key can look like, and only ever warns."""
+    caplog.set_level(logging.INFO)
+    assert gemini.key_problem(NEWER_KEY) is None
+    assert gemini.key_problem("AQ.short") is not None                 # a prefix alone is not enough
+    assert gemini.key_problem(NEWER_KEY[:-2] + " !") is not None      # characters a key does not have
+    gemini.GeminiBrain(make_config(google, gemini_api_key=NEWER_KEY), documents=Documents())
+    assert "GEMINI:" not in caplog.text
+
+
+def test_a_model_google_has_retired_says_where_to_change_it(google, client):
+    """gemini-2.5-flash, the first default, was 'no longer available to new users' -- a 404 that named no setting."""
+    google.script.append(error_reply(404, "This model models/gemini-old is no longer available to new users.",
+                                     "NOT_FOUND"))
+    with pytest.raises(ClaudeIntegrationError) as caught:
+        client.plan_page("p", {})
+    assert len(google.requests) == 1
+    assert "no longer available" in str(caught.value) and "GEMINI_MODEL" in str(caught.value)
 
 
 def test_the_settings_come_from_the_environment(monkeypatch):

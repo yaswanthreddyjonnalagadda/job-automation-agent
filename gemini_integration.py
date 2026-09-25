@@ -15,7 +15,6 @@ same facts. BEHAVIOUR.md says so. The key travels in a header, never in an addre
 """
 from __future__ import annotations
 
-import base64
 import logging
 import re
 import time
@@ -63,16 +62,24 @@ class GeminiTimeout(GeminiConnectionError):
     pass
 
 
+_KEY_CHARACTERS = re.compile(r"[A-Za-z0-9._-]+")
+
+
 def key_problem(key: str) -> Optional[str]:
     """What is wrong with a key, in words, or None. Never contains the key. A key once pasted 4 characters
-    short (missing its AIza) made every call fail with a message that did not say why."""
+    short (missing its AIza) made every call fail with a message that did not say why. Google has two kinds:
+    the long-standing one (AIza and 35 more characters) and a newer one that starts AQ. -- the owner's is the
+    newer, and the first version of this check, which knew only the first, called a working key wrong."""
     if not key:
         return "GEMINI_API_KEY is not set"
     if key != key.strip() or key[0] in "\"'" or key[-1] in "\"'":
         return "GEMINI_API_KEY has spaces or quotes around it: put the bare key after the = sign"
-    if len(key) != 39 or not key.startswith("AIza"):
-        return (f"GEMINI_API_KEY does not look like a Google API key (they are 39 characters and start with "
-                f"AIza; this one is {len(key)}): copy the whole key again from aistudio.google.com")
+    classic = key.startswith("AIza") and len(key) == 39
+    newer = key.startswith("AQ.") and len(key) >= 40
+    if not (classic or newer) or not _KEY_CHARACTERS.fullmatch(key):
+        return (f"GEMINI_API_KEY does not look like a Google API key (they start with AIza and are 39 characters, "
+                f"or start with AQ.; this one is {len(key)} characters): copy the whole key again from "
+                f"aistudio.google.com")
     return None
 
 
@@ -161,7 +168,10 @@ class _Messages:
         if reply.status_code >= 500:
             raise GeminiConnectionError(f"Gemini is busy or down ({reply.status_code})")
         if reply.status_code >= 400:
-            raise GeminiStatusError(_scrub(_google_message(reply), key), reply.status_code)
+            message = _scrub(_google_message(reply), key)
+            if reply.status_code == 404:        # a model Google has retired (gemini-2.5-flash, for new keys)
+                message += " -- set GEMINI_MODEL in .env to a model this key can use"
+            raise GeminiStatusError(message, reply.status_code)
         try:
             data = reply.json()
         except ValueError:

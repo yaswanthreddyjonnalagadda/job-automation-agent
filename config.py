@@ -154,7 +154,9 @@ class UserProfile:
     check_gmail_for_confirmation: bool = False
 
 
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+# The first default, gemini-2.5-flash, answered "no longer available to new users" on the owner's key (25
+# September 2026): the models a key can use change, so GEMINI_MODEL in .env overrides this.
+DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
 
