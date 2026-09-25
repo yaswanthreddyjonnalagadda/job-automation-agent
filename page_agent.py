@@ -161,6 +161,10 @@ class Control:
             return ""
         if re.fullmatch(r"mm|dd|yy(yy)?|mm/dd/yyyy|month|day|year", shown, re.IGNORECASE):
             return ""
+        # A phone box the site started with its country's dial code ("+1") is
+        # still empty: the code is what the number is typed after.
+        if self.role in ("textbox", "searchbox") and re.fullmatch(r"\+\s?\d{1,4}", shown):
+            return ""
         return "" if PLACEHOLDER.match(shown) else shown
 
 
@@ -185,6 +189,7 @@ def parse_snapshot(snapshot: str) -> list[Control]:
     radio_context = ""   # the question above a run of radio buttons with no group of their own
     unclickable = None   # a tick box with no reference: (role, name, checked, lines left to find it)
     last_control_indent = -1
+    entry_box: Optional[tuple[int, Control]] = None   # an empty-looking text box whose value may follow as a child line
     for raw in (snapshot or "").splitlines():
         # A line whose text holds a colon comes wrapped in quotes:
         #   - 'heading "Apply: Network Engineer" [level=1] [ref=e2]'
@@ -209,6 +214,19 @@ def parse_snapshot(snapshot: str) -> list[Control]:
             stack.pop()
         parent_group = next((label for _i, label, _ctl in reversed(stack) if label), "")
         owner = next((ctl for _i, _l, ctl in reversed(stack) if ctl is not None), None)
+
+        # A text box that carries a placeholder does not show what is typed in it
+        # after its colon: the snapshot draws the value as a child line,
+        #   - textbox "Email" [ref=e104]:
+        #     - /placeholder: ""
+        #     - text: jane@example.com
+        # (ADP's Email and Mobile Number). Read as empty, the box was retyped on
+        # every pass and reported "could not set". The first such child is its value.
+        if entry_box is not None and indent <= entry_box[0]:
+            entry_box = None
+        if entry_box is not None and role == "text" and value and not entry_box[1].value:
+            entry_box[1].value = value
+            continue
 
         if role in ("text", "paragraph", "heading", "strong", "emphasis", "generic") and (value or name):
             candidate_text = (value or name).strip()[:200]
@@ -305,6 +323,7 @@ def parse_snapshot(snapshot: str) -> list[Control]:
                 else "")
             controls.append(control)
             last_control_indent = indent
+            entry_box = (indent, control) if control.role in ("textbox", "searchbox") and not control.value else None
         # A named group is both a question for what is inside it and, when it
         # has a reference, a control the agent can act on.
         stack.append((indent, name if role in ("group", "radiogroup", "region") else "", control))
@@ -769,6 +788,7 @@ class PageAgent:
         self._google_tried: set[str] = set()
         self._retried_after_error = False
         self._google_failed: set[str] = set()   # sites whose Google account they will not accept
+        self._google_reloads: dict[str, int] = {}   # times a site's dead Google button was answered with a fresh load
         self._emailed_in: set[str] = set()      # sites where the email has been given on its own page
         self._created_at: set[str] = set()      # sites where an account has been created
         self._profile_answer_library: Optional[dict] = None
@@ -815,6 +835,7 @@ class PageAgent:
         self._signed_in_at = set()
         self._emailed_in = set()
         self._pressed = {}          # a resumed run may press on again
+        self._google_reloads = {}   # ... and give a dead Google button its fresh loads again
         self._retried_after_error = False
         self._code_tries = 0        # a resumed run may fetch a fresh code
         self._asked_for_new_code = False
@@ -834,6 +855,7 @@ class PageAgent:
         anything added since starts empty rather than failing."""
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
+                              ("_google_reloads", dict),
                               ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set), ("_list_retries", int), ("_shapes", dict),
                               ("_refreshed", bool),
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict),
@@ -880,6 +902,25 @@ class PageAgent:
 
     # -- signing in ------------------------------------------------------------------
     GOOGLE_SIGN_IN = re.compile(r"(sign|log) ?in with google|continue with google|google sign[- ]?in", re.IGNORECASE)
+    # ADP's Google button is sometimes dead for a whole page load (its script throws
+    # "Cannot read properties of undefined (reading 'googlePlusSocialURL')" and every
+    # press is ignored); a fresh load of the page brings it back. This many fresh loads,
+    # then the site's own sign-in.
+    GOOGLE_RELOADS = 2
+
+    def _google_still_offered(self, page) -> Optional[Control]:
+        """The Google sign-in the page still offers, or None once it offers none.
+
+        This is what tells a sign-in that worked from one that did not: the site
+        stops offering Google when it has taken the account. A page that cannot
+        be read this moment (it is loading) proves nothing, so it counts as
+        still offering it.
+        """
+        try:
+            controls = parse_snapshot(self.snapshot(page))
+        except Exception:
+            return Control(ref="", role="button", name="Sign in with Google")
+        return next((c for c in controls if c.role in PRESS_ROLES and self.GOOGLE_SIGN_IN.search(c.name or "")), None)
 
     def sign_in_step(self, page, controls: list[Control]) -> bool:
         """Signs in where the page asks for it. True when something was done.
@@ -908,8 +949,19 @@ class PageAgent:
                 # Through the snapshot's reference, so a sign-in box inside a
                 # frame is reached as well.
                 button = self.locate(page, google.ref).element_handle(timeout=5_000)
-                if self.assistant._sign_in_with_google(tab, button, email, host, lambda: None):
+                if self.assistant._sign_in_with_google(tab, button, email, host,
+                                                       lambda: self._google_still_offered(page)):
                     logger.info("LOGIN: signed in with Google")
+                elif getattr(self.assistant, "google_press_ignored", False) \
+                        and self._google_reloads.get(host, 0) < self.GOOGLE_RELOADS:
+                    # The site did not react at all: its button is dead until the
+                    # page is loaded again. That says nothing about the account.
+                    self._google_reloads[host] = self._google_reloads.get(host, 0) + 1
+                    self._google_tried.discard(host)
+                    logger.info("LOGIN: %s did not react to its Google button -- loading the page again (%d of %d)",
+                                host, self._google_reloads[host], self.GOOGLE_RELOADS)
+                    tab.reload(wait_until="domcontentloaded", timeout=30_000)
+                    self.settle(page, 3_000)
                 else:
                     # The site would not take it (NVIDIA: "Account is Inactive").
                     # Its own sign-in is used from here on.

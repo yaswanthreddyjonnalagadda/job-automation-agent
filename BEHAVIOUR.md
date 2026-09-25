@@ -103,6 +103,23 @@ no code arrives, the code is refused twice, the site will not take the existing
 password as the new one, or a CAPTCHA shows. The password and the code are never
 written to the logs.
 
+## Signing in with Google
+
+Where a site offers "Sign in with Google", the agent uses it and only picks
+your account on Google's chooser; it never types a Google password. The
+sign-in counts as done only once the site stops offering Google -- pressing the
+button is not evidence. A site whose button does nothing at all (ADP's is
+sometimes dead for a whole page load) is answered by pressing it once more, then
+by loading the page again, up to twice; after that the agent uses the site's own
+sign-in and says so in the log ("did not react to its Google button").
+
+## What is already in a box
+
+A value already in a box -- one the agent typed, one you typed, or one the
+site filled in -- is read as that box's value however the page draws it, so it
+is not typed again. A phone box that holds only its country's dial code ("+1")
+is still empty, and is filled.
+
 ## Before it stops
 
 `apply_flow.hand_over()` runs, in order:
