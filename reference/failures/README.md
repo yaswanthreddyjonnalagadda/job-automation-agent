@@ -21,3 +21,9 @@ edit the same file.
 
 The questions the agent could not answer live beside the answer library, not here: see
 `data/unanswered_questions.json` and `data/profile_answers.json` (local, not committed).
+
+To take both to the next project as one file, run `python next_project_knowledge.py`: it writes
+`data/next_project_knowledge.json` (local, because the questions name the employers applied to) with every
+failure here, each one's `prevention` on its own line to read first, and every question the agent left, most
+often asked first, each with the `answer_key` line that answers it. The answers themselves stay in
+`data/profile_answers.json`.
