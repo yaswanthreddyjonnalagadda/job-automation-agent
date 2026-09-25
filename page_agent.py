@@ -89,8 +89,11 @@ OPENS_A_FILE_DIALOG = re.compile(
 ASKS_FOR_A_REFRESH = re.compile(r"something went wrong|please (refresh|reload) (the |this )?page|"
                                 r"try (again|reloading)", re.IGNORECASE)
 
+# A confirmation says so in words only a confirmation uses. "Thank you for your interest" is
+# not one of them: a create-account page opens with it ("Thank you for your interest in a career
+# with HonorHealth. Please create an account ...") and was recorded as a submitted application.
 CONFIRMATION_TEXT = re.compile(
-    r"thank you for (applying|your application|your interest)|application (has been |was )?(received|submitted|sent)|"
+    r"thank you for (applying|your application)|application (has been |was )?(received|submitted|sent)|"
     r"your application has been sent|(successfully|now) (submitted|sent)|we('ve| have) received your application|"
     r"your application is complete|you('ve| have) (?:successfully |already )?applied",
     re.IGNORECASE)
@@ -3836,13 +3839,31 @@ class PageAgent:
             return False
 
     def _site_confirms(self, tab) -> bool:
+        """True only for a page that says the application was received in a
+        confirmation's own words AND asks for nothing more. A page that still shows
+        a password box or a form to fill in is not a confirmation, whatever it says."""
         try:
-            texts = [tab.inner_text("body", timeout=5_000)]
-            texts += [f.locator("body").inner_text(timeout=3_000) for f in tab.frames[1:]
+            frames = [f for f in tab.frames[1:]
                       if (f.url or "").startswith("http") and not safety.is_captcha_frame(f.url)]
+            texts = [tab.inner_text("body", timeout=5_000)]
+            texts += [f.locator("body").inner_text(timeout=3_000) for f in frames]
+            if not any(CONFIRMATION_TEXT.search(t or "") for t in texts):
+                return False
+            return not any(self._asks_for_input(part) for part in [tab, *frames])
         except Exception:
             return False
-        return any(CONFIRMATION_TEXT.search(t or "") for t in texts)
+
+    @staticmethod
+    def _asks_for_input(part) -> bool:
+        """A password box, or three or more boxes to fill in, is visible in this page or frame."""
+        found = part.evaluate("""() => {
+            const shown = e => !!(e.offsetParent || e.getClientRects().length) && getComputedStyle(e).visibility !== 'hidden';
+            const skip = ['hidden', 'checkbox', 'radio', 'button', 'submit', 'image', 'search', 'reset'];
+            const boxes = [...document.querySelectorAll('input, textarea, select')]
+                .filter(e => shown(e) && !skip.includes((e.type || '').toLowerCase()));
+            return {password: boxes.some(e => (e.type || '').toLowerCase() === 'password'), count: boxes.length};
+        }""")
+        return bool(found["password"]) or found["count"] >= 3
 
     def _resume_on_page(self, page) -> bool:
         if not self.resume_file:

@@ -1,0 +1,12 @@
+{
+  "id": "f014",
+  "date": "2026-09-25",
+  "class": "A success judged from loose wording on a page that is not a confirmation",
+  "symptom": "The dashboard showed the application as submitted (\"Already submitted on site -- confirmed by portal\") while it was still on the create-account page; a false submitted record also makes the agent refuse to apply for that job again.",
+  "site": "HonorHealth (Workday)",
+  "root_cause": "The confirmation pattern accepted \"thank you for your interest\", which opens employers' create-account and job pages (\"Thank you for your interest in a career with HonorHealth. Please create an account ...\"). The text alone was taken as proof, and nothing checked that the page had stopped asking for anything.",
+  "why_tests_missed": "The confirmation tests used real confirmation pages; none used a page that thanks the candidate and still shows a form.",
+  "fix": "CONFIRMATION_TEXT keeps only a confirmation's own words (\"thank you for applying\", \"we have received your application\", \"you've already applied\"); _site_confirms also requires that neither the page nor any frame shows a password box or three or more boxes to fill in. The false record was corrected by hand.",
+  "tests": ["tests/test_confirmation_needs_evidence.py"],
+  "prevention": "Record a terminal state such as 'submitted' only from positive evidence that cannot appear earlier in the flow (a confirmation's own words, a portal listing, an email), and check the page has stopped asking for input. Never let politeness or a generic phrase decide it."
+}
