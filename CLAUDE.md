@@ -65,6 +65,14 @@
   domains (`safety.password_allowed`), once per site per run, never a
   generated or different password. Any other broken login is surfaced to the
   user.
+- **One rule for reading an emailed code.** Whether the agent may read a
+  one-time code from the owner's mail is decided in `emailed_codes.why_not()`
+  and nowhere else: the owner has allowed mail reads
+  (`check_gmail_for_confirmation`), the site is an employer's, the code is not
+  one asked for to prove a human is applying (or a CAPTCHA), and the per-account
+  limit in `login_guard` is not spent. `passcode_from_gmail` asks it before it
+  opens the mail; a new step that reads a code goes through it, it does not
+  re-decide.
 
 ## 6. Safety, Compliance & Circuit Breakers
 - **Sponsorship guardrail:** scan for non-sponsorship language; if the

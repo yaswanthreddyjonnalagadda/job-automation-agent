@@ -41,6 +41,7 @@ from typing import Callable, Optional
 from urllib.parse import urlparse
 
 import concept_matcher
+import emailed_codes
 import geo_reference
 import login_guard
 from config import resume_to_attach, site_prefill_policy
@@ -1135,10 +1136,9 @@ class PageAgent:
     ACCOUNT_CODE = re.compile(
         r"(verification|security|confirmation|one[- ]?time|access)\s*code|passcode|\botp\b|"
         r"code (was )?(sent|emailed) to", re.IGNORECASE)
-    # A code a site asks for to prove a human is applying: never the agent's.
-    HUMAN_CHECK = re.compile(
-        r"confirm (that )?(you'?re|you are) (a )?human|prove (that )?you('re| are) (a )?human|"
-        r"not a robot|human verification|verify (that )?you are (a )?human", re.IGNORECASE)
+    # A code a site asks for to prove a human is applying: never the agent's. The wording lives with the one
+    # rule for when a code may be read (emailed_codes.py), not here.
+    HUMAN_CHECK = emailed_codes.HUMAN_CHECK
 
     def open_entry_for_missing_field(self, page, snapshot: str, controls: list[Control]) -> bool:
         """Opens a collapsed entry the page is complaining about.
@@ -1265,11 +1265,10 @@ class PageAgent:
                  and self.ACCOUNT_CODE.search(f"{c.question} {c.container}")]
         if not boxes or self._code_tries >= 3:
             return False
-        if not getattr(self.profile, "check_gmail_for_confirmation", False):
-            logger.info("A code was emailed to you; the agent may not read your mail")
-            return False
-        if self.HUMAN_CHECK.search(snapshot) or safety.captcha_visible(page):
-            logger.info("This code is asked for to prove a human is applying -- that one is yours to enter")
+        why = emailed_codes.why_not(self.profile, page.url, snapshot, safety.captcha_visible(page),
+                                    getattr(self.config, "ats_email", "") or "")
+        if why:
+            logger.info("CODE: a code was emailed to you, but %s", why)
             return False
         self._code_tries += 1
         logger.info("CODE: a code was emailed to you for this account -- fetching it from your mail")

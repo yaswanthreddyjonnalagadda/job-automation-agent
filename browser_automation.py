@@ -30,10 +30,11 @@ from urllib.parse import quote, urlparse
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 
 import geo_reference
+import emailed_codes
 import login_guard
 import provenance
 import safety
-from config import AppConfig, UserProfile, resume_to_attach
+from config import AppConfig, UserProfile, get_user_profile, resume_to_attach
 from interaction import (
     CARD_COMMIT_TEXT_PATTERN,
     click_resiliently,
@@ -6215,11 +6216,39 @@ class JobApplicationAssistant:
         m = re.search(r"\b(\d{4,8})\b", text)
         return m.group(1) if m else ""
 
+    def _owner_profile(self):
+        """The owner's profile as this run was given it; the file's when this run was not given one (the
+        page-reading flow never sets it). A run given None was given no permission."""
+        if hasattr(self, "_profile"):
+            return self._profile
+        try:
+            return get_user_profile()
+        except Exception:
+            return None
+
+    def why_not_read_a_code(self, page: Page, email: str = "") -> Optional[str]:
+        """emailed_codes.why_not for the page in front of the agent: None when it may read a code from the
+        owner's mail, else why not."""
+        try:
+            text = page.locator("body").inner_text(timeout=5_000) or ""
+        except Exception:
+            text = ""
+        profile = self._owner_profile()
+        email = email or (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
+        return emailed_codes.why_not(profile, page.url, text, safety.captcha_visible(page), email)
+
     def passcode_from_gmail(self, page: Page, previous: str = "", wait_seconds: int = 150,
                             length: int = 0) -> str:
         """Reads the newest one-time passcode email (last hour) in the Gmail this
         browser is signed in to, in a separate tab. Opens only that one email,
-        and only when its preview doesn't already show the code."""
+        and only when its preview doesn't already show the code.
+
+        Every reader of a code comes through here, so the one rule for when a code may be read
+        (emailed_codes.why_not) is asked before the mail is opened: no caller can go around it."""
+        why = self.why_not_read_a_code(page)
+        if why:
+            logger.info("PASSCODE: %s -- leaving it to the user", why)
+            return ""
         employer = (getattr(self, "employer", "") or "").strip()
         tab = page.context.new_page()
         try:
@@ -6250,6 +6279,10 @@ class JobApplicationAssistant:
                         code = self._extract_code(length=length, text=body)
                     if code and code != previous:
                         logger.info("PASSCODE: found a one-time passcode in Gmail")  # never the mail's text: it holds the code
+                        login_guard.record_code_read(
+                            urlparse(page.url).netloc.lower(),
+                            (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
+                            or getattr(self._owner_profile(), "email", ""))
                         return code
                     break
                 logger.info("PASSCODE: no new passcode email yet -- checking again in 15s")
@@ -6267,14 +6300,16 @@ class JobApplicationAssistant:
                 pass
 
     def complete_emailed_passcode(self, page: Page) -> bool:
-        if not safety.password_allowed(page.url):
-            return False  # never a Google/Apple/Microsoft verification step
         """On a 'we've sent a one-time password to your email' step of account
         setup or sign-in: read the code from Gmail, enter it, continue. The
         user's decision (2026-09-15). If the code is rejected or expired, asks
-        for a new one once."""
+        for a new one once. Whether a code may be read at all is emailed_codes.why_not's."""
         field = self._passcode_field(page)
         if field is None:
+            return False
+        why = self.why_not_read_a_code(page)
+        if why:
+            logger.info("PASSCODE: %s -- leaving it to the user", why)
             return False
         previous = ""
         for attempt in (1, 2):
@@ -6457,6 +6492,11 @@ class JobApplicationAssistant:
     def _reset_password_with_emailed_code(self, page: Page, email: str, password: str) -> bool:
         domain = urlparse(page.url).netloc.lower()
         if not safety.password_allowed(page.url) or safety.captcha_visible(page):
+            return False
+        why = self.why_not_read_a_code(page, email)        # before Forgot is pressed: a request is spent by it
+        if why:
+            self._login_paused = why
+            logger.info("RECOVERY: %s -- not requested by the agent", why)
             return False
         if getattr(self.adapter(page), "name", "") == "workday":
             # Workday resets by an emailed link that lasts about two hours and allows five requests in 24

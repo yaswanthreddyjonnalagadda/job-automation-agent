@@ -13,6 +13,7 @@ import logging
 
 import pytest
 
+import config
 import safety
 from browser_automation import JobApplicationAssistant
 from sites.base import SiteAdapter
@@ -119,7 +120,7 @@ def page(browser):
 def agent(monkeypatch):
     a = JobApplicationAssistant.__new__(JobApplicationAssistant)
     a.values = safety.AgentValues()
-    a._profile = None
+    a._profile = config.UserProfile(email=EMAIL, check_gmail_for_confirmation=True)   # the owner allowed mail reads
     a.adapter = lambda _page: SiteAdapter()
     a.RECOVERY_WAIT_SECONDS = 2
     a.gmail_calls = []

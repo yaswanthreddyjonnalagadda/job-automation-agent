@@ -32,6 +32,7 @@ WINDOW = timedelta(hours=24)
 MAX_FAILED_SIGN_INS = 2      # per account in 24 hours; Workday locks at 3 to 5 in a row
 MAX_ACCOUNT_CREATIONS = 2
 MAX_RESET_REQUESTS = 1       # Workday allows 5 in 24 hours, and the owner may need some
+MAX_CODE_READS = 6           # one-time codes read from the owner's mail for one account in 24 hours
 
 
 def _now() -> datetime:
@@ -106,6 +107,15 @@ def may_create_account(host: str, email: str) -> Optional[str]:
     return None
 
 
+def may_read_code(host: str, email: str) -> Optional[str]:
+    entry = _entry(_load(), host, email)
+    read = _recent(entry.get("code_reads"), _now())
+    if len(read) >= MAX_CODE_READS:
+        return (f"{len(read)} one-time codes were already read from your mail for {host} in the last 24 hours: "
+                f"a site that keeps refusing them needs you")
+    return None
+
+
 def may_request_reset(host: str, email: str) -> Optional[str]:
     entry = _entry(_load(), host, email)
     asked = _recent(entry.get("reset_requests"), _now())
@@ -153,6 +163,14 @@ def hold_for_verification(host: str, email: str) -> None:
     entry["hold_reason"] = (f"an account was just created on {host} and the site did not sign it in, so it may "
                             f"need its email verified: open the verification email it sent you, click the link, "
                             f"then press Continue.")
+    data[_key(host, email)] = entry
+    _save(data)
+
+
+def record_code_read(host: str, email: str) -> None:
+    data = _load()
+    entry = _entry(data, host, email)
+    entry["code_reads"] = [*(entry.get("code_reads") or []), _stamp()][-20:]
     data[_key(host, email)] = entry
     _save(data)
 

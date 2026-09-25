@@ -116,6 +116,30 @@ no code arrives, the code is refused twice, the site will not take the existing
 password as the new one, or a CAPTCHA shows. The password and the code are never
 written to the logs.
 
+## When a one-time code may be read from your mail
+
+One rule, in `emailed_codes.py`, decides every case where the agent reads a
+one-time code from your mail -- the code step of a form, the code step of
+sign-in or account setup, and the password reset of an existing account -- and
+`passcode_from_gmail` asks it before it opens your mail, so no step can go
+around it. The agent reads a code only when **all** of these hold:
+
+* you have allowed it to read your mail (`check_gmail_for_confirmation` in your
+  profile). Without it the agent does not read a code and does not even ask a
+  site to send one (a reset is not requested);
+* the site is an employer's, never Google, Microsoft, Apple, LinkedIn, Indeed or
+  Dice (`safety.password_allowed`);
+* the code is not one the site asks for to prove a human is applying ("enter the
+  code to confirm you're a human", a CAPTCHA on the page): that one is yours to
+  enter, and the hand-over says so;
+* it has not already read six codes for that account in the last 24 hours -- a
+  site that keeps refusing them needs you.
+
+Each read is counted for that account, kept across runs, and forgotten after 24
+hours. A code is never written to the logs. Before this the reset did not ask
+whether you had allowed mail reads or whether the code was a human check, and the
+code step of a form did not ask about the site; they now all do.
+
 ## Creating an account
 
 On an employer's create-account form the agent ticks two kinds of box and no
