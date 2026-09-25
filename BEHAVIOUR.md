@@ -85,6 +85,24 @@ over as `ready_to_submit`, whether or not automatic submission is on: the run
 stops as `needs_user_review` with "the tailored resume is not attached". A form
 with no resume field is unaffected.
 
+## An account that already exists
+
+When an employer's page says an account already exists for your email, the
+agent signs in with your existing `ATS_PASSWORD`. If the site rejects it, the
+agent resets the password to that same `ATS_PASSWORD`: it uses the site's
+forgot-password step, reads the one-time code the site emails you from the
+Gmail this browser is signed in to (a separate tab, closed straight after),
+and enters it and your existing password. It never generates or chooses a
+different password.
+
+It happens only on employer ATS domains (never Google, Microsoft, Apple,
+LinkedIn, Indeed, Dice or the other blocked sites, per `safety.password_allowed`),
+once per site per run, and only after the page itself says the account exists.
+It stops and leaves the login to you if the site sends a link instead of a code,
+no code arrives, the code is refused twice, the site will not take the existing
+password as the new one, or a CAPTCHA shows. The password and the code are never
+written to the logs.
+
 ## Before it stops
 
 `apply_flow.hand_over()` runs, in order:

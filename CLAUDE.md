@@ -55,11 +55,16 @@
 - Login is the human's step. Never type a password for Google, Microsoft,
   Apple, LinkedIn, Indeed, or Dice -- `safety.password_allowed()` enforces
   this in code; do not work around it.
-- ATS account credentials (Workday/Greenhouse/Lever/etc. accounts the user
-  created themselves) come only from the configured `.env` values. Do not
-  build automated password-reset, OTP-interception, or credential-vaulting
-  flows. If a login is broken, surface it to the user rather than
-  automating around it.
+- ATS account credentials come only from the configured `.env` values. Do
+  not build password-reset, OTP-interception, or credential-vaulting flows,
+  with one owner-approved exception: when an employer ATS page says an
+  account already exists for the owner's own email, the agent signs in with
+  the existing `ATS_PASSWORD`; if the site rejects it, it may reset the
+  password to that same `ATS_PASSWORD` using a one-time code emailed to the
+  owner and read from the owner's signed-in Gmail tab. Only on employer ATS
+  domains (`safety.password_allowed`), once per site per run, never a
+  generated or different password. Any other broken login is surfaced to the
+  user.
 
 ## 6. Safety, Compliance & Circuit Breakers
 - **Sponsorship guardrail:** scan for non-sponsorship language; if the
