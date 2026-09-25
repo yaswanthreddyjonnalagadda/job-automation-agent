@@ -120,6 +120,22 @@ site filled in -- is read as that box's value however the page draws it, so it
 is not typed again. A phone box that holds only its country's dial code ("+1")
 is still empty, and is filled.
 
+## Dropdowns that show their choices only when opened
+
+Some pages draw a required dropdown as a bare "Choose an option" button and list
+its choices only once it is opened. The agent opens it, reads the whole list,
+closes it without choosing, and gives those choices to Claude with the question,
+so the answer comes from your profile and the choices offered -- not from a guess
+at what the list might hold. If your profile settles no answer, or none of the
+choices fits, the question is still left for you and listed at hand-over.
+
+## When you press Continue
+
+Pressing Continue on the dashboard gives the agent its three tries at moving on
+afresh. Before, a page that had tripped the loop guard tripped it again on the
+first press after your Continue, whatever you had put right in between. The guard
+still stops a page that will not move on after three presses, and reports it.
+
 ## Before it stops
 
 `apply_flow.hand_over()` runs, in order:

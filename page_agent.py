@@ -645,6 +645,42 @@ def choices_in(snapshot: str, under: str = "", any_list: bool = False) -> list[t
     return found
 
 
+# What a dropdown that has no answer yet reads when the page draws it as a button
+# ("Choose an option"): the words are a prompt, not a name, and its choices are
+# not on the page until it is opened.
+_PROMPT_NAME = re.compile(
+    r"^\W*(choose( an option| one)?|select( an option| one| an item)?|please select|make a selection)\W*$",
+    re.IGNORECASE)
+
+
+def label_above(snapshot: str, ref: str) -> str:
+    """The question a control answers, when the control's own name is only a
+    prompt: the text just above it, in the same container -- ADP draws
+    `generic: If you are under 18 ...?*` and then `button "Choose an option"`."""
+    lines = (snapshot or "").splitlines()
+    for i, line in enumerate(lines):
+        if f"[ref={ref}]" not in line:
+            continue
+        indent = len(line) - len(line.lstrip())
+        for earlier in reversed(lines[:i]):
+            m = _LINE.match(earlier)
+            if not m:
+                continue
+            depth = len(m.group("indent"))
+            if depth > indent:
+                continue                      # inside something drawn between them
+            if depth < indent:
+                break                         # left the container: nothing above belongs to it
+            role = m.group("role")
+            if role in ANSWER_ROLES or role in PRESS_ROLES:
+                break                         # the previous control's own row
+            text = _unquote(m.group("value") or m.group("name") or "")
+            if role in ("generic", "text", "paragraph", "heading", "strong", "label", "legend") and text:
+                return text[:200]
+        return ""
+    return ""
+
+
 def closest_choice(choices: list[str], wanted: str) -> Optional[int]:
     """The choice that says what the profile says, where the words differ.
 
@@ -780,6 +816,7 @@ class PageAgent:
         self._pressed: dict[str, int] = {}
         self._opened_entries: set[str] = set()
         self._woken: set[str] = set()
+        self._peeked: dict[str, int] = {}      # times a hidden dropdown list was opened to read it
         self._list_retries = 0
         self._refreshed = False
         self._shapes: dict[int, int] = {}
@@ -844,8 +881,16 @@ class PageAgent:
         # things" guard on the very first read after a reload.
         self._shapes = {}
         self._woken = set()
+        self._peeked = {}
         self._opened_entries = set()
         self._list_retries = 0
+        # The loop guard's three tries are for one stretch of the run. Left as it
+        # was, a guard that had tripped tripped again on the first press after the
+        # owner's Continue ("identical across 4 consecutive cycles"), whatever had
+        # been put right in between.
+        guard = getattr(self, "_circuit_breaker", None)
+        if guard is not None:
+            guard.reset()
         # Re-read the answer library: the owner may have added answers to
         # data/profile_answers.json while the run waited.
         self._profile_answer_library = None
@@ -855,7 +900,7 @@ class PageAgent:
         anything added since starts empty rather than failing."""
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
-                              ("_google_reloads", dict),
+                              ("_google_reloads", dict), ("_peeked", dict),
                               ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set), ("_list_retries", int), ("_shapes", dict),
                               ("_refreshed", bool),
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict),
@@ -1797,9 +1842,17 @@ class PageAgent:
                 if still_open:
                     feedback = ((feedback + " | ") if feedback else "") + \
                         "the agent could not answer these itself: " + "; ".join(still_open[:12])
+                # A dropdown that draws its list only when opened is read by opening
+                # it, so Claude is told the choices instead of guessing at them.
+                hidden = self.read_hidden_choices(page, controls, snapshot)
+                asked = feedback
+                if hidden:
+                    snapshot = self.read_when_loaded(page)
+                    controls = parse_snapshot(snapshot)
+                    asked = ((feedback + " | ") if feedback else "") + hidden
                 try:
                     plan = PagePlan.from_json(self.claude.plan_page(compact_snapshot(snapshot),
-                                                                    self.facts(controls), feedback))
+                                                                    self.facts(controls), asked))
                 except Exception as exc:
                     message = str(exc)
                     if "out of credit" in message or "credit balance" in message.lower():
@@ -3166,6 +3219,61 @@ class PageAgent:
             if offered:
                 break
         return offered
+
+    def read_hidden_choices(self, page, controls: list[Control], snapshot: str) -> str:
+        """The choices of blank dropdowns that draw their list only when opened,
+        as words for the planner ("" when there is none to read).
+
+        ADP's required "If you are under 18 years of age, can you provide proof...?"
+        reaches the agent as `button "Choose an option"` with nothing under it.
+        Claude, asked to answer without the choices, said they were unknown and the
+        question went back to the owner. Opening the list shows them; the list is
+        closed again and nothing is chosen here -- choosing stays with the planner's
+        answer and `choose()`.
+        """
+        notes: list[str] = []
+        for control in controls:
+            if control.role not in ("button", "combobox", "listbox") or control.disabled or control.options \
+                    or control.answer or not _PROMPT_NAME.match((control.name or control.value or "").strip()):
+                continue
+            label = label_above(snapshot, control.ref) or control.context or control.container
+            key = f"{self._current_host}|{(label or control.ref)[:80]}"
+            if self._peeked.get(key, 0) >= 2 or len(notes) >= 4:
+                continue
+            self._peeked[key] = self._peeked.get(key, 0) + 1
+            choices = self._open_and_read(page, control, label)
+            if choices:
+                logger.info("CHOICES: read %d from %r by opening it", len(choices), (label or control.name)[:60])
+                notes.append(f"the choices for {label or control.name!r} (the {control.name!r} control, ref {control.ref}) "
+                             f"are: " + " | ".join(f"'{c}'" for c in choices)
+                             + " -- answer it with one of these if the facts settle it")
+        return "; ".join(notes)
+
+    def _open_and_read(self, page, control: Control, label: str) -> list[str]:
+        """Opens one dropdown, reads what it offers, and closes it again."""
+        tab = self.tab(page)
+        try:
+            loc = self.locate(page, control.ref)
+            showing = {ref for ref, _t in choices_in(self.snapshot(page), under=label, any_list=True)}
+            if not self.assistant._click_resiliently(loc, timeout_ms=4_000):
+                return []
+            offered = [text for ref, text in self._wait_for_choices(page, seconds=4.0, under=label, any_list=True)
+                       if ref not in showing]
+            # Close it: Escape, and where the widget ignores that, the control that opened it.
+            for close in (lambda: tab.keyboard.press("Escape"), lambda: loc.click(timeout=2_000)):
+                if not [1 for ref, _t in choices_in(self.snapshot(page), under=label, any_list=True)
+                        if ref not in showing]:
+                    break
+                try:
+                    close()
+                except Exception:
+                    pass
+                tab.wait_for_timeout(400)
+            return list(dict.fromkeys(offered))
+        except Exception as exc:
+            logger.debug("Could not read the choices of %r: %s", (label or control.name)[:50],
+                         str(exc).splitlines()[0][:100])
+            return []
 
     def _pick(self, offered: list[tuple[str, str]], value: str) -> Optional[int]:
         """Which choice to take: the one that matches, else the closest."""
