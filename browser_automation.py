@@ -5661,9 +5661,14 @@ class JobApplicationAssistant:
 
     def _claude_client(self):
         """Lazily built so this module stays importable (and hot-reloadable)
-        without an API key configured."""
+        without an API key configured. It matches dropdown choices, which is
+        answering a question: with FORM_ANSWER_MODE=gemini that is Gemini's."""
         if getattr(self, "_claude", None) is None:
             try:
+                if getattr(self._config, "form_answer_mode", "") == "gemini":
+                    from gemini_integration import GeminiClient
+                    self._claude = GeminiClient(self._config)
+                    return self._claude
                 from claude_integration import ClaudeClient
                 self._claude = ClaudeClient(self._config)
             except Exception as exc:

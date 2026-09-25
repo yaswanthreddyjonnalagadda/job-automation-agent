@@ -36,16 +36,29 @@ class ClaudeIntegrationError(RuntimeError):
 
 
 class ClaudeClient:
+    # What the model behind this client is called and what it raises, by kind. gemini_integration.GeminiClient
+    # is this class with Gemini's own in their place, so the prompts, the retry loops and the checks on what
+    # comes back below serve both, and neither has to know the other's library.
+    PROVIDER = "Claude"
+    RATE_LIMITED = anthropic.RateLimitError
+    STATUS_ERROR = anthropic.APIStatusError
+    CONNECTION_ERROR = anthropic.APIConnectionError
+    TIMEOUT_ERROR = anthropic.APITimeoutError
+
     def __init__(self, config: AppConfig):
         self._config = config
         self._client = anthropic.Anthropic(api_key=config.anthropic_api_key)
+
+    @property
+    def _model(self) -> str:
+        return self._config.anthropic_model
 
     def _call(self, *, system: str, user_message: str, max_tokens: int = 2000) -> str:
         last_error: Exception | None = None
         for attempt in range(1, self._config.claude_max_retries + 1):
             try:
                 response = self._client.messages.create(
-                    model=self._config.anthropic_model,
+                    model=self._model,
                     max_tokens=max_tokens,
                     system=system,
                     messages=[{"role": "user", "content": user_message}],
@@ -54,23 +67,23 @@ class ClaudeClient:
                 return "".join(
                     block.text for block in response.content if block.type == "text"
                 )
-            except anthropic.RateLimitError as exc:
+            except self.RATE_LIMITED as exc:
                 wait = 2 ** attempt
-                logger.warning("Rate limited by Claude API, retrying in %ds", wait)
+                logger.warning("Rate limited by %s API, retrying in %ds", self.PROVIDER, wait)
                 time.sleep(wait)
                 last_error = exc
-            except anthropic.APIStatusError as exc:
-                logger.error("Claude API error (status=%s): %s", exc.status_code, exc.message)
+            except self.STATUS_ERROR as exc:
+                logger.error("%s API error (status=%s): %s", self.PROVIDER, exc.status_code, exc.message)
                 last_error = exc
                 if exc.status_code and exc.status_code < 500:
                     break
                 time.sleep(2 ** attempt)
-            except anthropic.APIConnectionError as exc:
-                logger.warning("Connection error talking to Claude API: %s", exc)
+            except self.CONNECTION_ERROR as exc:
+                logger.warning("Connection error talking to %s API: %s", self.PROVIDER, exc)
                 last_error = exc
                 time.sleep(2 ** attempt)
 
-        raise ClaudeIntegrationError(f"Claude API call failed after retries: {last_error}")
+        raise ClaudeIntegrationError(f"{self.PROVIDER} API call failed after retries: {last_error}")
 
     @staticmethod
     def _extract_json(text: str) -> dict[str, Any]:
@@ -431,14 +444,14 @@ Rules -- follow every one:
                     # Room for a long form: R+L's application page is 43,000
                     # characters and its plan ran past a 6,000-token reply,
                     # which arrived cut off and could not be read at all.
-                    model=self._config.anthropic_model, max_tokens=16_000, system=self.PLAN_PAGE_SYSTEM,
+                    model=self._model, max_tokens=16_000, system=self.PLAN_PAGE_SYSTEM,
                     messages=[{"role": "user", "content": user + cut_off}],
                     timeout=max(self._config.claude_request_timeout, 180.0),
                 )
                 raw = "".join(block.text for block in response.content if block.type == "text")
                 start, end = raw.find("{"), raw.rfind("}")
                 return self._extract_json(raw[start:end + 1] if start >= 0 and end > start else raw)
-            except (anthropic.RateLimitError, anthropic.APIConnectionError, anthropic.APITimeoutError) as exc:
+            except (self.RATE_LIMITED, self.CONNECTION_ERROR, self.TIMEOUT_ERROR) as exc:
                 last_error = exc
                 time.sleep(2 ** attempt)
             except ClaudeIntegrationError as exc:
@@ -497,7 +510,7 @@ Rules -- follow every one:
         for attempt in range(1, self._config.claude_max_retries + 1):
             try:
                 response = self._client.messages.create(
-                    model=self._config.anthropic_model, max_tokens=400, system=system,
+                    model=self._model, max_tokens=400, system=system,
                     messages=[{"role": "user", "content": user_content}],
                     timeout=self._config.claude_request_timeout,
                 )
@@ -506,7 +519,7 @@ Rules -- follow every one:
                 return {"page": str(result.get("page") or "other"),
                         "click": str(result.get("click") or "").strip(),
                         "why": str(result.get("why") or "").strip()}
-            except (anthropic.RateLimitError, anthropic.APIConnectionError) as exc:
+            except (self.RATE_LIMITED, self.CONNECTION_ERROR) as exc:
                 last_error = exc
                 time.sleep(2 ** attempt)
             except Exception as exc:

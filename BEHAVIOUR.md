@@ -98,6 +98,35 @@ over as `ready_to_submit`, whether or not automatic submission is on: the run
 stops as `needs_user_review` with "the tailored resume is not attached". A form
 with no resume field is unaffected.
 
+## Which model answers the form, and which writes the documents
+
+`FORM_ANSWER_MODE` decides who works out the answers on each application page:
+
+* `profile` -- nobody: every answer comes from your saved profile and answer
+  library, and Claude only writes the documents;
+* `claude` -- Claude plans each page, through the Anthropic API or, with
+  `AGENT_BRAIN=session`, through the Claude Code session;
+* `gemini` -- Google's Gemini plans each page (your decision of 25 September
+  2026, after the Anthropic account reached its usage limit). `AGENT_BRAIN` is
+  not consulted.
+
+In every mode Claude writes the resume and the cover letter; Gemini never does,
+and its client refuses to. Everything that answers a question goes to Gemini in
+`gemini` mode: planning a page, reading a screenshot, matching a dropdown choice,
+screening answers.
+
+What leaves your computer: in `gemini` mode every page the agent reads, together
+with the facts it answers from (your profile and the text of your resume), goes
+to Google; the documents go to Anthropic. Nothing else changes: the agent's own
+rules -- attestations, sponsorship, CAPTCHAs, submitting only when every check
+passes -- decide what is done with an answer, whoever proposed it. The key
+(`GEMINI_API_KEY`) travels in a request header, never in an address, and is never
+written to a log. If it is missing, the run says so before it starts; if it does
+not look like a Google key (39 characters starting `AIza`) it says that too,
+without printing it. When Google refuses or is busy the agent waits and asks
+again (it waits as long as Google asks for a per-minute limit), and a page it
+still cannot get an answer for is handed to you as before.
+
 ## An account that already exists
 
 When an employer's page says an account already exists for your email, the

@@ -154,12 +154,24 @@ class UserProfile:
     check_gmail_for_confirmation: bool = False
 
 
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+
+
 @dataclass(frozen=True)
 class AppConfig:
     anthropic_api_key: str = field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", ""))
     anthropic_model: str = field(
         default_factory=lambda: os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
     )
+    # Google's Gemini, used only when FORM_ANSWER_MODE=gemini (gemini_integration.py): it answers the
+    # questions on the application pages, and Claude still writes the resume and the cover letter.
+    # The key comes from aistudio.google.com; it is never logged and never put in an address.
+    gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", "").strip())
+    gemini_model: str = field(
+        default_factory=lambda: os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_GEMINI_MODEL)
+    gemini_base_url: str = field(
+        default_factory=lambda: os.getenv("GEMINI_BASE_URL", "").strip() or DEFAULT_GEMINI_BASE_URL)
     resume_path: Path = Path(RESUME_PATH)
     job_queue_path: Path = Path(JOB_QUEUE_PATH)
     # Used only for employer ATS accounts (Workday/Greenhouse/Lever/iCIMS...)
@@ -200,7 +212,10 @@ class AppConfig:
     )
     # "profile" is the autonomous mode: every form answer comes from the
     # saved profile or local answer library, not an LLM or session planner.
-    # "claude" preserves the previous assisted page-planning workflow.
+    # "claude" preserves the previous assisted page-planning workflow (who plans
+    # each page is then AGENT_BRAIN: the API or the Claude Code session).
+    # "gemini" has Google's Gemini answer the pages and Claude write the documents;
+    # AGENT_BRAIN is not consulted.
     form_answer_mode: str = field(
         default_factory=lambda: os.getenv("FORM_ANSWER_MODE", "profile").strip().lower()
     )
