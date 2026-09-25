@@ -116,6 +116,18 @@ no code arrives, the code is refused twice, the site will not take the existing
 password as the new one, or a CAPTCHA shows. The password and the code are never
 written to the logs.
 
+## Creating an account
+
+On an employer's create-account form the agent ticks two kinds of box and no
+others: a privacy notice, and consent to creating the very account you asked it
+to create ("I agree to creating this account to allow me to apply for positions
+with ..."; your decision of 25 September 2026, decided in `safety.py`). Terms and
+conditions, declarations, signatures, marketing opt-ins and anything that shares
+your data stay unticked and are left for you. Some sites (Workday) draw the box
+under an overlay so a normal click ticks nothing: the agent then forces the tick,
+then uses the page's own click, and checks the box really is ticked. If it cannot
+tick a box it must, it does not press Create Account: it stops and says which box.
+
 ## Signing in with Google
 
 Where a site offers "Sign in with Google", the agent uses it and only picks

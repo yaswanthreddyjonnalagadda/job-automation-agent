@@ -111,6 +111,32 @@ def is_privacy_consent(text: str) -> bool:
     return bool(text and _PRIVACY_ONLY_RE.search(text) and not is_attestation(text))
 
 
+# Consent to creating the very account the owner asked the agent to create ("I agree to creating
+# this account to allow me to apply for positions with X"). It states nothing about the candidate
+# and is the act the owner authorized, so the agent may tick it -- owner's approval, 25 September
+# 2026. Anything that goes further is not this: terms and conditions, a declaration or signature,
+# a marketing opt-in, sharing data with anyone.
+_ACCOUNT_CREATION_RE = re.compile(
+    r"\b(agree|consent|acknowledge|accept)\b[^.]{0,40}\b(creat(e|ing|ion of)|open(ing)?|set(ting)? up|register(ing)?)\b"
+    r"[^.]{0,30}\baccount\b",
+    re.IGNORECASE,
+)
+_BEYOND_ACCOUNT_CREATION_RE = re.compile(
+    r"\bterms?\b|\bconditions?\b|\bcertif|\bperjury\b|\btrue\b|\baccurate\b|\bsignature\b|\bsign\b|"
+    r"\breceiv|\balerts?\b|\bnewsletters?\b|\bmarketing\b|\bpromotion|\bhear more\b|\bcontact me\b|"
+    r"\bshare\b|\bsell\b|\bthird[- ]part(y|ies)\b",
+    re.IGNORECASE,
+)
+
+
+def is_account_creation_consent(text: str) -> bool:
+    """True for a box that only consents to creating the account the owner asked for."""
+    text = " ".join((text or "").split())
+    if not text or not _ACCOUNT_CREATION_RE.search(text):
+        return False
+    return not (is_attestation(text) or _BEYOND_ACCOUNT_CREATION_RE.search(text))
+
+
 # --------------------------------------------------------------------------
 # Controls that submit an application: never clicked by the agent
 # --------------------------------------------------------------------------
