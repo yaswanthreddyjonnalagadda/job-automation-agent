@@ -4623,7 +4623,8 @@ class JobApplicationAssistant:
 
     @staticmethod
     def _is_account_consent(label: str, context: str) -> bool:
-        """Allows only an explicit privacy acknowledgment checkbox.
+        """Allows only an explicit privacy acknowledgment checkbox, or consent to
+        creating this very account (both decided in safety.py).
 
         Nearby privacy text does not turn terms and conditions into a privacy
         consent: accepting those terms remains a candidate action.
@@ -4633,7 +4634,26 @@ class JobApplicationAssistant:
             return False
         if re.search(r"\bterms?(?:\s+and\s+conditions?)?\b", label, re.IGNORECASE):
             return False
-        return safety.is_privacy_consent(label)
+        return safety.is_privacy_consent(label) or safety.is_account_creation_consent(label)
+
+    @staticmethod
+    def _tick_checkbox(box) -> bool:
+        """Ticks a checkbox and says whether it ended up ticked. Workday draws its
+        box under an overlay, so a normal tick lands on the overlay and the state
+        does not change: a forced tick, then a script's own click, are tried in turn."""
+        for attempt in (lambda: box.check(timeout=3_000),
+                        lambda: box.check(force=True, timeout=3_000),
+                        lambda: box.evaluate("e => e.click()")):
+            try:
+                attempt()
+            except Exception:
+                pass
+            try:
+                if box.is_checked():
+                    return True
+            except Exception:
+                return False
+        return False
 
     @staticmethod
     def _account_acknowledgment_is_authorized(label: str, profile) -> bool:
@@ -4774,15 +4794,21 @@ class JobApplicationAssistant:
                 if safety.is_attestation(label) or is_terms_acknowledgment:
                     if not box.is_checked():
                         if self._account_acknowledgment_is_authorized(label, profile):
-                            box.check(timeout=3_000)
-                            logger.info("ACCOUNT: accepted owner-authorized account acknowledgment")
+                            if self._tick_checkbox(box):
+                                logger.info("ACCOUNT: accepted owner-authorized account acknowledgment")
+                            else:
+                                needs_candidate_acknowledgment = True
+                                logger.info("LEFT_FOR_YOU: could not tick %r", label.strip()[:70])
                         else:
                             needs_candidate_acknowledgment = True
                             logger.info("LEFT_FOR_YOU: account form requires %r", label.strip()[:70])
                     continue
                 if agree and self._is_account_consent(label, context) and not box.is_checked():
-                    box.check(timeout=3_000)
-                    logger.info("ACCOUNT: accepted required privacy acknowledgment")
+                    if self._tick_checkbox(box):
+                        logger.info("ACCOUNT: accepted required privacy acknowledgment")
+                    else:
+                        needs_candidate_acknowledgment = True
+                        logger.info("LEFT_FOR_YOU: could not tick %r", label.strip()[:70])
 
             if needs_candidate_acknowledgment:
                 logger.warning("ACCOUNT_HELD: a terms or attestation checkbox needs the candidate")
