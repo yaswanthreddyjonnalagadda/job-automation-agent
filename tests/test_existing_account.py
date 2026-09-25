@@ -248,6 +248,22 @@ def test_neither_the_password_nor_the_code_is_ever_logged(page, agent, caplog):
     assert ATS_PASSWORD not in caplog.text and CODE not in caplog.text
 
 
+def test_the_gmail_reader_does_not_log_the_code_from_the_mail_it_read(browser, agent, caplog):
+    """The real reader, on a stand-in inbox whose subject line shows the code."""
+    caplog.set_level(logging.DEBUG)
+    inbox = ('<!doctype html><table><tr class="zA"><td>Example ATS</td>'
+             f'<td>Your verification code is {CODE}</td></tr></table>')
+    context = browser.new_context()  # the reader opens its own tab, which needs a real context
+    try:
+        context.route("https://mail.google.com/**",
+                      lambda route: route.fulfill(status=200, content_type="text/html", body=inbox))
+        code = JobApplicationAssistant.passcode_from_gmail(agent, context.new_page(), wait_seconds=5)
+    finally:
+        context.close()
+    assert code == CODE
+    assert CODE not in caplog.text
+
+
 # --- when it runs --------------------------------------------------------------------------
 
 def test_a_create_form_that_says_the_account_exists_signs_in_instead(page, agent):

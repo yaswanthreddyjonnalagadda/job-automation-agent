@@ -6151,7 +6151,7 @@ class JobApplicationAssistant:
                         body = " ".join(tab.locator("div.a3s, [role=main]").first.inner_text().split())
                         code = self._extract_code(length=length, text=body)
                     if code and code != previous:
-                        logger.info("PASSCODE: found a one-time passcode in Gmail (%s...)", text[:60])
+                        logger.info("PASSCODE: found a one-time passcode in Gmail")  # never the mail's text: it holds the code
                         return code
                     break
                 logger.info("PASSCODE: no new passcode email yet -- checking again in 15s")
