@@ -1,0 +1,12 @@
+{
+  "id": "f008",
+  "date": "2026-09-24",
+  "class": "Guard state that outlives its context",
+  "symptom": "After the owner supplied a missing answer and pressed Continue, the agent pressed Next once and the loop guard tripped again at once (\"identical across 4 consecutive cycles\").",
+  "site": "ADP WorkforceNow (Willdan); any multi-step form",
+  "root_cause": "The circuit breaker's count belonged to the whole run. Once tripped, every later press on an unchanged page tripped it at once, whatever the owner or the agent had put right in between, so Continue could never get past it. The hot-reload path ran the old class's resume bookkeeping.",
+  "why_tests_missed": "No test resumed a run after the guard had tripped.",
+  "fix": "forget_sign_in_attempts, which every resume runs, re-arms the loop guard; the reload_code path in apply_flow runs it again on the reloaded class. Three tries per stretch, still stopping and reporting a page that will not move on.",
+  "tests": ["tests/test_hidden_choices_and_breaker_reset.py"],
+  "prevention": "Scope every guard counter to a stretch of work and reset it on each hand-back from the owner. Test the whole sequence: trip, owner acts, resume, press once."
+}
