@@ -93,7 +93,13 @@ of them hold.
   symptom, the root cause as a class ("a label keyword chose the wrong
   concept"), why the existing tests missed it, and the test that now covers
   the whole class -- a property test where the class is large. A fix that
-  works for one site, one form or one value is not a fix.
+  works for one site, one form or one value is not a fix. The same pull
+  request adds a file to `reference/failures/` (one JSON file per failure:
+  symptom, root cause, why the tests missed it, the fix, the tests, and what
+  a new project should build in from the start); the owner keeps that
+  catalogue in the repository for the next project, and
+  `tests/test_failures_catalogue.py` checks each entry is complete and names
+  real tests.
 - **Data never lives in logic.** No place, company, person or answer
   literal decides anything in code. Places come from `reference/geo.json`
   through `geo_reference.py` (regenerate the data with
@@ -115,4 +121,6 @@ of them hold.
 - **Say what the owner will see.** Any change to what the agent does on a
   form updates `BEHAVIOUR.md` in the same pull request.
 - **Plans live outside the repository root.** Roadmaps, RFCs, reviews and
-  postmortems go in the Claude Project; the root keeps rules only.
+  postmortems go in the Claude Project; the root keeps rules only. The one
+  exception is `reference/failures/`, the machine-readable failure catalogue
+  above, which is data the project keeps.

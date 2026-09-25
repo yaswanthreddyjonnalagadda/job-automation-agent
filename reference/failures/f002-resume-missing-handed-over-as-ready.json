@@ -1,0 +1,16 @@
+{
+  "id": "f002",
+  "date": "2026-09-24",
+  "class": "A precondition checked on only one path, and a control the agent could not name",
+  "symptom": "A Greenhouse application was handed over as ready to submit three times with no resume attached, though \"Resume/CV *\" is required.",
+  "site": "Rubrik (Greenhouse)",
+  "root_cause": "Two causes. The resume check ran only on the automatic-submission path, so in the default configuration (auto-submit off) the gate returned \"ready for you to submit\" before reaching it, and required-field validation missed it because a file upload is not a field. And the upload was a label styled as a button (\"Attach file\") with no ARIA press role, so the agent never had anything to click.",
+  "why_tests_missed": "They exercised the resume check with automatic submission on, and the gate with it off only where no resume was involved; no fixture drew an upload as a bare styled label.",
+  "fix": "submit_gate stops with \"the tailored resume is not attached\" at the last step whenever the form asks for a resume (a recognised upload, or a required Resume/CV label) and the tailored one is not on it. parse_snapshot treats a clickable generic named like an attach control as a button, using the nearby label to tell resume from cover letter.",
+  "tests": [
+    "tests/test_page_agent.py::test_a_resume_the_form_asks_for_holds_the_handover_until_it_is_attached",
+    "tests/test_page_agent.py::test_the_handover_stands_once_the_resume_is_attached",
+    "tests/test_page_agent.py::test_greenhouse_attach_file_label_is_matched_to_the_resume_not_the_cover_letter"
+  ],
+  "prevention": "Put every 'is this application ready' precondition in the one gate that every path passes through. Detect required uploads by their label as well as by their control, and never assume a clickable thing has a role."
+}

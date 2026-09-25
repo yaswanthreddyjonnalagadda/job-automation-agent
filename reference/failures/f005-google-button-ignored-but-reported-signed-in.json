@@ -1,0 +1,12 @@
+{
+  "id": "f005",
+  "date": "2026-09-24",
+  "class": "A success judged by the absence of evidence",
+  "symptom": "The agent pressed \"Sign in with Google\", logged LOGIN_OK seven seconds later, and filled the create-a-profile form underneath while the Google option was still on the page.",
+  "site": "ADP WorkforceNow (Willdan)",
+  "root_cause": "The reading agent passed a placeholder (lambda: None) as the check for 'the site still offers Google', so any press the site ignored counted as a sign-in. ADP's Google button is sometimes dead for a whole page load (its script throws \"Cannot read properties of undefined (reading 'googlePlusSocialURL')\" and every press, by any method, does nothing); a fresh load of the page revives it.",
+  "why_tests_missed": "_sign_in_with_google was only ever replaced by a mock, so its own success test never ran against a page.",
+  "fix": "A press counts as answered only when a window opened, the page moved on, or the page stopped offering Google. An unanswered press is repeated once, then answered by loading the page again (twice at most), then by the site's own sign-in. The check is the page's own snapshot, frames included.",
+  "tests": ["tests/test_google_sign_in_and_value_readback.py"],
+  "prevention": "Decide 'signed in' from a fact the site controls (the sign-in step is no longer offered), never from the click having been made. Reproduce a site's oddity in a clean browser with dummy data before writing the fix."
+}
