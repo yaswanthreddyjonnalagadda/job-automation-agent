@@ -897,6 +897,10 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             importlib.reload(page_agent)
             agent.__class__ = page_agent.PageAgent
             agent.assistant = assistant
+            # The resume bookkeeping above ran on the old code: run the new code's
+            # (a loop guard that had tripped is re-armed, new state starts empty).
+            agent._ensure_state()
+            agent.forget_sign_in_attempts()
             # The profile, application settings and Claude's instructions too:
             # a corrected name or new authorization must reach the live run.
             try:
