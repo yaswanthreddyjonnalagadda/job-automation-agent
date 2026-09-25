@@ -894,8 +894,11 @@ class PageAgent:
             record_callback=record_callback,
         )
 
-    def forget_sign_in_attempts(self) -> None:
-        """Google stays refused where the site itself rejected the account."""
+    def forget_sign_in_attempts(self, owner_acted: bool = True) -> None:
+        """Google stays refused where the site itself rejected the account.
+
+        `owner_acted` is False when the run resumed for a reason that says nothing about the
+        account (a code reload, a refresh): a hold on the sign-in is then left where it is."""
         """A resumed run tries signing in again: the owner has had a hand in it,
         and the page may now offer something the last attempt never saw."""
         # What the site rejected is remembered; only the password attempts are
@@ -905,7 +908,8 @@ class PageAgent:
         self._pressed = {}          # a resumed run may press on again
         # The owner has looked at whatever held the sign-in back (a rejection, an account to verify):
         # it may try again. The day's limit on rejected sign-ins still applies (login_guard).
-        login_guard.owner_resumed(getattr(self, "_current_host", "") or "")
+        if owner_acted:
+            login_guard.owner_resumed(getattr(self, "_current_host", "") or "")
         self._google_reloads = {}   # ... and give a dead Google button its fresh loads again
         self._retried_after_error = False
         self._code_tries = 0        # a resumed run may fetch a fresh code

@@ -154,7 +154,9 @@ So the agent keeps count across runs (`data/_login_attempts.json`, on your machi
 * it never asks Workday for a password reset (it cannot follow the emailed link, and
   each request spends one of the five); elsewhere it asks at most once a day;
 * it makes at most two attempts a day to create an account on one site.
-Each time it holds back, the hand-over says why and what to do.
+Each time it holds back, the hand-over says why and what to do. Only the dashboard's
+**Continue** lifts a hold: reloading the agent's code, refreshing or re-uploading a
+resume say nothing about whether you looked at the account, so they leave it in place.
 
 ## Signing in with Google
 

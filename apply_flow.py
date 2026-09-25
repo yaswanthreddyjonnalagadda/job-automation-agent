@@ -835,7 +835,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             if not page.is_closed():
                 agent.note_owner_changes(page)
             agent._ensure_state()
-            agent.forget_sign_in_attempts()
+            agent.forget_sign_in_attempts(owner_acted=(decision == "continue"))
             if decision == "submitted_by_user":
                 evidence = getattr(assistant, "_confirmation_evidence", "") or "the page confirmed it"
                 status, note = safety.verification_status(evidence)
@@ -879,7 +879,9 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
         if not page.is_closed():
             agent.note_owner_changes(page)
         agent._ensure_state()
-        agent.forget_sign_in_attempts()
+        # Only the owner's Continue lifts a hold on a sign-in (login_guard): a code reload, a refresh
+        # or a re-upload says nothing about whether the account was looked at.
+        agent.forget_sign_in_attempts(owner_acted=(decision == "continue"))
         if decision == "submitted_by_user":
             evidence = getattr(assistant, "_confirmation_evidence", "") or "the page confirmed it"
             status, note = safety.verification_status(evidence)
@@ -900,7 +902,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             # The resume bookkeeping above ran on the old code: run the new code's
             # (a loop guard that had tripped is re-armed, new state starts empty).
             agent._ensure_state()
-            agent.forget_sign_in_attempts()
+            agent.forget_sign_in_attempts(owner_acted=False)
             # The profile, application settings and Claude's instructions too:
             # a corrected name or new authorization must reach the live run.
             try:
