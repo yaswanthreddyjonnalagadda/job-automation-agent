@@ -187,6 +187,19 @@ has to type and press Enter as a last resort, the answer counts only if the box
 still holds it after leaving the box, and a row that turns out to be a different
 town is taken out again and left for you.
 
+## Substitutes you have approved
+
+The agent never swaps a fact for a near one on its own: a field of study on an
+application is something you certify as true, so "Computer Technology" is not
+"Computer Science" when a list happens to offer only the second, and the box is
+left empty. If you decide a substitute is acceptable, you say so in your profile
+(`answer_alternatives` in `data/profile.json`, for example
+`{"Computer Technology": ["Computer Science"]}`). Then, and only when the exact value
+is not offered, the agent tries your alternatives in your order and nothing else; the
+hand-over lists each one it used ("'Computer Technology' is not offered, so your listed
+alternative 'Computer Science' was chosen"). Your decision of 25 September 2026, for
+Computer Technology only. A form that offers the exact value always gets the exact value.
+
 ## Dropdowns that show their choices only when opened
 
 Some pages draw a required dropdown as a bare "Choose an option" button and list

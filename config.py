@@ -130,6 +130,10 @@ class UserProfile:
     education_dates: tuple[tuple[str, str, str], ...] = ()
     # What the break between jobs was, for forms that ask about gaps.
     work_history_gap: str = ""
+    # Substitutes the OWNER has approved for a value a list may not offer, tried in order after the
+    # exact value fails and never otherwise: {"Computer Technology": ["Computer Science"]}. A field of
+    # study is a fact the application certifies, so the agent never swaps it on its own.
+    answer_alternatives: dict = field(default_factory=dict)
     country: str = ""
     phone_country_code: str = ""
     # Application-form pop-ups like "Data Privacy Agreement" that block the
