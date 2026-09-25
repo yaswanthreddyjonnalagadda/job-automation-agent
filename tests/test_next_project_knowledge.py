@@ -157,6 +157,20 @@ def test_the_real_catalogue_goes_in_whole():
     assert all(all(f.get(field) for field in FAILURE_FIELDS) for f in out["failures"])
 
 
+def test_the_file_it_writes_by_default_can_never_be_committed_by_accident():
+    """It names the employers the owner applied to, so like the rest of the owner's records in data/ it is
+    ignored by git (found untracked-but-not-ignored the day it was first written)."""
+    import subprocess
+    real = f"data/{knowledge.OUTPUT_FILE.name}"        # during a test OUTPUT_FILE itself points into a temp folder
+    try:
+        run = subprocess.run(["git", "check-ignore", "-q", "--no-index", real], cwd=ROOT, capture_output=True,
+                             timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        pytest.skip("git is not available here")
+    assert run.returncode != 128, "not a git checkout"
+    assert run.returncode == 0, f"{real} is not ignored by git"
+
+
 # --- tests keep out of the owner's data (the class behind the "Example" entry) --------------------------
 
 def project_modules():
