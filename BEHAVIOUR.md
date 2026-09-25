@@ -203,6 +203,17 @@ afresh. Before, a page that had tripped the loop guard tripped it again on the
 first press after your Continue, whatever you had put right in between. The guard
 still stops a page that will not move on after three presses, and reports it.
 
+## A job that will not sponsor
+
+When your profile needs sponsorship, the agent reads each page for wording that says
+the employer will not sponsor or is open only to citizens ("without the need for
+sponsorship", "unable to sponsor", "no visa sponsorship", "U.S. citizens only") and,
+finding it, stops with `DISQUALIFIED_POLICY_MISMATCH` before filling anything. An
+inclusive question is not a refusal: "Are you authorized to work in the United States
+(with or without sponsorship)?" (also "with and/or without") accepts candidates who
+need sponsorship, so the agent goes on. A real refusal elsewhere on the same page still
+stops it. Your decision of 25 September 2026, decided in `safety.py`.
+
 ## Before it stops
 
 `apply_flow.hand_over()` runs, in order:

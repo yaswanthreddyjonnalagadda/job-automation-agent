@@ -473,8 +473,14 @@ def handover_status(report: dict) -> tuple[str, str]:
     return "ready_to_submit", " | ".join([message] + notes)
 
 
+# "with or without sponsorship" is a question or a welcome that includes candidates who need
+# sponsorship, so the "without" inside it is not a refusal (owner-approved, 25 September 2026: Praxis's
+# "Are you authorized to work in the United States (with or without sponsorship)?" disqualified a job).
+_INCLUSIVE_WITHOUT = r"(?<!with or )(?<!with and/or )(?<!with/or )"
+
 _NO_SPONSORSHIP = re.compile(
     r"[^.!?\n]*(?:"
+    + _INCLUSIVE_WITHOUT +
     r"without (?:the )?(?:need (?:for|of) )?(?:current or future )?(?:employment[- ]based )?"
     r"(?:visa |immigration )?sponsorship"
     r"|(?:not|unable to|cannot|can't|will not|won't|does not|do not|are not able to|is not able to)"
