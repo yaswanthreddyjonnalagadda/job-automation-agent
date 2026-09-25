@@ -923,9 +923,19 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 # (or back) without restarting, keeping the form as it stands.
                 import session_planner
                 importlib.reload(session_planner)
-                wanted = getattr(config_module.get_app_config(), "agent_brain", "api")
+                fresh = config_module.get_app_config()
+                on_gemini = agent.claude.__class__.__name__ == "GeminiBrain"
+                wanted = getattr(fresh, "agent_brain", "api")
                 on_session = agent.claude.__class__.__name__ == "SessionPlanner"
-                if wanted == "session" and not on_session:
+                if brain_kind(fresh) == "gemini":
+                    # FORM_ANSWER_MODE=gemini decides it, whatever AGENT_BRAIN says.
+                    if not on_gemini:
+                        agent.claude = brain_for(fresh, job)
+                        logger.info("BRAIN: now Gemini answers the pages; Claude writes the documents")
+                elif on_gemini:
+                    agent.claude = brain_for(fresh, job)
+                    logger.info("BRAIN: Gemini no longer answers the pages")
+                elif wanted == "session" and not on_session:
                     api = agent.claude
                     agent.claude = session_planner.SessionPlanner(config, folder=Path("data"), fallback=api)
                     agent.claude.now_applying = f"{job.company} -- {job.title}"
@@ -986,18 +996,34 @@ def submit_verified(assistant, page, tracker, key, job, job_dir: Path, decision)
     return status == STATUS_SUBMITTED
 
 
+def brain_kind(config) -> str:
+    """Who answers the application pages under this configuration: "profile" (nobody: the saved profile),
+    "gemini", "session" (the Claude Code session) or "api" (Anthropic). FORM_ANSWER_MODE=gemini decides it
+    whatever AGENT_BRAIN says; the documents are Claude's in every case."""
+    mode = getattr(config, "form_answer_mode", "profile")
+    if mode in ("profile", "gemini"):
+        return mode
+    return "session" if getattr(config, "agent_brain", "api") == "session" else "api"
+
+
 def brain_for(config, job=None):
-    """The document writer, and optionally the old assisted page planner.
+    """The document writer, and optionally the assisted page planner.
 
     In profile mode Claude is document-only: it tailors the resume/CV, while
     PageAgent reads the form and answers it from the saved profile without an
-    API or session call.
+    API or session call. In gemini mode Gemini answers the pages and Claude
+    still writes the documents (gemini_integration.GeminiBrain).
     """
     api = ClaudeClient(config)
-    if getattr(config, "form_answer_mode", "profile") == "profile":
+    kind = brain_kind(config)
+    if kind == "profile":
         logger.info("BRAIN: Claude is document-only; form answers use the local profile planner")
         return api
-    if getattr(config, "agent_brain", "api") != "session":
+    if kind == "gemini":
+        from gemini_integration import GeminiBrain
+        logger.info("BRAIN: Gemini answers the application pages; Claude writes the resume and cover letter")
+        return GeminiBrain(config, documents=api)
+    if kind != "session":
         return api
     import session_planner
     brain = session_planner.SessionPlanner(config, folder=Path("data"), fallback=api)
