@@ -1,0 +1,12 @@
+{
+  "id": "f009",
+  "date": "2026-09-25",
+  "class": "The same fact in another spelling",
+  "symptom": "The required \"Location (City)\" was left empty: the profile says \"Fairfax, VA\", the form's search offers \"Fairfax, Virginia, United States\" and finds nothing for \"VA\".",
+  "site": "Alloy (Greenhouse)",
+  "root_cause": "A town written one way in the profile and another by the form (a state's code against its name, a country left out) was compared as text, so it never matched; place tests covered a country or a state alone, never a town with its region.",
+  "why_tests_missed": "No fixture had a list that finds nothing for the profile's spelling, and the place helpers compared only whole countries or states.",
+  "fix": "geo_reference.same_locality: same town name, the same US state in any spelling (a state's code wins over a country's code: VA is Virginia, not the Vatican), a country left out on one side or agreeing on both; a state named on one side only is not enough. _same_answer and closest_choice use it.",
+  "tests": ["tests/test_places_and_commit_check.py"],
+  "prevention": "Keep places as data (geo.json) with one comparison helper, and compare a place as a structure (town, state, country), not a string. Test the helper over the whole reference table and a list of near-misses."
+}

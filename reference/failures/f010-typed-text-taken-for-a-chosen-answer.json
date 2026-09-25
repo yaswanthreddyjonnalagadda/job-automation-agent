@@ -1,0 +1,12 @@
+{
+  "id": "f010",
+  "date": "2026-09-25",
+  "class": "An answer judged by what the widget echoed, not by what the form kept",
+  "symptom": "The agent logged CHOSE for the location box, yet the application was handed over with the box empty and \"Please enter your location\" showing.",
+  "site": "Alloy (Greenhouse)",
+  "root_cause": "The last-resort type-and-press-Enter path read the answer straight after typing, when typed text that was never chosen is still in the box (it is dropped only on leaving it), so the typed text counted as the answer. Enter also takes whichever row is showing, and a row that was not the town asked for stayed in the box.",
+  "why_tests_missed": "No fixture drops uncommitted text on blur or lets Enter take the first row.",
+  "fix": "type_and_commit leaves the box (Tab) before judging it, and takes out a row that turns out to be a different town, leaving the field empty for the owner.",
+  "tests": ["tests/test_places_and_commit_check.py"],
+  "prevention": "An answer counts as given only after it survives leaving the field. Never leave a wrong value in a box: a wrong answer is worse than none."
+}
