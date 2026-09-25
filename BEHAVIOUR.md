@@ -199,6 +199,14 @@ If the application leaves the screen without any of that — the window is
 closed, or the form is abandoned for 10 minutes — the status becomes
 **needs_user_review**, never "submitted". Success is never assumed.
 
+A confirmation page has to say so in words only a confirmation uses ("Thank you
+for applying", "we have received your application", "you've already applied") and
+must ask for nothing more: a page that still shows a password box or a form to
+fill in (three or more boxes) is not a confirmation, whatever it says. Politeness
+is not evidence -- "Thank you for your interest in a career with ..." opens
+employers' create-account pages, and once recorded an application as submitted
+that had not got past account creation.
+
 ## Verified auto-submit (opt in, off by default)
 
 Set `AUTO_SUBMIT_VERIFIED_ONLY=true` in `.env` to allow it. Even then, the
