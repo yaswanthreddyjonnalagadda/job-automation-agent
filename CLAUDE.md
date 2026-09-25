@@ -68,9 +68,10 @@
 - **One rule for reading an emailed code.** Whether the agent may read a
   one-time code from the owner's mail is decided in `emailed_codes.why_not()`
   and nowhere else: the owner has allowed mail reads
-  (`check_gmail_for_confirmation`), the site is an employer's, the code is not
-  one asked for to prove a human is applying (or a CAPTCHA), and the per-account
-  limit in `login_guard` is not spent. `passcode_from_gmail` asks it before it
+  (`check_gmail_for_confirmation`), the site is an employer's, no CAPTCHA is on
+  the page (a code the site words as "to confirm you're a human" is still just
+  an emailed code: the owner's decision of 25 September 2026), and the
+  per-account limit in `login_guard` is not spent. `passcode_from_gmail` asks it before it
   opens the mail; a new step that reads a code goes through it, it does not
   re-decide.
 

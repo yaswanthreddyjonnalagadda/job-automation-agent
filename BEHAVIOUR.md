@@ -129,16 +129,23 @@ around it. The agent reads a code only when **all** of these hold:
   site to send one (a reset is not requested);
 * the site is an employer's, never Google, Microsoft, Apple, LinkedIn, Indeed or
   Dice (`safety.password_allowed`);
-* the code is not one the site asks for to prove a human is applying ("enter the
-  code to confirm you're a human", a CAPTCHA on the page): that one is yours to
-  enter, and the hand-over says so;
+* no CAPTCHA is showing on the page: a challenge is yours to solve, and the
+  hand-over says so;
 * it has not already read six codes for that account in the last 24 hours -- a
   site that keeps refusing them needs you.
 
+A code the site says is there "to confirm you're a human" (Greenhouse: "enter the
+8-character code to confirm you're a human") is an emailed code like any other:
+the agent reads it from your mail, types it, and carries on. Your decision of 25
+September 2026: the code proves you control the mailbox, which you have let the
+agent read, and stopping there left a Praxis application one step short of done.
+The rule goes by whether a CAPTCHA is on the page, not by how the site words its
+code step. If the code has expired the agent asks the site for a new one.
+
 Each read is counted for that account, kept across runs, and forgotten after 24
 hours. A code is never written to the logs. Before this the reset did not ask
-whether you had allowed mail reads or whether the code was a human check, and the
-code step of a form did not ask about the site; they now all do.
+whether you had allowed mail reads, and the code step of a form did not ask about
+the site; they now all do.
 
 ## Creating an account
 

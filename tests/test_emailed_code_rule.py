@@ -6,6 +6,12 @@ read their mail or whether the code was one a site wants to prove a human is app
 asked whether the site was one the agent may enter anything on. The class: one decision written in several places,
 each missing a different part. emailed_codes.why_not() now holds it, and passcode_from_gmail -- which every reader
 goes through -- asks it before it opens the mail.
+
+The owner decided on 25 September 2026 that the agent enters a code Greenhouse emails "to confirm you're a
+human" itself: the code proves the applicant controls the mailbox, and the agent already reads that mailbox with
+the owner's permission. What stays the owner's is a CAPTCHA -- a challenge on the page -- and the rule now goes
+by whether one is on the page, not by how the site words its code step (the wording had stopped a Praxis
+application one step short of done).
 """
 import config
 import pytest
@@ -24,6 +30,8 @@ EMAIL = "owner@example.com"
 ALLOWED = config.UserProfile(email=EMAIL, check_gmail_for_confirmation=True)
 NOT_ALLOWED = config.UserProfile(email=EMAIL, check_gmail_for_confirmation=False)
 HUMAN = "A verification code was sent to you. To submit your application, enter the 8-character code to confirm you're a human."
+CAPTCHA_FRAME = ('<iframe title="recaptcha challenge expires in two minutes" width="300" height="300" '
+                 'srcdoc="<p>challenge</p>"></iframe>')
 
 
 # --- the rule ---------------------------------------------------------------------------------------
@@ -47,23 +55,15 @@ def test_no_code_is_read_for_a_site_the_agent_may_not_enter_anything_on(url):
     assert why and "not a site" in why
 
 
-@pytest.mark.parametrize("text", [
-    HUMAN, "Please confirm that you are a human by entering the code", "We need to prove you're a human",
-    "Human verification: enter the code", "verify that you are a human", "Confirm you're not a robot",
-])
-def test_a_code_asked_for_to_prove_a_human_is_never_read(text):
-    why = emailed_codes.why_not(ALLOWED, URL, page_text=text)
-    assert why and "human" in why
-
-
 def test_a_captcha_on_the_page_is_never_a_code_to_read():
-    assert emailed_codes.why_not(ALLOWED, URL, captcha=True)
+    why = emailed_codes.why_not(ALLOWED, URL, captcha=True)
+    assert why and "CAPTCHA" in why
 
 
-def test_the_ordinary_wording_of_an_account_code_is_not_a_human_check():
-    for text in ("Enter verification code sent to email", "We sent a one-time passcode to your email address",
-                 "Your security code is on its way", "Verify your email"):
-        assert emailed_codes.why_not(ALLOWED, URL, page_text=text) is None, text
+def test_how_a_site_words_its_code_step_is_not_what_decides():
+    """The rule goes by what is on the page (a CAPTCHA), not by what the page says about itself: it once
+    refused a code for saying "to confirm you're a human", though nothing on the page was a challenge."""
+    assert not hasattr(emailed_codes, "HUMAN_CHECK")
 
 
 def test_reads_are_limited_across_runs_and_forgotten_after_a_day(monkeypatch):
@@ -139,7 +139,7 @@ def test_the_mail_reader_reads_the_code_when_the_rule_allows_it_and_counts_the_r
 @pytest.mark.parametrize("profile, body", [
     (NOT_ALLOWED, "<h2>Verify</h2><input id='c'>"),
     (None, "<h2>Verify</h2><input id='c'>"),
-    (ALLOWED, f"<p>{HUMAN}</p><input id='c'>"),
+    (ALLOWED, f"<p>{HUMAN}</p>{CAPTCHA_FRAME}<input id='c'>"),          # the same words, beside a real challenge
 ])
 def test_the_mail_reader_never_opens_the_mail_when_the_rule_says_no(context, profile, body):
     hits = []
@@ -147,6 +147,16 @@ def test_the_mail_reader_never_opens_the_mail_when_the_rule_says_no(context, pro
     page = employer_page(context, body)
     assert assistant_for(profile).passcode_from_gmail(page, wait_seconds=5) == ""
     assert hits == []                                                  # Gmail was never even requested
+
+
+def test_a_code_the_site_says_confirms_a_human_is_read_when_no_captcha_is_showing(context):
+    """Greenhouse: "enter the 8-character code to confirm you're a human". It is an emailed code like any other,
+    and the owner wants the agent to enter it itself (25 September 2026)."""
+    hits = []
+    serve_mail(context, hits)
+    page = employer_page(context, f"<p>{HUMAN}</p><label for='c'>Security code</label><input id='c'>")
+    assert assistant_for(ALLOWED).passcode_from_gmail(page, wait_seconds=5) == "482913"
+    assert hits
 
 
 def test_the_reader_stops_at_the_limit(context):
@@ -167,7 +177,7 @@ FORGOT_SITE = """<html><body><h2>Sign In</h2><input type="email"><input type="pa
 
 @pytest.mark.parametrize("profile, body", [
     (NOT_ALLOWED, FORGOT_SITE), (None, FORGOT_SITE),
-    (ALLOWED, FORGOT_SITE.replace("<h2>Sign In</h2>", f"<h2>Sign In</h2><p>{HUMAN}</p>")),
+    (ALLOWED, FORGOT_SITE.replace("<h2>Sign In</h2>", f"<h2>Sign In</h2>{CAPTCHA_FRAME}")),
 ])
 def test_a_password_reset_is_not_even_requested_when_its_code_could_not_be_read(context, profile, body):
     """The reset used to click Forgot first and find out afterwards it could not read the code: a request spent
@@ -206,10 +216,11 @@ def test_the_form_code_step_obeys_the_same_rule_on_a_site_it_may_not_enter_anyth
     assert page.locator("#c").input_value() == ""
 
 
-def test_the_human_check_wording_is_written_in_one_place_only():
-    """re.compile hands back the same object for the same text, so `is` proves nothing: read the sources."""
+def test_no_step_refuses_a_code_for_how_the_site_words_it():
+    """Read the sources: the words a site uses for its code step decide nothing anywhere (a CAPTCHA does,
+    and safety.py's detection of one is the only place that knows its wording)."""
     from pathlib import Path
     root = Path(__file__).resolve().parent.parent
-    for name in ("page_agent.py", "browser_automation.py"):       # (safety.py's is its CAPTCHA detection)
-        assert "not a robot" not in (root / name).read_text(encoding="utf-8"), name
-    assert "not a robot" in (root / "emailed_codes.py").read_text(encoding="utf-8")
+    for name in ("page_agent.py", "browser_automation.py", "emailed_codes.py"):
+        text = (root / name).read_text(encoding="utf-8")
+        assert "HUMAN_CHECK" not in text and "not a robot" not in text, name
