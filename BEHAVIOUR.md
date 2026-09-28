@@ -278,6 +278,22 @@ six dropdowns in one look at a page, leaves alone a list of more than thirty cho
 (Schools, Countries -- those are typed into), and leaves Ant Design lists to their
 own reader.
 
+## Yes/No questions drawn as buttons
+
+Some sites (Ashby's) draw a Yes/No question as two buttons under the question
+instead of radio buttons. The agent reads such a row as that question's
+choices and answers it from your profile like any other: 18 or over, allowed to
+work, sponsorship, days in the office. It presses the answer once and then
+checks that it stayed pressed -- pressing a chosen button again clears it on
+these sites -- so a choice already showing is left alone, and one that did not
+stay pressed is listed for you at hand-over rather than reported as answered.
+A row of action buttons (Back / Next, Edit / Remove) is never taken for an answer.
+
+A question that names a place only to say where it applies -- "Are you legally
+authorized to work in the country in which the job is located?" -- is answered
+as the work-authorization (or sponsorship) question it is, from your profile,
+not as a question asking which country.
+
 ## When you press Continue
 
 Pressing Continue on the dashboard gives the agent its three tries at moving on

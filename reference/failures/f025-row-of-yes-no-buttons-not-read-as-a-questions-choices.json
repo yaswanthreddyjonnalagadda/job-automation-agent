@@ -1,0 +1,19 @@
+{
+  "id": "f025",
+  "date": "2026-09-28",
+  "class": "A question's choices drawn as pressable buttons were not read as its choices",
+  "symptom": "Writer (Ashby), six runs on 28 September: 'Are you at least 18 years of age?', 'Are you legally authorized to work...?', 'Will you ... require employment visa sponsorship?' and the office-days question were handed over blank every time, though the profile answers all four.",
+  "site": "Ashby job boards (any site that draws Yes/No as a row of aria-pressed buttons)",
+  "root_cause": "The snapshot reader knew choices only as radios, checkboxes and dropdown options. Ashby's two <button aria-pressed> elements were read as ordinary buttons named 'Yes' and 'No', whose question was their own name, so nothing tied them to the question above and the profile pass never saw a question to answer. The older site adapter (sites/ashby.py answer_toggle) knew the row, but the reading agent that now fills forms does not use adapters for answers. Separately, the radio click path retried a click that raised, which on a toggle clears the answer it just gave.",
+  "why_tests_missed": "Every choice fixture in the tests was a radio, checkbox or listbox; none drew a question's choices as buttons, and the one Ashby note lived only in a docstring of an adapter the reading agent no longer calls.",
+  "fix": "parse_snapshot reads a row of two or more sibling buttons under a question (asked with '?', or with a pressed button, or named only Yes/No-style words) as that question's choices: role radio, group the question, checked when pressed, toggle=True. Action rows (Next, Back, Cancel, Edit, Remove, Attach...) are excluded. do() presses a toggle once through _press_toggle, leaves a pressed one alone, never falls back to another question's radios, and reads the page back: a press that did not stay is reported open.",
+  "tests": [
+    "tests/test_toggle_button_choices.py",
+    "tests/test_toggle_button_choices.py::test_a_row_of_toggle_buttons_is_read_as_that_questions_choices",
+    "tests/test_toggle_button_choices.py::test_a_row_of_action_buttons_is_not_a_question",
+    "tests/test_toggle_button_choices.py::test_the_profile_answers_toggle_questions_with_one_click",
+    "tests/test_toggle_button_choices.py::test_an_answer_already_pressed_is_not_clicked_off",
+    "tests/test_toggle_button_choices.py::test_a_toggle_that_does_not_stay_pressed_is_reported_not_counted"
+  ],
+  "prevention": "Define 'a choice' by what a person sees -- several labelled things under one question, one of which is chosen -- not by the HTML role a site happens to use; build fixtures for each drawing of a choice (radio, checkbox, listbox, toggle button, card) from the start. When a site adapter learns a widget, the generic reader must learn it too, or the lesson is lost when the architecture moves on."
+}

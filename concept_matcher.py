@@ -365,6 +365,10 @@ CONCEPTS: dict[str, dict[str, Any]] = {
 }
 
 
+# Concepts that name a place. Inside a longer question they say where it applies.
+PLACE_CONCEPTS = ("COUNTRY", "STATE_PROVINCE", "CITY", "POSTAL_CODE")
+
+
 def match_concept(
     question: str,
     container: str = "",
@@ -386,8 +390,7 @@ def match_concept(
         return None
 
     # Step 1: Specific pattern checks with negative guardrails
-    best_concept = None
-    best_score = 0
+    candidates: list[tuple[int, str, bool]] = []   # (score, concept, matched in the question itself)
 
     for concept_name, defn in CONCEPTS.items():
         patterns = defn.get("patterns", [])
@@ -414,10 +417,19 @@ def match_concept(
                 # (e.g., name="Title" in container="Work Experience")
                 if container_boost and re.search(container_boost, clean_c, re.IGNORECASE):
                     score += 20
-                if score > best_score:
-                    best_score = score
-                    best_concept = concept_name
+                candidates.append((score, concept_name, bool(match_q)))
 
+    # A place named inside a question that asks something else is where the
+    # question applies, not what it asks: "Are you legally authorized to work
+    # in the country ...?" was answered "United States" because COUNTRY tied
+    # WORK_AUTHORIZATION and came first in the table (Writer, 28 September).
+    if any(in_q and concept not in PLACE_CONCEPTS for _s, concept, in_q in candidates):
+        candidates = [c for c in candidates if c[1] not in PLACE_CONCEPTS]
+
+    best_concept, best_score = None, 0
+    for score, concept_name, _in_q in candidates:     # table order breaks a tie, as before
+        if score > best_score:
+            best_score, best_concept = score, concept_name
     return best_concept
 
 

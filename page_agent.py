@@ -136,6 +136,7 @@ class Control:
     context: str = ""                     # nearby text, when the control has no name of its own
     options: list[str] = field(default_factory=list)
     selected_option: str = ""
+    toggle: bool = False                  # a choice drawn as a pressable button: a second click clears it
 
     GENERIC_NAMES = re.compile(
         r"^(attach( file)?|choose file|upload( file)?|browse|add file|select file|select one( required)?)$",
@@ -202,6 +203,8 @@ def parse_snapshot(snapshot: str) -> list[Control]:
     unclickable = None   # a tick box with no reference: (role, name, checked, lines left to find it)
     last_control_indent = -1
     entry_box: Optional[tuple[int, Control]] = None   # an empty-looking text box whose value may follow as a child line
+    toggle_row: list[tuple[Control, bool]] = []       # buttons side by side that may be one question's choices
+    toggle_indent, toggle_question = -1, ""
     for raw in (snapshot or "").splitlines():
         # A line whose text holds a colon comes wrapped in quotes:
         #   - 'heading "Apply: Network Engineer" [level=1] [ref=e2]'
@@ -217,6 +220,9 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         attrs = m.group("attrs") or ""
         value = _unquote(m.group("value") or "")
         ref_m = re.search(r"\[ref=([\w-]+)\]", attrs)
+        if toggle_row and indent <= toggle_indent and not (role == "button" and ref_m and indent == toggle_indent):
+            _settle_toggle_row(toggle_row, toggle_question)
+            toggle_row = []
         # Captured before the text-tracking block below can overwrite
         # last_text with THIS line's own text -- needed because a clickable
         # generic (unlike a real button) is one of the roles that block
@@ -335,11 +341,53 @@ def parse_snapshot(snapshot: str) -> list[Control]:
                 else "")
             controls.append(control)
             last_control_indent = indent
+            if control.role == "button" and not clickable_generic and (not toggle_row or indent == toggle_indent):
+                if not toggle_row:
+                    toggle_indent, toggle_question = indent, preceding_text
+                toggle_row.append((control, bool(re.search(r"\[pressed(?:=true)?\]", attrs))))
             entry_box = (indent, control) if control.role in ("textbox", "searchbox") and not control.value else None
         # A named group is both a question for what is inside it and, when it
         # has a reference, a control the agent can act on.
         stack.append((indent, name if role in ("group", "radiogroup", "region") else "", control))
+    if toggle_row:
+        _settle_toggle_row(toggle_row, toggle_question)
     return controls
+
+
+# What a button that does something is called -- never an answer to a question.
+_ACTION_WORDS = re.compile(
+    r"^(add|edit|save|upload|attach|browse|preview|view|open|close|clear|reset|done|ok|update|search|"
+    r"sign in|log in|enter manually|apply|skip|show|hide|more|less)\b", re.IGNORECASE)
+# What an answer is called when a row carries no other sign of being a question.
+_CHOICE_WORDS = re.compile(
+    r"^(yes|no|true|false|maybe|n/?a|not applicable|prefer not to (say|answer|disclose)|"
+    r"decline to (answer|state|self.identify))\b", re.IGNORECASE)
+
+
+def _settle_toggle_row(row: list[tuple[Control, bool]], question: str) -> None:
+    """Buttons side by side under a question are that question's choices.
+
+    Ashby draws Yes/No as two <button aria-pressed>. Read as plain buttons
+    called "Yes" and "No" they belonged to no question, and four questions the
+    profile answers were left blank on every run (Writer, 28 September). The
+    row becomes the question's choices, pressed meaning chosen. A row of
+    actions (Back / Next, Edit / Remove) stays a row of buttons.
+    """
+    question = " ".join((question or "").split())
+    names = [" ".join(c.name.split()) for c, _pressed in row]
+    if len(row) < 2 or not question or any(not n or len(n) > 40 for n in names):
+        return
+    if len({n.lower() for n in names}) != len(names) or any(_same_question(question, n) for n in names):
+        return
+    if any(FORWARD_LABEL.match(n) or NEVER_PRESS.search(n) or Control.GENERIC_NAMES.match(n)
+           or _ACTION_WORDS.match(n) for n in names):
+        return
+    asks = re.search(r"\?\s*\*?\s*$|\*\s*$", question)
+    if not (any(p for _c, p in row) or asks or all(_CHOICE_WORDS.match(n) for n in names)):
+        return
+    for control, is_pressed in row:
+        control.role, control.group, control.checked, control.toggle = "radio", question, is_pressed, True
+        control.context = ""
 
 
 def _section_holds_a_file(snapshot: str, section: str) -> bool:
@@ -839,6 +887,7 @@ class PageAgent:
         self.final_pressed = False
         self.pages_read = 0
         self.written: dict[str, str] = {}          # question -> value the agent put there
+        self.failed: list[str] = []                # answers tried and not given; answer_what_is_known runs before apply_answers resets it
         self._letter: Optional[tuple[Path, Path]] = None
         self._letter_attached = False
         self._code_tries = 0
@@ -2798,7 +2847,15 @@ class PageAgent:
             else:
                 group = [c for c in snapshot_controls
                          if c.role == control.role and c.group and c.group == control.group] or [control]
+            if control.toggle and answer.action == "check" and answer.value.strip().lower() in ("checked", "true", ""):
+                return self._press_toggle(page, control)
             index = self.assistant._best_option([c.name for c in group], [answer.value])
+            if control.toggle or any(c.toggle for c in group):
+                if index is None:
+                    logger.info("No choice matching %r for %r among %s", answer.value, control.question[:50],
+                                [c.name for c in group][:8])
+                    return False
+                return self._press_toggle(page, group[index])
             if index is None:
                 role_filter = control.role if control.role in ("radio", "checkbox", "switch") else "radio"
                 all_radios = [c for c in snapshot_controls if c.role == role_filter]
@@ -2843,6 +2900,28 @@ class PageAgent:
         if answer.action == "choose":
             return self.choose(page, control, answer.value, self._page_controls(page))
         return False
+
+    def _press_toggle(self, page, choice: Control) -> bool:
+        """Press a choice drawn as a toggle button once, and read it back.
+
+        Clicking a pressed toggle clears it (Ashby's Yes/No), so a pressed
+        choice is left alone and a click that did not take is never followed
+        by another: the question is reported open instead.
+        """
+        if choice.checked:
+            return True
+        try:
+            self.locate(page, choice.ref).click(timeout=5_000)
+        except Exception as exc:
+            logger.info("TOGGLE: could not press %r for %r: %s", choice.name, choice.group[:60],
+                        str(exc).splitlines()[0][:100])
+        self.settle(page, 500)
+        now = next((c for c in parse_snapshot(self.snapshot(page))
+                    if c.toggle and c.group == choice.group and c.name == choice.name), None)
+        if now is None or not now.checked:
+            logger.info("TOGGLE: %r did not stay pressed for %r", choice.name, choice.group[:60])
+            return False
+        return True
 
     def _alternatives_for(self, value: str) -> list[str]:
         """The substitutes the OWNER approved for this value (profile.answer_alternatives), in their order.
