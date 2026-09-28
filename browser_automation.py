@@ -4736,20 +4736,17 @@ class JobApplicationAssistant:
         profile = getattr(self, "_profile", None)
         full_name = (getattr(profile, "full_name", "") or "").split()
         try:
-            email_fields = visible(page.locator(
-                "input[type='email'], input[name*='email' i], input[id*='email' i], "
-                "input[name*='username' i], input[id*='username' i]"
-            ))
+            # The email first, and checked: the passwords are never sent without it.
+            email_fields = self._email_boxes(page)
+            if not email_fields:
+                logger.warning("ACCOUNT_CREATE_FAILED: found no email box on the Create Account form "
+                               "-- not submitting the passwords alone")
+                return False
             for box in email_fields:
-                # Workday's account form validates through React keyboard
-                # events; always replay the address so a stale controlled value
-                # cannot remain visibly correct but internally invalid.
-                box.click()
-                box.press("Control+A")
-                box.press("Backspace")
-                box.press_sequentially(email, delay=25)
-                box.press("Tab")
-                page.wait_for_timeout(500)
+                self._type_email(page, box, email)
+            if not self._email_kept(self._email_boxes(page) or email_fields, email):
+                logger.warning("ACCOUNT_CREATE_FAILED: the email box did not keep the address -- not submitting")
+                return False
             for box in pw_fields:
                 box.click()
                 box.press("Control+A")
@@ -4871,6 +4868,14 @@ class JobApplicationAssistant:
                 if not self._password_pair_matches(password_values, password):
                     logger.warning("ACCOUNT_CREATE_FAILED: password did not stay filled before submit")
                     return False
+            # The same re-render can clear the email: type it again where it is gone.
+            email_fields = self._email_boxes(page)
+            for box in email_fields:
+                if (box.input_value() or "").strip().lower() != email.strip().lower():
+                    self._type_email(page, box, email)
+            if not self._email_kept(self._email_boxes(page), email):
+                logger.warning("ACCOUNT_CREATE_FAILED: the email did not stay filled before submit")
+                return False
 
             submit = page.get_by_role(
                 "button", name=re.compile(r"^\s*(create (my )?account|register|sign up|submit)\s*$", re.IGNORECASE)
@@ -4906,12 +4911,19 @@ class JobApplicationAssistant:
             if not self._account_creation_is_confirmed(page):
                 logger.warning(
                     "ACCOUNT_UNVERIFIED: Workday left registration without Candidate Home or application evidence"
+                    " -- signing in with the email and password"
                 )
-                # Not signed in, so a sign-in now would only spend an attempt on an account that may be
-                # waiting for its email to be verified: the owner says when (Continue).
-                login_guard.hold_for_verification(site, email)
-                self._login_paused = login_guard.may_sign_in(site, email) or ""
-                return True
+                # The owner's decision (28 September): sign in once with the email and the password. A code
+                # the site then emails is read by the code step (emailed_codes.why_not decides); a rejection
+                # -- which may only mean the email is not verified yet -- is counted by login_guard and
+                # waits for the owner (Continue), as any rejected sign-in does.
+                if not self._open_sign_in(page):
+                    self._login_paused = (f"an account was just created on {site}, but no sign-in form was found: "
+                                          f"sign in yourself, then press Continue")
+                    logger.warning("ACCOUNT_HELD: %s", self._login_paused)
+                    return False
+                return self.attempt_auto_login(page, email, password, scope=self._sign_in_scope(page),
+                                               create_if_missing=False)
             logger.info("ACCOUNT_CREATED: new %s account for %s",
                         getattr(self, "employer", "") or urlparse(page.url).netloc, email)
             self.remember_account(page, email, "password")
@@ -5049,7 +5061,13 @@ class JobApplicationAssistant:
             logger.info("Two-step sign-in on %s: the email was given on the page before; entering the password",
                         domain)
         else:
+            # The email first, and checked: a password is never sent without it.
             email_locator.fill(email)
+            if not self._email_kept([email_locator], email):
+                self._type_email(page, email_locator, email)
+            if not self._email_kept([email_locator], email):
+                logger.warning("LOGIN_HELD: the email box on %s did not keep the address -- not signing in", domain)
+                return False
         pw_locator.fill(password)
 
         # Sign-in buttons are often duplicated (one hidden) or covered by a
@@ -5125,6 +5143,73 @@ class JobApplicationAssistant:
                 return self.create_account_from_link(page, email)
         return False
 
+    # A box asks for the email when anything a person or a screen reader would go by says so: its
+    # label (for= or wrapping), aria-label, aria-labelledby, placeholder, or its name/id/autocomplete/
+    # data-automation-id. Workday's is type=text with a generated id and only its label and
+    # data-automation-id say "email": the account form, which looked only at type/name/id, found no box
+    # and pressed Create Account with the passwords alone (28 September).
+    _EMAIL_BOX_JS = r"""(scope) => {
+        const root = scope || document;
+        const want = /e-?mail|user\s*-?name|user\s*id|login\s*id/i;
+        const skip = new Set(['password', 'hidden', 'checkbox', 'radio', 'submit', 'button', 'file',
+                              'image', 'reset', 'range', 'color']);
+        document.querySelectorAll('[data-agent-email-box]').forEach(e => e.removeAttribute('data-agent-email-box'));
+        const said = el => [
+            (el.type || '').toLowerCase() === 'email' ? 'email' : '',
+            el.name, el.id, el.getAttribute('autocomplete'), el.getAttribute('data-automation-id'),
+            el.getAttribute('aria-label'), el.placeholder,
+            ...[...(el.labels || [])].map(l => l.innerText),
+            ...(el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)
+                .map(id => (document.getElementById(id) || {}).innerText || ''),
+        ].join(' ');
+        let n = 0;
+        for (const el of root.querySelectorAll('input')) {
+            if (skip.has((el.type || 'text').toLowerCase())) continue;
+            // Not a read-only box: on the password step of a two-step sign-in it
+            // only shows the email already given, and can't be typed in.
+            if (el.readOnly || el.disabled || !el.getClientRects().length) continue;
+            if (!want.test(said(el))) continue;
+            el.setAttribute('data-agent-email-box', String(n++));
+        }
+        return n;
+    }"""
+
+    @staticmethod
+    def _email_boxes(root) -> list:
+        """Every visible box on `root` (a Page or a Locator) that asks for the email or user name, in
+        page order -- the address and its retype. The one place that decides which box is the email."""
+        try:
+            is_page = hasattr(root, "goto")
+            count = root.evaluate(JobApplicationAssistant._EMAIL_BOX_JS, None) if is_page \
+                else root.evaluate(JobApplicationAssistant._EMAIL_BOX_JS)
+            page = root if is_page else root.page
+            found = [page.locator(f"[data-agent-email-box='{i}']").first for i in range(int(count or 0))]
+            return [box for box in found if box.is_visible()]
+        except Exception as exc:
+            logger.debug("Could not look for the email box: %s", str(exc).splitlines()[0][:100])
+            return []
+
+    @staticmethod
+    def _email_kept(boxes: list, email: str) -> bool:
+        """Every email box really holds the address (a box can look filled and have been cleared)."""
+        try:
+            return bool(boxes) and all((box.input_value() or "").strip().lower() == email.strip().lower()
+                                       for box in boxes)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _type_email(page: Page, box, email: str) -> None:
+        # Workday's account form validates through React keyboard events;
+        # always replay the address so a stale controlled value cannot remain
+        # visibly correct but internally invalid.
+        box.click()
+        box.press("Control+A")
+        box.press("Backspace")
+        box.press_sequentially(email, delay=25)
+        box.press("Tab")
+        page.wait_for_timeout(500)
+
     @staticmethod
     def _find_login_email_input(root):
         """Locates the username/email box on a login form, returning a
@@ -5134,26 +5219,9 @@ class JobApplicationAssistant:
         just above the password field', which is what a human reads it as.
 
         `root` is a Page or a form Locator -- both expose .locator()."""
-        for selector in (
-            "input[data-automation-id='email']",
-            "input[data-automation-id*='email' i]",
-            "input[data-automation-id*='userName' i]",
-            "input[type='email']",
-            "input[name*='email' i]",
-            "input[name*='username' i]",
-            "input[id*='email' i]",
-            "input[id*='username' i]",
-            "input[aria-label*='email' i]",
-            "input[autocomplete='username']",
-        ):
-            # Not a read-only box: on the password step of a two-step sign-in
-            # it only shows the email already given, and can't be typed in.
-            loc = root.locator(f"{selector}:not([readonly]):not([disabled])").first
-            try:
-                if loc.count() and loc.is_visible():
-                    return loc
-            except Exception:
-                continue
+        boxes = JobApplicationAssistant._email_boxes(root)
+        if boxes:
+            return boxes[0]
 
         # Walk the inputs in DOM order and take the last plain text box that
         # sits ABOVE the password field -- taking simply "the last text input

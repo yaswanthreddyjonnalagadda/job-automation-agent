@@ -192,7 +192,23 @@ tick a box it must, it does not press Create Account: it stops and says which bo
 An account counts as created only when the site shows Candidate Home or the
 application. Landing on a Sign In page proves nothing (the site shows it when the
 account was made, when it was not, and when it still needs verifying), so nothing
-is saved as an account then, and the sign-in waits (see the next section).
+is saved as an account then: the agent signs in (see below).
+
+The order is always: your email, then the password and its retype, then Create
+Account. The email box is found by what it is labelled ("Email Address", however
+the page attaches that label), not by how it is coded, and the agent checks the box
+really holds your email before it types a password -- and again right before it
+presses Create Account, since Workday redraws the form as it fills. If it finds no
+email box, or the box will not keep your email, it does not press Create Account:
+the passwords are never sent alone. Sign-in works the same way: email first, checked,
+then the password.
+
+After creating the account it signs in once with your email and `ATS_PASSWORD` (your
+decision of 28 September 2026). If the site then emails a one-time code, the agent
+reads it from your Gmail under the rules in "When a one-time code may be read from
+your mail". If the site rejects the sign-in -- which on Workday can simply mean the
+new account's email is not verified yet -- that counts as a rejected sign-in (next
+section): it stops and tells you to verify the account, then press Continue.
 
 ## Signing in without locking your accounts
 
@@ -209,9 +225,9 @@ Whether a new account must have its email verified first is the employer's setti
 So the agent keeps count across runs (`data/_login_attempts.json`, on your machine):
 * after a rejected sign-in it does not try again until you press Continue, and after
   two rejections on one account in 24 hours it stops for the day whatever you press;
-* after it creates an account and the site does not sign it in, it does not try to
-  sign in: it tells you to verify the account from the email it was sent, then press
-  Continue;
+* after it creates an account it signs in once; that sign-in counts like any other,
+  so if the site rejects it the agent tells you to verify the account from the email
+  it was sent, then press Continue;
 * it never asks Workday for a password reset (it cannot follow the emailed link, and
   each request spends one of the five); elsewhere it asks at most once a day;
 * it makes at most two attempts a day to create an account on one site.
