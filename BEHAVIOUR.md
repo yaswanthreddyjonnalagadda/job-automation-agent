@@ -421,6 +421,15 @@ so your own Chrome windows are left alone, and the "Restore pages?" bubble Chrom
 showed after a forced stop is turned off. If it cannot find the window it logs
 "Could not find the agent's browser window" rather than failing silently.
 
+It only ever runs where you can see it. On Windows, a program opens its windows on
+the desktop it was started on, and an AI assistant in an IDE runs its terminal on a
+private desktop of its own, so a dashboard started from there opened every browser
+where you could not see it. The dashboard now refuses to start anywhere but your
+own desktop (`WinSta0\Default`): it prints why and exits. The browser is refused
+the same way, so `python apply.py` started from such a terminal stops before any
+browser opens. Start the dashboard yourself: double-click `Start Dashboard.bat`,
+or run `python web_ui.py` in a terminal you opened.
+
 ## Operational detail
 
 * **Retries** — flaky page actions are retried (`with_retries`, `action_retries`).

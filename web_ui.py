@@ -27,6 +27,7 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, redirect, render_template_string, request, send_file, url_for
 
+import visible_desktop
 from config import get_app_config
 from db import get_tracker
 
@@ -1007,7 +1008,13 @@ DETAIL_HTML = """
 """
 
 
-if __name__ == "__main__":
+def serve() -> None:
+    # Every run starts from here, so a dashboard on a desktop the owner does not
+    # see would open every browser there too (visible_desktop.py): it does not start.
+    reason = visible_desktop.why_invisible()
+    if reason:
+        print(reason, file=sys.stderr)
+        sys.exit(2)
     print("Job application UI:  http://127.0.0.1:5000")
     # Loopback only, on purpose -- see the module docstring.
     #
@@ -1018,4 +1025,8 @@ if __name__ == "__main__":
     # own process. (Set WEB_UI_NO_RELOAD=1 to switch it off.)
     app.run(host="127.0.0.1", port=5000, debug=False,
             use_reloader=os.getenv("WEB_UI_NO_RELOAD", "") not in {"1", "true", "yes"})
+
+
+if __name__ == "__main__":
+    serve()
 

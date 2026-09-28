@@ -1,0 +1,18 @@
+{
+  "id": "f029",
+  "date": "2026-09-28",
+  "class": "A program that shows the owner a window never checked it was on the desktop the owner looks at",
+  "symptom": "Writer (Ashby), 28 September: the owner saw no browser at all and could not tell what the agent had left unanswered. The run was going, the Chromium process was alive and not headless, and the log said 'Brought the agent's browser window to the front'.",
+  "site": "Any: it depends on how the dashboard was started, not on the site",
+  "root_cause": "An IDE's AI assistant (Antigravity) started web_ui.py from its own terminal, which runs on a private Windows desktop (WinSta0\\exebox-...). A process opens its windows on the desktop it was started on, and children inherit it, so apply.py, apply_flow.py and the browser all opened there. raise_window found the window on its own desktop and truthfully reported raising it; nothing ever compared that desktop with the owner's. A second dashboard started by the owner could not help: the run belonged to the first one.",
+  "why_tests_missed": "Tests of the window (test_agent_window_is_shown) run in the owner's session and check which window is picked and raised, never on which desktop it lives. No test started a process on another desktop.",
+  "fix": "visible_desktop.py decides, in one place, whether this process is on WinSta0\\Default (a name that cannot be read counts as not). web_ui.serve() prints the reason and exits with code 2 instead of starting; JobApplicationAssistant.__enter__ raises InvisibleDesktopError before Playwright starts. So a hidden dashboard never runs and a browser is never started where the owner cannot see it.",
+  "tests": [
+    "tests/test_visible_desktop.py::test_a_process_started_on_a_real_hidden_desktop_is_refused",
+    "tests/test_visible_desktop.py::test_every_desktop_but_the_owners_is_refused",
+    "tests/test_visible_desktop.py::test_every_window_station_but_the_owners_is_refused",
+    "tests/test_visible_desktop.py::test_the_browser_is_never_started_on_a_hidden_desktop",
+    "tests/test_visible_desktop.py::test_the_dashboard_does_not_start_on_a_hidden_desktop"
+  ],
+  "prevention": "A tool whose point is that a person watches a window must check, at start, that the person can see where its windows will open (desktop, session, display), and refuse otherwise. 'I raised the window' is not evidence the person can see it."
+}

@@ -34,6 +34,7 @@ import emailed_codes
 import login_guard
 import provenance
 import safety
+import visible_desktop
 from config import AppConfig, UserProfile, get_user_profile, resume_to_attach
 from interaction import (
     CARD_COMMIT_TEXT_PATTERN,
@@ -284,6 +285,8 @@ class JobApplicationAssistant:
             return adapter_for("")
 
     def __enter__(self) -> "JobApplicationAssistant":
+        # A browser on a desktop the owner does not see is never started (visible_desktop.py).
+        visible_desktop.refuse_if_invisible()
         self._playwright = sync_playwright().start()
         profile_dir = Path(self._config.browser_profile_dir)
         # A run whose process is killed leaves its browser running, and that
