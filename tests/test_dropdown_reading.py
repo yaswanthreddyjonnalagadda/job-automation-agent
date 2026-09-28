@@ -271,22 +271,9 @@ def test_a_posting_with_no_way_to_apply_reports_nothing(page, agent):
 
 
 def test_the_configured_browser_is_used_even_while_chrome_is_open(monkeypatch, agent):
-    """The user asked for real Chrome always, for rendering fidelity, so the
-    fallback to the bundled browser is deliberately gone.
-
-    The cost is real and was measured: Chrome will not start a second instance
-    while one is running, even against a separate profile -- it hands the
-    command to the running copy and exits -- so a run started while their
-    Chrome is open fails to launch. Closing Chrome first is the price of this
-    setting."""
-    from browser_automation import JobApplicationAssistant
-
+    """A browser channel set in the configuration is the one used."""
     agent._config = type("C", (), {"browser_channel": "chrome",
                                    "browser_profile_dir": "C:/x/browser_profile"})()
-    monkeypatch.setattr(JobApplicationAssistant, "_chrome_is_running", staticmethod(lambda: True))
-    assert agent._choose_channel() == "chrome"
-
-    monkeypatch.setattr(JobApplicationAssistant, "_chrome_is_running", staticmethod(lambda: False))
     assert agent._choose_channel() == "chrome"
 
 

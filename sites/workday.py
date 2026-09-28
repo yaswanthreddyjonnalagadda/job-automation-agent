@@ -375,34 +375,6 @@ class WorkdayAdapter(SiteAdapter):
             logger.warning("Could not fill date spinner %s/%s[%d]: %s", section_key, date_key, index, exc)
             return False
 
-    def _set_spinner_value(self, assistant, locator, value: str) -> bool:
-        """Activates and sets a value on an ARIA spinbutton input. Uses
-        .focus() rather than .click() -- click() requires the element be
-        the topmost thing at its screen position, which fails (30s
-        timeout) when a decorative display element sits visually on top
-        of the real input; focus() only needs the element attached/
-        enabled, not un-occluded. Falls back to a forced click (bypasses
-        the same occlusion check) if focus itself doesn't work."""
-        try:
-            locator.focus(timeout=5_000)
-        except Exception:
-            try:
-                locator.click(force=True, timeout=5_000)
-            except Exception as exc:
-                logger.warning("Could not focus or force-click spinner input: %s", exc)
-                return False
-        try:
-            # Deliberately no clear-first step: an extra fill("") on these
-            # spinbuttons disturbs the widget's internal part-tracking and
-            # corrupts the value that follows.
-            locator.fill(value)
-        except Exception:
-            try:
-                locator.press_sequentially(value, delay=60)
-            except Exception as exc:
-                logger.warning("Could not set spinner value to %r: %s", value, exc)
-                return False
-        return True
 
     def delete_all_entries(self, assistant, page: Page, section_heading: str, next_heading: str, max_deletes: int = 10) -> int:
         """Repeatedly clicks the first Delete button within a section
@@ -475,43 +447,6 @@ class WorkdayAdapter(SiteAdapter):
             return False
         return False
 
-    def _reverify_and_fix(self, assistant, page: Page, hints: list[str], index: int, value: str) -> None:
-        """Re-checks the Nth field matching hints against the value we
-        intended, and re-fills it if something else changed it since. Used
-        as a delayed final pass: some sites asynchronously overwrite a
-        field a few seconds after creation/fill -- well past any short
-        settle window checked immediately after filling -- so catching
-        that requires coming back and checking again later."""
-        if not value:
-            return
-        matches = [
-            el for el in page.query_selector_all("textarea, input[type='text'], input:not([type])")
-            if el.is_visible() and any(h in assistant._label_for(page, el).lower() for h in hints)
-        ]
-        if index >= len(matches):
-            return
-        el = matches[index]
-        try:
-            current = el.input_value()
-        except Exception:
-            return
-        if current.strip() != value.strip():
-            logger.warning("Entry %d matching %s drifted to %r -- correcting", index, hints, current[:60])
-            try:
-                el.fill(value)
-            except Exception as exc:
-                logger.warning("Final correction failed for entry %d matching %s: %s", index, hints, exc)
-
-    def _repeated_correction_pass(self, assistant, page: Page, entries: list[dict], hints: list[str], key: str, wait_schedule_ms: list[int]) -> None:
-        """Some external process overwrites certain fields on a delay we
-        can't predict -- one fixed wait isn't reliable. This checks and
-        re-corrects at multiple points in time (e.g. 3s, 6s, 10s after the
-        initial fill) instead of just once, to catch a late overwrite that
-        an earlier check already missed."""
-        for wait_ms in wait_schedule_ms:
-            page.wait_for_timeout(wait_ms)
-            for i, entry in enumerate(entries):
-                self._reverify_and_fix(assistant, page, hints, i, entry.get(key, ""))
 
     def fill_nth_matching(self, assistant, page: Page, hints: list[str], index: int, value: str, settle_ms: int = 500, retries: int = 2,
     ) -> bool:

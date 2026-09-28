@@ -70,14 +70,6 @@ def test_each_site_and_each_email_is_counted_on_its_own():
     assert login_guard.may_sign_in(HOST.upper(), EMAIL.upper())                        # spelling is not a difference
 
 
-def test_a_new_account_holds_the_sign_in_until_the_owner_has_verified_it():
-    login_guard.hold_for_verification(HOST, EMAIL)
-    why = login_guard.may_sign_in(HOST, EMAIL)
-    assert why and "verif" in why and "Continue" in why
-    login_guard.owner_resumed(HOST)
-    assert login_guard.may_sign_in(HOST, EMAIL) is None
-
-
 def test_account_creation_and_password_resets_are_limited_too():
     assert login_guard.may_create_account(HOST, EMAIL) is None
     for _ in range(login_guard.MAX_ACCOUNT_CREATIONS):
@@ -187,14 +179,6 @@ def test_a_sign_in_that_works_is_recorded_as_such(page, monkeypatch):
     assert login_guard.may_sign_in(HOST, EMAIL) is None
 
 
-def test_a_new_account_is_not_signed_in_to_until_the_owner_has_verified_it(page, monkeypatch):
-    serve(page)
-    a = assistant_for(monkeypatch=monkeypatch)
-    login_guard.hold_for_verification(HOST, EMAIL)
-    assert a.attempt_auto_login(page, EMAIL, "s3cret-ATS", create_if_missing=False) is False
-    assert tries(page) == 0 and "verif" in a._login_paused
-
-
 CREATE = """<html><body><h1>Create Account</h1>
 <label for="email">Email Address*</label><input id="email" type="email">
 <label for="pw">Password*</label><input id="pw" type="password">
@@ -206,12 +190,14 @@ CREATE = """<html><body><h1>Create Account</h1>
     '<input type="password"><button>Sign In</button></form>'; });</script></body></html>"""
 
 
-def test_landing_on_sign_in_after_creating_an_account_holds_the_sign_in(page, monkeypatch):
+def test_landing_on_sign_in_after_creating_an_account_signs_in_once_then_holds(page, monkeypatch):
+    """The owner's decision (28 September): sign in after creating. This sign-in form never lets
+    anyone in, so the one attempt is counted and the next waits for the owner."""
     a = assistant_for(adapter=WorkdayAdapter(), monkeypatch=monkeypatch)
     serve(page, body=CREATE)
-    a.fill_create_account_form(page, EMAIL)
+    assert a.fill_create_account_form(page, EMAIL) is False
     why = login_guard.may_sign_in(HOST, EMAIL)
-    assert why and "verif" in why
+    assert why and "verif" in why and "Continue" in why
 
 
 def test_an_account_is_not_created_again_and_again(page, monkeypatch):

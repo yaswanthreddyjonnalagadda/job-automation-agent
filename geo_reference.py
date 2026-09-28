@@ -119,9 +119,6 @@ def country_names(code: str) -> tuple[str, ...]:
     return tuple(_spellings(_data()["countries"].get((code or "").upper(), {})))
 
 
-def us_state_names(code: str) -> tuple[str, ...]:
-    return tuple(_spellings(_data()["us_states"].get((code or "").upper(), {})))
-
 
 def country_spellings(text: str) -> list[str]:
     """The given spelling first, then the country's ISO spellings, longest

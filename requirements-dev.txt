@@ -3,12 +3,6 @@
 pytest>=8.0
 hypothesis>=6.100
 
-# Only for tests/test_agent_v2.py (the agent_v2 prototype). Without them
-# those tests are skipped, not failed.
-langgraph>=0.2
-aiosqlite>=0.20
-cryptography>=42.0
-
 # ISO 3166 names: regenerates reference/geo.json (reference/build_geo.py) and
 # lets tests/test_no_place_literals.py recognise any province or region.
 # Pinned: geo.json is generated from this version; bump the two together.

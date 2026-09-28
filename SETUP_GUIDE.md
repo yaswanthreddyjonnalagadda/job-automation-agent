@@ -59,55 +59,35 @@ with your details but edit it if anything changes.
 Drop your resume at `data/resume.pdf` or `data/resume.docx` (update
 `RESUME_PATH` in `.env` if you use a different name/location).
 
-## 4. Queue up jobs
+## 4. Start the dashboard
 
-Browse LinkedIn/Indeed/Dice normally, and when you find a role you want to
-apply to, add its URL to `data/job_queue.txt` (one per line). The file is
-created automatically the first time you run `main.py` if it doesn't exist.
+Double-click **`Start Dashboard.bat`** in this folder. A black window opens (keep
+it open while the agent works) and the dashboard opens in your browser at
+http://127.0.0.1:5000.
 
-## 5. Run it
+Start it yourself this way, not from an IDE's AI assistant or any background
+terminal: a dashboard started in the background opens its browser where you
+cannot see it.
 
-```bash
-python main.py --dry-run   # generate tailored resume + cover letter only
-python main.py             # full flow, including the browser form-fill step
-python main.py --list      # see everything tracked so far
-```
+## 5. Apply to a job
 
-For each queued job you'll be prompted in the terminal to paste in the job
-title, company, location, and full JD text (copy/paste from the page you're
-looking at). The tool then:
+Paste the job's link (a company career page, or a LinkedIn link to one) into the
+dashboard and press Apply. The agent then:
 
-- Calls Claude to analyze the JD and tailor your resume/cover letter
-- Saves both under `output/<Company>_<Title>/`
-- Opens the job URL in a visible browser window
-- Waits for you to log in (first time only — persists after that)
-- Auto-fills form fields it recognizes (name, email, phone, location, etc.)
-  and uploads your resume
-- Takes a screenshot and pauses so **you** review and submit
+- reads the posting and skips it if it says it will not sponsor and your profile
+  needs sponsorship;
+- writes a resume for the job (Claude, then Gemini or OpenAI if Claude cannot),
+  or attaches your own resume if none of them can;
+- opens the application in a browser window you can see, creates or signs in
+  to the employer's account when needed, and fills every page from your profile;
+- writes answers to open questions ("Why do you want to join us?") in plain
+  English, inside the form's word limit;
+- stops at the Review page and lists anything left for you, and every answer
+  it wrote for you to read.
 
-Every job is recorded in `data/applications.db` (SQLite) keyed by URL, so
-re-running the tool never re-processes or re-applies to something you've
-already done.
-
-## Three human checkpoints
-
-Nothing gets applied to without you actively confirming it, at three points:
-
-1. **Right after you paste the JD text (before any API call).** A free,
-   local scan flags citizenship/clearance/no-sponsorship language against
-   your `requires_visa_sponsorship` setting. If it fires, you're asked
-   whether to even bother analyzing the job.
-2. **After Claude analyzes the JD (before tailoring anything).** Claude
-   reports required years of experience and citizenship/clearance
-   requirements; combined with checkpoint 1's scan, you confirm before any
-   tokens are spent writing a tailored resume/cover letter.
-3. **Right before you'd click Submit in the browser.** A concrete
-   checklist (job details match, resume is accurate, cover letter reads
-   right, every field is correct, extra questions are answered, correct
-   resume attached) — only after that do you submit, by hand, yourself.
-
-A job you decline at checkpoint 1 or 2 is still recorded (status
-`skipped`) so it won't be re-prompted if it shows up in the queue again.
+**You press Submit yourself**, in the browser window, after checking the form.
+Every application is tracked on the dashboard, so the same job is never applied
+to twice. What the agent does and never does is set out in `BEHAVIOUR.md`.
 
 ## Notes
 

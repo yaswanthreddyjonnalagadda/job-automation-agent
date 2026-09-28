@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # Every public method of ClaudeClient belongs to exactly one side (tests/test_gemini_answers.py checks it), so a
 # model call added later cannot end up at the wrong company by default.
 ANSWERS = frozenset({"plan_page", "read_page", "choose_option", "answer_screening_questions", "answer_single_question"})
-DOCUMENTS = frozenset({"tailor_resume", "generate_cover_letter", "structure_resume", "analyze_job"})
+DOCUMENTS = frozenset({"tailor_resume", "generate_cover_letter"})
 
 MIN_OUTPUT_TOKENS = 4_096       # Gemini counts its thinking in the limit: a 400-token answer would be cut off
 MAX_RATE_LIMIT_WAIT = 65.0      # the longest wait for a per-minute limit that is worth making
@@ -52,6 +52,40 @@ class GeminiStatusError(GeminiError):
 
 class GeminiRateLimited(GeminiStatusError):
     """A per-minute or daily limit: worth waiting for."""
+
+
+class GeminiDailyLimit(GeminiStatusError):
+    """The key's allowance for the day is spent. Not worth waiting for: asking again only waits a minute
+    and fails, three times over, on every question (KBI, 28 September: 3 minutes a question)."""
+
+
+# When the daily allowance was found spent. Calls in the next hour fail at once, without asking Google.
+_DAILY_SPENT_AT = 0.0
+DAILY_LIMIT_MEMORY = 3600.0
+
+
+def _daily_quota(reply) -> bool:
+    """A 429 whose quota is counted per day (Google's QuotaFailure names it, e.g. '...PerDay...')."""
+    try:
+        return "perday" in (reply.text or "").replace("_", "").lower()
+    except Exception:
+        return False
+
+
+def _limit_error(reply) -> GeminiStatusError:
+    global _DAILY_SPENT_AT
+    if _daily_quota(reply):
+        _DAILY_SPENT_AT = time.time()
+        return GeminiDailyLimit("the key's daily allowance is used up -- it comes back tomorrow "
+                                "(or raise the quota at aistudio.google.com)", 429)
+    time.sleep(_retry_delay(reply))       # the wait Google asked for, before the caller's own backoff
+    return GeminiRateLimited("quota or per-minute limit reached (wait, or check the key's quota "
+                             "at aistudio.google.com)", 429)
+
+
+def _refuse_if_daily_limit_spent() -> None:
+    if _DAILY_SPENT_AT and time.time() - _DAILY_SPENT_AT < DAILY_LIMIT_MEMORY:
+        raise GeminiDailyLimit("the key's daily allowance is used up -- not asking again this hour", 429)
 
 
 class GeminiConnectionError(GeminiError):
@@ -143,6 +177,7 @@ class _Messages:
 
     def create(self, *, model: str, max_tokens: int, system: str, messages: list[dict],
                timeout: Optional[float] = None, **_ignored: Any) -> SimpleNamespace:
+        _refuse_if_daily_limit_spent()
         key = str(getattr(self._config, "gemini_api_key", "") or "")
         base = str(getattr(self._config, "gemini_base_url", "") or DEFAULT_GEMINI_BASE_URL).rstrip("/")
         payload = {
@@ -162,9 +197,7 @@ class _Messages:
             raise GeminiConnectionError(f"could not reach Gemini ({type(exc).__name__})") from None
 
         if reply.status_code == 429:
-            time.sleep(_retry_delay(reply))       # the wait Google asked for, before the caller's own backoff
-            raise GeminiRateLimited("quota or per-minute limit reached (wait, or check the key's quota "
-                                    "at aistudio.google.com)", 429)
+            raise _limit_error(reply)
         if reply.status_code >= 500:
             raise GeminiConnectionError(f"Gemini is busy or down ({reply.status_code})")
         if reply.status_code >= 400:
@@ -218,6 +251,7 @@ class _MessagesText(_Messages):
 
     def create(self, *, model: str, max_tokens: int, system: str, messages: list[dict],
                timeout: Optional[float] = None, **_ignored: Any) -> SimpleNamespace:
+        _refuse_if_daily_limit_spent()
         key = str(getattr(self._config, "gemini_api_key", "") or "")
         base = str(getattr(self._config, "gemini_base_url", "") or DEFAULT_GEMINI_BASE_URL).rstrip("/")
         payload = {
@@ -236,9 +270,7 @@ class _MessagesText(_Messages):
             raise GeminiConnectionError(f"could not reach Gemini ({type(exc).__name__})") from None
 
         if reply.status_code == 429:
-            time.sleep(_retry_delay(reply))
-            raise GeminiRateLimited("quota or per-minute limit reached (wait, or check the key's quota "
-                                    "at aistudio.google.com)", 429)
+            raise _limit_error(reply)
         if reply.status_code >= 500:
             raise GeminiConnectionError(f"Gemini is busy or down ({reply.status_code})")
         if reply.status_code >= 400:
@@ -276,7 +308,6 @@ class GeminiDocumentClient(GeminiClient):
 
     def _call(self, *, system: str, user_message: str, max_tokens: int = 2000) -> str:
         """Single-attempt call -- fails fast so the provider fallback loop moves on."""
-        import time as _time
         from claude_integration import ClaudeIntegrationError
         try:
             response = self._client.messages.create(

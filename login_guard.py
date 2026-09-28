@@ -13,8 +13,10 @@ What Workday does with an external candidate's account (researched 25 September 
     in 24 hours ("Failed to initiate password reset, please contact administrator").
   * Whether a new account must have its email verified before it can sign in is the employer's setting.
 
-So the agent stops after a rejection and after it creates an account, and the owner says when to try
-again (Continue). At most MAX_FAILED_SIGN_INS rejections are spent per account in 24 hours, well short
+So the agent stops after a rejection, and the owner says when to try again (Continue). After it creates
+an account it signs in once with the email and password (the owner's decision of 28 September); if the
+site rejects that -- perhaps only because the new account's email is not verified yet -- it is counted
+and held like any other rejection. At most MAX_FAILED_SIGN_INS rejections are spent per account in 24 hours, well short
 of a lock. Nothing here decides who may sign in where: safety.password_allowed still does that.
 """
 from __future__ import annotations
@@ -150,19 +152,6 @@ def record_account_attempt(host: str, email: str) -> None:
     data = _load()
     entry = _entry(data, host, email)
     entry["creations"] = [*(entry.get("creations") or []), _stamp()][-10:]
-    data[_key(host, email)] = entry
-    _save(data)
-
-
-def hold_for_verification(host: str, email: str) -> None:
-    """An account was created but the site did not show it signed in: it may need its email verified,
-    and a sign-in now would only spend an attempt."""
-    data = _load()
-    entry = _entry(data, host, email)
-    entry["hold"] = "new_account"
-    entry["hold_reason"] = (f"an account was just created on {host} and the site did not sign it in, so it may "
-                            f"need its email verified: open the verification email it sent you, click the link, "
-                            f"then press Continue.")
     data[_key(host, email)] = entry
     _save(data)
 

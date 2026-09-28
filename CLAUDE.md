@@ -7,8 +7,7 @@
   before submission. `BEHAVIOUR.md` is the authority on consent,
   attestations, credentials, and submission -- nothing in this file
   overrides it.
-- **Primary runtime:** `apply.py` -> `apply_flow.py`. `main.py` is
-  deprecated.
+- **Primary runtime:** `web_ui.py` (the dashboard) -> `apply.py` -> `apply_flow.py`.
 - **Core standard:** accessibility-first perception (roles and labels) and
   synthetic event dispatching, over volatile CSS selectors.
 

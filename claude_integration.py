@@ -108,48 +108,10 @@ class ClaudeClient:
     # ------------------------------------------------------------------
     # Resume structuring
     # ------------------------------------------------------------------
-    def structure_resume(self, resume: ResumeData) -> dict[str, Any]:
-        system = (
-            "You extract structured data from resumes. Respond with ONLY valid JSON, "
-            "no markdown fences, no commentary."
-        )
-        user_message = (
-            "Extract the following fields from this resume as JSON: "
-            "contact (name, email, phone, location), summary, skills (list), "
-            "experience (list of {company, title, start_date, end_date, bullets[]}), "
-            "education (list of {school, degree, field, year}), certifications (list).\n\n"
-            f"RESUME TEXT:\n{resume.raw_text}"
-        )
-        raw = self._call(system=system, user_message=user_message, max_tokens=3000)
-        structured = self._extract_json(raw)
-        resume.structured = structured
-        return structured
 
     # ------------------------------------------------------------------
     # Job description analysis
     # ------------------------------------------------------------------
-    def analyze_job(self, job: JobDescription) -> dict[str, Any]:
-        system = (
-            "You analyze job postings for a job-seeker. Respond with ONLY valid JSON, "
-            "no markdown fences, no commentary."
-        )
-        user_message = (
-            "Analyze this job posting as JSON with fields: "
-            "required_skills (list), preferred_skills (list), seniority_level, "
-            "key_responsibilities (list), ats_keywords (list of exact phrases to mirror "
-            "in a resume), visa_sponsorship_mentioned (bool: true only if the posting "
-            "explicitly says sponsorship is available), "
-            "citizenship_or_clearance_required (bool: true if the posting requires US "
-            "citizenship, permanent residency, or a security clearance), "
-            "min_years_experience_required (integer, or null if not stated), "
-            "estimated_fit_notes (string).\n\n"
-            f"JOB TITLE: {job.title}\nCOMPANY: {job.company}\n\n"
-            f"JOB DESCRIPTION:\n{job.raw_text}"
-        )
-        raw = self._call(system=system, user_message=user_message, max_tokens=2000)
-        analysis = self._extract_json(raw)
-        job.analysis.update(analysis)
-        return analysis
 
     # ------------------------------------------------------------------
     # Resume tailoring

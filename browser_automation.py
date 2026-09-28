@@ -46,10 +46,7 @@ from interaction import (
     wipe_and_enforce_location_sweep,
 )
 from perception import (
-    find_active_draft_cards,
     is_ant_dropdown,
-    is_field_active,
-    read_control_attributes,
 )
 from sites import adapter_for
 
@@ -326,16 +323,6 @@ class JobApplicationAssistant:
             return ""
         return channel
 
-    @staticmethod
-    def _chrome_is_running() -> bool:
-        try:
-            if os.name != "nt":
-                return False
-            out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq chrome.exe"],
-                                 capture_output=True, text=True, timeout=20).stdout
-            return "chrome.exe" in out
-        except Exception:
-            return False
 
     @staticmethod
     def _close_leftover_browsers(profile_dir: Path) -> int:
@@ -519,12 +506,6 @@ class JobApplicationAssistant:
         self.sweep_modals_and_policies(page)
         return page
 
-    def wait_for_manual_login(self, page: Page, logged_in_selector: str, timeout_ms: int = 300_000) -> None:
-        """Blocks until a selector that only appears when logged in shows up,
-        giving the human time to sign in by hand in the visible browser."""
-        logger.info("Waiting for manual login (looking for selector: %s)...", logged_in_selector)
-        page.wait_for_selector(logged_in_selector, timeout=timeout_ms)
-        logger.info("Login detected.")
 
     # Frames that are never the application form.
     _NON_FORM_FRAME_HOSTS = (
@@ -715,18 +696,9 @@ class JobApplicationAssistant:
     def _is_honeypot(label_text: str) -> bool:
         """True for anti-bot decoy fields, which announce themselves in their
         own label/aria-label text (Workday's is literally 'this input is for
-        robots only, do not enter if you're human')."""
-        return any(
-            marker in label_text
-            for marker in (
-                "for robots only",
-                "do not enter if you're human",
-                "do not enter if you are human",
-                "leave this field blank",
-                "leave blank",
-                "honeypot",
-            )
-        )
+        robots only, do not enter if you're human'). Decided in perception.is_honeypot."""
+        import perception
+        return perception.is_honeypot(label_text)
 
     @staticmethod
     def _label_for(page: Page, el) -> str:
@@ -750,33 +722,6 @@ class JobApplicationAssistant:
                 pass
         return text
 
-    @staticmethod
-    def _group_question_text(radio_el) -> str:
-        """The actual question for a radio-button GROUP -- deliberately
-        distinct from _label_for, which would return an individual option's
-        own label (e.g. 'Yes') if asked about one radio input. Looks at the
-        group's container (fieldset/legend, or an ARIA radiogroup with
-        aria-labelledby/aria-label), never at a single option's label."""
-        try:
-            text = radio_el.evaluate(
-                """el => {
-                    const container = el.closest("[role='radiogroup'], fieldset");
-                    if (!container) return '';
-                    const labelledBy = container.getAttribute('aria-labelledby');
-                    if (labelledBy) {
-                        const labelEl = document.getElementById(labelledBy);
-                        if (labelEl && labelEl.innerText.trim()) return labelEl.innerText;
-                    }
-                    const legend = container.querySelector('legend');
-                    if (legend && legend.innerText.trim()) return legend.innerText;
-                    const ariaLabel = container.getAttribute('aria-label');
-                    if (ariaLabel) return ariaLabel;
-                    return '';
-                }"""
-            )
-            return (text or "").strip()
-        except Exception:
-            return ""
 
     # Fields about OTHER people or conditional follow-ups. IGT's "If yes, please
     # provide the name of the relative" got the candidate's own name, and a
@@ -4615,10 +4560,6 @@ class JobApplicationAssistant:
             return False
         return self.fill_create_account_form(page, email)
 
-    @staticmethod
-    def _nonempty_texts(values) -> list[str]:
-        """Normalizes browser text results that may contain null entries."""
-        return [value.strip() for value in values if isinstance(value, str) and value.strip()]
 
     @staticmethod
     def _password_pair_matches(values, password: str) -> bool:
@@ -4632,6 +4573,26 @@ class JobApplicationAssistant:
             re.IGNORECASE,
         )
         return any(pattern.search(text or "") for text in error_texts)
+
+    @staticmethod
+    def _save_account_failure(page: Page, site: str) -> None:
+        """A screenshot and the page's accessibility text when a site refuses to create the account.
+
+        KBI's Workday kept its Create Account form open twice with no error the agent could read, and
+        nothing was kept to show why; after two tries the account is held for a day. The page text goes
+        through hide_secrets, so no password is written."""
+        from datetime import datetime
+        from perception import hide_secrets
+        try:
+            folder = Path("logs") / "account_failures"
+            folder.mkdir(parents=True, exist_ok=True)
+            stem = f"{re.sub(r'[^A-Za-z0-9.-]+', '_', site or 'site')}_{datetime.now():%Y%m%d_%H%M%S}"
+            page.screenshot(path=str(folder / f"{stem}.png"), full_page=True)
+            (folder / f"{stem}.txt").write_text(hide_secrets(page.locator("body").aria_snapshot(mode="ai")),
+                                                encoding="utf-8")
+            logger.warning("ACCOUNT_CREATE_FAILED: what the site showed is saved in %s", folder / stem)
+        except Exception as exc:
+            logger.info("Could not save the account page: %s", str(exc).splitlines()[0][:100])
 
     def _visible_error_texts(self, page: Page) -> list[str]:
         try:
@@ -4739,20 +4700,17 @@ class JobApplicationAssistant:
         profile = getattr(self, "_profile", None)
         full_name = (getattr(profile, "full_name", "") or "").split()
         try:
-            email_fields = visible(page.locator(
-                "input[type='email'], input[name*='email' i], input[id*='email' i], "
-                "input[name*='username' i], input[id*='username' i]"
-            ))
+            # The email first, and checked: the passwords are never sent without it.
+            email_fields = self._email_boxes(page)
+            if not email_fields:
+                logger.warning("ACCOUNT_CREATE_FAILED: found no email box on the Create Account form "
+                               "-- not submitting the passwords alone")
+                return False
             for box in email_fields:
-                # Workday's account form validates through React keyboard
-                # events; always replay the address so a stale controlled value
-                # cannot remain visibly correct but internally invalid.
-                box.click()
-                box.press("Control+A")
-                box.press("Backspace")
-                box.press_sequentially(email, delay=25)
-                box.press("Tab")
-                page.wait_for_timeout(500)
+                self._type_email(page, box, email)
+            if not self._email_kept(self._email_boxes(page) or email_fields, email):
+                logger.warning("ACCOUNT_CREATE_FAILED: the email box did not keep the address -- not submitting")
+                return False
             for box in pw_fields:
                 box.click()
                 box.press("Control+A")
@@ -4874,6 +4832,14 @@ class JobApplicationAssistant:
                 if not self._password_pair_matches(password_values, password):
                     logger.warning("ACCOUNT_CREATE_FAILED: password did not stay filled before submit")
                     return False
+            # The same re-render can clear the email: type it again where it is gone.
+            email_fields = self._email_boxes(page)
+            for box in email_fields:
+                if (box.input_value() or "").strip().lower() != email.strip().lower():
+                    self._type_email(page, box, email)
+            if not self._email_kept(self._email_boxes(page), email):
+                logger.warning("ACCOUNT_CREATE_FAILED: the email did not stay filled before submit")
+                return False
 
             submit = page.get_by_role(
                 "button", name=re.compile(r"^\s*(create (my )?account|register|sign up|submit)\s*$", re.IGNORECASE)
@@ -4905,16 +4871,24 @@ class JobApplicationAssistant:
                     return self.sign_in_to_existing_account(page, email)
                 logger.warning("ACCOUNT_CREATE_FAILED: the site kept the form open%s",
                                f" -- {' / '.join(errors)[:200]}" if errors else "")
+                self._save_account_failure(page, site)
                 return False
             if not self._account_creation_is_confirmed(page):
                 logger.warning(
                     "ACCOUNT_UNVERIFIED: Workday left registration without Candidate Home or application evidence"
+                    " -- signing in with the email and password"
                 )
-                # Not signed in, so a sign-in now would only spend an attempt on an account that may be
-                # waiting for its email to be verified: the owner says when (Continue).
-                login_guard.hold_for_verification(site, email)
-                self._login_paused = login_guard.may_sign_in(site, email) or ""
-                return True
+                # The owner's decision (28 September): sign in once with the email and the password. A code
+                # the site then emails is read by the code step (emailed_codes.why_not decides); a rejection
+                # -- which may only mean the email is not verified yet -- is counted by login_guard and
+                # waits for the owner (Continue), as any rejected sign-in does.
+                if not self._open_sign_in(page):
+                    self._login_paused = (f"an account was just created on {site}, but no sign-in form was found: "
+                                          f"sign in yourself, then press Continue")
+                    logger.warning("ACCOUNT_HELD: %s", self._login_paused)
+                    return False
+                return self.attempt_auto_login(page, email, password, scope=self._sign_in_scope(page),
+                                               create_if_missing=False)
             logger.info("ACCOUNT_CREATED: new %s account for %s",
                         getattr(self, "employer", "") or urlparse(page.url).netloc, email)
             self.remember_account(page, email, "password")
@@ -5052,7 +5026,13 @@ class JobApplicationAssistant:
             logger.info("Two-step sign-in on %s: the email was given on the page before; entering the password",
                         domain)
         else:
+            # The email first, and checked: a password is never sent without it.
             email_locator.fill(email)
+            if not self._email_kept([email_locator], email):
+                self._type_email(page, email_locator, email)
+            if not self._email_kept([email_locator], email):
+                logger.warning("LOGIN_HELD: the email box on %s did not keep the address -- not signing in", domain)
+                return False
         pw_locator.fill(password)
 
         # Sign-in buttons are often duplicated (one hidden) or covered by a
@@ -5128,6 +5108,73 @@ class JobApplicationAssistant:
                 return self.create_account_from_link(page, email)
         return False
 
+    # A box asks for the email when anything a person or a screen reader would go by says so: its
+    # label (for= or wrapping), aria-label, aria-labelledby, placeholder, or its name/id/autocomplete/
+    # data-automation-id. Workday's is type=text with a generated id and only its label and
+    # data-automation-id say "email": the account form, which looked only at type/name/id, found no box
+    # and pressed Create Account with the passwords alone (28 September).
+    _EMAIL_BOX_JS = r"""(scope) => {
+        const root = scope || document;
+        const want = /e-?mail|user\s*-?name|user\s*id|login\s*id/i;
+        const skip = new Set(['password', 'hidden', 'checkbox', 'radio', 'submit', 'button', 'file',
+                              'image', 'reset', 'range', 'color']);
+        document.querySelectorAll('[data-agent-email-box]').forEach(e => e.removeAttribute('data-agent-email-box'));
+        const said = el => [
+            (el.type || '').toLowerCase() === 'email' ? 'email' : '',
+            el.name, el.id, el.getAttribute('autocomplete'), el.getAttribute('data-automation-id'),
+            el.getAttribute('aria-label'), el.placeholder,
+            ...[...(el.labels || [])].map(l => l.innerText),
+            ...(el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)
+                .map(id => (document.getElementById(id) || {}).innerText || ''),
+        ].join(' ');
+        let n = 0;
+        for (const el of root.querySelectorAll('input')) {
+            if (skip.has((el.type || 'text').toLowerCase())) continue;
+            // Not a read-only box: on the password step of a two-step sign-in it
+            // only shows the email already given, and can't be typed in.
+            if (el.readOnly || el.disabled || !el.getClientRects().length) continue;
+            if (!want.test(said(el))) continue;
+            el.setAttribute('data-agent-email-box', String(n++));
+        }
+        return n;
+    }"""
+
+    @staticmethod
+    def _email_boxes(root) -> list:
+        """Every visible box on `root` (a Page or a Locator) that asks for the email or user name, in
+        page order -- the address and its retype. The one place that decides which box is the email."""
+        try:
+            is_page = hasattr(root, "goto")
+            count = root.evaluate(JobApplicationAssistant._EMAIL_BOX_JS, None) if is_page \
+                else root.evaluate(JobApplicationAssistant._EMAIL_BOX_JS)
+            page = root if is_page else root.page
+            found = [page.locator(f"[data-agent-email-box='{i}']").first for i in range(int(count or 0))]
+            return [box for box in found if box.is_visible()]
+        except Exception as exc:
+            logger.debug("Could not look for the email box: %s", str(exc).splitlines()[0][:100])
+            return []
+
+    @staticmethod
+    def _email_kept(boxes: list, email: str) -> bool:
+        """Every email box really holds the address (a box can look filled and have been cleared)."""
+        try:
+            return bool(boxes) and all((box.input_value() or "").strip().lower() == email.strip().lower()
+                                       for box in boxes)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _type_email(page: Page, box, email: str) -> None:
+        # Workday's account form validates through React keyboard events;
+        # always replay the address so a stale controlled value cannot remain
+        # visibly correct but internally invalid.
+        box.click()
+        box.press("Control+A")
+        box.press("Backspace")
+        box.press_sequentially(email, delay=25)
+        box.press("Tab")
+        page.wait_for_timeout(500)
+
     @staticmethod
     def _find_login_email_input(root):
         """Locates the username/email box on a login form, returning a
@@ -5137,26 +5184,9 @@ class JobApplicationAssistant:
         just above the password field', which is what a human reads it as.
 
         `root` is a Page or a form Locator -- both expose .locator()."""
-        for selector in (
-            "input[data-automation-id='email']",
-            "input[data-automation-id*='email' i]",
-            "input[data-automation-id*='userName' i]",
-            "input[type='email']",
-            "input[name*='email' i]",
-            "input[name*='username' i]",
-            "input[id*='email' i]",
-            "input[id*='username' i]",
-            "input[aria-label*='email' i]",
-            "input[autocomplete='username']",
-        ):
-            # Not a read-only box: on the password step of a two-step sign-in
-            # it only shows the email already given, and can't be typed in.
-            loc = root.locator(f"{selector}:not([readonly]):not([disabled])").first
-            try:
-                if loc.count() and loc.is_visible():
-                    return loc
-            except Exception:
-                continue
+        boxes = JobApplicationAssistant._email_boxes(root)
+        if boxes:
+            return boxes[0]
 
         # Walk the inputs in DOM order and take the last plain text box that
         # sits ABOVE the password field -- taking simply "the last text input
@@ -5388,45 +5418,6 @@ class JobApplicationAssistant:
             logger.warning("Could not fill field matching %s: %s", hints, exc)
             return False
 
-    def fill_first_matching_verified(
-        self, page: Page, hints: list[str], value: str,
-        only_if_empty: bool = True, settle_ms: int = 1000, retries: int = 2,
-    ) -> bool:
-        """Like fill_first_matching, but holds the SAME element handle and
-        re-fills it if the value doesn't stick after a short settle window.
-        Some sites asynchronously overwrite a field shortly after it's
-        set (e.g. their own resume auto-parse firing late) -- this makes
-        sure OUR value is the one still there afterward, not theirs."""
-        if not value:
-            return False
-        el = self._find_first_matching(page, hints, only_if_empty=only_if_empty)
-        if not el:
-            return False
-        for attempt in range(retries + 1):
-            try:
-                if attempt == 0:
-                    fill_and_dispatch(el, value)
-                else:
-                    # Some masked inputs (e.g. date pickers) ignore a
-                    # directly-set value and only respond to real keystrokes.
-                    el.click()
-                    el.fill("")
-                    el.type(value, delay=40)
-            except Exception as exc:
-                logger.warning("Could not fill field matching %s (attempt %d): %s", hints, attempt + 1, exc)
-                continue
-            page.wait_for_timeout(settle_ms)
-            try:
-                current = el.input_value()
-            except Exception:
-                current = None
-            if current is not None and current.strip() == value.strip():
-                return True
-            logger.warning(
-                "Value for %s changed after settling (attempt %d, now %r) -- retrying",
-                hints, attempt + 1, (current or "")[:60],
-            )
-        return False
 
     def select_radio(self, page: Page, element) -> bool:
         """Selects one radio or checkbox, whatever the page puts in the way.
@@ -5855,84 +5846,6 @@ class JobApplicationAssistant:
         except Exception as exc:
             logger.warning("Widget dump failed for %s: %s", id_suffix, exc)
 
-    def dump_controls(self, page: Page, keyword: str) -> None:
-        """Diagnostic: lists visible buttons/comboboxes/selects whose id,
-        automation id, or text mentions the keyword -- for finding custom
-        dropdown widgets that aren't plain <select> elements."""
-        found = []
-        for el in page.query_selector_all("button, select, [role='combobox'], [role='listbox'], [role='button']"):
-            try:
-                if not el.is_visible():
-                    continue
-                attrs = {
-                    "tag": el.evaluate("e => e.tagName"),
-                    "id": el.get_attribute("id") or "",
-                    "automationId": el.get_attribute("data-automation-id") or "",
-                    "ariaLabel": el.get_attribute("aria-label") or "",
-                    "text": (el.inner_text() or "")[:40],
-                }
-                blob = " ".join(str(v) for v in attrs.values()).lower()
-                if keyword.lower() in blob:
-                    found.append(attrs)
-            except Exception:
-                continue
-        logger.info("CONTROL_DUMP[%s]: %d: %s", keyword, len(found), found)
-
-    def dump_field_ids(self, page: Page, id_contains: str) -> None:
-        """Diagnostic: lists every visible input/select/textarea whose id
-        contains the given fragment, with its id and data-automation-id.
-        Label-text matching is unreliable on these custom widgets, so this
-        is how we find the stable selectors to target instead."""
-        found = []
-        for el in page.query_selector_all("input, select, textarea"):
-            try:
-                if not el.is_visible():
-                    continue
-                el_id = el.get_attribute("id") or ""
-                if id_contains.lower() not in el_id.lower():
-                    continue
-                found.append({
-                    "id": el_id,
-                    "automationId": el.get_attribute("data-automation-id"),
-                    "value": (el.get_attribute("value") or "")[:40],
-                })
-            except Exception:
-                continue
-        logger.info("FIELD_DUMP[%s]: %d fields: %s", id_contains, len(found), found)
-
-    def inspect_date_field(self, page: Page, visible_text: str, index: int = 0) -> dict:
-        """Diagnostic: finds the input immediately following visible text
-        (e.g. 'From') on the page and dumps its HTML/attributes, so we can
-        see what kind of widget it really is instead of guessing at why
-        .fill()/.type() aren't sticking."""
-        try:
-            heading = page.get_by_text(visible_text, exact=False).nth(index)
-            el = heading.locator("xpath=following::input[1]")
-            if el.count() == 0:
-                logger.info("DATE_FIELD_INSPECT: no input found following text %r (index %d)", visible_text, index)
-                return {"error": "no following input found"}
-        except Exception as exc:
-            logger.info("DATE_FIELD_INSPECT: lookup failed for %r: %s", visible_text, exc)
-            return {"error": str(exc)}
-        info = el.evaluate(
-            """e => ({
-                tag: e.tagName,
-                type: e.type || null,
-                readonly: e.readOnly,
-                disabled: e.disabled,
-                value: e.value,
-                placeholder: e.placeholder,
-                maxLength: e.maxLength,
-                pattern: e.pattern,
-                className: e.className,
-                ariaLabel: e.getAttribute('aria-label'),
-                dataAutomationId: e.getAttribute('data-automation-id'),
-                outerHTML: e.outerHTML.slice(0, 500),
-                parentOuterHTML: e.parentElement ? e.parentElement.outerHTML.slice(0, 800) : null,
-            })"""
-        )
-        logger.info("DATE_FIELD_INSPECT[%d]: %s", index, info)
-        return info
 
     # A section of a form that is open for editing, with a save of its own.
     # Dayforce will not let the wizard advance while one is open: the agent
@@ -6807,29 +6720,6 @@ class JobApplicationAssistant:
         except Exception:
             return []
 
-    def wait_out_captcha(self, page: Page, timeout_seconds: float = 600.0) -> bool:
-        """A CAPTCHA is the user's to solve. The agent says so plainly, brings
-        the window forward, and waits for it to disappear, then carries on with
-        ordinary automation. It never touches the challenge itself."""
-        if not safety.captcha_visible(page):
-            return True
-        self.raise_window(page)
-        logger.warning("ACTION NEEDED: a CAPTCHA / human verification step is showing. "
-                       "Please complete it in the browser window -- the agent will carry on by itself.")
-        waited = 0.0
-        while waited < timeout_seconds:
-            time.sleep(5.0)
-            waited += 5.0
-            try:
-                if page.is_closed():
-                    return False
-                if not safety.captcha_visible(page):
-                    logger.info("CAPTCHA cleared -- resuming.")
-                    return True
-            except Exception:
-                continue
-        logger.warning("The CAPTCHA is still showing after %ds; handing over.", int(timeout_seconds))
-        return False
 
     def validate_application(self, page: Page, resume_name: str = "") -> dict:
         """Everything a person needs to know before deciding to submit.
@@ -6908,12 +6798,6 @@ class JobApplicationAssistant:
         self.__dict__.setdefault("_ambiguous_choices", [])
         self._ambiguous_choices = [e for e in self._ambiguous_choices if not e.startswith(key)]
 
-    def note_unsupported_question(self, question: str) -> None:
-        """Records a custom question with no approved answer."""
-        self.__dict__.setdefault("_unsupported_questions", [])
-        entry = " ".join(question.split())[:120]
-        if entry and entry not in self._unsupported_questions:
-            self._unsupported_questions.append(entry)
 
     def pending_attestations(self, page: Page) -> list[str]:
         """Unticked declarations and empty signature boxes on the page."""
@@ -7237,24 +7121,3 @@ class JobApplicationAssistant:
             return "refresh"  # re-detect whatever is on the page now
         return decision
 
-    def pause_for_human_review(self, page: Page, job_title: str = "", company: str = "") -> None:
-        """Never auto-submits. Screenshots the filled form and blocks the
-        program until the human confirms in the terminal that they have
-        reviewed everything and (if satisfied) clicked Submit themselves
-        in the visible browser window."""
-        screenshot_path = self._config.output_dir / "last_form_review.png"
-        page.screenshot(path=str(screenshot_path), full_page=True)
-        logger.info("Screenshot saved to %s for your review", screenshot_path)
-        heading = f"{job_title} @ {company}" if job_title else "this application"
-        input(
-            f"\n>>> FINAL REVIEW before submitting to {heading}:\n"
-            ">>>   [ ] Job title, location, and salary match what you expected\n"
-            ">>>   [ ] Tailored resume text is accurate -- nothing fabricated or exaggerated\n"
-            ">>>   [ ] Cover letter has the right company/role name and reads like you\n"
-            ">>>   [ ] Every auto-filled field in the browser is actually correct\n"
-            ">>>   [ ] Any extra questions the assistant couldn't fill (EEO, work auth,\n"
-            ">>>       salary expectation, etc.) are answered by you\n"
-            ">>>   [ ] The correct resume file is attached\n"
-            ">>> Only click Submit in the browser once every box above is true.\n"
-            ">>> Press Enter here once you're done (submitted or not) to continue...\n"
-        )

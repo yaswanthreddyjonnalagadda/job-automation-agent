@@ -26,20 +26,3 @@ class AshbyAdapter(SiteAdapter):
     confirmation_phrases = ("application was successfully submitted", "thanks for applying")
     portal_list_patterns = ("/applications",)
 
-    def answer_toggle(self, assistant, page, question: str, choice: str) -> bool:
-        """Ashby's Yes/No pairs: click only when the wanted choice is not
-        already pressed, because clicking a pressed button unselects it."""
-        label = assistant._question_label(page, question)
-        if label is None:
-            return False
-        button = label.locator(
-            f"xpath=following::button[normalize-space(.)={choice!r}][1]".replace("'", '"')
-        ).first
-        if not button.count():
-            return False
-        if button.get_attribute("aria-pressed") == "true":
-            return True
-        return assistant._click_resiliently(button, timeout_ms=5_000)
-
-    def required_marker_is_css(self) -> bool:
-        return True

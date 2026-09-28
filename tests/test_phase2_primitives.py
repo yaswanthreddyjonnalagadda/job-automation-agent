@@ -132,9 +132,6 @@ def test_perception_functions_are_read_only(page):
 
     # Perception checks
     assert perception.is_ant_dropdown(inp) is True
-    assert perception.is_field_active(inp) is True
-    attrs = perception.read_control_attributes(inp)
-    assert attrs["value"] == "Select State"
 
     # Confirm perception did not mutate or trigger events
     assert page.evaluate("() => window.mutated") is False
@@ -260,20 +257,6 @@ DRAFT_CARDS_HTML = """
   </script>
 </body></html>
 """
-
-def test_find_active_draft_cards_perception(page):
-    """Verifies perception layer identifies active draft cards without clicking."""
-    page.set_content(DRAFT_CARDS_HTML)
-
-    cards = perception.find_active_draft_cards(page)
-    assert len(cards) == 2
-    buttons = [b for card in cards for b in card["commit_buttons"]]
-    assert "Save Entry" in buttons
-    assert "Update" in buttons
-
-    # Ensure no buttons were clicked
-    assert page.evaluate("() => window.card1_committed") is False
-    assert page.evaluate("() => window.card2_committed") is False
 
 
 def test_commit_draft_cards_interaction(page):

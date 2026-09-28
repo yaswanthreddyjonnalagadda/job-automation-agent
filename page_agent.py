@@ -55,12 +55,11 @@ from interaction import (
     wipe_and_enforce_location_sweep,
 )
 from perception import (
-    find_active_draft_cards,
     hide_secrets,
     is_ant_dropdown,
     is_ant_single_select,
-    is_field_active,
-    read_control_attributes,
+    is_honeypot,
+    is_secret_box,
 )
 import provenance
 import safety
@@ -354,6 +353,10 @@ def parse_snapshot(snapshot: str) -> list[Control]:
                     clickable_generic or not name or Control.GENERIC_NAMES.match(name.strip())
                     or re.fullmatch(r"(?:yes|no|select one) required", name.strip(), re.IGNORECASE))
                 else "")
+            if control.role in ("textbox", "searchbox") and is_honeypot(control.name):
+                # A decoy for robots: not a question, never answered, never "still blank".
+                stack.append((indent, "", None))
+                continue
             controls.append(control)
             last_control_indent = indent
             if control.role == "button" and not clickable_generic and (not toggle_row or indent == toggle_indent):
@@ -1816,16 +1819,6 @@ class PageAgent:
                             str(exc).splitlines()[0][:100])
         return filled, open_questions
 
-    def obvious_next(self, controls: list[Control]) -> Optional[Control]:
-        """The one control that plainly moves the application on, or None.
-
-        Only used when nothing on the page is still unanswered; anything
-        ambiguous is left for the brain to decide.
-        """
-        forward = [c for c in controls if c.role in PRESS_ROLES and c.name
-                   and FORWARD_LABEL.match(" ".join(c.name.split()))
-                   and not NEVER_PRESS.search(c.name) and not c.disabled]
-        return forward[0] if len(forward) == 1 else None
 
     def facts(self, controls: list[Control]) -> dict:
         profile = asdict(self.profile) if hasattr(self.profile, "__dataclass_fields__") else dict(vars(self.profile))
@@ -2000,6 +1993,8 @@ class PageAgent:
                                 continue
                             if safety.is_attestation(ctrl.question) or safety.is_legal_status_question(ctrl.question):
                                 continue
+                            if is_secret_box(ctrl.question) or is_honeypot(ctrl.question):
+                                continue            # a password or a robots' decoy is never the AI's to answer
                             try:
                                 # A text box tells how long an answer it takes and what it
                                 # asks beside the label ("max 150 words", "0/500").

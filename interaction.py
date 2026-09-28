@@ -16,7 +16,7 @@ import re
 import time
 from typing import Any, Callable, Optional
 
-from playwright.sync_api import Locator, Page
+from playwright.sync_api import Page
 
 import safety
 from perception import is_ant_single_select

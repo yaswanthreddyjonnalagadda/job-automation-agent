@@ -1,0 +1,196 @@
+"""Workday's Create Account was pressed with the passwords filled and the email box empty (28 September,
+KBI Biopharma on jsrglobal.wd1.myworkdayjobs.com): the site answered with an error at the top.
+
+The account form found its email box only by attribute guesses (type=email, name/id containing "email"
+or "username"). Workday's is a plain type=text box with a generated id, known by its label "Email
+Address" and data-automation-id="email", so the form saw no email box, typed only the passwords and
+pressed Create Account. The sign-in form had a better lookup of its own; the two had drifted apart.
+
+The class: a field found by its HTML attributes instead of by what it is labelled -- and a form
+submitted without checking that each thing it needs is really in it. Also here: after creating the
+account the agent now signs in with the email and password (the owner's decision of 28 September),
+instead of stopping; a code the site then emails is read from the owner's mail by the existing code step.
+"""
+import pytest
+
+import login_guard
+import safety
+from browser_automation import JobApplicationAssistant
+from sites.base import SiteAdapter
+from sites.workday import WorkdayAdapter
+
+HOST = "tenant.wd1.myworkdayjobs.com"
+EMAIL = "owner@example.com"
+PASSWORD = "s3cret-ATS"
+
+# Every way a page says "this box is the email", with nothing else about the box giving it away.
+EMAIL_BOXES = {
+    "label-for": '<label for="i1">Email Address*</label><input type="text" id="i1" class="box">',
+    "wrapping-label": '<label>Email Address* <input type="text" class="box"></label>',
+    "aria-label": '<input type="text" aria-label="Email Address" class="box">',
+    "aria-labelledby": '<span id="l1">Email Address*</span><input type="text" aria-labelledby="l1" class="box">',
+    "placeholder": '<input type="text" placeholder="Email" class="box">',
+    "workday": '<label for="input-4">Email Address*</label>'
+               '<input type="text" id="input-4" data-automation-id="email" class="box">',
+    "type-email": '<input type="email" id="x9" class="box">',
+    "username": '<label for="u">Username</label><input type="text" id="u" class="box">',
+}
+# Workday's robot trap: a text box that must stay empty.
+HONEYPOT = ('<label for="w">Enter website. This input is for robots only, do not enter if you\'re human.</label>'
+            '<input type="text" id="w" name="website">')
+
+RECORD = """<script>
+  window.creates = 0; window.signins = 0; window.order = [];
+  const box = () => document.querySelector('.box');
+  document.addEventListener('input', e => window.order.push(e.target.type === 'password' ? 'password' : 'email'));
+  const seen = () => ({email: box() ? box().value : null,
+                       website: (document.getElementById('w') || {}).value,
+                       passwords: [...document.querySelectorAll('input[type=password]')].map(p => p.value)});
+  document.getElementById('create') && document.getElementById('create').addEventListener('click', () => {
+    window.creates++; window.at_create = seen(); document.body.innerHTML = AFTER_CREATE; });
+  document.getElementById('signin') && document.getElementById('signin').addEventListener('click', () => {
+    window.signins++; window.at_signin = seen(); AFTER_SIGN_IN(); });
+</script>"""
+
+
+def create_page(email_box, after_create="'<h1>Candidate Home</h1>'", extra=""):
+    return (f"<html><body><h1>Create Account</h1>{HONEYPOT}{email_box}"
+            '<label for="p1">Password*</label><input id="p1" type="password">'
+            '<label for="p2">Verify New Password*</label><input id="p2" type="password">'
+            f'{extra}<button id="create">Create Account</button>'
+            + RECORD.replace("AFTER_CREATE", after_create).replace("AFTER_SIGN_IN()", "0")
+            + "</body></html>")
+
+
+def sign_in_page(email_box, on_sign_in="document.body.innerHTML = '<h1>Candidate Home</h1>'"):
+    return (f"<html><body><h2>Sign In</h2><div id='alert' role='alert'></div>{email_box}"
+            '<label for="p">Password*</label><input id="p" type="password">'
+            '<button id="signin">Sign In</button>'
+            + RECORD.replace("AFTER_CREATE", "''").replace("AFTER_SIGN_IN()", on_sign_in)
+            + "</body></html>")
+
+
+@pytest.fixture(scope="module")
+def browser():
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        b = p.chromium.launch(headless=True)
+        yield b
+        b.close()
+
+
+@pytest.fixture
+def page(browser):
+    context = browser.new_context()
+    pg = context.new_page()
+    yield pg
+    context.close()
+
+
+def assistant_for(monkeypatch, adapter=None):
+    a = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    a.values = safety.AgentValues()
+    a._profile = None
+    a.adapter = lambda _page: adapter or SiteAdapter()
+    monkeypatch.setattr(JobApplicationAssistant, "_read_ats_password", staticmethod(lambda: PASSWORD))
+    return a
+
+
+def serve(page, body):
+    page.route(f"https://{HOST}/**", lambda route: route.fulfill(status=200, content_type="text/html", body=body))
+    page.goto(f"https://{HOST}/en-US/careers/apply")
+
+
+# --- creating the account ------------------------------------------------------------------------
+
+@pytest.mark.parametrize("shape", sorted(EMAIL_BOXES))
+def test_the_account_form_types_the_email_however_its_box_is_labelled(page, monkeypatch, shape):
+    serve(page, create_page(EMAIL_BOXES[shape]))
+    assert assistant_for(monkeypatch).fill_create_account_form(page, EMAIL) is True
+    sent = page.evaluate("window.at_create")
+    assert sent["email"] == EMAIL
+    assert sent["passwords"] == [PASSWORD, PASSWORD]
+    assert sent["website"] == ""                                       # the robot trap is left alone
+
+
+def test_the_email_goes_in_before_the_passwords(page, monkeypatch):
+    serve(page, create_page(EMAIL_BOXES["workday"]))
+    assistant_for(monkeypatch).fill_create_account_form(page, EMAIL)
+    order = page.evaluate("window.order")
+    assert order and order[0] == "email" and "password" in order
+
+
+def test_passwords_alone_are_never_submitted_when_there_is_no_email_box(page, monkeypatch):
+    serve(page, create_page(""))
+    assert assistant_for(monkeypatch).fill_create_account_form(page, EMAIL) is False
+    assert page.evaluate("window.creates") == 0
+
+
+def test_an_email_box_that_will_not_keep_the_address_stops_the_form(page, monkeypatch):
+    wiping = ('<label for="e">Email Address*</label><input type="text" id="e" class="box">'
+              "<script>document.getElementById('e').addEventListener('blur', e => { e.target.value = ''; });</script>")
+    serve(page, create_page(wiping))
+    assert assistant_for(monkeypatch).fill_create_account_form(page, EMAIL) is False
+    assert page.evaluate("window.creates") == 0
+
+
+def test_an_email_the_page_clears_while_it_redraws_is_typed_again_before_create(page, monkeypatch):
+    """Workday redraws as the rest of the form fills; the passwords were already re-checked, the email was not."""
+    clears = ("<script>document.getElementById('p2').addEventListener('blur', () => {"
+              " if (!window.cleared) { window.cleared = 1; document.querySelector('.box').value = ''; } });</script>")
+    serve(page, create_page(EMAIL_BOXES["workday"], extra=clears))
+    assert assistant_for(monkeypatch).fill_create_account_form(page, EMAIL) is True
+    assert page.evaluate("window.at_create")["email"] == EMAIL
+
+
+# --- signing in ----------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("shape", sorted(EMAIL_BOXES))
+def test_the_sign_in_types_the_email_however_its_box_is_labelled(page, monkeypatch, shape):
+    serve(page, sign_in_page(EMAIL_BOXES[shape]))
+    assert assistant_for(monkeypatch).attempt_auto_login(page, EMAIL, PASSWORD, create_if_missing=False) is True
+    sent = page.evaluate("window.at_signin")
+    assert sent["email"] == EMAIL and sent["passwords"] == [PASSWORD]
+
+
+def test_a_sign_in_whose_email_will_not_stay_is_not_submitted(page, monkeypatch):
+    wiping = ('<label for="e">Email Address*</label><input type="text" id="e" class="box">'
+              "<script>document.getElementById('e').addEventListener('input', e => { e.target.value = ''; });</script>")
+    serve(page, sign_in_page(wiping))
+    assert assistant_for(monkeypatch).attempt_auto_login(page, EMAIL, PASSWORD, create_if_missing=False) is False
+    assert page.evaluate("window.signins") == 0
+
+
+# --- after the account is created ------------------------------------------------------------------
+
+SIGN_IN_AFTER_CREATE = ("'<h2>Sign In</h2><div id=alert role=alert></div>"
+                        "<label for=se>Email Address*</label><input type=text id=se data-automation-id=email>"
+                        "<label for=sp>Password*</label><input type=password id=sp>"
+                        "<button id=signin2>Sign In</button>'")
+WIRE_SIGN_IN = ("<script>new MutationObserver(() => { const b = document.getElementById('signin2');"
+                " if (b && !b.wired) { b.wired = 1; b.addEventListener('click', () => { window.signins++;"
+                " window.at_signin = {email: document.getElementById('se').value,"
+                " password: document.getElementById('sp').value}; ON_SIGN_IN }); } })"
+                ".observe(document.documentElement, {childList: true, subtree: true});</script>")
+
+
+def test_after_creating_the_account_it_signs_in_with_the_email_and_password(page, monkeypatch):
+    body = create_page(EMAIL_BOXES["workday"], after_create=SIGN_IN_AFTER_CREATE,
+                       extra=WIRE_SIGN_IN.replace("ON_SIGN_IN", "document.body.innerHTML = '<h1>Candidate Home</h1>';"))
+    serve(page, body)
+    assert assistant_for(monkeypatch, WorkdayAdapter()).fill_create_account_form(page, EMAIL) is True
+    assert page.evaluate("window.signins") == 1
+    assert page.evaluate("window.at_signin") == {"email": EMAIL, "password": PASSWORD}
+
+
+def test_a_new_account_the_site_will_not_sign_in_yet_is_tried_once_and_left_to_the_owner(page, monkeypatch):
+    reject = ("document.getElementById('alert').textContent = 'You may have entered the wrong email address or "
+              "password or your account might be locked.';")
+    body = create_page(EMAIL_BOXES["workday"], after_create=SIGN_IN_AFTER_CREATE,
+                       extra=WIRE_SIGN_IN.replace("ON_SIGN_IN", reject))
+    serve(page, body)
+    a = assistant_for(monkeypatch, WorkdayAdapter())
+    assert a.fill_create_account_form(page, EMAIL) is False
+    assert page.evaluate("window.signins") == 1
+    why = login_guard.may_sign_in(HOST, EMAIL)
+    assert why and "verify" in why and "Continue" in why

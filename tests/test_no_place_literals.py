@@ -16,7 +16,7 @@ What counts as a literal: a string constant that *is* a place (tuples of
 "wrong" values, defaults, comparison targets), and a quoted place inside a
 larger string (JavaScript such as val.includes('...')). Docstrings and
 comments may name places as examples; tests, the reference data and its
-loader, and the agent_v2 prototype are not logic modules.
+loader are not logic modules.
 """
 
 from __future__ import annotations
