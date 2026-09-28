@@ -263,6 +263,11 @@ CONCEPTS: dict[str, dict[str, Any]] = {
             r"\b(?:willing\s+to\s+relocate|open\s+to\s+relocation|relocate\s+for\s+this\s+role|relocation)\b",
         ],
     },
+    "ONSITE_HYBRID": {
+        "patterns": [
+            r"\b(?:in[-\s]*person|in[-\s]*office|working\s+sessions\s+in\s+office|onsite|on-site|hybrid|3\s+days\s*(?:\/|\s+per\s+)?week|minimum\s+of\s+3\s+days)\b",
+        ],
+    },
     "TRAVEL": {
         "patterns": [
             r"\b(?:willing\s+to\s+travel|travel\s+requirements?|travel\s+(?:for|up\s+to)|travel\s+percentage)\b",
@@ -533,6 +538,13 @@ def best_option_match(desired: str, options: list[str]) -> Optional[str]:
             if re.search(r"\basian\b", low) and not re.search(r"\bcaucasian\b", low):
                 return opt
 
+    # Relocation matching
+    if desired_lower in ("yes", "true", "willing"):
+        for opt in options:
+            low = opt.strip().lower()
+            if ("willing to relocate" in low or "open to relocate" in low) and "not" not in low:
+                return opt
+
     # Yes / No matching
     if desired_lower in ("yes", "true", "1"):
         for opt in options:
@@ -678,6 +690,9 @@ def resolve_profile_value(
     elif concept == "RELOCATION":
         val = "Yes" if _is_yes(getattr(profile, "open_to_relocation", True), default=True) else "No"
         src = "profile.open_to_relocation"
+    elif concept == "ONSITE_HYBRID":
+        val = str(getattr(profile, "willing_to_work_onsite_three_days", "") or "Yes").strip()
+        src = "profile.willing_to_work_onsite_three_days"
     elif concept == "TRAVEL":
         val = str(getattr(profile, "willing_to_travel", "") or "").strip()
         src = "profile.willing_to_travel"

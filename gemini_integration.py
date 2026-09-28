@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # Every public method of ClaudeClient belongs to exactly one side (tests/test_gemini_answers.py checks it), so a
 # model call added later cannot end up at the wrong company by default.
-ANSWERS = frozenset({"plan_page", "read_page", "choose_option", "answer_screening_questions"})
+ANSWERS = frozenset({"plan_page", "read_page", "choose_option", "answer_screening_questions", "answer_single_question"})
 DOCUMENTS = frozenset({"tailor_resume", "generate_cover_letter", "structure_resume", "analyze_job"})
 
 MIN_OUTPUT_TOKENS = 4_096       # Gemini counts its thinking in the limit: a 400-token answer would be cut off
@@ -206,6 +206,103 @@ def _refuse(name: str):
 
 for _name in DOCUMENTS:                 # the resume and the cover letter never go to Google from here
     setattr(GeminiClient, _name, _refuse(_name))
+
+
+class _MessagesText(_Messages):
+    """Like _Messages but without the JSON responseMimeType constraint.
+
+    ClaudeClient's document methods (tailor_resume, generate_cover_letter, …)
+    return prose, not structured JSON.  Forcing Gemini into JSON mode breaks
+    them, so GeminiDocumentClient uses this transport instead.
+    """
+
+    def create(self, *, model: str, max_tokens: int, system: str, messages: list[dict],
+               timeout: Optional[float] = None, **_ignored: Any) -> SimpleNamespace:
+        key = str(getattr(self._config, "gemini_api_key", "") or "")
+        base = str(getattr(self._config, "gemini_base_url", "") or DEFAULT_GEMINI_BASE_URL).rstrip("/")
+        payload = {
+            "systemInstruction": {"parts": [{"text": system}]},
+            "contents": [{"role": "model" if m.get("role") == "assistant" else "user",
+                          "parts": _parts(m["content"])} for m in messages],
+            "generationConfig": {"temperature": 0, "maxOutputTokens": max(int(max_tokens), MIN_OUTPUT_TOKENS)},
+        }
+        try:
+            reply = requests.post(f"{base}/models/{model}:generateContent", json=payload,
+                                  headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+                                  timeout=timeout)
+        except requests.exceptions.Timeout:
+            raise GeminiTimeout("Gemini did not answer in time") from None
+        except requests.exceptions.RequestException as exc:
+            raise GeminiConnectionError(f"could not reach Gemini ({type(exc).__name__})") from None
+
+        if reply.status_code == 429:
+            time.sleep(_retry_delay(reply))
+            raise GeminiRateLimited("quota or per-minute limit reached (wait, or check the key's quota "
+                                    "at aistudio.google.com)", 429)
+        if reply.status_code >= 500:
+            raise GeminiConnectionError(f"Gemini is busy or down ({reply.status_code})")
+        if reply.status_code >= 400:
+            message = _scrub(_google_message(reply), key)
+            if reply.status_code == 404:
+                message += " -- set GEMINI_MODEL in .env to a model this key can use"
+            raise GeminiStatusError(message, reply.status_code)
+        try:
+            data = reply.json()
+        except ValueError:
+            raise GeminiConnectionError("Gemini sent an answer that could not be read") from None
+        return _as_reply(data)
+
+
+class GeminiDocumentClient(GeminiClient):
+    """Gemini client allowed to write documents (resume, cover letter).
+
+    Used only as a *fallback* when Claude is unavailable.  It uses plain-text
+    mode (no JSON constraint) because the document prompts return prose, not
+    structured data.
+
+    GeminiClient has the DOCUMENTS methods replaced with _refuse stubs via
+    setattr, so subclasses inherit them.  We restore the original ClaudeClient
+    implementations here so tailor_resume / generate_cover_letter actually run.
+
+    Unlike the base GeminiClient (which retries page-planning calls with long
+    waits), this client fails fast on connection errors so the provider loop in
+    prepare_materials can immediately try the next provider (OpenAI, local resume)
+    without making the user wait 30-90 seconds per attempt.
+    """
+
+    def __init__(self, config: Any):
+        self._config = config
+        self._client = SimpleNamespace(messages=_MessagesText(config))
+
+    def _call(self, *, system: str, user_message: str, max_tokens: int = 2000) -> str:
+        """Single-attempt call -- fails fast so the provider fallback loop moves on."""
+        import time as _time
+        from claude_integration import ClaudeIntegrationError
+        try:
+            response = self._client.messages.create(
+                model=self._model,
+                max_tokens=max_tokens,
+                system=system,
+                messages=[{"role": "user", "content": user_message}],
+                timeout=self._config.claude_request_timeout,
+            )
+            return "".join(block.text for block in response.content if block.type == "text")
+        except (self.RATE_LIMITED, self.CONNECTION_ERROR, self.TIMEOUT_ERROR) as exc:
+            raise ClaudeIntegrationError(
+                f"Gemini unavailable for document tailoring ({exc}) -- skipping to next provider"
+            ) from exc
+        except self.STATUS_ERROR as exc:
+            raise ClaudeIntegrationError(
+                f"Gemini document error (status={exc.status_code}): {exc.message}"
+            ) from exc
+
+
+# Restore the original ClaudeClient implementations for every DOCUMENTS method:
+# setattr on the parent class makes those _refuse stubs inherited, so we pin
+# the real implementations directly onto this subclass.
+from claude_integration import ClaudeClient as _ClaudeClient
+for _name in DOCUMENTS:
+    setattr(GeminiDocumentClient, _name, getattr(_ClaudeClient, _name))
 
 
 class GeminiBrain:

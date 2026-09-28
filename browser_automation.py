@@ -34,6 +34,7 @@ import emailed_codes
 import login_guard
 import provenance
 import safety
+import visible_desktop
 from config import AppConfig, UserProfile, get_user_profile, resume_to_attach
 from interaction import (
     CARD_COMMIT_TEXT_PATTERN,
@@ -284,6 +285,8 @@ class JobApplicationAssistant:
             return adapter_for("")
 
     def __enter__(self) -> "JobApplicationAssistant":
+        # A browser on a desktop the owner does not see is never started (visible_desktop.py).
+        visible_desktop.refuse_if_invisible()
         self._playwright = sync_playwright().start()
         profile_dir = Path(self._config.browser_profile_dir)
         # A run whose process is killed leaves its browser running, and that
@@ -311,27 +314,16 @@ class JobApplicationAssistant:
         return self
 
     def _choose_channel(self) -> str:
-        """Force the configured browser channel (always use real Chrome, never fallback).
-
-        IMPORTANT: This means real Chrome will be locked to the agent while 
-        applications run. The user explicitly chose this behavior for better 
-        rendering fidelity (real Chrome matches the browser they test with).
+        """Selects the browser channel.
         
-        Previous versions would fall back to bundled chromium if real Chrome
-        was already running, to allow simultaneous browsing. That fallback
-        is now disabled per user request.
+        Using bundled Chromium (channel="" or "chromium") ensures an isolated, visible
+        window opens on your desktop without conflicting with any currently
+        open Google Chrome sessions.
         """
-        # Always use the configured browser channel (e.g., "chrome")
-        # Do NOT fall back to chromium even if Chrome is already running.
-        # User wants real Chrome only for this use case.
-        channel = (getattr(self._config, "browser_channel", "") or "").strip()
-        
-        # If no channel is configured, use real Chrome by default
-        if not channel or channel == "chromium":
-            return "chrome"
-        
-        logger.info("Using %s with the profile at %s (Chrome already running is OK)",
-                   channel, self._config.browser_profile_dir)
+        channel = (getattr(self._config, "browser_channel", "") or "").strip().lower()
+        if channel in ("chromium", "bundled", ""):
+            logger.info("Using bundled Chromium with profile at %s", self._config.browser_profile_dir)
+            return ""
         return channel
 
     @staticmethod
@@ -504,9 +496,16 @@ class JobApplicationAssistant:
 
     def open_job_page(self, url: str) -> Page:
         assert self._context is not None, "Use within a `with` block"
-        page = self._context.new_page()
+        if self._context.pages and self._context.pages[0].url in ("about:blank", ""):
+            page = self._context.pages[0]
+        else:
+            page = self._context.new_page()
         self._last_page = page
         self._attach_console_listener(page)
+        try:
+            page.bring_to_front()
+        except Exception:
+            pass
         self.with_retries(f"opening {url[:60]}", lambda: page.goto(url, wait_until="domcontentloaded"))
         # Workday/Greenhouse/etc. render via JS after domcontentloaded fires,
         # so the page is typically still blank at this point. Give it a
@@ -1445,6 +1444,10 @@ class JobApplicationAssistant:
                         expanded_candidates.append(syn)
             elif c_low == "asian":
                 for syn in ("asian (united states of america)", "asian (not hispanic or latino)"):
+                    if syn not in expanded_candidates:
+                        expanded_candidates.append(syn)
+            elif c_low in ("yes", "willing", "open to relocation", "relocate", "open_to_relocation"):
+                for syn in ("no, but willing to relocate", "willing to relocate", "yes, willing to relocate"):
                     if syn not in expanded_candidates:
                         expanded_candidates.append(syn)
 

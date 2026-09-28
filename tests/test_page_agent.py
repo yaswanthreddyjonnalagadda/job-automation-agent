@@ -437,9 +437,18 @@ def test_a_legal_question_is_answered_only_from_a_profile_field_that_states_it(p
                        name="Have you ever") == ""
 
 
+def asks_the_planner():
+    """A profile that leaves Country open, so the page goes to the planner.
+
+    A page the profile answers whole is planned without the AI (PAGE_FULLY_KNOWN); the tests
+    of what the agent refuses from a plan need a page the plan is asked about."""
+    import dataclasses
+    return dataclasses.replace(config.get_user_profile(), country="")
+
+
 def test_finish_later_is_never_pressed(page, resume_file):
     serve(page)
-    outcome = make_agent(Planner(next_label="Finish Later"), resume_file).run(page)
+    outcome = make_agent(Planner(next_label="Finish Later"), resume_file, profile=asks_the_planner()).run(page)
     assert outcome.kind == "owner_needed" and "never presses" in outcome.summary
     assert page.url.endswith("/apply/1")
 
@@ -536,7 +545,7 @@ def test_an_answer_that_cannot_be_given_is_reported_not_dropped(page, resume_fil
             if answer["question"] == "Country":
                 answer["value"] = "Atlantis"
         return plan
-    outcome = make_agent(SimpleNamespace(plan_page=plan_page), resume_file).run(page)
+    outcome = make_agent(SimpleNamespace(plan_page=plan_page), resume_file, profile=asks_the_planner()).run(page)
     assert outcome.kind == "owner_needed"
     assert any("could not set" in r and "Atlantis" in r for r in outcome.reasons)
     assert page.url.endswith("/apply/1")
@@ -555,8 +564,13 @@ class Tracker:
 
 def test_a_resume_attached_in_an_earlier_run_counts_at_the_last_step(page, resume_file):
     """Schwab's resume went on at step 1; the run that reached the last step
-    started later and was held for "the tailored resume is not attached"."""
-    serve(page)
+    started later and was held for "the tailored resume is not attached".
+
+    The last step here has no upload box (the resume went on at step 1), so the
+    agent cannot attach it itself and only the earlier run's record can count."""
+    step2 = STEP_2.replace('<label for="resume">Resume *</label><input type="file" id="resume">', "") \
+                  .replace("localStorage.resume = resume.files.length ? resume.files[0].name : '';", "")
+    serve(page, step2=step2)
     page.goto("https://jobs.example.com/apply/2")
     planner = Planner()
     original = planner.plan_page

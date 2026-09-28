@@ -55,7 +55,8 @@ class ClaudeClient:
 
     def _call(self, *, system: str, user_message: str, max_tokens: int = 2000) -> str:
         last_error: Exception | None = None
-        for attempt in range(1, self._config.claude_max_retries + 1):
+        max_retries = getattr(self._config, "claude_max_retries", 3)
+        for attempt in range(1, max_retries + 1):
             try:
                 response = self._client.messages.create(
                     model=self._model,
@@ -79,9 +80,16 @@ class ClaudeClient:
                     break
                 time.sleep(2 ** attempt)
             except self.CONNECTION_ERROR as exc:
-                logger.warning("Connection error talking to %s API: %s", self.PROVIDER, exc)
+                # Gemini 503 "busy or down" is transient and typically clears in
+                # 15-30 s; use a longer wait than the exponential backoff for
+                # Claude so we don't give up before Gemini recovers.
+                wait = min(30 * attempt, 90)
+                logger.warning(
+                    "Connection error talking to %s API (attempt %d/%d, retrying in %ds): %s",
+                    self.PROVIDER, attempt, max_retries, wait, exc,
+                )
                 last_error = exc
-                time.sleep(2 ** attempt)
+                time.sleep(wait)
 
         raise ClaudeIntegrationError(f"{self.PROVIDER} API call failed after retries: {last_error}")
 
@@ -348,10 +356,119 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
             "reason": (result.get("reason") or "").strip(),
         }
 
+    def answer_single_question(
+        self,
+        question: str,
+        options: Optional[list[str]] = None,
+        resume_text: str = "",
+        profile: Optional[UserProfile] = None,
+        job_title: str = "",
+        company: str = "",
+        job_text: str = "",
+        box: Optional[dict] = None,
+    ) -> str:
+        """Answers ONE specific unanswered question on behalf of the candidate.
+        Extremely fast, token-efficient (< 300 tokens), and strictly grounded in
+        the candidate's resume and profile facts.
+
+        An open question ("Why are you interested in joining us?") is written by
+        open_answers in plain English, inside the form's word or character limit;
+        `box` is what open_answers.read_box saw on the page.
+        """
+        if not question:
+            return ""
+        import safety
+        # is_attestation covers signatures too. (This called safety.is_signature_prompt, which does not
+        # exist: every call raised AttributeError, the caller logged it at debug level, and no question
+        # was ever answered this way.)
+        if safety.is_attestation(question) or safety.is_legal_status_question(question):
+            return ""
+        box = box or {}
+        if not options:
+            import open_answers
+            if open_answers.is_open(question, box.get("multiline", False)):
+                return self._open_answer(question, resume_text, profile, job_title, company, job_text, box)
+
+        system = (
+            "You answer application questions for a real candidate. "
+            "Answer ONLY using truthful facts from their profile and resume. "
+            "If options are provided, the answer MUST be an exact string from the options list. "
+            "If it is a text/essay question (e.g. 'Why are you interested in this role?'), provide a "
+            "concise, professional 1-3 sentence response grounded in their background. "
+            "Respond with ONLY JSON: {\"answer\": \"<your concise answer>\"}"
+        )
+
+        facts_lines = []
+        if profile:
+            facts_lines.append(f"Candidate: {profile.full_name}")
+            if profile.target_titles:
+                facts_lines.append(f"Target Titles: {', '.join(profile.target_titles)}")
+            if profile.current_position_title and profile.current_employer:
+                facts_lines.append(f"Current Role: {profile.current_position_title} at {profile.current_employer}")
+            if profile.years_experience:
+                facts_lines.append(f"Experience: {profile.years_experience} years")
+            if profile.current_location:
+                facts_lines.append(f"Location: {profile.current_location}")
+            if profile.work_authorization:
+                facts_lines.append(f"Work Auth: {profile.work_authorization}")
+
+        snippet = (resume_text or "").strip()[:2500]
+        user_message = (
+            f"FACTS:\n{chr(10).join(facts_lines)}\n\n"
+            f"RESUME EXCERPT:\n{snippet}\n\n"
+            f"TARGET JOB: {job_title or 'Engineer'} at {company or 'Company'}\n\n"
+            f"QUESTION: {question}\n"
+        )
+        if options:
+            user_message += f"\nAVAILABLE OPTIONS (choose exactly one):\n{json.dumps(options, indent=2)}"
+
+        try:
+            raw = self._call(system=system, user_message=user_message, max_tokens=600)
+            data = self._extract_json(raw)
+            ans = str(data.get("answer") or "").strip()
+            if options and ans:
+                for opt in options:
+                    if opt.strip().lower() == ans.lower():
+                        return opt
+                return ""
+            return ans
+        except Exception as exc:
+            logger.info("Could not answer single question %r: %s", question[:50], exc)
+            return ""
+
+    def _open_answer(self, question: str, resume_text: str, profile: Optional[UserProfile],
+                     job_title: str, company: str, job_text: str, box: dict) -> str:
+        """An open question, written in the owner's plain words by open_answers."""
+        import open_answers
+        facts = []
+        if profile:
+            facts.append(f"Name: {profile.full_name}")
+            if profile.current_position_title and profile.current_employer:
+                facts.append(f"Current role: {profile.current_position_title} at {profile.current_employer}")
+            if profile.years_experience:
+                facts.append(f"Years of experience: {profile.years_experience}")
+            if profile.target_titles:
+                facts.append(f"Roles wanted: {', '.join(profile.target_titles)}")
+            for level, subject, school, year in profile.education[:2]:
+                facts.append(f"Education: {level} in {subject}, {school} {year}".strip())
+        facts.append(f"Applying for: {job_title or 'this role'} at {company or 'this company'}")
+        limits = open_answers.limits_from(question, box.get("hint", ""), maxlength=box.get("maxlength"),
+                                          minlength=box.get("minlength"))
+        try:
+            answer, left = open_answers.write(
+                question, ask=lambda system, user, tokens: self._call(system=system, user_message=user,
+                                                                        max_tokens=tokens),
+                facts="\n".join(facts), resume_text=resume_text, job_text=job_text,
+                hint=box.get("hint", ""), limits=limits)
+        except ClaudeIntegrationError as exc:
+            logger.info("Could not write an answer to %r: %s", question[:50], exc)
+            return ""
+        return answer
+
     # ------------------------------------------------------------------
     # Reading an application page and planning its answers
     # ------------------------------------------------------------------
-    PLAN_PAGE_SYSTEM = """You fill in job applications for one applicant. You are given the page as an
+    PLAN_PAGE_SYSTEM ="""You fill in job applications for one applicant. You are given the page as an
 accessibility snapshot (every control with a [ref=...], its current value, its choices, [checked] and
 [selected] states) and FACTS about the applicant. Decide how to answer this page and how to move on.
 

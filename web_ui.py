@@ -27,6 +27,7 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, redirect, render_template_string, request, send_file, url_for
 
+import visible_desktop
 from config import get_app_config
 from db import get_tracker
 
@@ -257,10 +258,16 @@ def _save_env_values(values: dict[str, str]) -> None:
 def settings():
     env_path = BASE_DIR / ".env"
     if request.method == "POST":
-        api_key = (request.form.get("anthropic_api_key") or "").strip()
         values = {"ATS_EMAIL": (request.form.get("ats_email") or "").strip()}
-        if api_key:
-            values["ANTHROPIC_API_KEY"] = api_key
+        # API keys: only write when the field is non-empty (blank = keep existing)
+        for field_name, env_key in [
+            ("anthropic_api_key", "ANTHROPIC_API_KEY"),
+            ("gemini_api_key",    "GEMINI_API_KEY"),
+            ("openai_api_key",    "OPENAI_API_KEY"),
+        ]:
+            val = (request.form.get(field_name) or "").strip()
+            if val:
+                values[env_key] = val
         password = request.form.get("ats_password") or ""
         if password:
             values["ATS_PASSWORD"] = password
@@ -269,7 +276,7 @@ def settings():
         except (OSError, ValueError) as exc:
             return render_template_string(SETTINGS_HTML, error=f"Could not save settings: {exc}",
                                           saved=False, ats_email=values["ATS_EMAIL"],
-                                          has_api_key=bool(api_key),
+                                          has_claude=False, has_gemini=False, has_openai=False,
                                           has_password=bool(password))
         return redirect(url_for("settings", saved="1"))
     from dotenv import dotenv_values
@@ -278,7 +285,9 @@ def settings():
         SETTINGS_HTML,
         error=request.args.get("error"), saved=request.args.get("saved") == "1",
         ats_email=current.get("ATS_EMAIL") or "",
-        has_api_key=bool(current.get("ANTHROPIC_API_KEY")),
+        has_claude=bool(current.get("ANTHROPIC_API_KEY")),
+        has_gemini=bool(current.get("GEMINI_API_KEY")),
+        has_openai=bool(current.get("OPENAI_API_KEY")),
         has_password=bool(current.get("ATS_PASSWORD")),
     )
 
@@ -332,6 +341,25 @@ def stop_application(app_id: int):
     if not ended:
         return redirect(url_for("index", error="Nothing was running for that application."))
     return redirect(url_for("index"))
+
+
+@app.post("/application/<int:app_id>/status")
+def change_application_status(app_id: int):
+    """Updates an application's status directly from the UI (e.g. submitted, needs_user_review, etc.)."""
+    new_status = (request.form.get("status") or "").strip()
+    valid_statuses = {"prepared", "form_filled", "ready_to_submit", "needs_user_review", "submitted", "skipped"}
+    if new_status not in valid_statuses:
+        return redirect(url_for("application", app_id=app_id, error="Invalid status."))
+    tracker = get_tracker()
+    record = next((a for a in tracker.list_all() if a.id == app_id), None)
+    if not record:
+        return redirect(url_for("index", error="That application is gone."))
+    note = (request.form.get("notes") or "").strip() or f"Status updated to {new_status.replace('_', ' ')} via UI"
+    tracker.update_status(record.dedup_key, new_status, notes=note)
+    if hasattr(tracker, "record_event"):
+        tracker.record_event(record.dedup_key, "status_change", f"Status set to {new_status} by user in web UI")
+    next_url = request.form.get("next") or url_for("application", app_id=app_id)
+    return redirect(next_url)
 
 
 @app.post("/delete/<int:app_id>")
@@ -468,15 +496,24 @@ def _current_runs() -> dict:
     has one.
     """
     tracker = get_tracker()
-    by_url = {}
-    for record in tracker.list_all():
-        if record.url:
-            by_url[record.url] = record.status
+    app_records = tracker.list_all()
+    by_url = {r.url: r for r in app_records if r.url}
     with _RUNS_LOCK:
         for url, run in _RUNS.items():
+            rec = by_url.get(url)
+            if rec:
+                run["last_page_url"] = getattr(rec, "last_page_url", None) or rec.url
+                run["app_id"] = rec.id
+                run["company"] = rec.company
+                run["title"] = rec.title
+                events = tracker.events(rec.dedup_key) if hasattr(tracker, "events") else []
+                for ev in events:
+                    if ev.get("screenshot_path") and Path(ev["screenshot_path"]).is_file():
+                        run["screenshot"] = ev["screenshot_path"]
+                        break
             if run["state"] != "running" or _process_alive(run.get("pid")):
                 continue
-            status = by_url.get(url, "")
+            status = rec.status if rec else ""
             run["state"] = f"finished -- {status.replace('_', ' ')}" if status else "ended"
             run["proc"], run["pid"] = None, None
             _save_runs()
@@ -502,10 +539,16 @@ def application(app_id: int):
         ).fetchall()
     events = tracker.events(record.dedup_key) if hasattr(tracker, "events") else []
     decision, validation = latest_decision(events), latest_validation(record)
+    latest_screenshot = ""
+    for ev in events:
+        if ev.get("screenshot_path") and Path(ev["screenshot_path"]).is_file():
+            latest_screenshot = ev["screenshot_path"]
+            break
     return render_template_string(
         DETAIL_HTML, a=record, docs=docs, answers=answers, events=events,
         decision=decision, validation=validation, progress=progress_of(record, validation),
         auto_submit_on=get_app_config().auto_submit_verified_only,
+        latest_screenshot=latest_screenshot,
     )
 
 
@@ -683,34 +726,77 @@ SETTINGS_HTML = """
 <!doctype html><meta charset="utf-8"><title>Settings</title>
 <style>""" + BASE_CSS + """
 .settings { max-width:680px; }
-.settings label { display:block; margin:16px 0 6px; font-weight:600; }
-.settings input { width:100%; }
-.hint { color:var(--muted); font-size:13px; }
+.settings label { display:block; margin:16px 0 4px; font-weight:600; }
+.settings input[type=password], .settings input[type=email] { width:100%; }
+.hint { color:var(--muted); font-size:13px; margin:3px 0 0; }
 .ok { background:#e3f5ea; color:#0f7b46; padding:11px 13px; border-radius:9px; margin-bottom:14px; }
+.provider-row { display:flex; align-items:center; gap:10px; margin:16px 0 4px; }
+.provider-row label { margin:0; }
+.badge { font-size:11px; font-weight:700; padding:2px 8px; border-radius:20px; letter-spacing:.4px; }
+.badge.active { background:#d1fae5; color:#065f46; }
+.badge.inactive { background:#f3f4f6; color:#9ca3af; }
+.section-title { font-size:13px; font-weight:700; text-transform:uppercase;
+  letter-spacing:.8px; color:var(--muted); margin:22px 0 2px; }
 </style>
 <div class="wrap settings">
   <p><a href="/">&larr; Back to applications</a></p>
   <h1>Settings</h1>
   <p class="sub">Credentials are stored locally in <code>.env</code>. Existing secrets are never shown here.</p>
-  {% if saved %}<div class="ok">Settings saved. Restart the dashboard before starting another application.</div>{% endif %}
+  {% if saved %}<div class="ok">✅ Settings saved. Restart the dashboard before starting another application.</div>{% endif %}
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
   <div class="card">
     <form method="post" action="/settings">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label for="anthropic_api_key">Anthropic API key</label>
+
+      <p class="section-title">Resume Tailoring &mdash; AI Providers</p>
+      <p class="hint" style="margin:0 0 6px">The agent tries providers in order: Claude &rarr; Gemini &rarr; OpenAI.
+        If none are set, your local resume is attached as-is.</p>
+
+      <div class="provider-row">
+        <label for="anthropic_api_key">Claude (Anthropic)</label>
+        <span class="badge {% if has_claude %}active{% else %}inactive{% endif %}">
+          {% if has_claude %}Active{% else %}Not set{% endif %}
+        </span>
+      </div>
       <input id="anthropic_api_key" type="password" name="anthropic_api_key"
-             placeholder="{% if has_api_key %}Saved; leave blank to keep it{% else %}sk-ant-...{% endif %}"
+             placeholder="{% if has_claude %}Saved &mdash; leave blank to keep{% else %}sk-ant-...{% endif %}"
              autocomplete="new-password">
-      <p class="hint">Used for resume tailoring and Claude features.</p>
+      <p class="hint">Get a key at <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a></p>
+
+      <div class="provider-row">
+        <label for="gemini_api_key">Gemini (Google)</label>
+        <span class="badge {% if has_gemini %}active{% else %}inactive{% endif %}">
+          {% if has_gemini %}Active{% else %}Not set{% endif %}
+        </span>
+      </div>
+      <input id="gemini_api_key" type="password" name="gemini_api_key"
+             placeholder="{% if has_gemini %}Saved &mdash; leave blank to keep{% else %}AQ. ... or AIza ...{% endif %}"
+             autocomplete="new-password">
+      <p class="hint">Get a key at <a href="https://aistudio.google.com" target="_blank">aistudio.google.com</a> (free tier available)</p>
+
+      <div class="provider-row">
+        <label for="openai_api_key">OpenAI (GPT-4o)</label>
+        <span class="badge {% if has_openai %}active{% else %}inactive{% endif %}">
+          {% if has_openai %}Active{% else %}Not set{% endif %}
+        </span>
+      </div>
+      <input id="openai_api_key" type="password" name="openai_api_key"
+             placeholder="{% if has_openai %}Saved &mdash; leave blank to keep{% else %}sk-...{% endif %}"
+             autocomplete="new-password">
+      <p class="hint">Get a key at <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com</a></p>
+
+      <p class="section-title" style="margin-top:26px">Account &amp; ATS Login</p>
+
       <label for="ats_email">Employer ATS email</label>
       <input id="ats_email" type="email" name="ats_email" value="{{ ats_email }}"
              placeholder="you@example.com" autocomplete="username">
       <label for="ats_password">Employer ATS password</label>
       <input id="ats_password" type="password" name="ats_password"
-             placeholder="{% if has_password %}Saved; leave blank to keep it{% else %}Enter password{% endif %}"
+             placeholder="{% if has_password %}Saved &mdash; leave blank to keep{% else %}Enter password{% endif %}"
              autocomplete="new-password">
       <p class="hint">For Workday, Greenhouse, Lever, or iCIMS. Do not use a LinkedIn, Indeed, Dice, or Google password.</p>
-      <button type="submit">Save credentials</button>
+
+      <button type="submit" style="margin-top:18px">Save settings</button>
     </form>
   </div>
 </div>
@@ -745,9 +831,12 @@ INDEX_HTML = """
          browser window and press <strong>Continue</strong>; the agent carries on from there.</p>
       <ul style="margin:8px 0 0 18px; padding:0">
         {% for a in waiting[:5] %}
-          <li><a href="/application/{{ a.id }}">{{ a.title }}</a> at {{ a.company }} &mdash;
-              <span class="pill {{ a.status }}">{{ a.status.replace('_', ' ') }}</span>
-              <span class="muted">{{ (a.notes or '')[:140] }}</span></li>
+          <li style="margin-bottom:8px">
+            <a href="/application/{{ a.id }}"><strong>{{ a.title }}</strong></a> at {{ a.company }} &mdash;
+            <span class="pill {{ a.status }}">{{ a.status.replace('_', ' ') }}</span>
+            <a href="{{ a.last_page_url or a.url }}" target="_blank" style="margin-left:8px"><button class="ghost" type="button" style="color:#0b5394; font-weight:600; padding:2px 8px; font-size:12px">Open Form & Submit &rarr;</button></a>
+            <div class="muted" style="margin-top:2px">{{ (a.notes or '')[:140] }}</div>
+          </li>
         {% endfor %}
         {% if waiting|length > 5 %}
           <li class="muted">and {{ waiting|length - 5 }} more below</li>
@@ -781,14 +870,25 @@ INDEX_HTML = """
     <h2>Current run</h2>
     <div class="card">
       <table>
-        <tr><th>Job</th><th>State</th><th class="label">Log</th><th class="actions">Controls</th></tr>
+        <tr><th>Job</th><th>State</th><th class="label">Log & Screen</th><th class="actions">Controls</th></tr>
         {% for url, r in runs.items() %}
         <tr>
-          <td class="run-url">{{ url[:110] }}{% if url|length > 110 %}&hellip;{% endif %}</td>
+          <td class="run-url">
+            {{ url[:90] }}{% if url|length > 90 %}&hellip;{% endif %}
+            {% if r.last_page_url and r.last_page_url != url %}
+              <div class="muted" style="font-size:11px">At: {{ r.last_page_url[:75] }}</div>
+            {% endif %}
+          </td>
           <td>{% if r.state == 'running' %}<span class="live">running</span>{% else %}{{ r.state }}{% endif %}
               {% if r.started %}<span class="muted"> &middot; started {{ r.started|local }}</span>{% endif %}</td>
-          <td class="logcell">{% if r.log %}<a href="/log?path={{ r.log }}" target="_blank">view log</a>{% else %}<span class="muted">&mdash;</span>{% endif %}</td>
+          <td class="logcell">
+            {% if r.log %}<a href="/log?path={{ r.log }}" target="_blank">view log</a>{% else %}<span class="muted">&mdash;</span>{% endif %}
+            {% if r.screenshot %}
+              &middot; <a href="/evidence?path={{ r.screenshot }}" target="_blank" style="color:#0b5394; font-weight:600">view screen</a>
+            {% endif %}
+          </td>
           <td class="actions"><div class="row-actions">
+            {% if r.app_id %}<a href="/application/{{ r.app_id }}"><button class="ghost" type="button">Details</button></a>{% endif %}
             {% if r.state == 'running' %}
             <form method="post" action="/reload-agent">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -846,6 +946,12 @@ INDEX_HTML = """
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="ghost" title="{{ 'Reopen the part-filled form at ' + a.last_page_url[:80] if a.last_page_url else 'Start this application again from the posting' }} -- the resume and answers already stored are reused">Resume</button>
             </form>
+            <form method="post" action="/application/{{ a.id }}/status">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="status" value="submitted">
+              <input type="hidden" name="next" value="/">
+              <button class="ghost" style="color:#0f7b46" title="Mark this application as submitted">Mark Submitted</button>
+            </form>
             <form method="post" action="/stop-application/{{ a.id }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="ghost" title="Stop the run working on this application and close its browser. Nothing is submitted and the application is kept.">Stop</button>
@@ -883,8 +989,37 @@ DETAIL_HTML = """
 <div class="wrap">
   <p><a href="/">&larr; All applications</a></p>
   <h1>{{ a.title }}</h1>
-  <p class="sub">{{ a.company }}{% if a.location %} — {{ a.location }}{% endif %}
-     &nbsp;<span class="pill {{ a.status }}">{{ a.status.replace('_',' ') }}</span></p>
+  <p class="sub">{{ a.company }}{% if a.location %} — {{ a.location }}{% endif %}</p>
+
+  {% if latest_screenshot %}
+  <h2>What the agent sees</h2>
+  <div class="card" style="padding:16px;">
+    <p class="muted" style="margin-bottom:10px">Latest page screenshot captured by the agent:</p>
+    <a href="/evidence?path={{ latest_screenshot }}" target="_blank" title="Click to view full image in a new tab">
+      <img src="/evidence?path={{ latest_screenshot }}" style="max-width:100%; height:auto; border:1px solid var(--line); border-radius:6px; box-shadow:0 2px 8px rgba(0,0,0,0.06);" alt="Latest Page Screenshot">
+    </a>
+  </div>
+  {% endif %}
+
+  <div class="card" style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; background:#fbfcfe;">
+    <div style="display:flex; align-items:center; gap:8px;">
+      <span style="font-weight:600; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em;">Current Status:</span>
+      <span class="pill {{ a.status }}" style="font-size:13px;">{{ a.status.replace('_',' ') }}</span>
+    </div>
+    <form method="post" action="/application/{{ a.id }}/status" style="display:inline-flex; align-items:center; gap:8px; margin:0;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="status-select" style="font-weight:600; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em;">Change status:</label>
+      <select id="status-select" name="status" style="padding:6px 10px; border-radius:8px; border:1px solid var(--line); font-size:13px; background:#fff; font-weight:500;">
+        <option value="needs_user_review" {% if a.status == 'needs_user_review' %}selected{% endif %}>Needs User Review</option>
+        <option value="submitted" {% if a.status == 'submitted' %}selected{% endif %}>Submitted</option>
+        <option value="ready_to_submit" {% if a.status == 'ready_to_submit' %}selected{% endif %}>Ready to Submit</option>
+        <option value="form_filled" {% if a.status == 'form_filled' %}selected{% endif %}>Form Filled</option>
+        <option value="prepared" {% if a.status == 'prepared' %}selected{% endif %}>Prepared</option>
+        <option value="skipped" {% if a.status == 'skipped' %}selected{% endif %}>Skipped</option>
+      </select>
+      <button type="submit" style="padding:6px 14px; font-size:13px;">Update</button>
+    </form>
+  </div>
 
   <div class="card">
     <table>
@@ -1007,7 +1142,13 @@ DETAIL_HTML = """
 """
 
 
-if __name__ == "__main__":
+def serve() -> None:
+    # Every run starts from here, so a dashboard on a desktop the owner does not
+    # see would open every browser there too (visible_desktop.py): it does not start.
+    reason = visible_desktop.why_invisible()
+    if reason:
+        print(reason, file=sys.stderr)
+        sys.exit(2)
     print("Job application UI:  http://127.0.0.1:5000")
     # Loopback only, on purpose -- see the module docstring.
     #
@@ -1017,5 +1158,9 @@ if __name__ == "__main__":
     # and an application already in the browser is unaffected -- it runs in its
     # own process. (Set WEB_UI_NO_RELOAD=1 to switch it off.)
     app.run(host="127.0.0.1", port=5000, debug=False,
-            use_reloader=os.getenv("WEB_UI_NO_RELOAD", "") not in {"1", "true", "yes"})
+            use_reloader=os.getenv("WEB_UI_RELOAD", "") in {"1", "true", "yes"})
+
+
+if __name__ == "__main__":
+    serve()
 

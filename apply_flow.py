@@ -49,7 +49,9 @@ import config as config_module
 from resume_pdf import build_letter_pdf, build_resume_pdf
 from browser_automation import BlockedLoginDomainError, JobApplicationAssistant
 from claude_integration import ClaudeClient, ClaudeIntegrationError
-from config import get_app_config, get_user_profile
+from gemini_integration import GeminiDocumentClient
+from openai_integration import OpenAIDocumentClient
+from config import get_app_config, get_user_profile, available_tailor_providers
 from jd_analyzer import build_job_description, dedup_key_for_url
 import safety
 from safety import STATUS_DISQUALIFIED_POLICY_MISMATCH
@@ -248,26 +250,114 @@ def reuse_stored_document(tracker, key: str, kind: str, job_dir: Path) -> Path |
         return None
     if not doc or not doc.get("content"):
         return None
-    path = job_dir / doc["filename"]
     content = bytes(doc["content"])
+    # A PDF smaller than 20 KB is almost certainly broken (bad tailoring output
+    # that got PDF'd as a near-empty file). Discard it so the run retailors.
+    if kind == "resume" and doc.get("filename", "").lower().endswith(".pdf") and len(content) < 20_000:
+        logger.warning(
+            "REUSE_SKIPPED: stored resume %s is only %d bytes (likely corrupt) -- will retailor",
+            doc["filename"], len(content),
+        )
+        return None
+    path = job_dir / doc["filename"]
     if not path.is_file() or path.read_bytes() != content:
         path.write_bytes(content)
     return path
 
 
+# ── out-of-credits / quota-exhausted detection ────────────────────────────────
+
+_OUT_OF_CREDITS_PHRASES = (
+    "usage limits",
+    "credit balance",
+    "billing",
+    "quota exceeded",
+    "insufficient_quota",
+    "rate_limit_exceeded",   # OpenAI
+    "resource_exhausted",    # Google
+)
+
+
+def _is_out_of_credits(exc: Exception) -> bool:
+    """True when the error is a hard account-level limit (not a transient 503)."""
+    msg = str(exc).lower()
+    return any(phrase in msg for phrase in _OUT_OF_CREDITS_PHRASES)
+
+
+def _make_tailor_client(provider: str, cfg) -> ClaudeClient:
+    """Build the right client object for *provider*."""
+    if provider == "claude":
+        return ClaudeClient(cfg)
+    if provider == "gemini":
+        return GeminiDocumentClient(cfg)
+    if provider == "openai":
+        return OpenAIDocumentClient(cfg)
+    raise ValueError(f"Unknown tailor provider: {provider!r}")
+
+
+def _tailor_with(client, resume, job, profile, job_dir: Path, resume_txt: Path, resume_pdf: Path,
+                 label: str) -> Path | None:
+    """Attempt to tailor the resume using *client*.
+
+    Returns the PDF path on success.
+    Returns None on transient / unknown failure so the caller tries the next provider.
+    Raises _OutOfCreditsError when the account has hit a hard usage limit, so the
+    caller can warn the user and still try the next provider rather than silently
+    falling through."""
+    try:
+        logger.info("Tailoring resume for %s via %s...", job.company, label)
+        raw = client.tailor_resume(resume, job, profile)
+        tailored = ensure_resume_header(
+            normalise_contact_details(strip_model_preamble(raw, profile), profile),
+            profile, job,
+        )
+        unsupported = safety.unsupported_claims(resume.raw_text, tailored)
+        if unsupported:
+            logger.warning("TAILORING_RETRY (%s): claimed %s, which isn't in the resume",
+                           label, ", ".join(unsupported[:6]))
+            try:
+                retry = client.tailor_resume(
+                    resume, job, profile,
+                    extra_instruction=(
+                        "Your previous draft claimed these, which do NOT appear in the candidate's "
+                        f"resume: {', '.join(unsupported[:10])}. Write it again using only what the "
+                        "resume actually says. Do not name specific product models, versions, metrics "
+                        "or certifications unless the resume names them."
+                    ),
+                )
+                retried = ensure_resume_header(
+                    normalise_contact_details(strip_model_preamble(retry, profile), profile), profile, job)
+                still = safety.unsupported_claims(resume.raw_text, retried)
+                if len(still) < len(unsupported):
+                    tailored, unsupported = retried, still
+            except Exception as retry_exc:
+                logger.warning("TAILORING_RETRY failed (%s) -- keeping the first draft", retry_exc)
+        resume_txt.write_text(tailored, encoding="utf-8")
+        build_resume_pdf(resume_txt, resume_pdf)
+        logger.info("Tailored resume written to %s via %s", resume_pdf.name, label)
+        return resume_pdf
+    except Exception as exc:
+        if _is_out_of_credits(exc):
+            logger.warning(
+                "AI_OUT_OF_CREDITS (%s): %s account has reached its usage limit -- "
+                "add credits or wait for the limit to reset. Trying the next provider.",
+                label, label,
+            )
+        else:
+            logger.warning("TAILORING_FAILED via %s (%s)", label, exc)
+        return None
+
+
 def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None, key: str = "") -> Path:
-    """Returns the resume PDF to attach for THIS job: the one already generated
-    for the posting if there is one (from the database), otherwise a newly
-    tailored one. The cover letter is NOT written here -- see prepare_cover_letter.
+    """Returns the resume PDF to attach for THIS job.
 
-    Without this the flow attached whatever `_resume_override.txt` happened to
-    point at -- a single global file left over from the previous application,
-    which is how one employer's tailored resume nearly went to another. Each
-    job now gets its own PDF under its own output folder.
+    Tailoring priority is driven by which API keys the user has configured in
+    Settings (or .env). The order is always: Claude → Gemini → OpenAI.
+    If none are configured, the local resume is attached immediately — no waiting,
+    no silent fallback.
 
-    Falls back to the generic resume if tailoring fails; sending the untailored
-    resume is a worse application, but sending the wrong company's is worse
-    still, and sending nothing wastes the run."""
+    Falls back to the local generic resume only after every configured provider
+    has been tried."""
     generic = Path(config_module.RESUME_PATH)
     safe_company = re.sub(r"[^A-Za-z0-9]+", "", job.company)[:24] or "Job"
     reused = reuse_stored_document(tracker, key, "resume", job_dir)
@@ -287,45 +377,34 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
     resume_txt = job_dir / "tailored_resume.txt"
     resume_pdf = job_dir / f"Yaswanth_Jonnalagadda_Resume_{safe_company}.pdf"
 
-    try:
-        logger.info("Tailoring resume for %s...", job.company)
-        raw = claude.tailor_resume(resume, job, profile)
-        tailored = ensure_resume_header(
-            normalise_contact_details(strip_model_preamble(raw, profile), profile),
-            profile, job,
+    # Determine which providers are available (have an API key in settings/env)
+    cfg = config_module.get_app_config()
+    providers = available_tailor_providers(cfg)
+
+    if not providers:
+        logger.info(
+            "TAILORING_SKIPPED: no AI API keys configured -- attaching the local resume. "
+            "Add a Claude, Gemini, or OpenAI key in Settings to enable tailoring."
         )
-        # The user's decision (2026-09-15): always send Claude's tailored
-        # resume. If a draft names something the real resume doesn't, it is
-        # rewritten once with that pointed out -- quietly, and the tailored
-        # resume is used either way.
-        unsupported = safety.unsupported_claims(resume.raw_text, tailored)
-        if unsupported:
-            logger.warning("TAILORING_RETRY: it claimed %s, which isn't in the resume",
-                           ", ".join(unsupported[:6]))
-            try:
-                retry = claude.tailor_resume(
-                    resume, job, profile,
-                    extra_instruction=(
-                        "Your previous draft claimed these, which do NOT appear in the candidate's "
-                        f"resume: {', '.join(unsupported[:10])}. Write it again using only what the "
-                        "resume actually says. Do not name specific product models, versions, metrics "
-                        "or certifications unless the resume names them."
-                    ),
-                )
-                retried = ensure_resume_header(
-                    normalise_contact_details(strip_model_preamble(retry, profile), profile), profile, job)
-                still = safety.unsupported_claims(resume.raw_text, retried)
-                if len(still) < len(unsupported):
-                    tailored, unsupported = retried, still
-            except Exception as exc:
-                logger.warning("TAILORING_RETRY failed (%s) -- keeping the first draft", exc)
-        resume_txt.write_text(tailored, encoding="utf-8")
-        build_resume_pdf(resume_txt, resume_pdf)
-        logger.info("Tailored resume written to %s", resume_pdf.name)
-        return resume_pdf
-    except Exception as exc:
-        logger.error("TAILORING_FAILED (%s) -- attaching the generic resume instead", exc)
         return generic
+
+    for provider in providers:
+        try:
+            client = _make_tailor_client(provider, cfg)
+        except Exception as build_exc:
+            logger.warning("Could not build %s client (%s) -- skipping", provider, build_exc)
+            continue
+        result = _tailor_with(client, resume, job, profile, job_dir, resume_txt, resume_pdf,
+                              provider.capitalize())
+        if result is not None:
+            return result
+
+    # All configured providers failed
+    logger.error(
+        "TAILORING_FAILED: all configured AI providers (%s) failed -- attaching the local generic resume.",
+        ", ".join(providers),
+    )
+    return generic
 
 
 def prepare_cover_letter(claude, resume, job, profile, job_dir: Path, tracker=None, key: str = "") -> tuple[Path, Path] | None:
@@ -719,6 +798,8 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
             logger.info("  a CAPTCHA is showing -- only you can complete it")
     if report.get("resume_attached") is False:
         logger.info("  the resume does not show as attached")
+    for question in getattr(assistant, "written_answers", None) or []:
+        logger.info("  written for you -- read before you submit: %s", question)
     if not decision.eligible:
         logger.info("Auto-submit: %s", decision.summary())
     logger.info("Review the form in the browser window, then click Submit yourself.")
@@ -849,13 +930,6 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 tracker.update_status(key, STATUS_SKIPPED, notes="Skipped by you")
                 return
             continue
-
-        if any("already sent" in r or "already applied" in r for r in outcome.reasons) or \
-                "already sent" in outcome.summary or "already applied" in outcome.summary:
-            message = "Already submitted on site -- confirmed by portal" + (f". Worth checking: {notes}" if notes else "")
-            tracker.update_status(key, STATUS_SUBMITTED, notes=message[:1000])
-            logger.info("ALREADY SUBMITTED: %s at %s -- the site confirmed it", job.title, job.company)
-            return
 
         message = outcome.summary + (f" | worth checking: {notes}" if notes else "")
         tracker.update_status(key, STATUS_NEEDS_USER_REVIEW, notes=message[:1000])

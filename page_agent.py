@@ -44,6 +44,7 @@ import concept_matcher
 import emailed_codes
 import geo_reference
 import login_guard
+import open_answers
 from config import resume_to_attach, site_prefill_policy
 from interaction import (
     click_resiliently,
@@ -98,7 +99,8 @@ ASKS_FOR_A_REFRESH = re.compile(r"something went wrong|please (refresh|reload) (
 CONFIRMATION_TEXT = re.compile(
     r"thank you for (applying|your application)|application (has been |was )?(received|submitted|sent)|"
     r"your application has been sent|(successfully|now) (submitted|sent)|we('ve| have) received your application|"
-    r"your application is complete|you('ve| have) (?:successfully |already )?applied",
+    r"your application is complete|"
+    r"(?<!if )(?<!jobs )(?<!positions )(?:you've|you have) (?:successfully |already )?applied(?! before|\?|\s+to check)",
     re.IGNORECASE)
 
 # What a site says when the account behind a sign-in cannot be used.
@@ -109,8 +111,21 @@ ACCOUNT_ERROR = re.compile(
     re.IGNORECASE)
 
 PLACEHOLDER = re.compile(
-    r"^[\s\-–—]*(no selection|select( one| an option)?|please select|choose( one)?|make a selection|"
+    r"^[\s\-–—]*(no selection|select( one| an option)?|please select|choose( one| an option)?|make a selection|"
     r"none selected)?[\s\-–—.]*$", re.IGNORECASE)
+
+
+def _blank_choice_on_page(controls) -> bool:
+    """A dropdown still showing its placeholder ("Choose an option"), whatever the agent made of it.
+
+    The profile-only shortcut trusted the questions the agent recognised; ADP's dropdown is a bare
+    button the agent does not take for a question, so the page was called fully answered and Next
+    was pressed with a required answer blank. Such a page goes to the plan."""
+    for c in controls:
+        shown = (c.value or c.name or "").strip()
+        if c.role in ("button", "combobox", "listbox") and not c.disabled and shown and PLACEHOLDER.match(shown):
+            return True
+    return False
 
 # Every required question the agent had to leave for the owner, once each, with why and where.
 # Plain JSON like the answer library beside it (data/profile_answers.json), so both can be read,
@@ -492,6 +507,8 @@ _STANDING_ANSWERS: tuple[tuple[re.Pattern, str], ...] = (
     (re.compile(r"willing to work weekends?|work weekends?|weekend work|weekend availability",
                 re.IGNORECASE), "willing_to_work_weekends"),
     (re.compile(r"(relative|family member).{0,40}(employ|work)", re.IGNORECASE), "relatives_employed_here"),
+    (re.compile(r"3 days\s*/?\s*week|3 days per week|onsite 3 days|in person.{0,30}3 days", re.IGNORECASE),
+     "willing_to_work_onsite_three_days"),
     (re.compile(r"drug (screen|test)|physical exam|pre-?employment screening", re.IGNORECASE),
      "willing_drug_test_and_physical"),
 )
@@ -1444,7 +1461,8 @@ class PageAgent:
             return (name, "profile.full_name") if name else ("", "")
         return "checked", "profile.sign_attestations"
 
-    def profile_plan(self, controls: list[Control], required: set[str], still_open: list[str]) -> PagePlan:
+    def profile_plan(self, controls: list[Control], required: set[str], still_open: list[str],
+                     snapshot: str = "") -> PagePlan:
         """Build a deterministic page plan without calling Claude.
 
         Known profile data is handled before this method.  This second pass
@@ -1498,14 +1516,21 @@ class PageAgent:
             return PagePlan(page_kind="application_form", answers=answers)
         label = " ".join((forward.name or "").split())
         opening = bool(re.fullmatch(r"apply(?: now)?|start application|begin application", label, re.IGNORECASE))
+        # The step counter the page shows ("Step 1 of 2"), as the AI plan reports it: a "Submit" on
+        # a step with more to come only saves that step (Schwab's step 2 of 5). Without it, a page
+        # answered from the profile alone called its "Submit" the last and stopped for a resume
+        # that belonged to a later step.
+        counter = re.search(r"\b(?:step|page)\s*(\d+)\s*(?:of|/)\s*(\d+)\b", snapshot or "", re.IGNORECASE)
+        step = f"{counter.group(1)} of {counter.group(2)}" if counter else ""
+        steps_remain = bool(counter) and int(counter.group(1)) < int(counter.group(2))
         return PagePlan(
             page_kind="job_description" if opening else "application_form",
-            step="profile-only",
+            step=step or "profile-only",
             answers=answers,
             next_ref=forward.ref,
             next_label=label,
             next_kind="open_application" if opening else (
-                "final_submit" if safety.is_submit_label(label) else "next_step"
+                "final_submit" if safety.is_submit_label(label) and not steps_remain else "next_step"
             ),
         )
 
@@ -1586,11 +1611,19 @@ class PageAgent:
                 # Only required fields receive a placeholder.
                 replacement = "N/A" if "*" in question or "required" in question.lower() else ""
                 return replacement, f"profile.{field}"
+        effective_q = f"{question} {control.group or ''} {control.container or ''}".strip()
         for pattern, standing in _STANDING_ANSWERS:
-            if not pattern.search(question):
+            if not pattern.search(effective_q):
                 continue
             held = getattr(self.profile, standing, None)
             if isinstance(held, bool):
+                if control.options and standing == "open_to_relocation" and held:
+                    # "No, but willing to relocate" -- never "No, and not willing to relocate",
+                    # which also has "relocate" in it.
+                    for opt in control.options:
+                        if re.search(r"\bwilling to relocate\b", opt, re.IGNORECASE) \
+                                and not re.search(r"\b(not|un)\s*willing|\bnot\b", opt, re.IGNORECASE):
+                            return opt, f"profile.{standing}"
                 return ("Yes" if held else "No"), f"profile.{standing}"
             value = str(held or "").strip()
             if value:
@@ -1930,29 +1963,119 @@ class PageAgent:
                 # hands an application page, screening answer, or navigation
                 # choice to Claude/the session; unknown *required* questions
                 # are returned as a clear profile-data gap instead.
-                plan = self.profile_plan(controls, required, still_open)
+                plan = self.profile_plan(controls, required, still_open, snapshot)
             if plan is None:
-                self.follow_the_chosen_brain()
-                if still_open:
-                    feedback = ((feedback + " | ") if feedback else "") + \
-                        "the agent could not answer these itself: " + "; ".join(still_open[:12])
-                # A dropdown that draws its list only when opened is read by opening
-                # it, so Claude is told the choices instead of guessing at them.
-                hidden = self.read_hidden_choices(page, controls, snapshot, only=still_open)
-                asked = feedback
-                if hidden:
-                    snapshot = self.read_when_loaded(page)
-                    controls = parse_snapshot(snapshot)
-                    asked = ((feedback + " | ") if feedback else "") + hidden
-                try:
-                    plan = PagePlan.from_json(self.claude.plan_page(compact_snapshot(snapshot),
-                                                                    self.facts(controls), asked))
-                except Exception as exc:
-                    message = str(exc)
-                    if "out of credit" in message or "credit balance" in message.lower():
-                        return Outcome("owner_needed", page, [message.split(": ", 1)[-1][:200]])
-                    return Outcome("owner_needed", page,
-                                   [f"could not read this page ({message.splitlines()[0][:120]})"])
+                # 1. Profile-first: if the profile already answered everything on
+                # this page (still_open is empty), build the plan from the
+                # profile without spending an AI API call.
+                if not still_open:
+                    plan = self.profile_plan(controls, required, still_open, snapshot)
+                    if (plan.next_ref or plan.for_owner) and not _blank_choice_on_page(controls):
+                        logger.info("PAGE_FULLY_KNOWN: all fields answered from profile -- skipping AI call")
+                    else:
+                        # Nothing left to answer, but no plain Next either: a work-history
+                        # page that only offers "Add Experience" needs the plan to go on.
+                        plan = None
+                else:
+                    # 2. Targeted Per-Question AI Answering: For remaining unanswered questions,
+                    # make lightweight per-question calls with candidate resume context (< 300 tokens each).
+                    self.follow_the_chosen_brain()
+                    if hasattr(self.claude, "answer_single_question"):
+                        resume_text = getattr(self, "_resume_text_cache", None)
+                        if resume_text is None:
+                            try:
+                                if self.resume_file and hasattr(self.assistant, "extract_resume_text"):
+                                    resume_text = self.assistant.extract_resume_text(self.resume_file)
+                                elif hasattr(self.job, "resume_text"):
+                                    resume_text = getattr(self.job, "resume_text", "")
+                            except Exception:
+                                resume_text = ""
+                            self._resume_text_cache = resume_text or ""
+
+                        newly_answered = 0
+                        for ctrl in list(controls):
+                            if not ctrl.question or ctrl.answer or ctrl.disabled:
+                                continue
+                            if not any(_same_question(ctrl.question, q) for q in still_open):
+                                continue
+                            if safety.is_attestation(ctrl.question) or safety.is_legal_status_question(ctrl.question):
+                                continue
+                            try:
+                                # A text box tells how long an answer it takes and what it
+                                # asks beside the label ("max 150 words", "0/500").
+                                box = open_answers.read_box(self.locate(page, ctrl.ref)) \
+                                    if ctrl.role in ("textbox", "searchbox") else {}
+                                val = self.claude.answer_single_question(
+                                    question=ctrl.question,
+                                    options=ctrl.options,
+                                    resume_text=self._resume_text_cache,
+                                    profile=self.profile,
+                                    job_title=getattr(self.job, "title", ""),
+                                    company=getattr(self.job, "company", ""),
+                                    job_text=getattr(self.job, "raw_text", "") or "",
+                                    box=box,
+                                )
+                                if val:
+                                    action = "fill" if ctrl.role in ("textbox", "searchbox", "spinbutton") else "choose"
+                                    ans = Answer(ctrl.ref, ctrl.question, action, val, "ai_single_question")
+                                    if self.do(page, ans, ctrl):
+                                        newly_answered += 1
+                                        self.written[ctrl.question] = val
+                                        self._remember(ctrl, ans)
+                                        logger.info("AI_ANSWERED_QUESTION: %r = %r", ctrl.question[:50], val[:50])
+                                        if not ctrl.options and open_answers.is_open(ctrl.question,
+                                                                                     box.get("multiline", False)):
+                                            # Written in the owner's name: the hand-over says to read it.
+                                            written = getattr(self.assistant, "written_answers", None)
+                                            if written is None:
+                                                written = self.assistant.written_answers = []
+                                            if ctrl.question not in written:
+                                                written.append(ctrl.question)
+                            except Exception as exc:
+                                # Said out loud: at debug level a broken call (a missing function)
+                                # left every question blank with no word in the run's log.
+                                logger.warning("Could not answer %r with the AI: %s: %s", ctrl.question[:60],
+                                               type(exc).__name__, str(exc).splitlines()[0][:120] if str(exc) else "")
+
+                        if newly_answered > 0:
+                            self.settle(page, 800)
+                            snapshot = self.read_when_loaded(page)
+                            controls = parse_snapshot(snapshot)
+                            still_open = [q for q in still_open
+                                          if not any(_same_question(c.question, q) and c.answer for c in controls)]
+                            self._commit_learned_memory(controls)
+
+                    if not still_open:
+                        plan = self.profile_plan(controls, required, still_open, snapshot)
+                        if (plan.next_ref or plan.for_owner) and not _blank_choice_on_page(controls):
+                            logger.info("PAGE_FULLY_KNOWN: all fields answered after targeted AI -- "
+                                        "skipping full-page AI call")
+                        else:
+                            plan = None
+
+                if plan is None:
+                    # 3. Full-page plan fallback (if still_open couldn't be resolved or complex multi-step navigation needed)
+                    self.follow_the_chosen_brain()
+                    if still_open:
+                        feedback = ((feedback + " | ") if feedback else "") + \
+                            "the agent could not answer these itself: " + "; ".join(still_open[:12])
+                    # A dropdown that draws its list only when opened is read by opening
+                    # it, so Claude is told the choices instead of guessing at them.
+                    hidden = self.read_hidden_choices(page, controls, snapshot, only=still_open)
+                    asked = feedback
+                    if hidden:
+                        snapshot = self.read_when_loaded(page)
+                        controls = parse_snapshot(snapshot)
+                        asked = ((feedback + " | ") if feedback else "") + hidden
+                    try:
+                        plan = PagePlan.from_json(self.claude.plan_page(compact_snapshot(snapshot),
+                                                                        self.facts(controls), asked))
+                    except Exception as exc:
+                        message = str(exc)
+                        if "out of credit" in message or "credit balance" in message.lower():
+                            return Outcome("owner_needed", page, [message.split(": ", 1)[-1][:200]])
+                        return Outcome("owner_needed", page,
+                                                             [f"could not read this page ({message.splitlines()[0][:120]})"])
             logger.info("READ: %s%s -- %d to answer, %d for you, next: %s %r", plan.page_kind.replace("_", " "),
                         f" ({plan.step})" if plan.step else "", len(plan.answers), len(plan.for_owner),
                         plan.next_kind.replace("_", " "), plan.next_label[:40])
@@ -2280,7 +2403,7 @@ class PageAgent:
                     continue
                 if self._letter_attached or self.cover_letter is None:
                     continue
-            control = _upload_control(controls, matches)
+            control = _upload_control(controls, matches) or self._file_input_for(page, controls, matches)
             if control is None and action == "upload_resume" and (
                     re.search(r"upload a file|resume upload", snapshot or "", re.IGNORECASE)
                     and re.search(r"required|error", snapshot or "", re.IGNORECASE)):
@@ -2311,6 +2434,25 @@ class PageAgent:
                     self._letter_attached = True
                 logger.info("ATTACHED: the %s (%s)", what, Path(path).name)
         return given
+
+    def _file_input_for(self, page, controls: list[Control], section: re.Pattern) -> Optional[Control]:
+        """A plain <input type=file> the section names ("Resume *").
+
+        The snapshot draws it as a button named by its label, with no upload word,
+        so it looks like any other "Resume" button. It used to be found only when
+        the AI plan named it; a page answered from the profile alone skipped the
+        plan and the resume was never attached. The page is asked what it is.
+        """
+        for c in controls:
+            if c.role != "button" or c.disabled or not section.search(f"{c.container} {c.context} {c.name}"):
+                continue
+            try:
+                if self.locate(page, c.ref).evaluate("e => e.tagName === 'INPUT' && e.type === 'file'",
+                                                     timeout=2_000):
+                    return c
+            except Exception:
+                continue
+        return None
 
     def not_stuck(self, given: list[tuple[Answer, Control]], after: list[Control]) -> list[str]:
         """The answers the page does not show after all."""
@@ -4008,15 +4150,17 @@ class PageAgent:
 
     @staticmethod
     def _asks_for_input(part) -> bool:
-        """A password box, or three or more boxes to fill in, is visible in this page or frame."""
+        """A password box, or any form field to fill in, is visible in this page or frame."""
         found = part.evaluate("""() => {
             const shown = e => !!(e.offsetParent || e.getClientRects().length) && getComputedStyle(e).visibility !== 'hidden';
-            const skip = ['hidden', 'checkbox', 'radio', 'button', 'submit', 'image', 'search', 'reset'];
-            const boxes = [...document.querySelectorAll('input, textarea, select')]
+            const skip = ['hidden', 'button', 'submit', 'image', 'search', 'reset'];
+            const allElements = [...document.querySelectorAll('input, textarea, select, [role="textbox"], [role="combobox"], [role="listbox"], [role="radio"], [role="checkbox"], [contenteditable="true"]')]
                 .filter(e => shown(e) && !skip.includes((e.type || '').toLowerCase()));
-            return {password: boxes.some(e => (e.type || '').toLowerCase() === 'password'), count: boxes.length};
+            const password = allElements.some(e => (e.type || '').toLowerCase() === 'password');
+            const inputs = allElements.filter(e => (e.type || '').toLowerCase() !== 'button' && (e.type || '').toLowerCase() !== 'submit');
+            return {password: password, count: inputs.length};
         }""")
-        return bool(found["password"]) or found["count"] >= 3
+        return bool(found["password"]) or found["count"] >= 1
 
     def _resume_on_page(self, page) -> bool:
         if not self.resume_file:

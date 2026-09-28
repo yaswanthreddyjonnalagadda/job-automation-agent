@@ -1,0 +1,18 @@
+{
+  "id": "f027",
+  "date": "2026-09-28",
+  "class": "A call to a function that does not exist, inside a broad except that logs at debug level",
+  "symptom": "Writer (Ashby): 'Why are you interested in joining WRITER?' and the cultural-values question were handed over blank; the run's log said nothing about trying to answer them.",
+  "site": "Every site: any question the profile did not answer and the per-question AI step should have",
+  "root_cause": "ClaudeClient.answer_single_question called safety.is_signature_prompt, which was never written. Every call raised AttributeError; page_agent's per-question loop caught every Exception and logged it with logger.debug, which the run log does not show. So the step looked quiet rather than broken. (That day the AI credits were also spent, which hid it further.) Its essay prompt, 'a concise, professional 1-3 sentence response', also ignored the form's limit and invited AI-sounding wording.",
+  "why_tests_missed": "No test called answer_single_question: the page-agent tests replace the AI client with a planner object, and the per-question path was added without a test of its own.",
+  "fix": "answer_single_question uses safety.is_attestation (which covers signatures) and safety.is_legal_status_question. The loop logs a failed AI answer as a warning with its error. Open questions go to open_answers.write: limits read from the question, the hint beside the box and its maxlength; style rules from reference/plain_english.json; a draft checked in code and sent back once with its problems; cut to the limit at a sentence end; listed at hand-over for the owner to read.",
+  "tests": [
+    "tests/test_open_answers.py",
+    "tests/test_open_answers.py::test_answer_single_question_writes_an_open_answer_inside_the_limit",
+    "tests/test_open_answers.py::test_a_question_with_choices_is_not_written_as_an_essay",
+    "tests/test_open_answers.py::test_fit_never_leaves_an_answer_over_the_limit",
+    "tests/test_open_answers.py::test_an_ai_sounding_draft_is_sent_back_once_with_its_problems"
+  ],
+  "prevention": "Every method that calls a model gets a test that calls it with a fake model, however small it looks. A broad except around a step that does the owner's work logs at warning with the error's type, so a broken step is loud. And a model's text is checked in code against the owner's rules (length, wording) rather than trusted to follow the prompt."
+}

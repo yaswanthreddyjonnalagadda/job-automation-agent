@@ -110,10 +110,23 @@ with no resume field is unaffected.
   2026, after the Anthropic account reached its usage limit). `AGENT_BRAIN` is
   not consulted.
 
-In every mode Claude writes the resume and the cover letter; Gemini never does,
-and its client refuses to. Everything that answers a question goes to Gemini in
-`gemini` mode: planning a page, reading a screenshot, matching a dropdown choice,
-screening answers.
+Claude writes the resume and the cover letter first. When Claude cannot (its
+usage limit is reached, or it is down), the next writer with a key in `.env` is
+tried, in this order: Gemini (`GEMINI_API_KEY`), then OpenAI (`OPENAI_API_KEY`,
+model `OPENAI_MODEL`). Only when all of them fail is your generic resume attached,
+and the run's log says which one wrote it ("Tailored resume written ... via
+Gemini"). So when Claude is out of credit, your resume text and the job posting
+go to Google, or to OpenAI if you have set that key. Leave a key out of `.env` and
+that company is never sent it. Everything that answers a question goes to Gemini
+in `gemini` mode: planning a page, reading a screenshot, matching a dropdown
+choice, screening answers.
+
+A page your profile answers completely is filled and moved on without asking the
+AI at all, which saves credits. The page still goes to the AI when there is no
+plain Next/Continue to press (for example only "Add Experience"), or when a
+dropdown still shows "Choose an option" or "Select". The agent reads the page's
+step counter itself ("Step 1 of 2"), so a "Submit" button on a step with more
+to come only saves that step. It also finds a plain resume upload box by itself.
 
 What leaves your computer: in `gemini` mode every page the agent reads, together
 with the facts it answers from (your profile and the text of your resume), goes
@@ -293,6 +306,30 @@ A question that names a place only to say where it applies -- "Are you legally
 authorized to work in the country in which the job is located?" -- is answered
 as the work-authorization (or sponsorship) question it is, from your profile,
 not as a question asking which country.
+
+## Questions it answers in your words
+
+Questions such as "Why are you interested in joining us?" or "Give an example from
+your experience that fits our values" are written for you by the AI that answers the
+form, from your resume and profile, and from what the job posting says about the
+company -- nothing else. Your decision of 28 September 2026: plain, simple English
+that a person who speaks English as a second language understands the first time,
+with no AI wording.
+
+- Short sentences and everyday words. No lists, dashes, semicolons or exclamation
+  marks. One real example or one or two real reasons, named from your resume.
+- Words that sound written by AI ("passionate", "leverage", "thrilled", "great fit"
+  and others) are never used. The list is `reference/plain_english.json`: add or
+  remove words there.
+- The limit the form sets is kept: words ("max 150 words", "between 100 and 200
+  words") or characters ("0/500", the box's own limit). The answer is cut at the end
+  of a sentence, never in the middle, and never goes over. With no limit it aims for
+  about 50-100 words for a "why" question and 80-150 for an example.
+- A draft that breaks these rules goes back once with the problems named. Anything
+  still wrong is noted in the run's log.
+- Every answer written this way is listed at hand-over as "written for you -- read
+  before you submit". It is in your name: read it, and change it if it is not how
+  you would say it.
 
 ## When you press Continue
 

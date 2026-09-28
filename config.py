@@ -174,6 +174,10 @@ class AppConfig:
         default_factory=lambda: os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_GEMINI_MODEL)
     gemini_base_url: str = field(
         default_factory=lambda: os.getenv("GEMINI_BASE_URL", "").strip() or DEFAULT_GEMINI_BASE_URL)
+    # OpenAI API key for resume tailoring fallback (optional).
+    openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", "").strip())
+    openai_model: str = field(
+        default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-4o").strip())
     resume_path: Path = Path(RESUME_PATH)
     job_queue_path: Path = Path(JOB_QUEUE_PATH)
     # Used only for employer ATS accounts (Workday/Greenhouse/Lever/iCIMS...)
@@ -291,9 +295,20 @@ def resume_to_attach(tailored, app_config=None) -> Optional[Path]:
 
 
 def get_app_config() -> AppConfig:
-    cfg = AppConfig()
-    if not cfg.anthropic_api_key:
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY is not set. Copy .env.example to .env and fill it in."
-        )
-    return cfg
+    """Returns the app config. No API key is required -- if none are set the
+    agent skips tailoring and attaches the local resume."""
+    return AppConfig()
+
+
+def available_tailor_providers(cfg: AppConfig) -> list[str]:
+    """Returns the list of AI providers that have an API key configured,
+    in priority order: Claude -> Gemini -> OpenAI.
+    An empty list means no AI tailoring is possible; the local resume is used."""
+    providers = []
+    if cfg.anthropic_api_key:
+        providers.append("claude")
+    if cfg.gemini_api_key:
+        providers.append("gemini")
+    if cfg.openai_api_key:
+        providers.append("openai")
+    return providers
