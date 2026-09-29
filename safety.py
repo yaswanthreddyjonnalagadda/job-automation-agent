@@ -232,7 +232,7 @@ class AgentValues:
 
     def __init__(self) -> None:
         self._values: dict[str, str] = {}
-        # ref -> (value, where the value came from), e.g. ("Fairfax", "profile:city")
+        # ref -> (value, where the value came from), e.g. ("Springfield", "profile:city")
         self.records: dict[str, tuple] = {}
 
     @staticmethod

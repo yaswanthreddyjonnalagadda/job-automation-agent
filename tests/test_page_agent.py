@@ -40,7 +40,7 @@ def page(browser):
 
 @pytest.fixture
 def resume_file(tmp_path):
-    path = tmp_path / "Yaswanth_Jonnalagadda_Resume_Example.pdf"
+    path = tmp_path / "Jane_Doe_Resume_Example.pdf"
     path.write_bytes(b"%PDF-1.4 test resume")
     return path
 
@@ -855,7 +855,7 @@ def test_the_cover_letter_is_attached_where_the_form_asks_for_one(page, resume_f
     (attach only where the form requires a letter), the section here is
     required; test_optional_cover_letter_is_skipped_when_not_required covers
     the optional case."""
-    letter = tmp_path / "Yaswanth_Jonnalagadda_Cover_Letter.pdf"
+    letter = tmp_path / "Jane_Doe_Cover_Letter.pdf"
     letter.write_bytes(b"%PDF-1.4 letter")
     page.route("https://jobs.example.com/**", lambda route: route.fulfill(
         status=200, content_type="text/html",

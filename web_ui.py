@@ -34,6 +34,10 @@ from db import get_tracker
 BASE_DIR = Path(__file__).resolve().parent
 app = Flask(__name__)
 
+from web_setup import setup_pages  # noqa: E402  (the pages import web_ui back, lazily)
+
+app.register_blueprint(setup_pages)
+
 # Applications launched from this UI, so their progress can be shown. Keyed by
 # the URL that started them, and written to disk so restarting this server --
 # or letting it reload after a code change -- doesn't lose track of a run that
@@ -438,6 +442,10 @@ MAX_SHOWN = 300       # as far as the list grows
 
 @app.get("/")
 def index():
+    import profile_setup
+    if profile_setup.needs_setup():
+        # A new person has no profile, and every answer comes from it: set it up first.
+        return redirect(url_for("setup_pages.setup"))
     tracker = get_tracker()
     apps = tracker.list_all()
     signals = sorted(p.name for p in (BASE_DIR / "data").glob("_signal_*.txt"))
@@ -807,11 +815,13 @@ INDEX_HTML = """
 <!doctype html><meta charset="utf-8"><title>Job Applications</title>
 <style>""" + BASE_CSS + """</style>
 <div class="wrap">
-  <p><a href="/settings">Settings</a></p>
+  <p><a href="/profile">Your profile</a> &middot; <a href="/answers">Your saved answers</a> &middot;
+     <a href="/settings">Settings</a></p>
   <h1>Job Applications</h1>
-  <p class="sub">Paste an employer's job link and the agent applies: it reads each page,
-     answers from your profile, attaches your tailored resume and submits when every
-     check passes. Job boards and staffing agencies are refused.</p>
+  <p class="sub">Paste an employer's job link and the agent applies: it reads each page and
+     answers from your profile, then your saved answers, then the AI, and asks you only
+     what none of them know. It attaches your tailored resume and stops at the Review page
+     for you to submit. Job boards and staffing agencies are refused.</p>
 
   <div class="stats">
     <div class="stat"><b>{{ total }}</b><span>tracked</span></div>

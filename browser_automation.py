@@ -1296,7 +1296,7 @@ class JobApplicationAssistant:
              [g("address_line1")]),
             # A questionnaire's employment block. The narrow wordings come
             # first: a rule for the employer's name matched every one of these
-            # questions and wrote "Capital One" into all five.
+            # questions and wrote "the current employer" into all five.
             (r"type of business|industry|nature of business", [g("current_employer_type")]),
             (r"dates? of employment|employment dates|period of employment|from\s*/\s*to",
              [g("current_employment_dates")]),
@@ -5715,7 +5715,7 @@ class JobApplicationAssistant:
         Some widgets render their suggestions without role='option' or an
         aria-controls link back to the input, so neither the ARIA lookup nor
         ArrowDown+Enter reaches them -- but the suggestion is plainly visible
-        and clickable ('Fairfax, Virginia, United States'). Matching on the
+        and clickable ('Springfield, Illinois, United States'). Matching on the
         leading text keeps this from hitting an unrelated open list."""
         term = typed.split(",")[0].strip()
         if len(term) < 2:

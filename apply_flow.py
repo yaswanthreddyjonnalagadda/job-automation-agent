@@ -348,6 +348,17 @@ def _tailor_with(client, resume, job, profile, job_dir: Path, resume_txt: Path, 
         return None
 
 
+def document_name(profile, kind: str, company: str) -> str:
+    """The file name an employer sees: the applicant's own name, the document, the company.
+
+    'Jane_Doe_Resume_Acme'. The name comes from the profile -- it was the owner's, written into the code, so every
+    applicant's resume would have gone out under his name."""
+    name = " ".join(filter(None, (getattr(profile, "first_name", ""), getattr(profile, "last_name", ""))))         or getattr(profile, "full_name", "")
+    person = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")
+    safe_company = re.sub(r"[^A-Za-z0-9]+", "", company or "")[:24] or "Job"
+    return "_".join(part for part in (person, kind, safe_company) if part)
+
+
 def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None, key: str = "") -> Path:
     """Returns the resume PDF to attach for THIS job.
 
@@ -361,7 +372,7 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
     generic = Path(config_module.RESUME_PATH)
     safe_company = re.sub(r"[^A-Za-z0-9]+", "", job.company)[:24] or "Job"
     reused = reuse_stored_document(tracker, key, "resume", job_dir)
-    if reused is not None and reused.name not in (generic.name, f"Yaswanth_Jonnalagadda_Resume_{safe_company}.pdf"):
+    if reused is not None and reused.name != generic.name and not reused.name.endswith(f"Resume_{safe_company}.pdf"):
         # Written when the posting was read as someone else's: Schwab's was
         # tailored to its careers page's menu ("Career Schwab"), not the job.
         logger.info("RETAILORING: %s was written from a misread posting; tailoring it again", reused.name)
@@ -375,7 +386,7 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
         return reused
 
     resume_txt = job_dir / "tailored_resume.txt"
-    resume_pdf = job_dir / f"Yaswanth_Jonnalagadda_Resume_{safe_company}.pdf"
+    resume_pdf = job_dir / f"{document_name(profile, 'Resume', job.company)}.pdf"
 
     # Determine which providers are available (have an API key in settings/env)
     cfg = config_module.get_app_config()
@@ -428,8 +439,7 @@ def prepare_cover_letter(claude, resume, job, profile, job_dir: Path, tracker=No
         except Exception as exc:
             logger.warning("Stored cover letter unusable (%s) -- writing a new one", exc)
 
-    safe_company = re.sub(r"[^A-Za-z0-9]+", "", job.company)[:24] or "Job"
-    letter_txt = job_dir / f"Yaswanth_Jonnalagadda_Cover_Letter_{safe_company}.txt"
+    letter_txt = job_dir / f"{document_name(profile, 'Cover_Letter', job.company)}.txt"
     letter_pdf = letter_txt.with_suffix(".pdf")
     try:
         logger.info("Form has a cover letter field -- writing one for %s...", job.company)

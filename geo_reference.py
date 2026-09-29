@@ -186,12 +186,12 @@ def _regions(parts: list[str]) -> tuple[set[str], set[str]]:
 
 
 def same_locality(a: str, b: str) -> bool:
-    """True when two spellings name the same town: "Fairfax, VA" and
-    "Fairfax, Virginia, United States".
+    """True when two spellings name the same town: "Springfield, IL" and
+    "Springfield, Illinois, United States".
 
     Both give the town first and a region after it. The town's name is the same
     words; the state, in any spelling, is the same state on both sides (named on
-    one side only is not enough: several states have a Fairfax); a country
+    one side only is not enough: several states have a Springfield); a country
     left out of one side is not a difference, one named on both must agree.
     """
     first, second = str(a or "").split(","), str(b or "").split(",")

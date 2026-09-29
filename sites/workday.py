@@ -761,11 +761,11 @@ class WorkdayAdapter(SiteAdapter):
 
         # Only leave it alone when what's showing is actually one of the
         # answers wanted. Skipping on ANY displayed text let stale leftovers
-        # ('Fairfax' typed into the search box) pass as a committed answer, so
+        # ('Springfield' typed into the search box) pass as a committed answer, so
         # a required field was never filled at all.
         # Only leave it alone when what's showing IS one of the wanted answers,
         # matched exactly. Skipping on any displayed text let a stale leftover
-        # ('Fairfax' still sitting in the search box) pass as a committed
+        # ('Springfield' still sitting in the search box) pass as a committed
         # answer, so a required field went unfilled while looking done.
         already = assistant._displayed_value(page, id_suffix)
         if already and any(already.lower() == c.strip().lower() for c in candidates if c):

@@ -40,3 +40,6 @@ runs/
 
 # Virtual environments under either common name.
 .venv/
+
+# Run logs: they name employers and carry answers.
+data/*.log

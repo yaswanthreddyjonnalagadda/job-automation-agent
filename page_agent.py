@@ -615,7 +615,7 @@ def _holds_dial_code(control: "Control") -> bool:
 
 
 def _same_answer(a: str, b: str) -> bool:
-    # "Fairfax, VA" is "Fairfax, Virginia, United States": one town, two spellings.
+    # "Springfield, IL" is "Springfield, Illinois, United States": one town, two spellings.
     if geo_reference.same_locality(a, b):
         return True
     a, b = _plain(a), _plain(b)
@@ -780,8 +780,8 @@ def closest_choice(choices: list[str], wanted: str) -> Optional[int]:
     The profile says "I am not a veteran"; the form offers "I am not a
     protected veteran". A choice that reverses the meaning ("I identify as
     ...") is never taken: a yes/no in the answer must appear in the choice too.
-    A town is the choice that names the same town in another spelling ("Fairfax,
-    VA" is "Fairfax, Virginia, United States", and no other Fairfax).
+    A town is the choice that names the same town in another spelling ("Springfield,
+    IL" is "Springfield, Illinois, United States", and no other Springfield).
     """
     for i, choice in enumerate(choices):
         if geo_reference.same_locality(wanted, choice):
@@ -2544,7 +2544,7 @@ class PageAgent:
             known_val, known_src = self.known_answer(control)
             if known_val and _same_answer(current, known_val):
                 # Use exact comparison for the planner's value against the profile value:
-                # _same_answer considers "Yaswanth" ≈ "Yaswanth Reddy" via prefix matching,
+                # _same_answer considers "Jane" ≈ "Jane Marie" via prefix matching,
                 # but the profile's canonical value must be preserved exactly.
                 if _plain(answer.value) != _plain(known_val):
                     return f"already answered from your profile ({current!r}) -- not changing to {answer.value!r}"
@@ -2579,8 +2579,8 @@ class PageAgent:
         """
         # (question, right answer, profile field, must match exactly)
         fixes: list[tuple[str, str, str, bool]] = []
-        # The owner's name as they write it. Forms were filled "Yaswanth" /
-        # "Reddy Jonnalagadda", split from the full name.
+        # The owner's name as they write it. Forms were filled "Jane" /
+        # "Marie Doe", split from the full name.
         for control in controls:
             if control.role not in ("textbox", "searchbox") or control.disabled or _holds_dial_code(control):
                 continue
@@ -2596,7 +2596,7 @@ class PageAgent:
                 fixes.append((control.question, replacement, "profile.middle_name", True))
                 continue
             if wanted and shown.lower() != wanted.lower():
-                # Exactly: "Yaswanth" is not "Yaswanth Reddy", though one
+                # Exactly: "Jane" is not "Jane Marie", though one
                 # begins the other.
                 fixes.append((control.question, wanted, f"profile.{field}", True))
         # Where the owner lives, on any kind of control: a country, state or
@@ -2723,7 +2723,7 @@ class PageAgent:
         for question, value in now.items():
             if any(w and (_plain(w) in _plain(value) or _plain(value) in _plain(w))
                    for w in self.written.values()):
-                continue   # the site tidied up what the agent wrote ("22030" -> "22030, Fairfax, VA")
+                continue   # the site tidied up what the agent wrote ("62701" -> "62701, Springfield, IL")
             if question in self._paused_state and value != self._paused_state[question]:
                 self.owner_answers[question] = value
                 logger.info("YOURS: %r is now %r -- the agent leaves it as you set it", question[:60], value[:40])
@@ -3505,7 +3505,7 @@ class PageAgent:
                 return True
             if shown is not None and shown.answer and not took:
                 # Enter took whichever row was showing, and it is not what was asked
-                # for ("Fairfax Station" for "Fairfax"): a wrong answer is worse than
+                # for ("Springfield Gardens" for "Springfield"): a wrong answer is worse than
                 # none, so it is taken out again.
                 try:
                     box = self.locate(page, control.ref)

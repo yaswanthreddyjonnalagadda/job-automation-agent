@@ -26,6 +26,23 @@ the result, and hand the finished application over.
 | Never submits duplicates | `apply.already_submitted()` and `db.find_submitted()` match by URL (ignoring tracking parameters) and by company+title | `test_a_previously_submitted_job_is_refused` |
 | Never claims unsupported facts | `safety.unsupported_claims()` rejects a tailored resume or letter that invents a figure, date or certification | `test_invented_numbers_and_certifications_are_caught` |
 
+## Your profile comes first
+
+Anyone can run the agent on their own computer (the owner's decision of 29 September
+2026). Until a profile is saved, the dashboard opens **Set up your profile** instead
+of the applications list: upload a resume, check the profile drafted from it, save.
+The draft takes only what the resume plainly says (name, email, phone, LinkedIn, city,
+years); with an AI key it also copies the work history and education, told to copy
+and never infer. Nothing is guessed, and first, middle and last names are shown split
+for you to correct.
+
+Every application then answers in this order: **your profile, your saved answers, the
+AI, and only then you.** A blank box in the profile means "ask" -- the agent never
+fills it with a guess. Any question it has to leave for you appears under **Your saved
+answers** on the dashboard; answer it once there and it is used on every form that
+asks it. Resumes and cover letters are named after you (`Jane_Doe_Resume_Acme.pdf`).
+Everything stays on your computer, in `data/`.
+
 ## What it learns from you
 
 Anything **you** type or choose on the form is your answer: it is never
@@ -252,11 +269,11 @@ country: a "+1" is the prefix your number takes, not where you live.
 
 ## A town the form spells another way
 
-Your profile says "Fairfax, VA"; a form's own search may offer "Fairfax, Virginia,
+Your profile says "Springfield, IL"; a form's own search may offer "Springfield, Illinois,
 United States" and find nothing for "VA". The agent treats them as one town -- the
 same name, the same state in any spelling, a country left out or named on both
-sides in agreement -- and clicks that row. Another Fairfax (a different state, or
-"Fairfax Station") is never taken for it. Where a list cannot be read and the agent
+sides in agreement -- and clicks that row. Another Springfield (a different state, or
+"Springfield Gardens") is never taken for it. Where a list cannot be read and the agent
 has to type and press Enter as a last resort, the answer counts only if the box
 still holds it after leaving the box, and a row that turns out to be a different
 town is taken out again and left for you.
@@ -396,7 +413,7 @@ agent submits only when `safety.evaluate_auto_submit()` returns an eligible
 * every required field on the form **exactly** matches approved data — a value
   the agent wrote from your profile/resume, an explicitly approved answer from
   `data/_approved_answers.json`, or an existing value that equals a profile
-  value. Near-misses are refusals: "Fairfax County" never matches "Fairfax";
+  value. Near-misses are refusals: "Springfield County" never matches "Springfield";
 * nothing uncertain is present: no blanks, form errors or warnings, no
   ambiguous dropdown choice, no unsupported custom question, no attestation,
   e-signature or consent checkbox, no CAPTCHA, no identity check.

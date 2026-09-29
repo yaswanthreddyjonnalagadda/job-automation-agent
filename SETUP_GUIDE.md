@@ -40,26 +40,7 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-## 2. Configure
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and set `ANTHROPIC_API_KEY` (get one from
-https://console.anthropic.com/). Leave everything else as-is unless you
-need to.
-
-Your job-search profile (name, target titles, locations, salary range,
-etc.) lives in `config.py` under `UserProfile` — it's already filled in
-with your details but edit it if anything changes.
-
-## 3. Add your resume
-
-Drop your resume at `data/resume.pdf` or `data/resume.docx` (update
-`RESUME_PATH` in `.env` if you use a different name/location).
-
-## 4. Start the dashboard
+## 2. Start the dashboard
 
 Double-click **`Start Dashboard.bat`** in this folder. A black window opens (keep
 it open while the agent works) and the dashboard opens in your browser at
@@ -68,6 +49,39 @@ http://127.0.0.1:5000.
 Start it yourself this way, not from an IDE's AI assistant or any background
 terminal: a dashboard started in the background opens its browser where you
 cannot see it.
+
+## 3. Set up your profile (first launch)
+
+The first time, the dashboard opens **Set up your profile**:
+
+1. **Upload your resume** (.pdf or .docx). The agent reads your name, email,
+   phone, LinkedIn, city and years of experience from it. If you have set an AI
+   key (step 4), it also copies your work history and education. Nothing is
+   guessed: what the resume does not say, you fill in.
+2. **Check your profile** and fill in what a resume does not say: work
+   authorization and visa, salary, availability, standard screening answers,
+   the optional voluntary disclosures, and what the agent may do for you. Leave
+   a box blank and the agent asks the AI or you instead of guessing.
+3. **Your saved answers.** Add answers to questions you expect. Later, any
+   question the agent could not answer shows up here to answer once.
+
+Everything is kept only on your computer: `data/profile.json`,
+`data/profile_answers.json` and your resume in `data/`. Change them any time
+from **Your profile** and **Your saved answers** on the dashboard.
+
+## 4. Settings: AI keys and your job-site password
+
+Open **Settings** on the dashboard:
+
+- **AI keys** (optional but recommended): Claude writes the tailored resume and
+  cover letter; Gemini answers application questions. With no key, your own
+  resume is attached as it is, and questions your profile does not cover are
+  left for you.
+- **Job-site account email and password**: used only to create and sign in to
+  employers' own application sites (Workday and similar), never LinkedIn,
+  Indeed or Dice. Use a password you do not use anywhere else.
+
+Keys and the password are kept in `.env` in this folder, on your computer only.
 
 ## 5. Apply to a job
 
