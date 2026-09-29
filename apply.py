@@ -86,8 +86,44 @@ def slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_")[:40] or "job"
 
 
+def saved_job(url: str) -> dict | None:
+    """The posting as an earlier run of it read and saved (data/_job_<company>_<title>.json), matched by the
+    posting's address without its tracking parameters."""
+    from safety import canonical_url
+    wanted = canonical_url(url)
+    newest = None
+    for path in DATA_DIR.glob("_job_*.json"):
+        try:
+            job = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(job, dict) and job.get("url") and job.get("title") \
+                and canonical_url(job["url"]) == wanted:
+            if newest is None or path.stat().st_mtime > newest[0]:
+                newest = (path.stat().st_mtime, job)
+    return newest[1] if newest else None
+
+
+def read_job(url: str) -> dict | None:
+    """The posting: read now, a second time if the first read found nothing, else as an earlier run saved it.
+
+    Secunetics (BambooHR), 29 September: the page is built by script, one read came back empty, and the run
+    stopped at 'Could not read a job description' although the same posting had been read an hour before and
+    was saved."""
+    for attempt in (1, 2):
+        job = resolve_job(url)
+        if job:
+            return job
+        logger.info("The posting could not be read (try %d of 2)", attempt)
+    job = saved_job(url)
+    if job:
+        logger.info("READ_FROM_EARLIER_RUN: %s @ %s -- the posting would not load now; using the copy saved "
+                    "when it was read before", job.get("title"), job.get("company"))
+    return job
+
+
 def run_one(url: str, auto: bool = True, open_url: str = "") -> int:
-    job = resolve_job(url)
+    job = read_job(url)
     if not job:
         logger.error("Could not read a job description from %s", url)
         return 1

@@ -607,6 +607,18 @@ submitted, even when the same page offers to make an account to track it. A page
 that says something is still left to finish the application is not a
 confirmation.
 
+Besides reading the page the way a screen reader does, the agent takes an
+inventory of every field on it -- in every frame and inside components that hide
+their fields (Shadow DOM) -- by what each field is, not by what it is called. The
+resume goes in the file input that sits under the page's resume section, whatever
+its button says ('Attach', 'Choose File*', 'From Device'), and never in an
+'autofill from resume' upload. A list drawn as a button ('State –Select–') is
+answered by the exact item ('Virginia', never 'West Virginia'). A field that is
+hidden, or says to leave it blank, or is named like a honeypot, is never filled.
+Before the last press, every visible required field still empty is named to you,
+so a page is never called complete with something required left out. How each
+portal builds its fields is in `reference/ats_fields/`.
+
 On a form that repeats the same boxes for each job or each degree ("Company,
 Position title, Start date, End date ..." again and again), every box is answered
 from *that* job's or degree's record in your work history -- never from one value

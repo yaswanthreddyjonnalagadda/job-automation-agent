@@ -1,0 +1,405 @@
+"""Every field on an application page, found by what it is -- not by what it is called.
+
+Built from the portal research in reference/ats_fields/ (29 September 2026). The agent's usual reading is the
+page's accessibility snapshot, which does not show a hidden file input, a hidden <select> behind a styled button,
+or which question an unlabelled box belongs to; a required field it did not see was silently skipped (Secunetics
+on BambooHR: State and the resume, with the page reported complete).
+
+inventory() runs one script in every frame of the page. The script walks the page and every open shadow root
+(SmartRecruiters builds its whole form in Shadow DOM), and for each field records what kind it is, its question
+(its label, else the nearest question text above it -- Rippling's custom questions are boxes named only
+'Select'), whether it is required, whether a person can see it, what it holds now, and whether it is a trap (a
+honeypot: hidden, or labelled 'leave this field blank' / 'honeypot'). Each field is stamped with
+data-jaa-field so it can be found again.
+
+The kinds (reference/ats_fields/README.md): text, textarea, select (native), combobox (react-select, Ant,
+Workday search, div role=combobox), button_list (a button that opens a list: BambooHR, Workday 'Select One'),
+checkbox, radio, yes_no (Ashby's two aria-pressed buttons), date, file.
+"""
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
+
+STAMP = "data-jaa-field"
+
+# What a list shows before anything is picked.
+PLACEHOLDER = re.compile(r"^\s*(?:[–—-]+\s*)?(?:select(?: one| an option| from list)?|choose(?: one| an option)?|"
+                         r"please select|pick one|none selected|search)?\s*(?:\.\.\.|…)?\s*(?:[–—-]+)?\s*$",
+                         re.IGNORECASE)
+
+INVENTORY_JS = r"""
+(stampPrefix) => {
+  const STAMP = 'data-jaa-field';
+  const text = e => (e ? (e.innerText || e.textContent || '').replace(/\s+/g, ' ').trim() : '');
+  const visible = e => {
+    if (!e || !e.getClientRects().length) return false;
+    const s = getComputedStyle(e);
+    if (s.visibility === 'hidden' || s.display === 'none' || parseFloat(s.opacity) === 0) return false;
+    const r = e.getBoundingClientRect();
+    return r.width > 1 && r.height > 1 && r.right > 0 && r.bottom > 0;
+  };
+  const byId = (root, id) => (root.getElementById ? root.getElementById(id) : null) || document.getElementById(id);
+  const all = [];
+  const walk = root => {
+    root.querySelectorAll('input, select, textarea, button, [role=combobox], [role=radio], [role=checkbox], [role=switch]')
+        .forEach(e => all.push(e));
+    root.querySelectorAll('*').forEach(e => { if (e.shadowRoot) walk(e.shadowRoot); });
+  };
+  walk(document);
+
+  const GENERIC = /^(select|search|select\.\.\.|choose|choose file\*?|attach|upload|browse|drop or select.*|type here.*)$/i;
+  const labelText = e => {
+    const root = e.getRootNode();
+    const ids = (e.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean);
+    if (ids.length) { const t = ids.map(i => text(byId(root, i))).join(' ').trim(); if (t) return t; }
+    if (e.id && root.querySelector) {
+      const l = root.querySelector(`label[for="${CSS.escape(e.id)}"]`);
+      if (l && text(l)) return text(l);
+    }
+    const aria = e.getAttribute('aria-label');
+    if (aria && !GENERIC.test(aria.trim())) return aria;
+    const wrap = e.closest('label');
+    if (wrap && text(wrap)) return text(wrap);
+    return '';
+  };
+  // The question a box sits under when nothing links them: the nearest text above it, walking up the page.
+  const QUESTIONY = 'label, legend, p, h1, h2, h3, h4, h5, span, div';
+  const nearestText = e => {
+    let node = e;
+    for (let depth = 0; node && depth < 9; depth++) {
+      let prev = node.previousElementSibling;
+      while (prev) {
+        if (!prev.querySelector('input, select, textarea, [role=combobox]') || prev.matches('label, legend, p, h1, h2, h3, h4, h5')) {
+          const t = text(prev);
+          if (t && t.length > 1 && t.length < 400 && !GENERIC.test(t)) return t;
+        }
+        prev = prev.previousElementSibling;
+      }
+      node = node.parentElement || (node.getRootNode && node.getRootNode().host);
+    }
+    return '';
+  };
+  const section = e => {
+    let node = e;
+    for (let depth = 0; node && depth < 12; depth++) {
+      let prev = node.previousElementSibling;
+      while (prev) {
+        const h = prev.matches('h1,h2,h3,h4,legend') ? prev : prev.querySelector && prev.querySelector('h1,h2,h3,h4,legend');
+        if (h && text(h)) return text(h).slice(0, 80);
+        prev = prev.previousElementSibling;
+      }
+      node = node.parentElement || (node.getRootNode && node.getRootNode().host);
+    }
+    return '';
+  };
+  const around = e => {                         // the text of the field's own block, for files and traps
+    let node = e;
+    for (let depth = 0; node && depth < 4; depth++) node = node.parentElement || node;
+    return text(node).slice(0, 300);
+  };
+  const shownValue = e => {
+    // react-select, Ant, Workday: the picked value is drawn beside the input, not in it
+    for (let n = e, d = 0; n && d < 6; n = n.parentElement, d++) {
+      const v = n.querySelector && n.querySelector('.select__single-value, [class*="singleValue"], .ant-select-selection-item, [data-automation-id=selectedItem]');
+      if (v && text(v)) return text(v);
+      const chips = n.querySelector && n.querySelector('[role=listbox][aria-label="items selected"] [role=option], .select__multi-value__label');
+      if (chips && text(chips)) return text(chips).replace(/, press delete to clear value\.?$/i, '');
+    }
+    return e.value || '';
+  };
+  // Required: the box says so, its label ends in a star, or the label element carries a 'required' class
+  // (Ashby marks the question's label, not the box).
+  const labelEl = e => {
+    const root = e.getRootNode();
+    if (e.id && root.querySelector) { const l = root.querySelector(`label[for="${CSS.escape(e.id)}"]`); if (l) return l; }
+    const ids = (e.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean);
+    return ids.length ? byId(root, ids[0]) : null;
+  };
+  const required = (e, label) => e.required || e.getAttribute('aria-required') === 'true'
+      || /[*✱]\s*$|\*\s*\(?required\)?/i.test(label) || /\brequired\b/i.test(e.getAttribute('aria-label') || '')
+      || !!(e.closest && e.closest('[class*="_required"], .required, [data-required=true]'))
+      || /(^|[\s_-])required/i.test((labelEl(e) || {}).className || '');
+  const TRAP = /leave (this|it) (field )?blank|honeypot|for robots only|^hp[_-]|if you are (a )?human/i;
+
+  const out = [];
+  const seenGroups = new Set();
+  let n = 0;
+  for (const e of all) {
+    const tag = e.tagName.toLowerCase();
+    const type = (e.getAttribute('type') || '').toLowerCase();
+    const role = e.getAttribute('role') || '';
+    if (tag === 'input' && ['hidden', 'submit', 'image', 'reset', 'button'].includes(type)) continue;
+    let kind = '';
+    if (tag === 'input' && type === 'file') kind = 'file';
+    else if (tag === 'select') kind = 'select';
+    else if (tag === 'textarea') kind = 'textarea';
+    else if (tag === 'input' && (type === 'checkbox' || role === 'checkbox' || role === 'switch')) kind = 'checkbox';
+    else if (tag === 'input' && (type === 'radio' || role === 'radio')) kind = 'radio';
+    else if (tag === 'input' && type === 'date') kind = 'date';
+    else if (role === 'combobox' || (tag === 'input' && e.getAttribute('aria-autocomplete'))) kind = 'combobox';
+    else if (tag === 'button' && /^(listbox|true|menu)$/.test(e.getAttribute('aria-haspopup') || '')) kind = 'button_list';
+    else if (tag === 'button' && e.hasAttribute('aria-pressed') && /^(yes|no)$/i.test(text(e))) kind = 'yes_no';
+    else if (tag === 'input') kind = /mm\s*\/\s*(dd|yyyy)/i.test(e.getAttribute('placeholder') || '') ? 'date' : 'text';
+    else continue;
+
+    // A hidden native select that only mirrors a styled button (BambooHR): one option, aria-hidden -- the button
+    // is the field.
+    if (kind === 'select' && e.options.length <= 1 && (e.getAttribute('aria-hidden') === 'true' || !visible(e))) continue;
+    // A react-select's hidden value input, or a search box inside a list: not a field of its own.
+    if (kind === 'text' && !visible(e) && e.closest('[class*=select__], .ant-select, [role=listbox], [role=menu]')) continue;
+
+    let label = labelText(e);
+    let question = label;
+    if (kind === 'yes_no') {
+      const box = e.parentElement;
+      if (seenGroups.has(box)) continue;
+      seenGroups.add(box);
+      question = labelText(box) || nearestText(box);
+    } else if (kind === 'radio' || kind === 'checkbox') {
+      const fs = e.closest('fieldset, [role=radiogroup], [role=group]');
+      const legend = fs ? (text(fs.querySelector('legend')) || fs.getAttribute('aria-label') || labelText(fs)) : '';
+      question = legend || nearestText(fs || e.parentElement);
+    } else if (kind === 'button_list') {
+      // BambooHR names the button '<label> <value>' ('State –Select–'); Workday '<question> Select One Required'.
+      question = label || nearestText(e);
+    } else if (!question || GENERIC.test(question)) {
+      question = nearestText(e) || e.getAttribute('placeholder') || e.getAttribute('name') || '';
+    }
+
+    const id = `${stampPrefix}${n++}`;
+    e.setAttribute(STAMP, id);
+    const isVisible = kind === 'file' ? true : visible(e);
+    let value = '';
+    if (kind === 'select') value = e.selectedIndex >= 0 ? text(e.options[e.selectedIndex]) : '';
+    else if (kind === 'checkbox' || kind === 'radio') value = e.checked ? 'checked' : '';
+    else if (kind === 'file') value = (e.files && e.files.length) ? [...e.files].map(f => f.name).join(', ') : '';
+    else if (kind === 'button_list') value = text(e);
+    else if (kind === 'yes_no') { const on = e.parentElement.querySelector('[aria-pressed=true]'); value = on ? text(on) : ''; }
+    else if (kind === 'combobox' && tag !== 'input') value = text(e);
+    else value = shownValue(e);
+
+    out.push({
+      id, kind, tag, type, role,
+      label: (label || '').slice(0, 300),
+      question: (question || '').slice(0, 300),
+      required: kind === 'yes_no' ? required(e.parentElement, question) : required(e, label || question),
+      visible: isVisible,
+      disabled: !!(e.disabled || e.getAttribute('aria-disabled') === 'true'),
+      value: (value || '').slice(0, 200),
+      options: kind === 'select' ? [...e.options].map(o => text(o)).slice(0, 400) : [],
+      multiple: !!(e.multiple || e.getAttribute('aria-multiselectable') === 'true'),
+      accept: e.getAttribute('accept') || '',
+      name: (e.getAttribute('name') || e.getAttribute('data-testid') || e.getAttribute('data-automation-id')
+             || e.getAttribute('data-qa') || e.id || '').slice(0, 120),
+      section: section(e),
+      around: kind === 'file' ? around(e) : '',
+      trap: TRAP.test(label) || TRAP.test(e.getAttribute('name') || '') || TRAP.test(e.getAttribute('placeholder') || '')
+            || (kind !== 'file' && !isVisible && (kind === 'textarea' || kind === 'text')),
+      shadow: e.getRootNode() !== document,
+    });
+  }
+  return out;
+}
+"""
+
+
+@dataclass
+class Field:
+    id: str
+    kind: str
+    tag: str = ""
+    type: str = ""
+    role: str = ""
+    label: str = ""
+    question: str = ""
+    required: bool = False
+    visible: bool = True
+    disabled: bool = False
+    value: str = ""
+    options: list = field(default_factory=list)
+    multiple: bool = False
+    accept: str = ""
+    name: str = ""
+    section: str = ""
+    around: str = ""
+    trap: bool = False
+    shadow: bool = False
+    frame: Any = None               # the Playwright frame the field is in
+
+    @property
+    def empty(self) -> bool:
+        if self.kind == "button_list":
+            return is_placeholder(value_of_button(self))
+        if self.kind in ("select", "combobox"):
+            return is_placeholder(self.value)
+        return not (self.value or "").strip()
+
+    def locator(self):
+        return self.frame.locator(f"[{STAMP}='{self.id}']")
+
+
+def is_placeholder(value: str) -> bool:
+    return bool(PLACEHOLDER.fullmatch(value or ""))
+
+
+def value_of_button(f: Field) -> str:
+    """What a list button shows, without its label: 'State –Select–' -> '–Select–'; 'Country United States' ->
+    'United States'; Workday's '<question> Select One Required' -> 'Select One'."""
+    shown = (f.value or "").strip()
+    label = re.sub(r"[\s*✱:]+$", "", (f.label or "").strip())
+    if label and shown.lower().startswith(label.lower()) and len(shown) > len(label):
+        shown = shown[len(label):].strip()
+    shown = re.sub(r"\s*\bRequired\s*$", "", shown, flags=re.IGNORECASE)
+    if f.question and shown.lower().startswith(f.question.lower()):
+        shown = shown[len(f.question):].strip()
+    return shown
+
+
+def inventory(page) -> list[Field]:
+    """Every field in every frame of the page."""
+    fields: list[Field] = []
+    for number, frame in enumerate(getattr(page, "frames", [page])):
+        rows = None
+        for attempt in range(2):
+            try:
+                rows = frame.evaluate(INVENTORY_JS, f"f{number}-")
+                break
+            except Exception as exc:
+                # A page that re-renders itself while being read ("Execution context was destroyed") is read again
+                # once; a frame that cannot be read (another site's captcha) is skipped.
+                logger.debug("No field inventory in frame %s (try %d): %s", number, attempt + 1,
+                             str(exc).splitlines()[0][:100])
+                try:
+                    frame.wait_for_timeout(800)
+                except Exception:
+                    break
+        if rows is None:
+            continue
+        for row in rows or []:
+            fields.append(Field(frame=frame, **row))
+    return fields
+
+
+def blank_required(fields: list[Field]) -> list[Field]:
+    """Fields a person can see, that the page marks required, that hold nothing yet -- never a trap. Radio and
+    checkbox groups count once, as answered if any box in the group is ticked."""
+    groups: dict[str, list[Field]] = {}
+    out = []
+    for f in fields:
+        if f.trap or not f.visible or f.disabled or not f.required:
+            continue
+        if f.kind in ("radio", "checkbox"):
+            groups.setdefault(f.question or f.name, []).append(f)
+            continue
+        if f.kind == "file":
+            continue                        # the resume has one authority: the submit gate
+        if f.empty:
+            out.append(f)
+    for question, members in groups.items():
+        if not any(m.value for m in members):
+            out.append(members[0])
+    return out
+
+
+# --- the resume -----------------------------------------------------------------------------------------------
+
+_RESUME = re.compile(r"\b(resume|résumé|cv|curriculum vitae)\b", re.IGNORECASE)
+_NOT_RESUME = re.compile(r"cover\s*letter|photo|picture|avatar|profile image|transcript|portfolio|additional|"
+                         r"other documents?|writing sample|autofill|auto-fill|import|parse", re.IGNORECASE)
+
+
+def resume_input(fields: list[Field]) -> Optional[Field]:
+    """The file input the resume goes in, told apart by the words around it, never by its own name alone.
+
+    Most portals name the upload 'Attach', 'Choose File*', 'Drop or select' or 'From Device' (in the agent's
+    recordings only 4 of 30 upload buttons had 'resume' near them); the section or block around it says what it
+    is for. A second upload that re-fills the form from the resume ('Autofill from resume', 'Import Resume') is not
+    the resume field."""
+    files = [f for f in fields if f.kind == "file" and not f.disabled]
+    if not files:
+        return None
+
+    def words(f: Field) -> str:
+        return " ".join((f.label, f.question, f.section, f.name, f.around))
+
+    named = [f for f in files if _RESUME.search(words(f)) and not _NOT_RESUME.search(f.label + " " + f.question)]
+    for f in named:
+        if not _NOT_RESUME.search(words(f)):
+            return f
+    if named:
+        # 'Resume' beside 'Autofill from resume': the one whose own label or name says resume wins.
+        own = [f for f in named if _RESUME.search(f.label + " " + f.name + " " + f.question)]
+        return (own or named)[0]
+    required = [f for f in files if f.required and not _NOT_RESUME.search(words(f))]
+    if len(required) == 1:
+        return required[0]
+    plain = [f for f in files if not _NOT_RESUME.search(words(f))]
+    return plain[0] if len(plain) == 1 else None
+
+
+def attach_resume(page, path: Path, fields: Optional[list[Field]] = None) -> Optional[Field]:
+    """Puts the resume in its file input. Returns the field, or None when there is no such input or it would
+    not take the file."""
+    fields = fields if fields is not None else inventory(page)
+    target = resume_input(fields)
+    if target is None:
+        return None
+    try:
+        target.locator().set_input_files(str(path), timeout=10_000)
+    except Exception as exc:
+        logger.info("Could not put the resume in %r: %s", target.question or target.label or target.name,
+                    str(exc).splitlines()[0][:120])
+        return None
+    return target
+
+
+# --- a list opened by a button (BambooHR, Workday 'Select One') --------------------------------------------------
+
+def choose_from_button_list(page, f: Field, answer: str, timeout_ms: int = 4_000) -> bool:
+    """Opens the list, types into its search box when it has one, clicks the item whose text IS the answer
+    (never one that merely contains it: 'Virginia' is not 'West Virginia'), and confirms the button now shows it.
+    Never presses Enter (that takes whichever row is first)."""
+    want = (answer or "").strip()
+    if not want:
+        return False
+    button = f.locator()
+    try:
+        button.scroll_into_view_if_needed(timeout=timeout_ms)
+        button.click(timeout=timeout_ms)
+    except Exception as exc:
+        logger.info("Could not open the list %r: %s", f.question, str(exc).splitlines()[0][:100])
+        return False
+    frame = f.frame
+    try:
+        frame.wait_for_timeout(300)
+        search = frame.locator("[role=menu] input:visible, [role=listbox] input:visible, "
+                               "input[placeholder^='Search']:visible").first
+        if search.count():
+            search.fill(want[:40], timeout=timeout_ms)
+            frame.wait_for_timeout(400)
+        items = frame.locator("[role=menuitem]:visible, [role=option]:visible")
+        chosen = None
+        for i in range(min(items.count(), 400)):
+            item = items.nth(i)
+            label = " ".join((item.inner_text(timeout=1_000) or "").split())
+            if label.lower() == want.lower():
+                chosen = item
+                break
+        if chosen is None:
+            frame.keyboard.press("Escape")
+            logger.info("No item equal to %r in the list %r", want, f.question)
+            return False
+        chosen.click(timeout=timeout_ms)
+        frame.wait_for_timeout(300)
+        shown = " ".join((button.inner_text(timeout=2_000) or "").split())
+    except Exception as exc:
+        logger.info("Could not choose %r in %r: %s", want, f.question, str(exc).splitlines()[0][:100])
+        return False
+    return want.lower() in shown.lower() and not is_placeholder(value_of_button(Field(
+        id=f.id, kind=f.kind, label=f.label, question=f.question, value=shown)))

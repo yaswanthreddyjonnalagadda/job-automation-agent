@@ -46,6 +46,7 @@ import geo_reference
 import account_state
 from claude_integration import JOB_POSTING_CHARS, is_non_answer
 import employment_history
+import form_fields
 import repeated_entries
 import login_guard
 import open_answers
@@ -1185,7 +1186,7 @@ class PageAgent:
         """Code reloaded into a run that is already going keeps its old object:
         anything added since starts empty rather than failing."""
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
-                              ("_entries", dict), ("_entry_blank", set), ("history", dict),
+                              ("_entries", dict), ("_entry_blank", set), ("history", dict), ("_attached_here", set),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
                               ("_google_reloads", dict), ("_peeked", dict),
                               ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set), ("_list_retries", int), ("_shapes", dict),
@@ -2306,6 +2307,14 @@ class PageAgent:
                 still_open = [q for q in still_open
                               if not any(_same_question(c.question, q) and c.answer for c in controls)]
                 self._commit_learned_memory(controls)
+            # Fields the accessibility snapshot does not show as questions -- a hidden resume input, a list drawn as a
+            # button -- found by what they are (form_fields.py).
+            if self.inventory_pass(page):
+                self.settle(page, 600)
+                snapshot = self.read_when_loaded(page)
+                controls = parse_snapshot(snapshot)
+                still_open = [q for q in still_open
+                              if not any(_same_question(c.question, q) and c.answer for c in controls)]
             plan = None
             if self.uses_profile_planner():
                 # Autonomous mode is intentionally deterministic.  It never
@@ -2547,6 +2556,16 @@ class PageAgent:
                         answered = True
                     if not answered and question not in missing_required:
                         missing_required.append(question)
+                # Whatever the page draws it as: a required field a person can see, still empty, is named -- the
+                # snapshot alone missed BambooHR's State and reported the page complete (Secunetics).
+                try:
+                    for blank in form_fields.blank_required(form_fields.inventory(self.tab(page))):
+                        question = re.sub(r"[\s*✱:]+$", "", blank.question or blank.label)
+                        if question and not any(_same_question(question, m) for m in missing_required) \
+                                and not any(_same_question(question, g) for g in given_questions):
+                            missing_required.append(question)
+                except Exception as exc:
+                    logger.debug("Field inventory at the last step failed: %s", exc)
                 blockers += [f"required field is still blank: {question}" for question in missing_required]
             if blockers:
                 return Outcome("owner_needed", page, blockers)
@@ -2759,6 +2778,54 @@ class PageAgent:
             self.notes.append(note)
             logger.info("SIGNED: %s", note)
         return given
+
+    def inventory_pass(self, page) -> list[str]:
+        """What the field inventory finds that the snapshot does not: the resume's file input (told apart by the
+        section it sits in -- 'Attach', 'Choose File*', 'From Device' say nothing), and lists a page draws as a
+        button ('State –Select–'). Returns what was done."""
+        tab = self.tab(page)
+        try:
+            fields = form_fields.inventory(tab)
+        except Exception as exc:
+            logger.debug("Field inventory failed: %s", exc)
+            return []
+        done: list[str] = []
+        if self.resume_file and not self.resume_uploaded:
+            target = form_fields.resume_input(fields)
+            here = (urlparse(getattr(tab, "url", "")).path, target.name or target.label) if target else None
+            if target is not None and not target.value and here not in self._attached_here:
+                if form_fields.attach_resume(tab, self.resume_file, fields):
+                    self._attached_here.add(here)
+                    self._resume_went_on(self.resume_file)
+                    self.resume_seen = True
+                    for asked in {target.question, target.label, target.section} - {""}:
+                        self.written[asked] = Path(self.resume_file).name   # the page's own words for it: answered
+                    where = target.section or target.question or target.label or target.name
+                    logger.info("ATTACHED: the resume (%s) -- its input found by where it sits: %r",
+                                Path(self.resume_file).name, where[:60])
+                    done.append("resume")
+        try:
+            controls = parse_snapshot(self.snapshot(page))
+        except Exception:
+            controls = []
+        for f in fields:
+            if f.kind != "button_list" or f.trap or not f.visible or f.disabled or not f.empty:
+                continue
+            question = re.sub(r"[\s*✱:]+$", "", f.label or f.question)
+            # The snapshot shows it as a question and can answer it the usual way -- unless what it shows is the
+            # hidden one-option <select> that only mirrors the button (BambooHR): that has nothing to choose.
+            if not question or any(_same_question(c.question, question)
+                                   and ((c.role in ANSWER_ROLES and not (c.role in ("combobox", "listbox")
+                                                                         and len(c.options) <= 1))
+                                        or is_workday_choice_button(c)) for c in controls):
+                continue
+            value, source = self.known_answer(Control(ref=f"inv:{f.id}", role="combobox", name=question))
+            if value and form_fields.choose_from_button_list(tab, f, value):
+                logger.info("KNEW: %s = %r (%s) -- a list the page draws as a button", question[:44], value[:34],
+                            source)
+                self.written[question] = value
+                done.append(question)
+        return done
 
     def attach_documents(self, page, snapshot: str, controls: list[Control]) -> list[tuple[Answer, Control]]:
         """Attaches the resume and the cover letter where the form asks for them.
@@ -3364,10 +3431,7 @@ class PageAgent:
                         if nearby.count():
                             nearby.last.set_input_files(str(path), timeout=15_000)
                             if answer.action == "upload_resume":
-                                self.resume_uploaded = True
-                                self._record_resume_attached()
-                                if hasattr(self.assistant, "attached_resume"):
-                                    self.assistant.attached_resume = str(path)
+                                self._resume_went_on(path)
                             self.settle(page, 1_500)
                             return True
                 except Exception as exc:
@@ -3376,10 +3440,7 @@ class PageAgent:
                 try:
                     if self.assistant.upload_via_chooser(
                             page, r"select files?|upload a file|choose files?", Path(path)):
-                        self.resume_uploaded = True
-                        self._record_resume_attached()
-                        if hasattr(self.assistant, "attached_resume"):
-                            self.assistant.attached_resume = str(path)
+                        self._resume_went_on(path)
                         self.settle(page, 1_500)
                         return True
                 except Exception as exc:
@@ -3391,10 +3452,7 @@ class PageAgent:
                     loc.click(timeout=5_000)
                 chooser.value.set_files(str(path))
             if answer.action == "upload_resume":
-                self.resume_uploaded = True
-                self._record_resume_attached()
-                if hasattr(self.assistant, "attached_resume"):
-                    self.assistant.attached_resume = str(path)
+                self._resume_went_on(path)
             self.settle(page, 1_500)
             return True
         if answer.action == "choose" and control.role in ("textbox", "searchbox", "spinbutton"):
@@ -4596,6 +4654,13 @@ class PageAgent:
                 self.resume_file.stem.lower() in self.tab(page).inner_text("body", timeout=5_000).lower()
         except Exception:
             return False
+
+    def _resume_went_on(self, path) -> None:
+        """The resume is on the form: remembered for this run, for later runs (an event), and by the browser."""
+        self.resume_uploaded = True
+        self._record_resume_attached()
+        if hasattr(self.assistant, "attached_resume"):
+            self.assistant.attached_resume = str(path)
 
     def _record_resume_attached(self) -> None:
         if self.tracker is not None and self.key and self.resume_file and hasattr(self.tracker, "record_event"):
