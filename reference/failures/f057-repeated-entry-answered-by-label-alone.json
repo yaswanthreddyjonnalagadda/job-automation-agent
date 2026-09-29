@@ -6,13 +6,14 @@
   "site": "Avature (Steelcase); any form that repeats bare 'Start date' / 'End date' / 'Institution' boxes per job or degree",
   "root_cause": "known_answer matched a label to one concept and one profile value ('End date' -> the education end date, 'Institution' -> the first school), with no idea which job or degree the box belongs to. The owner's per-entry work history (data/_experience.json) reached only the Workday wizard, never the reading agent.",
   "why_tests_missed": "Work and education boxes were tested on forms that name them ('Degree 1 school', Workday's numbered groups); none had the same bare labels repeated per entry.",
-  "fix": "repeated_entries.py reads which section and which entry each box belongs to from the page, and answers it from that entry's own record: entries that already show a company or degree take the record that names it, the others the records left over, in order. The current job's end date is left blank on purpose (and a date the site put there is reported); what the record does not hold (country of institution, status) is never taken from another box. apply_flow gives the agent the work history.",
+  "fix": "repeated_entries.py reads which section and which entry each box belongs to from the page, and answers it from that entry's own record: entries that already show a company or degree take the record that names it, the others the records left over, in order. The current job's end date is left blank on purpose (and a date the site put there is reported); what the record does not hold (country of institution, status) is never taken from another box. apply_flow gives the agent the work history. The page plan cannot override it either: in apply_answers an entry box takes its record's value over the plan's, the current job's end date is never filled, and the plan's value stands only where the record holds nothing.",
   "tests": [
     "tests/test_repeated_entries.py::test_each_box_belongs_to_its_own_entry",
     "tests/test_repeated_entries.py::test_an_entry_is_matched_by_the_company_it_shows_before_its_place",
     "tests/test_repeated_entries.py::test_entries_without_a_company_take_the_records_left_over_and_the_current_job_is_one",
     "tests/test_repeated_entries.py::test_each_degree_takes_its_own_school_and_nothing_is_guessed",
-    "tests/test_repeated_entries.py::test_the_agent_answers_entry_boxes_from_the_entry_not_the_profile"
+    "tests/test_repeated_entries.py::test_the_agent_answers_entry_boxes_from_the_entry_not_the_profile",
+    "tests/test_repeated_entries.py::test_the_page_plan_cannot_put_another_entrys_value_in_an_entry_box"
   ],
   "prevention": "Model repeated sections as lists of entries from the start: a field's identity is (section, entry, label), not its label, and the data behind it is a list of records, not one value per concept."
 }

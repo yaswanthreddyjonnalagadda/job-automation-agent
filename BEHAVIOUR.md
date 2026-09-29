@@ -615,7 +615,8 @@ there by the site's own resume reader, takes that company's record; the others t
 the remaining jobs in order. Your current job's end date is left blank, and if the
 site filled one in, the agent tells you to clear it. What your records do not hold
 -- the country of a school, a degree's status -- is left for the AI or you, not
-copied from another box.
+copied from another box. The same holds when the AI plans the page: for a box in a
+job or degree entry, the entry's record wins over the AI's proposal.
 
 An application's page lists its documents with the one **In use** first;
 files from an earlier attempt are marked **Earlier attempt** -- the employer

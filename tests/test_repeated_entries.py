@@ -131,3 +131,28 @@ def test_the_agent_answers_entry_boxes_from_the_entry_not_the_profile():
     assert agent.known_answer(boxes["w2h"]) == ("", "work history (Acme)") and "w2h" in agent._entry_blank
     assert agent.known_answer(boxes["e2g"])[0] == "City College"
     assert agent.known_answer(boxes["e1f"]) == ("", "")                   # never the profile's country
+
+
+def test_the_page_plan_cannot_put_another_entrys_value_in_an_entry_box():
+    from page_agent import Answer, PagePlan
+    job = SimpleNamespace(title="Engineer", company="Hooli", url="https://careers.example.com/apply")
+    agent = PageAgent(SimpleNamespace(values=SimpleNamespace(record=lambda *a, **k: None)), SimpleNamespace(),
+                      SimpleNamespace(auto_submit=False, ats_email=""), config.UserProfile(email="jane@example.com"),
+                      SimpleNamespace(raw_text="x"), job, resume_file=None)
+    agent._ensure_state()
+    agent.history = HISTORY
+    agent._entries = r.entry_map(PAGE)
+    agent.tab = lambda page: page
+    agent.refusal = lambda *a, **k: ""
+    typed = []
+    agent.do = lambda page, answer, control: typed.append((control.ref, answer.value)) or True
+    controls = parse_snapshot(PAGE)
+    plan = PagePlan(page_kind="application_form", answers=[
+        Answer("w3h", "End date", "fill", "May 2018", "ai"),              # the plan's guess: the education end
+        Answer("w2h", "End date", "fill", "March 2025", "ai"),            # an end date for the current job
+        Answer("e1f", "Country of Institution", "choose", "United States", "ai"),   # not in the record: kept
+    ])
+    agent.apply_answers(None, plan, controls)
+    assert ("w3h", "December 2020") in typed                            # Initech's own end date
+    assert not any(ref == "w2h" for ref, _ in typed)                    # the current job's end stays blank
+    assert ("e1f", "United States") in typed

@@ -2576,6 +2576,21 @@ class PageAgent:
             if control is None:
                 logger.info("SKIPPED: %r is not on the page", answer.question[:60])
                 continue
+            # A box inside a job or degree entry takes that entry's record, whatever the page plan proposed; the
+            # plan's value stands only where the record holds nothing (a school's country, say).
+            entry = getattr(self, "_entries", {}).get(control.ref)
+            if entry is not None and answer.action in ("fill", "choose") \
+                    and not str(answer.source or "").startswith("work history"):
+                value, source, blank = repeated_entries.answer(entry, getattr(self, "history", {}) or {})
+                if blank:
+                    logger.info("ENTRY: %r stays blank -- %s is the current job (the plan said %r)",
+                                entry.label, source, answer.value[:40])
+                    processed_refs.add(control.ref)
+                    continue
+                if value and not _same_answer(answer.value, value):
+                    logger.info("ENTRY: %r takes %r from %s, not the plan's %r", entry.label, value[:40], source,
+                                answer.value[:40])
+                    answer = Answer(answer.ref, answer.question, answer.action, value, source)
             refusal = self.refusal(page, answer, control, current_controls)
             if refusal:
                 known_val, _ = self.known_answer(control)
