@@ -194,7 +194,13 @@ sent to the AI. The page still goes to the AI when there is no
 plain Next/Continue to press (for example only "Add Experience"), or when a
 dropdown still shows "Choose an option" or "Select". The agent reads the page's
 step counter itself ("Step 1 of 2"), so a "Submit" button on a step with more
-to come only saves that step. It also finds a plain resume upload box by itself.
+to come only saves that step. It reads only the step the page is *on*: a progress
+bar that lists finished steps ("completed step 1 of 5 ... current step 5 of 5")
+is read as step 5 of 5, and when the page does not make clear which step it is
+on, a "Submit" is treated as the last one and the agent stops for you. (On 29
+September Aristocrat's Review page was read as "step 1 of 5" and its final
+Submit was pressed -- the application went without your review. That can no
+longer happen this way.) It also finds a plain resume upload box by itself.
 
 What leaves your computer: every page the agent reads, together with the facts it
 answers from (your profile, the text of your resume and the job posting -- the

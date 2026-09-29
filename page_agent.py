@@ -690,6 +690,34 @@ def published_choices(question: str, published: list) -> list[str]:
     return []
 
 
+_STEP = re.compile(r"\b(current\s+|completed\s+)?(?:step|page)\s*(\d+)\s*(?:of|/)\s*(\d+)\b", re.IGNORECASE)
+
+
+def current_step(snapshot: str) -> Optional[tuple[int, int]]:
+    """The step the page is ON, as (step, total) -- or None when the page does not say which.
+
+    Workday's progress bar reads "completed step 1 of 5 ... completed step 4 of 5, current step 5 of 5". The
+    first "step N of M" on the page was taken for the current one, so on Aristocrat's Review page (step 5 of
+    5, 29 September) the agent read "1 of 5", took the last "Submit" for a mid-form one and pressed it: the
+    application was sent without the owner's review. A counter marked current wins; one marked completed is
+    never the current step; several unmarked counters that disagree say nothing -- and a page that does not
+    say which step it is on has no steps to come, so its Submit is the last and the agent stops for the owner.
+    """
+    marked, plain = [], []
+    for match in _STEP.finditer(snapshot or ""):
+        kind, step, total = (match.group(1) or "").strip().lower(), int(match.group(2)), int(match.group(3))
+        if not 0 < step <= total:
+            continue
+        if kind == "current":
+            marked.append((step, total))
+        elif not kind:
+            plain.append((step, total))
+    if marked:
+        return marked[-1] if len(set(marked)) == 1 else None
+    distinct = set(plain)
+    return plain[0] if len(distinct) == 1 else None
+
+
 def _open_is_required(question: str, controls: list["Control"], required: set[str]) -> bool:
     """Whether a question still open is marked required -- by a star, or by the page's own required list."""
     if question.rstrip().endswith("*") or any(_same_question(question, marked) for marked in required):
@@ -1696,9 +1724,9 @@ class PageAgent:
         # a step with more to come only saves that step (Schwab's step 2 of 5). Without it, a page
         # answered from the profile alone called its "Submit" the last and stopped for a resume
         # that belonged to a later step.
-        counter = re.search(r"\b(?:step|page)\s*(\d+)\s*(?:of|/)\s*(\d+)\b", snapshot or "", re.IGNORECASE)
-        step = f"{counter.group(1)} of {counter.group(2)}" if counter else ""
-        steps_remain = bool(counter) and int(counter.group(1)) < int(counter.group(2))
+        counter = current_step(snapshot)
+        step = f"{counter[0]} of {counter[1]}" if counter else ""
+        steps_remain = bool(counter) and counter[0] < counter[1]
         return PagePlan(
             page_kind="job_description" if opening else "application_form",
             step=step or "profile-only",
