@@ -44,7 +44,7 @@ import concept_matcher
 import emailed_codes
 import geo_reference
 import account_state
-from claude_integration import JOB_POSTING_CHARS
+from claude_integration import JOB_POSTING_CHARS, is_non_answer
 import employment_history
 import login_guard
 import open_answers
@@ -3107,6 +3107,12 @@ class PageAgent:
 
     def do(self, page, answer: Answer, control: Control) -> bool:
         tab = self.tab(page)
+        offered = {o.strip().lower() for o in (control.options or [])}
+        if answer.action in ("fill", "choose") and is_non_answer(answer.value)                 and (answer.value or "").strip().lower() not in offered:     # "None" can be a real choice
+            # Whoever proposed it -- the page plan or a single question -- "Not provided in the resume" is not the
+            # owner's answer and is never typed (Steelcase's Work Phone, 29 September).
+            logger.info("NOT TYPED: %r for %r is a way of saying 'unknown'", answer.value[:60], control.question[:60])
+            return False
         if answer.action == "choose":
             self._choice_methods.pop(control.ref, None)
             recipe = self._recalled_form_recipe(control, answer)

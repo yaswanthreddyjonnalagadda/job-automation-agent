@@ -117,3 +117,37 @@ def test_the_agent_reads_workdays_confirmation(browser, body, confirmed):
                       resume_file=None)
     assert agent._site_confirms(page) is confirmed
     context.close()
+
+
+# --- an AI's "I don't know" is never typed ---------------------------------------------------------------------
+
+@pytest.mark.parametrize("text, unknown", [
+    ("Not provided in the resume", True), ("N/A", True), ("Not specified.", True),
+    ("The resume does not mention a work phone", True), ("I cannot determine this", True),
+    ("Fairfax, VA", False), ("Information Technology", False), ("703-555-0100", False), ("Yes", False),
+])
+def test_a_non_answer_is_recognised(text, unknown):
+    from claude_integration import is_non_answer
+    assert is_non_answer(text) is unknown
+
+
+def test_the_agent_does_not_type_a_non_answer_but_may_choose_a_none_option(caplog):
+    import logging
+    import config
+    from page_agent import Answer, Control, PageAgent
+    job = SimpleNamespace(title="Engineer", company="Acme", url="https://jobs.example.com/1")
+    agent = PageAgent(SimpleNamespace(values=None), SimpleNamespace(), SimpleNamespace(auto_submit=False, ats_email=""),
+                      config.UserProfile(email="jane@example.com"), SimpleNamespace(raw_text="x"), job,
+                      resume_file=None)
+    agent.tab = lambda page: page
+    caplog.set_level(logging.INFO, logger="page_agent")
+    phone = Control(ref="e1", role="textbox", name="Work Phone")
+    assert agent.do(None, Answer("e1", "Work Phone", "fill", "Not provided in the resume", "ai"), phone) is False
+    assert "NOT TYPED" in caplog.text
+    caplog.clear()
+    choice = Control(ref="e2", role="combobox", name="Disability", options=["Yes", "No", "N/A"])
+    try:
+        agent.do(None, Answer("e2", "Disability", "choose", "N/A", "ai"), choice)
+    except Exception:
+        pass                                    # the choice itself needs a page; only the check is tested here
+    assert "NOT TYPED" not in caplog.text       # "N/A" is one of the options: a real choice, not "unknown"

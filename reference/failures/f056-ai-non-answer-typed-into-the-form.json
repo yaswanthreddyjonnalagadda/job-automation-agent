@@ -1,0 +1,15 @@
+{
+  "id": "f056",
+  "date": "2026-09-29",
+  "class": "A model's 'I don't know' was taken as an answer and typed into the form",
+  "symptom": "Steelcase (Avature), 29 September: asked for the Work Phone, the AI answered 'Not provided in the resume', and the agent typed that into the Work Phone box, where it would have gone to the employer as the owner's phone number.",
+  "site": "Every site",
+  "root_cause": "answer_single_question returned any non-empty text the model gave, and the agent typed whatever an answer held; nothing told a real answer from the model saying it did not know.",
+  "why_tests_missed": "The AI answer tests used good answers or empty ones; none had a model phrase its 'unknown' as a sentence.",
+  "fix": "claude_integration.is_non_answer() recognises the ways a model says 'unknown' (N/A, not provided in the resume, the resume does not mention ...). answer_single_question returns nothing for it, and PageAgent.do() never types one, whoever proposed it -- unless it is one of a dropdown's own options ('N/A' can be a real choice).",
+  "tests": [
+    "tests/test_owner_ends_and_confirmations.py::test_a_non_answer_is_recognised",
+    "tests/test_owner_ends_and_confirmations.py::test_the_agent_does_not_type_a_non_answer_but_may_choose_a_none_option"
+  ],
+  "prevention": "Treat every model output as a proposal to be checked, including the ways a model says it does not know, at the one place where values are written to the page."
+}

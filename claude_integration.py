@@ -7,6 +7,7 @@ design live in one place.
 from __future__ import annotations
 
 import json
+import re
 import logging
 import time
 from typing import Any
@@ -33,6 +34,20 @@ def explain(exc: Exception) -> str:
 
 class ClaudeIntegrationError(RuntimeError):
     pass
+
+
+# A model's way of saying it does not know, which must never be typed into a form as the answer.
+_NON_ANSWER = re.compile(
+    r"(?:n/?a|none|null|unknown|not applicable|no answer|-+|"
+    r"(?:not|no)\s+(?:provided|specified|mentioned|stated|given|available|listed|found|known|included)"
+    r"(?:\s+(?:in|on|by|from)\s+(?:the\s+)?(?:resume|cv|profile|candidate'?s? (?:resume|profile)|facts|information))?|"
+    r"(?:the\s+)?(?:resume|profile|candidate)\s+does\s+not\s+(?:say|mention|specify|provide|list|include)\b.*|"
+    r"(?:i\s+)?(?:do not|don't|cannot|can't)\s+(?:know|determine|tell|find)\b.*|"
+    r"information\s+(?:not|un)\s*available)[.!]?", re.IGNORECASE)
+
+
+def is_non_answer(text: str) -> bool:
+    return bool(_NON_ANSWER.fullmatch((text or "").strip()))
 
 
 # How much of a job posting goes with each question and page: enough for the requirements, not every benefit.
@@ -396,6 +411,11 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
             raw = self._call(system=system, user_message=user_message, max_tokens=600)
             data = self._extract_json(raw)
             ans = str(data.get("answer") or "").strip()
+            if is_non_answer(ans):
+                # "Not provided in the resume" is the model saying it does not know; typed into Steelcase's
+                # Work Phone box (29 September) it would have gone to the employer as the owner's phone number.
+                logger.info("AI had no answer for %r (%r) -- left for the owner", question[:50], ans[:60])
+                return ""
             if options and ans:
                 for opt in options:
                     if opt.strip().lower() == ans.lower():
