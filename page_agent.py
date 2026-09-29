@@ -472,6 +472,12 @@ def _section_holds_a_file(snapshot: str, section: str) -> bool:
 
 
 _UPLOAD_VERB = re.compile(r"attach|upload|choose|add|browse|file|import", re.IGNORECASE)
+# A page or step that is about the resume, in the words sites use for it.
+_RESUME_PAGE = re.compile(r"upload a file|resume upload|\b(select|choose|upload|attach|add|submit)\s+(your\s+|a\s+)?"
+                          r"(resume|cv|curriculum vitae)\b", re.IGNORECASE)
+# A button that opens the computer's file picker.
+_FILE_BUTTON = re.compile(r"\b(select|choose|pick)\s+(another\s+|a\s+|your\s+)?files?\b|\battach\b|\bupload\b|\bbrowse\b",
+                          re.IGNORECASE)
 _RESUME_WORDS = re.compile(r"resume|\bcv\b", re.IGNORECASE)
 # A resume/CV label marked required, as the snapshot shows it: seen even when the
 # upload beside it is not one the agent recognises.
@@ -2729,12 +2735,15 @@ class PageAgent:
                 if self._letter_attached or self.cover_letter is None:
                     continue
             control = _upload_control(controls, matches) or self._file_input_for(page, controls, matches)
+            # A required upload that never says "resume" beside it, on a page or step that is about the resume:
+            # Avature's "Select your resume" step shows "From Device *  No file selected  [Choose another file]"
+            # (Steelcase, 29 September) -- the agent pressed Continue three times with nothing attached.
             if control is None and action == "upload_resume" and (
-                    re.search(r"upload a file|resume upload", snapshot or "", re.IGNORECASE)
+                    _RESUME_PAGE.search(snapshot or "")
                     and re.search(r"required|error", snapshot or "", re.IGNORECASE)):
                 generic_uploads = [c for c in controls
                                    if c.role in PRESS_ROLES | {"button"}
-                                   and re.search(r"select files?|choose files?|attach|upload", c.name or "", re.IGNORECASE)]
+                                   and _FILE_BUTTON.search(c.name or "")]
                 if len(generic_uploads) == 1:
                     control = generic_uploads[0]
             if control is None:

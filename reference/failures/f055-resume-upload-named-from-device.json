@@ -1,0 +1,16 @@
+{
+  "id": "f055",
+  "date": "2026-09-29",
+  "class": "A required upload recognised only by the exact words one site used for it",
+  "symptom": "Steelcase (Avature), 29 September: the 'Select your resume' step showed 'From Device *  No file selected  [Choose another file]'. The agent pressed Continue three times with nothing attached, the page said 'This field is required' each time, and the loop guard stopped the run.",
+  "site": "Avature (Steelcase); any site whose resume box is not labelled 'resume'",
+  "root_cause": "The fallback for an unnamed resume upload needed the page to say 'upload a file' or 'resume upload', and the button to say 'select file(s)', 'choose file(s)', 'attach' or 'upload'. Avature says 'Select your resume' and 'Choose another file'.",
+  "why_tests_missed": "The fallback's tests used the one wording it was written for; no fixture had a resume step whose upload box names the source ('From Device') instead of the document.",
+  "fix": "_RESUME_PAGE recognises a page or step about the resume in the usual phrasings (select/choose/upload/attach/add/submit your resume or CV); _FILE_BUTTON recognises the usual file-picker buttons ('choose another file', 'select files', 'browse', ...). The fallback still acts only when the page says a field is required and exactly one such button is there.",
+  "tests": [
+    "tests/test_resume_upload_without_the_word_resume.py::test_the_avature_resume_step_gets_the_resume",
+    "tests/test_resume_upload_without_the_word_resume.py::test_the_ways_a_file_button_is_named",
+    "tests/test_resume_upload_without_the_word_resume.py::test_a_file_button_on_a_page_not_about_the_resume_is_left_alone"
+  ],
+  "prevention": "Recognise a control by what the page around it is for, in every usual phrasing, and keep a real fixture from each ATS family (Avature included) for the steps that must never be skipped."
+}
