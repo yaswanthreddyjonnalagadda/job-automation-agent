@@ -1,0 +1,17 @@
+{
+  "id": "f032",
+  "date": "2026-09-29",
+  "class": "A value filter that could not tell a profile detail from an everyday word, and learning kept where the person could not see it",
+  "symptom": "Answers the owner typed on application forms were almost never reused: a 'Yes' or 'No' was never learned, and what was learned was reused only at the same employer, stored in the database, and never shown on the dashboard, so the same general questions came back to the owner on every new employer's form.",
+  "site": "Every site",
+  "root_cause": "learn_user_answers skipped any value found among the profile's values, and every profile holds 'Yes' and 'No', so yes/no answers -- most screening questions -- were dropped. What was learned went only to the form_answers table, recalled for the same host and the same wording, and nowhere a person could read or correct it.",
+  "why_tests_missed": "The learning tests used free-text answers ('Social and Professional Network'); none answered a yes/no question, and none checked that an answer given at one employer was used at another.",
+  "fix": "Everyday answers (Yes, No, N/A...) are no longer taken for profile details. profile_setup.worth_keeping() is the one rule for what joins the saved answers from a form: a general question answered in a few words -- not about the one employer, not an essay, not legal, visa, work-authorization or signed. remember_answer() adds it to data/profile_answers.json, never over an answer the person saved, where every form is answered from first and the dashboard shows it.",
+  "tests": [
+    "tests/test_learn_answers.py",
+    "tests/test_learn_answers.py::test_a_general_question_answered_in_a_few_words_is_kept",
+    "tests/test_learn_answers.py::test_anything_about_the_employer_an_essay_or_a_legal_answer_is_not",
+    "tests/test_learn_answers.py::test_the_persons_answers_on_a_form_join_their_saved_answers"
+  ],
+  "prevention": "When filtering values against a profile, compare against the field the question asks for, not against every value the profile holds; and keep what the system learns about a person where that person can see and correct it."
+}

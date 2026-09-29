@@ -698,7 +698,10 @@ def remembered_answers(tracker, questions) -> dict:
     return recalled
 
 
-def learn_user_answers(assistant, page, tracker, key, profile) -> int:
+_EVERYDAY_ANSWERS = frozenset({"yes", "no", "n/a", "na", "none", "true", "false", "not applicable"})
+
+
+def learn_user_answers(assistant, page, tracker, key, profile, company: str = "") -> int:
     """Records what the user filled in by hand, so the next application answers
     it by itself.
 
@@ -718,7 +721,9 @@ def learn_user_answers(assistant, page, tracker, key, profile) -> int:
         label, value = (field.get("label") or "").strip(), (field.get("value") or "").strip()
         if field.get("source") in ("agent", "site") or not label or not value or len(label) < 6:
             continue   # the agent's own answer, or one the site put there that nobody touched
-        if value.lower() in known or safety.is_attestation(label) or safety.is_attestation(value):
+        # A profile detail (a name, an address) is not learned again -- but 'Yes' and 'No' are in every profile,
+        # and skipping them left every yes/no question the person answered unlearned.
+        if (value.lower() in known and value.lower() not in _EVERYDAY_ANSWERS)                 or safety.is_attestation(label) or safety.is_attestation(value):
             continue
         if safety.is_legal_status_question(label):
             continue  # the user answers these afresh every time
@@ -729,6 +734,14 @@ def learn_user_answers(assistant, page, tracker, key, profile) -> int:
             learned += 1
         except Exception as exc:
             logger.debug("Could not remember %r: %s", label[:50], exc)
+        # A general question, answered in a few words, is the person's answer for every employer: it joins
+        # their saved answers, which every form is answered from and the dashboard shows and edits.
+        try:
+            import profile_setup
+            if profile_setup.remember_answer(label, value, company):
+                logger.info("SAVED ANSWER: %r = %r, for every application", label[:60], value[:40])
+        except Exception as exc:
+            logger.debug("Could not add %r to the saved answers: %s", label[:50], exc)
     if learned:
         logger.info("LEARNED: remembered %d answer(s) you filled in, for next time", learned)
     return learned
@@ -747,7 +760,7 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
     """
     documents = documents or {}
     if profile is not None:
-        learn_user_answers(assistant, page, tracker, key, profile)
+        learn_user_answers(assistant, page, tracker, key, profile, getattr(job, "company", ""))
     report = assistant.validate_application(page, resume_name)
     form_fields = assistant.read_back_fields(page)
     # Sponsorship and work authorization, checked against the profile whoever
@@ -1409,7 +1422,7 @@ def main() -> None:
             # Anything on the form the agent did not write is the user's own
             # answer: remember it before filling, both so it is not overwritten
             # and so the next application can use it.
-            learn_user_answers(assistant, page, tracker, key, profile)
+            learn_user_answers(assistant, page, tracker, key, profile, getattr(job, "company", ""))
             remember_progress(tracker, key, page)
 
             # A job may say it will not sponsor a visa only inside its form --

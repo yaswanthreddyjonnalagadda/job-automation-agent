@@ -412,3 +412,59 @@ def save_answers(changes: dict[str, str], removed: tuple[str, ...] = (), path: O
     tmp.write_text(json.dumps(answers, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(path)
     return path
+
+
+# ---------------------------------------------------------------------------
+# Learning from what the person answers while applying
+# ---------------------------------------------------------------------------
+_ABOUT_THIS_EMPLOYER = re.compile(
+    r"\b(this|our) (company|organi[sz]ation|firm|team|employer|position|role|job|opening)\b|\bfor us\b|\bwith us\b|"
+    r"\bhere\b|\bjoin(ing)? us\b|refer(red|ral|rer)?\b|employee (id|number)|requisition|job (id|code|number)|"
+    r"\bwhy (do|are|would) you\b", re.IGNORECASE)
+KEEP_AT_MOST = 200          # longer is an essay written for one job, not an answer to reuse
+
+
+def worth_keeping(question: str, answer: str, company: str = "") -> bool:
+    """Whether an answer the person gave on one form is theirs for every form: a general question, answered in a
+    few words. Anything about the employer they gave it to, an essay, or a legal or signed statement is not.
+
+    The one rule for what joins the saved answers from an application (apply_flow.learn_user_answers asks it)."""
+    import safety
+    question, answer = " ".join((question or "").split()), (answer or "").strip()
+    if len(question) < 6 or not answer or len(answer) > KEEP_AT_MOST:
+        return False
+    if safety.is_attestation(question) or safety.is_legal_status_question(question) or safety.is_attestation(answer):
+        return False
+    import concept_matcher
+    if concept_matcher.match_concept(question) in ("WORK_AUTHORIZATION", "VISA_SPONSORSHIP", "CITIZENSHIP"):
+        return False            # answered from the profile only, every time -- never from a saved answer
+    if _ABOUT_THIS_EMPLOYER.search(question):
+        return False
+    words = [w for w in re.findall(r"[A-Za-z]{4,}", company or "")
+             if w.lower() not in {"inc", "corp", "corporation", "company", "group", "services", "llc", "limited"}]
+    if any(re.search(rf"\b{re.escape(w)}\b", question, re.IGNORECASE) for w in words):
+        return False
+    return True
+
+
+def remember_answer(question: str, answer: str, company: str = "", path: Optional[Path] = None) -> bool:
+    """Adds an answer the person gave while applying to their saved answers, when it is worth keeping and no saved
+    answer already covers the question. Returns True when it was added. A saved answer is never overwritten here:
+    what the person set on the dashboard stays theirs."""
+    if not worth_keeping(question, answer, company):
+        return False
+    path = Path(path or ANSWERS_PATH)
+    question = " ".join(question.split()).rstrip(" *")
+    saved = _read(path)
+    lowered = question.lower()
+    for key in saved:
+        if key.lower() == lowered:
+            return False
+        if key.startswith("re:"):
+            try:
+                if re.search(key[3:], question, re.IGNORECASE):
+                    return False
+            except re.error:
+                continue
+    save_answers({question: answer}, path=path)
+    return True

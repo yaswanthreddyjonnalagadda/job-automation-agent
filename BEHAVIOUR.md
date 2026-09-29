@@ -54,6 +54,14 @@ only reused when it is among the options the new form actually offers. What
 the site filled in by itself (a resume parser's guess) is not learned as
 yours.
 
+A general question you answer in a few words -- "Are you willing to work night
+shifts?", "What is your notice period?" -- also joins **Your saved answers**, so every
+employer's form gets it and you can see and change it on the dashboard. What is kept
+there: not an answer about the one employer ("Have you worked for Acme?", "for us",
+"here", referrals), not an essay, not a legal, visa or work-authorization answer (those
+come from your profile every time), not a signed statement, and never over an answer
+you saved yourself. Yes and No answers are learned too; they used to be skipped.
+
 Fixed facts live in `config.py` (`UserProfile`) and are filled on every
 application without asking: citizenship, clearance, years of experience,
 salary range, education, EEO answers. A pay-band dropdown is answered with the
