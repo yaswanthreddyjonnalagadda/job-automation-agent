@@ -455,7 +455,7 @@ def index():
         return redirect(url_for("setup_pages.setup"))
     tracker = get_tracker()
     apps = tracker.list_all()
-    signals = sorted(p.name for p in (BASE_DIR / "data").glob("_signal_*.txt"))
+    signals = waiting_runs(BASE_DIR / "data")
     runs = _current_runs()
     try:
         show = int(request.args.get("show", PAGE_SIZE))
@@ -470,6 +470,25 @@ def index():
         more=min(show + PAGE_SIZE, MAX_SHOWN), can_show_more=show < min(len(apps), MAX_SHOWN),
         counts=counts, runs=latest_run(runs), signals=signals, error=request.args.get("error"),
     )
+
+
+def waiting_runs(data_dir: Path) -> list[dict]:
+    """The runs waiting for the owner, each with the signal file its Continue writes and a readable label.
+
+    A run marks itself waiting with _waiting_<name>.txt (browser_automation.waiting_note_for). The card used to
+    list only signal files that already existed -- an answer already sent -- so a run that was waiting had no
+    Continue button at all (Rackspace, 29 September)."""
+    found = []
+    for note in sorted(Path(data_dir).glob("_waiting_*.txt")):
+        name = note.name.replace("_waiting_", "", 1)
+        label = name[:-4].replace("_", " ")
+        try:
+            job = json.loads((Path(data_dir) / f"_job_{name[:-4]}.json").read_text(encoding="utf-8-sig"))
+            label = f"{job.get('title', '')} at {job.get('company', '')}".strip() or label
+        except (OSError, ValueError):
+            pass
+        found.append({"signal": f"_signal_{name}", "label": label})
+    return found
 
 
 def latest_run(runs: dict) -> dict:
@@ -920,8 +939,8 @@ INDEX_HTML = """
          the page again and carries on &mdash; after you have dealt with whatever it stopped for.</p>
       {% for s in signals %}
         <div style="margin-top:8px">
-          <code>{{ s }}</code>
-          <form method="post" action="/signal/{{ s }}" style="display:inline">
+          <strong>{{ s.label }}</strong>
+          <form method="post" action="/signal/{{ s.signal }}" style="display:inline">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button name="decision" value="continue">Continue</button>
             <button class="ghost" name="decision" value="reload_code">Reload agent code</button>

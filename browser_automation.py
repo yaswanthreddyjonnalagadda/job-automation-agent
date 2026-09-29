@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -228,6 +229,12 @@ class FramedPage:
         if hasattr(frame, name):
             return getattr(frame, name)
         return getattr(self.top, name)
+
+
+def waiting_note_for(signal_path: Path) -> Path:
+    """The note beside a signal file that says its run is waiting for the owner (_waiting_<name>.txt)."""
+    signal_path = Path(signal_path)
+    return signal_path.with_name(signal_path.name.replace("_signal_", "_waiting_", 1))
 
 
 class JobApplicationAssistant:
@@ -6965,9 +6972,21 @@ class JobApplicationAssistant:
         the owner's turn, so every control they change is recorded as theirs."""
         if page is not None:
             provenance.set_agent_busy(page, False)
+        # The dashboard offers Continue for a run that is waiting, which it knows from this note. It showed
+        # Continue only for an answer already sent (the signal file), so a waiting run had no button at all
+        # (Rackspace, 29 September).
+        waiting = waiting_note_for(signal_path)
+        try:
+            waiting.write_text(datetime.now().isoformat(timespec="seconds"), encoding="utf-8")
+        except OSError:
+            pass
         try:
             return self._wait_for_signal(signal_path, poll_seconds, timeout_seconds, page, left_form_seconds)
         finally:
+            try:
+                waiting.unlink(missing_ok=True)
+            except OSError:
+                pass
             if page is not None:
                 try:
                     provenance.set_agent_busy(page, True)
