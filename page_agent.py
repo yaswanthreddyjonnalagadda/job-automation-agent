@@ -34,7 +34,7 @@ import json
 import logging
 import re
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from typing import Callable, Optional
@@ -47,6 +47,7 @@ import account_state
 from claude_integration import JOB_POSTING_CHARS, is_non_answer
 import employment_history
 import form_fields
+import option_match
 import repeated_entries
 import login_guard
 import open_answers
@@ -1096,6 +1097,10 @@ class PageAgent:
         self._google_reloads: dict[str, int] = {}   # times a site's dead Google button was answered with a fresh load
         self._emailed_in: set[str] = set()      # sites where the email has been given on its own page
         self._created_at: set[str] = set()      # sites where an account has been created
+        # Sites that took the email and then asked for its password: they know the account. Kept when a run
+        # resumes (unlike _emailed_in), because it is what the site said, not something the agent tried.
+        self._account_known: set[str] = set()
+        self._reset_asked: set[str] = set()     # sites where a reset to the ATS password was asked for this run
         self.account_blocker = ""               # what only the owner can do at the account step, or ""
         self._account_seen: dict[str, tuple] = {}   # the last account state logged, per site
         self._account_waits: dict[str, int] = {}    # reads of an account step still drawing its form
@@ -1189,7 +1194,7 @@ class PageAgent:
                               ("_entries", dict), ("_entry_blank", set), ("history", dict), ("_attached_here", set),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
                               ("_google_reloads", dict), ("_peeked", dict),
-                              ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set), ("_list_retries", int), ("_shapes", dict),
+                              ("_emailed_in", set), ("_created_at", set), ("_account_known", set), ("_reset_asked", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set), ("_list_retries", int), ("_shapes", dict),
                               ("_refreshed", bool),
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict),
                               ("_profile_answer_library", lambda: None),
@@ -1292,13 +1297,20 @@ class PageAgent:
         memory = account_state.Memory(
             google_tried=host in self._google_tried, google_refused=host in self._google_failed,
             created=host in self._created_at, signed_in_tried=host in self._signed_in_at,
-            email_given=host in self._emailed_in, account_exists=exists,
+            email_given=host in self._emailed_in, account_exists=exists or host in self._account_known,
+            reset_tried=host in self._reset_asked,
             held=str(getattr(self.assistant, "_login_paused", "") or ""))
         step = account_state.next_step(state, memory)
         self._note_account_state(page, host, state, step)
 
         if step.action == account_state.FOR_OWNER:
             self.account_blocker = step.why
+            return False
+        if step.action == account_state.RESET_PASSWORD:
+            if email and self._reset_refused_password(tab, host, email):
+                return True
+            self.account_blocker = str(getattr(self.assistant, "_login_paused", "") or "") \
+                or account_state.next_step(state, replace(memory, reset_tried=True)).why
             return False
         if step.action == account_state.WAIT:
             waited = self._account_waits.get(host, 0)
@@ -1322,12 +1334,23 @@ class PageAgent:
         if step.action in (account_state.CREATE, account_state.SIGN_IN):
             making_account = step.action == account_state.CREATE
             (self._created_at if making_account else self._signed_in_at).add(host)
+            if not making_account and host in self._emailed_in:
+                self._account_known.add(host)       # it took the email and asked for this account's password
             logger.info("LOGIN: %s on %s", "creating the account" if making_account else "signing in", host)
             try:
+                self.assistant._last_login_rejected = False     # only a refusal of this attempt counts below
                 if self.assistant.handle_auth_gate(tab, email):
                     return True
             except Exception as exc:
                 logger.warning("LOGIN: %s", str(exc).splitlines()[0][:120])
+            # The password just typed was refused: what to do about a refusal is the table's (account_state),
+            # asked now rather than after the sign-in page has been read as a form of questions for the owner.
+            if not making_account and getattr(self.assistant, "_last_login_rejected", False):
+                refused = account_state.AccountState(account_state.WRONG_PASSWORD, "the site refused the password")
+                known = replace(memory, account_exists=memory.account_exists or host in self._account_known)
+                if account_state.next_step(refused, known).action == account_state.RESET_PASSWORD \
+                        and self._reset_refused_password(tab, host, email):
+                    return True
             # Held back on purpose (login_guard): the owner is told why, and what to do.
             reason = str(getattr(self.assistant, "_login_paused", "") or "")
             if reason:
@@ -1337,6 +1360,23 @@ class PageAgent:
                     logger.info("LOGIN: %s", note[:200])
                 self.account_blocker = note
             return False
+        return False
+
+    def _reset_refused_password(self, tab, host: str, email: str) -> bool:
+        """Resets a refused password to the same ATS password with the code emailed to the owner, and signs in
+        (CLAUDE.md §5). Asked for once per site per run; the limits on it (employer sites only, the owner's
+        permission to read the mail, no CAPTCHA, login_guard) are the assistant's."""
+        self._reset_asked.add(host)
+        recover = getattr(self.assistant, "recover_rejected_sign_in", None)
+        if recover is None:
+            return False
+        try:
+            if recover(tab, email):
+                logger.info("LOGIN: the password was reset to your ATS password and the sign-in went through on %s",
+                            host)
+                return True
+        except Exception as exc:
+            logger.warning("RECOVERY: %s", str(exc).splitlines()[0][:120])
         return False
 
     def _note_account_state(self, page, host: str, state, step) -> None:
@@ -2808,8 +2848,32 @@ class PageAgent:
             controls = parse_snapshot(self.snapshot(page))
         except Exception:
             controls = []
+        # A label that appears on several boxes belongs to repeated entries (a job's 'End date'): those are the
+        # entry-aware path's (repeated_entries.py), never answered from here by label alone.
+        seen_labels: dict[str, int] = {}
         for f in fields:
-            if f.kind != "button_list" or f.trap or not f.visible or f.disabled or not f.empty:
+            key = option_match.plain(f.label or f.question)
+            seen_labels[key] = seen_labels.get(key, 0) + 1
+        fillable = ("button_list", "select", "combobox", "date")
+        for f in fields:
+            if f.kind not in fillable or f.trap or not f.visible or f.disabled or not f.empty:
+                continue
+            if seen_labels.get(option_match.plain(f.label or f.question), 0) > 1:
+                continue
+            if f.kind != "button_list":
+                question = re.sub(r"[\s*✱:]+$", "", f.label or f.question)
+                if not question:
+                    continue
+                value, source = self.known_answer(Control(ref=f"inv:{f.id}", role="combobox", name=question,
+                                                          options=list(f.options)))
+                if not value:
+                    continue
+                done_it = form_fields.fill_date(tab, f, value) if f.kind == "date" else form_fields.choose(tab, f, value)
+                if done_it:
+                    logger.info("KNEW: %s = %r (%s) -- a %s the usual reading left empty", question[:44], value[:34],
+                                source, f.kind.replace("_", " "))
+                    self.written[question] = value
+                    done.append(question)
                 continue
             question = re.sub(r"[\s*✱:]+$", "", f.label or f.question)
             # The snapshot shows it as a question and can answer it the usual way -- unless what it shows is the

@@ -1,0 +1,16 @@
+{
+  "id": "f065",
+  "date": "2026-09-29",
+  "class": "A reload refreshed a module but not the modules it newly depends on",
+  "symptom": "Found before it struck, 29 September: loading the refused-sign-in fix (f064) into Mutual of Enumclaw's waiting run with 'Reload code' would have given the new page agent the old account_state, which has no reset step -- an AttributeError in the sign-in step of a live application. The same class once killed a live Amazon application (a new browser_automation meeting an old site adapter).",
+  "site": "Every site (any run that is sent 'Reload code')",
+  "root_cause": "reload_browser_automation reloaded a hand-kept list -- config, safety, the site adapters, browser_automation -- and the run then reloaded page_agent. Every other project module the agents use (account_state, form_fields, option_match, geo_reference, login_guard, emailed_codes, interaction, perception ...) kept the version the run started with, and a list kept by hand falls behind each new module.",
+  "why_tests_missed": "No test covered the reload at all: it was only ever tried on live runs.",
+  "fix": "apply_flow.project_modules_used_by walks the project's own modules the agents use, directly or through each other, and orders each after the modules it uses; reload_browser_automation compile-checks all of them first (one syntax error keeps the whole running version) and reloads them in that order before the site adapters and browser_automation.",
+  "tests": [
+    "tests/test_code_reload.py::test_the_helpers_the_agents_use_are_found_each_after_what_it_uses",
+    "tests/test_code_reload.py::test_a_code_reload_refreshes_every_helper_before_the_agent_that_uses_it",
+    "tests/test_code_reload.py::test_a_helper_with_a_syntax_error_keeps_the_running_version"
+  ],
+  "prevention": "What to reload is derived from the import graph, never kept as a list by hand; a hot reload is tested with importlib.reload recorded, so the order and the all-or-nothing rule are checked without disturbing the process."
+}

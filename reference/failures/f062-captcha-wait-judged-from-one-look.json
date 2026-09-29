@@ -1,0 +1,15 @@
+{
+  "id": "f062",
+  "date": "2026-09-29",
+  "class": "A wait for the owner judged the page from one look taken as the wait began",
+  "symptom": "Mutual of Enumclaw (iCIMS), 29 September: the run stopped for a CAPTCHA, the owner solved it, the site moved on, and the run went on waiting for a Continue that never came.",
+  "site": "iCIMS (hCaptcha); any site whose challenge redraws itself",
+  "root_cause": "_wait_for_signal decided whether it was waiting on a CAPTCHA from one safety.captcha_visible look as the wait began. hCaptcha's picture puzzle redraws itself; that one look fell between draws, so the wait was treated as an ordinary 'waiting for your instruction' and never watched for the challenge to be done -- although the run had stopped precisely because of it.",
+  "why_tests_missed": "The CAPTCHA-wait test put the challenge on the page before the wait began and kept it there until solved; no test drew it late, or told the wait why the run had stopped.",
+  "fix": "apply_flow passes for_captcha when the stop was for a CAPTCHA. The wait then watches for the whole wait: it carries on by itself once the CAPTCHA has been seen and then seen gone on two looks, and never carries on for a challenge it has not seen (no guessing that it was solved).",
+  "tests": [
+    "tests/test_finding_the_way.py::test_a_captcha_that_shows_only_after_the_wait_began_is_still_watched_to_the_end",
+    "tests/test_finding_the_way.py::test_a_stop_for_a_captcha_never_seen_is_not_carried_on_by_guessing"
+  ],
+  "prevention": "A wait carries the reason it began; what it waits for is watched for the whole wait, never decided from the page at one instant -- and never assumed done without having been seen."
+}

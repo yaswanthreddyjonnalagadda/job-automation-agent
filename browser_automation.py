@@ -6413,9 +6413,37 @@ class JobApplicationAssistant:
             return False
         return self._reset_password_with_emailed_code(page, email, password)
 
+    def recover_rejected_sign_in(self, page: Page, email: str) -> bool:
+        """The site knows the owner's account but refused its password (whether it does is decided in
+        account_state, by the caller): the owner's rule for an existing account applies -- reset it to the same
+        ATS_PASSWORD with the code emailed to the owner, then sign in. Mutual of Enumclaw (iCIMS), 29 September:
+        the sign-in was refused and the run stopped with the username and password as questions for the owner,
+        although the rule says what to do.
+
+        The same limits as sign_in_to_existing_account: employer ATS sites only, once per site per run (in
+        _reset_password_with_emailed_code, whichever route asks), no CAPTCHA, the owner's permission to read the
+        mail and the account's limit (why_not_read_a_code), and never a generated or different password."""
+        domain = urlparse(page.url).netloc.lower()
+        if not safety.password_allowed(page.url):
+            return False
+        password = self._read_ats_password()
+        if not password or not email:
+            return False
+        if safety.captcha_visible(page):
+            logger.warning("RECOVERY: a CAPTCHA is showing on %s -- only you can complete it", domain)
+            return False
+        logger.info("RECOVERY: %s knows the account but refused the password -- resetting it to the same "
+                    "ATS password with the code emailed to you", domain)
+        return self._reset_password_with_emailed_code(page, email, password)
+
     def _reset_password_with_emailed_code(self, page: Page, email: str, password: str) -> bool:
         domain = urlparse(page.url).netloc.lower()
         if not safety.password_allowed(page.url) or safety.captcha_visible(page):
+            return False
+        # Once per site per run, whichever route asked for it (an 'account exists' form or a refused sign-in).
+        reset_on = self.__dict__.setdefault("_reset_requested_on", set())
+        if domain in reset_on:
+            logger.info("RECOVERY: a reset was already requested on %s this run -- leaving it to the user", domain)
             return False
         if getattr(self.adapter(page), "name", "") == "workday":
             # Workday resets by an emailed link that lasts about two hours and allows five requests in 24
@@ -6441,6 +6469,7 @@ class JobApplicationAssistant:
             return False
         logger.info("RECOVERY: %s rejected the password -- resetting it to the existing one with an emailed code",
                     domain)
+        reset_on.add(domain)
         self._click_resiliently(forgot, timeout_ms=5_000)
         page.wait_for_timeout(1_500)
         box = self._find_login_email_input(page)
@@ -6966,7 +6995,7 @@ class JobApplicationAssistant:
 
     def wait_for_signal(
         self, signal_path: Path, poll_seconds: float = 2.0, timeout_seconds: float = 1800.0,
-        page: Optional[Page] = None, left_form_seconds: float = 600.0,
+        page: Optional[Page] = None, left_form_seconds: float = 600.0, for_captcha: bool = False,
     ) -> str:
         """Waits for the owner (see _wait_for_signal), with the page marked as
         the owner's turn, so every control they change is recorded as theirs."""
@@ -6981,7 +7010,8 @@ class JobApplicationAssistant:
         except OSError:
             pass
         try:
-            return self._wait_for_signal(signal_path, poll_seconds, timeout_seconds, page, left_form_seconds)
+            return self._wait_for_signal(signal_path, poll_seconds, timeout_seconds, page, left_form_seconds,
+                                         for_captcha=for_captcha)
         finally:
             try:
                 waiting.unlink(missing_ok=True)
@@ -6995,7 +7025,7 @@ class JobApplicationAssistant:
 
     def _wait_for_signal(
         self, signal_path: Path, poll_seconds: float = 2.0, timeout_seconds: float = 1800.0,
-        page: Optional[Page] = None, left_form_seconds: float = 600.0,
+        page: Optional[Page] = None, left_form_seconds: float = 600.0, for_captcha: bool = False,
     ) -> str:
         """Blocks (polling, not input()) until a signal file is written
         externally -- e.g. by a separate command once a human has reviewed
@@ -7027,14 +7057,21 @@ class JobApplicationAssistant:
         # Stopped for a CAPTCHA: once the user has completed it, carry on by
         # itself. On Schwab's sign-in the user solved the puzzle, the site moved
         # to its next step, and the run went on waiting for an instruction.
-        waiting_on_captcha = False
+        #
+        # for_captcha: the run stopped BECAUSE of a CAPTCHA. It is watched for the whole wait, not judged from one
+        # look as the wait begins: hCaptcha's picture puzzle redraws itself, one look two seconds after the stop
+        # missed it, and Mutual of Enumclaw's run (iCIMS, 29 September) waited for a Continue that never came.
+        # It carries on once the CAPTCHA has been seen and then seen gone.
+        waiting_on_captcha = for_captcha
+        captcha_seen = False
         captcha_gone_polls = 0
         waiting_on_signature = False
         if page is not None:
             try:
-                waiting_on_captcha = safety.captcha_visible(page)
+                captcha_seen = bool(safety.captcha_visible(page))
             except Exception:
-                waiting_on_captcha = False
+                captcha_seen = False
+            waiting_on_captcha = waiting_on_captcha or captcha_seen
             if waiting_on_captcha:
                 logger.info("Waiting for you to complete the CAPTCHA; the agent carries on once it is done")
             else:
@@ -7067,14 +7104,20 @@ class JobApplicationAssistant:
                     continue
                 if waiting_on_captcha:
                     try:
-                        captcha_gone_polls = 0 if safety.captcha_visible(page) else captcha_gone_polls + 1
+                        visible = bool(safety.captcha_visible(page))
                     except Exception:
-                        captcha_gone_polls = 0  # mid-navigation: look again next poll
-                    if captcha_gone_polls >= 2:
+                        visible = None      # mid-navigation: look again next poll
+                    if visible:
+                        captcha_seen, captcha_gone_polls = True, 0
+                    elif visible is False and captcha_seen:
+                        captcha_gone_polls += 1
+                    if captcha_seen and captcha_gone_polls >= 2:
                         logger.info("The CAPTCHA is done -- carrying on with the application")
                         page.wait_for_timeout(2_000)  # let the site's next step finish loading
                         return "refresh"
-                    continue
+                    if captcha_seen:
+                        continue
+                    # Not seen yet: the usual checks below still run, so nothing is carried on on a guess.
                 try:
                     on_form = self.find_submit_button(page) is not None
                     if on_form:

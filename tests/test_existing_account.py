@@ -291,3 +291,31 @@ def test_the_auth_gate_acts_on_an_exists_alert_already_on_the_page(page, agent):
     serve(page, password=ATS_PASSWORD, show_on_load=True)
     assert agent.handle_auth_gate(page, EMAIL) is True
     assert site(page)["view"] == "home"
+
+
+# --- a refused sign-in on an account the site knows (Mutual of Enumclaw, iCIMS, 29 September) ------------------------
+
+def test_a_refused_sign_in_is_reset_to_the_existing_password_and_signed_in(page, agent):
+    serve(page, password=OLD_PASSWORD, start="signin")
+    assert agent.attempt_auto_login(page, EMAIL, ATS_PASSWORD, create_if_missing=False) is False
+    assert agent.recover_rejected_sign_in(page, EMAIL) is True
+    state = site(page)
+    assert state["password"] == ATS_PASSWORD and state["resets"] == [ATS_PASSWORD]
+    assert state["signIns"] == [False, True] and state["view"] == "home"
+    assert agent.gmail_calls == [""] and state["codeRequests"] == 1
+
+
+def test_one_reset_per_site_per_run_whichever_route_asked_for_it(page, agent):
+    serve(page, password=OLD_PASSWORD, reject_new=True)
+    assert agent.sign_in_to_existing_account(page, EMAIL) is False       # the 'account exists' route: one reset
+    serve(page, password=OLD_PASSWORD, start="signin")
+    assert agent.attempt_auto_login(page, EMAIL, ATS_PASSWORD, create_if_missing=False) is False
+    assert agent.recover_rejected_sign_in(page, EMAIL) is False          # the sign-in route: not a second one
+    assert site(page)["codeRequests"] == 0 and agent.gmail_calls == [""]
+
+
+def test_a_refused_sign_in_is_never_reset_on_a_site_that_is_off_limits(page, agent):
+    serve(page, password=OLD_PASSWORD, start="signin", host="www.linkedin.com")
+    assert agent.recover_rejected_sign_in(page, EMAIL) is False
+    state = site(page)
+    assert state["codeRequests"] == 0 and state["attempts"] == [] and agent.gmail_calls == []

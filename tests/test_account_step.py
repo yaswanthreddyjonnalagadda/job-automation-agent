@@ -28,8 +28,10 @@ def page(browser):
 
 
 class Assistant:
-    def __init__(self, held="", exists=False, gate=False):
+    def __init__(self, held="", exists=False, gate=False, refuses=False, resets=False):
         self._login_paused, self._exists, self._gate, self.calls = held, exists, gate, []
+        self._refuses, self._resets = refuses, resets
+        self._last_login_rejected = False
         self.values = None
 
     def adapter(self, tab):
@@ -40,7 +42,12 @@ class Assistant:
 
     def handle_auth_gate(self, tab, email):
         self.calls.append(("gate", email))
+        self._last_login_rejected = self._refuses
         return self._gate
+
+    def recover_rejected_sign_in(self, tab, email):
+        self.calls.append(("reset", email))
+        return self._resets
 
     def _sign_in_with_google(self, tab, button, email, host, still_offered):
         self.calls.append(("google", button.inner_text().strip()))
@@ -136,3 +143,54 @@ def test_an_application_page_is_left_to_the_rest_of_the_agent(page, tmp_path):
     assistant = Assistant()
     a = agent(assistant, tmp_path)
     assert step(page, a) is False and a.account_blocker == "" and assistant.calls == []
+
+
+# --- a refused password on an account the site knows (CLAUDE.md §5) --------------------------------------------------
+
+REFUSED = SIGN_IN + '<div role="alert">Invalid username or password.</div>'
+
+
+def test_a_password_refused_on_a_known_account_is_reset_with_the_emailed_code(page, tmp_path):
+    """Mutual of Enumclaw (iCIMS), 29 September: the sign-in was refused and the run stopped with the username and
+    password as questions for the owner. The owner's rule: reset it to the same ATS password with the emailed code."""
+    serve(page, SIGN_IN)
+    assistant = Assistant(exists=True, refuses=True, resets=True)
+    assert step(page, agent(assistant, tmp_path)) is True
+    assert assistant.calls == [("gate", "jane@example.com"), ("reset", "jane@example.com")]
+
+
+def test_a_page_that_already_shows_the_refusal_is_reset_for_a_known_account(page, tmp_path):
+    serve(page, REFUSED)
+    assistant = Assistant(exists=True, resets=True)
+    assert step(page, agent(assistant, tmp_path)) is True
+    assert assistant.calls == [("reset", "jane@example.com")]
+
+
+def test_a_reset_that_did_not_work_is_not_asked_for_again_and_says_why(page, tmp_path):
+    serve(page, REFUSED)
+    assistant = Assistant(exists=True, resets=False)
+    a = agent(assistant, tmp_path)
+    assert step(page, a) is False and "refused" in a.account_blocker
+    assert step(page, a) is False and assistant.calls == [("reset", "jane@example.com")]
+
+
+def test_a_refused_password_on_an_unknown_account_is_not_reset(page, tmp_path):
+    serve(page, SIGN_IN)
+    assistant = Assistant(refuses=True, resets=True)
+    assert step(page, agent(assistant, tmp_path)) is False
+    assert assistant.calls == [("gate", "jane@example.com")]
+
+
+def test_a_new_account_form_that_is_refused_is_not_reset(page, tmp_path):
+    serve(page, CREATE)
+    assistant = Assistant(exists=False, refuses=True, resets=True)
+    step(page, agent(assistant, tmp_path))
+    assert ("reset", "jane@example.com") not in assistant.calls
+
+
+def test_a_refusal_left_over_from_an_earlier_attempt_does_not_start_a_reset(page, tmp_path):
+    serve(page, SIGN_IN)
+    assistant = Assistant(exists=True, refuses=False, resets=True)
+    assistant._last_login_rejected = True           # from an attempt before this one
+    step(page, agent(assistant, tmp_path))
+    assert ("reset", "jane@example.com") not in assistant.calls

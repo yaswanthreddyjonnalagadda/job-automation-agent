@@ -1,0 +1,21 @@
+{
+  "_about": "Words that mean the same answer on different portals (reference/ats_fields/README.md). Each group is one answer; a list offering any member of the answer's group takes that member. Places are not here: they come from geo.json through geo_reference.py.",
+  "degree_level": [
+    ["Master", "Master's", "Masters", "Master's Degree", "Masters Degree", "Master of Science", "Masters of Science", "Master's of Science", "MS", "M.S.", "MSc", "M.Sc.", "Master of Engineering", "M.Eng", "MEng", "Graduate Degree"],
+    ["Bachelor", "Bachelor's", "Bachelors", "Bachelor's Degree", "Bachelors Degree", "Bachelor of Science", "Bachelor of Technology", "Bachelor of Engineering", "BS", "B.S.", "BSc", "B.Sc.", "BTech", "B.Tech", "B.Tech.", "BE", "B.E.", "Undergraduate Degree"],
+    ["Associate", "Associate's", "Associates", "Associate's Degree", "Associate Degree"],
+    ["Doctorate", "Ph.D.", "PhD", "Doctoral Degree", "Doctor of Philosophy"],
+    ["High School", "High School Diploma", "GED", "Secondary School"]
+  ],
+  "language_level": [
+    ["Native", "Native Speaker", "Native or Bilingual", "Mother Tongue", "Bilingual"],
+    ["Fluent", "Advanced", "Full Professional Proficiency", "Professional Working Proficiency", "Proficient"],
+    ["Intermediate", "Conversational", "Limited Working Proficiency"],
+    ["Beginner", "Basic", "Elementary", "Elementary Proficiency"]
+  ],
+  "degree_status": [
+    ["Graduated", "Completed", "Degree Received", "Degree Awarded"],
+    ["Now attending", "Currently Attending", "In Progress", "Attending"],
+    ["Incomplete", "Did Not Complete", "Not Completed", "Withdrawn"]
+  ]
+}

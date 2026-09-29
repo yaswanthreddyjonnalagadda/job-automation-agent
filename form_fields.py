@@ -24,14 +24,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+import option_match
+
 logger = logging.getLogger(__name__)
 
 STAMP = "data-jaa-field"
-
-# What a list shows before anything is picked.
-PLACEHOLDER = re.compile(r"^\s*(?:[–—-]+\s*)?(?:select(?: one| an option| from list)?|choose(?: one| an option)?|"
-                         r"please select|pick one|none selected|search)?\s*(?:\.\.\.|…)?\s*(?:[–—-]+)?\s*$",
-                         re.IGNORECASE)
 
 INVENTORY_JS = r"""
 (stampPrefix) => {
@@ -245,7 +242,7 @@ class Field:
 
 
 def is_placeholder(value: str) -> bool:
-    return bool(PLACEHOLDER.fullmatch(value or ""))
+    return option_match.is_placeholder(value)
 
 
 def value_of_button(f: Field) -> str:
@@ -359,15 +356,143 @@ def attach_resume(page, path: Path, fields: Optional[list[Field]] = None) -> Opt
     return target
 
 
-# --- a list opened by a button (BambooHR, Workday 'Select One') --------------------------------------------------
+# --- choosing from a list: one reader of options, one matcher (option_match.py) ------------------------------------
 
-def choose_from_button_list(page, f: Field, answer: str, timeout_ms: int = 4_000) -> bool:
-    """Opens the list, types into its search box when it has one, clicks the item whose text IS the answer
-    (never one that merely contains it: 'Virginia' is not 'West Virginia'), and confirms the button now shows it.
-    Never presses Enter (that takes whichever row is first)."""
+# Every way a list's rows are drawn in the portals studied: ARIA options and menu items (react-select, Workday,
+# BambooHR, SmartRecruiters, Rippling), Ant rows, Workday prompt rows, select2 rows.
+_OPTION_SELECTOR = ("[role=option], [role=menuitem], .ant-select-item-option, [data-automation-id=promptOption], "
+                    ".select2-results__option")
+
+_OPTIONS_JS = r"""
+([fieldId, selector]) => {
+  const deep = (root, sel, acc = []) => {
+    root.querySelectorAll(sel).forEach(e => acc.push(e));
+    root.querySelectorAll('*').forEach(e => { if (e.shadowRoot) deep(e.shadowRoot, sel, acc); });
+    return acc;
+  };
+  const visible = e => e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
+  deep(document, '[data-jaa-opt]').forEach(e => e.removeAttribute('data-jaa-opt'));
+  const field = deep(document, `[data-jaa-field="${fieldId}"]`)[0];
+  let scope = null;
+  if (field) {
+    const id = field.getAttribute('aria-controls') || field.getAttribute('aria-owns');
+    if (id) scope = (field.getRootNode().getElementById && field.getRootNode().getElementById(id)) || document.getElementById(id);
+  }
+  let rows = deep(scope || document, selector).filter(visible)
+    // a picked value shown as a chip is drawn as an option too (Workday 'items selected'): not a row to choose
+    .filter(o => !o.closest('[aria-label="items selected"], .select__multi-value'));
+  return rows.slice(0, 600).map((o, i) => {
+    o.setAttribute('data-jaa-opt', String(i));
+    return (o.getAttribute('data-automation-label') || o.getAttribute('title') || o.innerText || o.textContent || '')
+      .replace(/\s+/g, ' ').trim();
+  });
+}
+"""
+
+_VALUE_JS = r"""
+(fieldId) => {
+  const deep = (root, sel, acc = []) => {
+    root.querySelectorAll(sel).forEach(e => acc.push(e));
+    root.querySelectorAll('*').forEach(e => { if (e.shadowRoot) deep(e.shadowRoot, sel, acc); });
+    return acc;
+  };
+  const e = deep(document, `[data-jaa-field="${fieldId}"]`)[0];
+  if (!e) return '';
+  const text = n => (n ? (n.innerText || n.textContent || '').replace(/\s+/g, ' ').trim() : '');
+  if (e.tagName === 'SELECT') return e.selectedIndex >= 0 ? text(e.options[e.selectedIndex]) : '';
+  if (e.tagName === 'BUTTON' || (e.getAttribute('role') === 'combobox' && e.tagName !== 'INPUT')) return text(e);
+  for (let n = e, d = 0; n && d < 6; n = n.parentElement, d++) {
+    const v = n.querySelector && n.querySelector('.select__single-value, [class*="singleValue"], .ant-select-selection-item, [data-automation-id=selectedItem]');
+    if (v && text(v)) return text(v);
+    const chip = n.querySelector && n.querySelector('[role=listbox][aria-label="items selected"] [role=option], .select__multi-value__label');
+    if (chip && text(chip)) return text(chip).replace(/, press delete to clear value\.?$/i, '');
+  }
+  return e.value || '';
+}
+"""
+
+
+def list_options(f: Field) -> list[str]:
+    """The rows of the list that belongs to this field, as they are drawn now; each row is stamped data-jaa-opt."""
+    try:
+        return f.frame.evaluate(_OPTIONS_JS, [f.id, _OPTION_SELECTOR]) or []
+    except Exception as exc:
+        logger.debug("Could not read the options of %r: %s", f.question, exc)
+        return []
+
+
+def shown_value(f: Field) -> str:
+    """What the field shows now (a list shows its pick beside the input, not in it)."""
+    try:
+        return f.frame.evaluate(_VALUE_JS, f.id) or ""
+    except Exception:
+        return ""
+
+
+def _wait_for_options(f: Field, timeout_ms: int) -> list[str]:
+    """Rows appear a moment after opening -- or after a server answers what was typed (location, school)."""
+    waited, last = 0, []
+    while waited <= timeout_ms:
+        rows = list_options(f)
+        if rows and rows == last:
+            return rows                  # the list has settled
+        last = rows
+        f.frame.wait_for_timeout(250)
+        waited += 250
+    return last
+
+
+def _click_row(f: Field, index: int, timeout_ms: int) -> bool:
+    try:
+        row = f.frame.locator(f"[data-jaa-opt='{index}']").first
+        row.scroll_into_view_if_needed(timeout=timeout_ms)
+        row.click(timeout=timeout_ms)
+        return True
+    except Exception as exc:
+        logger.info("Could not click the row for %r: %s", f.question, str(exc).splitlines()[0][:100])
+        return False
+
+
+def _kept(f: Field, chosen: str) -> bool:
+    shown = option_match.plain(shown_value(f))
+    want = option_match.plain(chosen)
+    return bool(shown) and not is_placeholder(shown) and (want in shown or shown in want)
+
+
+def _in_ant_select(f: Field) -> bool:
+    try:
+        return bool(f.locator().evaluate("e => !!e.closest('.ant-select')"))
+    except Exception:
+        return False
+
+
+def choose(page, f: Field, answer: str, timeout_ms: int = 5_000) -> bool:
+    """Gives a list field its answer, whatever the list is built as; True only when the field then shows it.
+
+    native <select>: select the option the matcher names. Ant select: interaction.resolve_ant_dropdown (opens with
+    mousedown, reads the whole virtual list). Anything else that opens a list -- react-select, a button list,
+    Workday search, SmartRecruiters, Rippling: a real click opens it (react-select ignores page-script key presses),
+    the answer is typed where the field takes typing (the list filters, or a server answers), and the row the
+    matcher names is clicked. Never Enter, which takes whichever row is first."""
     want = (answer or "").strip()
     if not want:
         return False
+    if f.kind == "select":
+        index = option_match.best_option(f.options, want)
+        if index is None:
+            logger.info("No option of %r is %r (offered: %s)", f.question, want, f.options[:8])
+            return False
+        try:
+            f.locator().select_option(index=index, timeout=timeout_ms)
+        except Exception as exc:
+            logger.info("Could not select %r in %r: %s", f.options[index], f.question, str(exc).splitlines()[0][:100])
+            return False
+        return _kept(f, f.options[index])
+    if f.kind == "combobox" and _in_ant_select(f):
+        import interaction
+        return interaction.resolve_ant_dropdown(f.frame, f.locator(), want, timeout_ms=timeout_ms,
+                                                pick=lambda labels: option_match.best_option(labels, want))
+
     button = f.locator()
     try:
         button.scroll_into_view_if_needed(timeout=timeout_ms)
@@ -376,30 +501,138 @@ def choose_from_button_list(page, f: Field, answer: str, timeout_ms: int = 4_000
         logger.info("Could not open the list %r: %s", f.question, str(exc).splitlines()[0][:100])
         return False
     frame = f.frame
-    try:
-        frame.wait_for_timeout(300)
-        search = frame.locator("[role=menu] input:visible, [role=listbox] input:visible, "
-                               "input[placeholder^='Search']:visible").first
-        if search.count():
-            search.fill(want[:40], timeout=timeout_ms)
-            frame.wait_for_timeout(400)
-        items = frame.locator("[role=menuitem]:visible, [role=option]:visible")
-        chosen = None
-        for i in range(min(items.count(), 400)):
-            item = items.nth(i)
-            label = " ".join((item.inner_text(timeout=1_000) or "").split())
-            if label.lower() == want.lower():
-                chosen = item
-                break
-        if chosen is None:
+    frame.wait_for_timeout(300)
+    typeable = f.tag == "input" and f.type in ("", "text", "search")
+    search = None
+    if not typeable:
+        # BambooHR's menu brings its own search box
+        candidate = frame.locator("[role=menu] input:visible, [role=listbox] input:visible, "
+                                  "input[placeholder^='Search']:visible").first
+        search = candidate if candidate.count() else None
+    queries = [want, want.split(",")[0].split("(")[0].strip()[:20]] if (typeable or search) else [None]
+    chosen = None
+    for query in dict.fromkeys(queries):
+        if query:
+            box = button if typeable else search
+            try:
+                box.fill("", timeout=timeout_ms)
+                box.type(query[:40], delay=25, timeout=timeout_ms)
+            except Exception as exc:
+                logger.debug("Could not type into %r: %s", f.question, exc)
+        rows = _wait_for_options(f, timeout_ms)
+        index = option_match.best_option(rows, want)
+        if index is not None:
+            # A search that answers every keystroke redraws its list after it was read (the row read is gone):
+            # read the list again and click the same answer in it.
+            for _attempt in range(3):
+                if _click_row(f, index, timeout_ms):
+                    chosen = rows[index]
+                    break
+                f.frame.wait_for_timeout(400)
+                rows = _wait_for_options(f, timeout_ms)
+                index = option_match.best_option(rows, want)
+                if index is None:
+                    break
+            break
+        logger.info("No row of %r is %r (offered: %s)", f.question, want, rows[:8])
+    if chosen is None:
+        try:
             frame.keyboard.press("Escape")
-            logger.info("No item equal to %r in the list %r", want, f.question)
-            return False
-        chosen.click(timeout=timeout_ms)
-        frame.wait_for_timeout(300)
-        shown = " ".join((button.inner_text(timeout=2_000) or "").split())
-    except Exception as exc:
-        logger.info("Could not choose %r in %r: %s", want, f.question, str(exc).splitlines()[0][:100])
+        except Exception:
+            pass
         return False
-    return want.lower() in shown.lower() and not is_placeholder(value_of_button(Field(
-        id=f.id, kind=f.kind, label=f.label, question=f.question, value=shown)))
+    frame.wait_for_timeout(300)
+    return _kept(f, chosen)
+
+
+def choose_from_button_list(page, f: Field, answer: str, timeout_ms: int = 4_000) -> bool:
+    """A list drawn as a button (BambooHR, Workday 'Select One'): see choose()."""
+    return choose(page, f, answer, timeout_ms)
+
+
+# --- several answers ---------------------------------------------------------------------------------------------
+
+def choose_several(page, boxes: list[Field], answers: list[str]) -> list[str]:
+    """A 'tick all that apply' group (Lever languages): ticks the box whose label is each answer. Returns what was
+    ticked. A box already ticked is left as it is -- someone ticked it."""
+    labels = [b.label or b.question for b in boxes]
+    ticked = []
+    for answer in answers:
+        index = option_match.best_option(labels, answer)
+        if index is None:
+            logger.info("No box of %r is %r", boxes[0].question if boxes else "", answer)
+            continue
+        box = boxes[index]
+        try:
+            if not box.locator().is_checked():
+                box.locator().check(timeout=4_000)
+            ticked.append(labels[index])
+        except Exception as exc:
+            logger.info("Could not tick %r: %s", labels[index], str(exc).splitlines()[0][:100])
+    return ticked
+
+
+# --- dates ---------------------------------------------------------------------------------------------------------
+
+_MONTHS = {m.lower(): n for n, m in enumerate(("January February March April May June July August September "
+                                               "October November December").split(), start=1)}
+
+
+def parse_date(text: str) -> Optional[tuple[int, int, int]]:
+    """(year, month, day) from the ways the profile and work history write a date: '02/2025', 'February 2025',
+    'Feb 2025', '2025-02-01', '02/01/2025', '2025'. A missing day is 1; a missing month is 1."""
+    t = (text or "").strip()
+    m = re.fullmatch(r"(\d{4})-(\d{1,2})(?:-(\d{1,2}))?", t)
+    if m:
+        return int(m.group(1)), int(m.group(2)), int(m.group(3) or 1)
+    m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", t)
+    if m:
+        return int(m.group(3)), int(m.group(1)), int(m.group(2))
+    m = re.fullmatch(r"(\d{1,2})[/-](\d{4})", t)
+    if m:
+        return int(m.group(2)), int(m.group(1)), 1
+    m = re.fullmatch(r"([A-Za-z]+)\.?,?\s+(\d{4})", t)
+    if m:
+        month = next((n for name, n in _MONTHS.items() if name.startswith(m.group(1).lower()[:3])), None)
+        if month:
+            return int(m.group(2)), month, 1
+    m = re.fullmatch(r"(\d{4})", t)
+    if m:
+        return int(m.group(1)), 1, 1
+    return None
+
+
+def fill_date(page, f: Field, value: str) -> bool:
+    """Types a date the way this box takes it: a native date input takes yyyy-mm-dd; a text box takes what its
+    placeholder shows (mm/dd/yyyy, mm/yyyy, dd/mm/yyyy); a box that says nothing takes mm/dd/yyyy. True when the
+    box then holds it."""
+    parts = parse_date(value)
+    if parts is None:
+        logger.info("Not a date the agent can read: %r for %r", value, f.question)
+        return False
+    year, month, day = parts
+    placeholder = ""
+    try:
+        placeholder = (f.locator().get_attribute("placeholder") or "").lower()
+    except Exception:
+        pass
+    if f.type == "date":
+        text = f"{year:04d}-{month:02d}-{day:02d}"
+    elif re.search(r"dd\s*/\s*mm", placeholder):
+        text = f"{day:02d}/{month:02d}/{year:04d}"
+    elif re.fullmatch(r"\s*mm\s*/\s*yyyy\s*", placeholder):
+        text = f"{month:02d}/{year:04d}"
+    else:
+        text = f"{month:02d}/{day:02d}/{year:04d}"
+    box = f.locator()
+    try:
+        box.fill(text, timeout=5_000)
+        box.dispatch_event("change")
+        box.blur()
+    except Exception as exc:
+        logger.info("Could not type the date into %r: %s", f.question, str(exc).splitlines()[0][:100])
+        return False
+    try:
+        return (box.input_value(timeout=2_000) or "") == text
+    except Exception:
+        return False

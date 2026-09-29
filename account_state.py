@@ -163,6 +163,7 @@ CREATE = "create"
 SIGN_IN = "sign_in"
 GIVE_EMAIL = "give_email"
 ENTER_CODE = "enter_code"
+RESET_PASSWORD = "reset_password"    # a known account refused its password: the owner's rule resets it
 OPEN_SIGN_IN = "open_sign_in"        # a create form, but this email already has an account here
 WAIT = "wait"                        # read the page again: it is still drawing
 FOR_OWNER = "for_owner"              # the owner has to act; `why` says what
@@ -178,6 +179,7 @@ class Memory:
     signed_in_tried: bool = False
     email_given: bool = False
     account_exists: bool = False
+    reset_tried: bool = False        # a reset to the ATS password was already asked for on this site
     held: str = ""                   # login_guard's reason for holding back, if any
 
 
@@ -201,6 +203,13 @@ def next_step(state: AccountState, memory: Memory) -> Step:
     if kind == CODE_ENTRY:
         return Step(ENTER_CODE, "a code was emailed")
     if kind == WRONG_PASSWORD:
+        # The owner's rule (CLAUDE.md §5): an account the site knows -- on record, or the site took the email and
+        # asked for its password -- whose password it refused is reset to the same ATS password with the code
+        # emailed to the owner, once per site per run. 'Wrong email or password' alone does not say the account
+        # exists, so an unknown one stays the owner's. (Mutual of Enumclaw, iCIMS, 29 September.)
+        if (memory.account_exists or memory.email_given) and not memory.reset_tried:
+            return Step(RESET_PASSWORD, "the site knows this account and refused its password: resetting it to the "
+                                        "ATS password with the code emailed to you")
         return Step(FOR_OWNER, f"the site refused the email and password ({state.why}). Check them on the site "
                                f"(or reset the password to the one in Settings), then press Continue")
     if state.google_offered and not memory.google_tried and not memory.google_refused:

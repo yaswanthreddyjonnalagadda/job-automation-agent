@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import inspect
 import json
 from datetime import datetime, timezone
 from typing import Optional
@@ -995,7 +996,8 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
         assistant.raise_window(page)
         agent.remember_page_state(page)
         try:
-            decision = assistant.wait_for_signal(signal_path, timeout_seconds=args.timeout, page=page)
+            decision = assistant.wait_for_signal(signal_path, timeout_seconds=args.timeout, page=page,
+                                                 for_captcha=outcome.kind == "captcha")
         except TimeoutError:
             logger.info("No instruction received; the application is left as it is, unsubmitted.")
             return
@@ -1179,6 +1181,35 @@ def confirmed_after_all(agent, page, tracker, key: str) -> bool:
         return False
 
 
+_RELOADED_ON_THEIR_OWN = {"__main__", "apply_flow", "browser_automation", "page_agent", "config"}
+
+
+def project_modules_used_by(*modules) -> list:
+    """The project's own modules these modules use, directly or through each other, each listed after the
+    modules it uses: the order a reload must follow, or a reloaded module binds the old version of what it
+    imports. The modules that are reloaded on their own (this one, the two agents, config) are left out."""
+    root = Path(__file__).resolve().parent
+    order, seen = [], set()
+
+    def visit(module) -> None:
+        if module.__name__ in seen:
+            return
+        seen.add(module.__name__)
+        for value in list(vars(module).values()):
+            try:
+                used = value if inspect.ismodule(value) else sys.modules.get(getattr(value, "__module__", None) or "")
+                path = getattr(used, "__file__", None)
+                if used is not None and used is not module and path and Path(path).resolve().parent == root:
+                    visit(used)
+            except Exception:
+                continue
+        order.append(module)
+
+    for module in modules:
+        visit(module)
+    return [m for m in order if m.__name__ not in _RELOADED_ON_THEIR_OWN]
+
+
 def reload_browser_automation(assistant: JobApplicationAssistant) -> JobApplicationAssistant:
     """Re-reads browser_automation.py from disk and rebinds `assistant` to
     the freshly-reloaded class, so a bug fix takes effect in THIS already
@@ -1214,17 +1245,28 @@ def reload_browser_automation(assistant: JobApplicationAssistant) -> JobApplicat
         except Exception as exc:
             logger.warning("Could not reload config.py: %s", exc)
 
+        # Every project module the running code uses (safety.py's rules, account_state's table, the fillers ...),
+        # each after the modules it uses. Reloading browser_automation and page_agent alone left new code calling
+        # what the old helpers do not have: a reload into Mutual of Enumclaw's waiting run (29 September) would have
+        # met an account_state without its reset step.
+        helpers = project_modules_used_by(*(m for m in (browser_automation, sys.modules.get("page_agent")) if m))
+        for module in helpers:
+            try:
+                compile(Path(module.__file__).read_text(encoding="utf-8"), module.__file__, "exec")
+            except SyntaxError as exc:
+                logger.error("RELOAD_REJECTED: %s (line %s): %s -- keeping the running version",
+                             Path(module.__file__).name, exc.lineno, exc.msg)
+                return assistant
+        for module in helpers:
+            try:
+                importlib.reload(module)
+            except Exception as exc:
+                logger.warning("Could not reload %s: %s", Path(module.__file__).name, exc)
+
         # The site adapters first: browser_automation calls hooks on them, and
         # reloading only one half left a new call meeting an old adapter --
         # which killed a live Amazon application with AttributeError.
         import sites
-        # safety.py holds the rules the run applies -- a fix to them reached
-        # the code on disk but not the running process, which went on using
-        # the version it started with.
-        try:
-            importlib.reload(safety)
-        except Exception as exc:
-            logger.warning("Could not reload safety.py: %s", exc)
         for module in [sites.base] + [
             importlib.import_module(f"sites.{name}") for name in
             ("amazon", "ashby", "eightfold", "greenhouse", "lever", "successfactors", "workday")

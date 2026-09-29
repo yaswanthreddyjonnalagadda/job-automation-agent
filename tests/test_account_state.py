@@ -157,3 +157,28 @@ def test_a_form_the_site_says_is_unfinished_is_finished_first(error):
     assert state.kind == A.CREATE_FORM and state.form_error
     assert A.next_step(state, A.Memory(account_exists=True)).action == A.CREATE
     assert A.next_step(state, A.Memory(created=True)).action == A.CREATE
+
+
+# --- a refused password on an account the site knows (CLAUDE.md §5) --------------------------------------------------
+
+@pytest.mark.parametrize("known", [{"account_exists": True}, {"email_given": True}])
+def test_a_refused_password_on_a_known_account_is_reset_not_handed_over(known):
+    """Mutual of Enumclaw (iCIMS), 29 September: the site took the email, asked for the password and refused it; the
+    run handed the sign-in page to the owner although the owner's rule says reset it to the ATS password with the
+    emailed code."""
+    assert step(A.WRONG_PASSWORD, **known).action == A.RESET_PASSWORD
+
+
+def test_a_refused_password_is_reset_once_and_then_it_is_the_owners():
+    result = step(A.WRONG_PASSWORD, account_exists=True, reset_tried=True)
+    assert result.action == A.FOR_OWNER and "refused" in result.why
+
+
+def test_a_refused_password_on_an_account_nobody_knows_is_the_owners():
+    """'Wrong email or password' alone does not say the account exists: no reset is asked for."""
+    assert step(A.WRONG_PASSWORD).action == A.FOR_OWNER
+    assert step(A.WRONG_PASSWORD, signed_in_tried=True).action == A.FOR_OWNER
+
+
+def test_a_locked_account_is_never_reset_by_the_agent():
+    assert step(A.LOCKED, account_exists=True, email_given=True).action == A.FOR_OWNER

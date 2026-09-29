@@ -253,9 +253,18 @@ Gmail this browser is signed in to (a separate tab, closed straight after),
 and enters it and your existing password. It never generates or chooses a
 different password.
 
+The same is done when a sign-in is refused on an account the site knows: the
+account is on record, or the site took your email and then asked for that
+account's password (iCIMS signs in this way). Before, only an "account already
+exists" message led to the reset; a refused sign-in stopped the run and asked you
+for the username and password (Mutual of Enumclaw, 29 September). A "wrong email
+or password" on an account the site has not shown it knows is still yours: it may
+mean there is no account there.
+
 It happens only on employer ATS domains (never Google, Microsoft, Apple,
 LinkedIn, Indeed, Dice or the other blocked sites, per `safety.password_allowed`),
-once per site per run, and only after the page itself says the account exists.
+once per site per run whichever way it got there, and only for an account the site
+has shown it knows.
 It stops and leaves the login to you if the site sends a link instead of a code,
 no code arrives, the code is refused twice, the site will not take the existing
 password as the new one, or a CAPTCHA shows. The password and the code are never
@@ -307,8 +316,12 @@ counts before what the form looks like. Then one table decides:
 - **Sign in** on a sign-in form, once per site per run, with the password from
   Settings; give the email first where the site asks for it on its own.
 - **Enter an emailed code** under the rules below.
+- **Reset a refused password** of an account the site knows, to the same password,
+  with the code emailed to you -- once per site per run (see "An account that already
+  exists").
 - **Stop and tell you** when only you can act: open the verification email and click
-  its link, a refused password, a locked account, or sign-in held back to protect the
+  its link, a refused password the reset did not cure (or on an account the site has
+  not shown it knows), a locked account, or sign-in held back to protect the
   account. The run says exactly what to do; press Continue when it is done. It no
   longer treats a sign-in page it could not get past as a form to fill in.
 
@@ -499,6 +512,13 @@ afresh. Before, a page that had tripped the loop guard tripped it again on the
 first press after your Continue, whatever you had put right in between. The guard
 still stops a page that will not move on after three presses, and reports it.
 
+When the run stops for a CAPTCHA, you do not need to press Continue: the agent
+watches the page for the whole wait and carries on by itself once the CAPTCHA has
+been seen and is then gone. Before, it looked once as the wait began; a puzzle that
+redraws itself (hCaptcha's) could be missed at that moment, and the run then waited
+for a Continue after you had solved it (Mutual of Enumclaw, 29 September). It never
+carries on for a CAPTCHA it has not seen.
+
 ## A job that will not sponsor
 
 When your profile needs sponsorship, the agent reads each page for wording that says
@@ -622,6 +642,23 @@ its button says ('Attach', 'Choose File*', 'From Device'), and never in an
 'autofill from resume' upload. A list drawn as a button ('State –Select–') is
 answered by the exact item ('Virginia', never 'West Virginia'). A field that is
 hidden, or says to leave it blank, or is named like a honeypot, is never filled.
+
+Each kind of list is filled the way its portal builds it, and counts as answered
+only when the box then shows the answer: a plain list is set directly; a searchable
+list (Greenhouse's country, a school) is opened with a real click, the answer typed,
+and the matching row clicked once the rows stop changing -- again if the list
+redraws; a location the site suggests (Lever, Rippling) is picked from its
+suggestions, not left as typed text; a menu with its own search box (BambooHR's
+state) is searched and its item clicked; "check all that apply" ticks each of your
+answers. Enter is never pressed in a list: it takes whichever row happens to be
+first. The row chosen must be your answer: the same words; the same place however
+the site spells it ("United States +1" for United States); the same answer in the
+site's own words ("Master" for "Masters of Science", "Graduated" for "Completed" --
+the pairs are in `reference/answer_equivalents.json`); or your whole answer followed
+only by more after a comma or bracket ("No, I do not have a disability" for No). Never
+a row that merely contains it ('Virginia' is not 'West Virginia'), and when two rows
+fit equally well, neither is picked and the question is yours. A date goes in the
+way its box takes it: a date picker, "mm/dd/yyyy", or "MM/YYYY".
 Before the last press, every visible required field still empty is named to you,
 so a page is never called complete with something required left out. How each
 portal builds its fields is in `reference/ats_fields/`.
@@ -697,6 +734,10 @@ or run `python web_ui.py` in a terminal you opened.
 * **Retries** — flaky page actions are retried (`with_retries`, `action_retries`).
 * **Progress is saved** — the form's own Save button is clicked before handing
   over, so a part-finished application survives a reload.
+* **Reload code** — a waiting run takes up edited code without closing its browser.
+  Every part of the agent it uses is reloaded, each after the parts it relies on;
+  before, only a few were, so new code could meet an old helper and stop the run.
+  If any file has a syntax error, the run keeps the whole version it started with.
 * **Structured logs** — each run also writes `logs/run_<timestamp>.jsonl`.
 * **No secrets in logs** — every log line passes through `safety.redact()`,
   which masks API keys, passwords, email addresses and phone numbers. The page text

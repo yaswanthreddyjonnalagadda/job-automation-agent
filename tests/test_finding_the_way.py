@@ -572,3 +572,26 @@ def test_the_agent_carries_on_once_the_owner_has_signed(page, agent, tmp_path):
     page.evaluate("setTimeout(() => document.getElementById('sig').checked = true, 1200)")
     decision = agent.wait_for_signal(tmp_path / "_signal_x.txt", poll_seconds=0.3, timeout_seconds=20, page=page)
     assert decision == "refresh"
+
+
+# --- a run stopped for a CAPTCHA that the first look missed (Mutual of Enumclaw, iCIMS, 29 September) -----------
+
+def test_a_captcha_that_shows_only_after_the_wait_began_is_still_watched_to_the_end(page, agent, tmp_path):
+    """hCaptcha's picture puzzle redraws itself; one look as the wait began missed it and the run waited for a
+    Continue. Stopped for a CAPTCHA, the wait watches throughout and carries on once it has come and gone."""
+    serve_captcha(page, 400)
+    page.evaluate("document.querySelector('iframe').style.display = 'none'")          # missed at the start
+    page.evaluate("setTimeout(() => { document.querySelector('iframe').style.display = ''; }, 700);"
+                  "setTimeout(() => { document.querySelector('iframe').remove();"
+                  " document.body.insertAdjacentHTML('beforeend', '<h2>Create your account</h2>'); }, 2200)")
+    decision = agent.wait_for_signal(tmp_path / "_signal_x.txt", poll_seconds=0.3, timeout_seconds=20, page=page,
+                                     for_captcha=True)
+    assert decision == "refresh"
+
+
+def test_a_stop_for_a_captcha_never_seen_is_not_carried_on_by_guessing(page, agent, tmp_path):
+    serve_captcha(page, 400)
+    page.evaluate("document.querySelector('iframe').remove()")
+    with pytest.raises(TimeoutError):
+        agent.wait_for_signal(tmp_path / "_signal_x.txt", poll_seconds=0.3, timeout_seconds=2, page=page,
+                              for_captcha=True)
