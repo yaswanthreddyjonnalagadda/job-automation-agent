@@ -1,0 +1,18 @@
+{
+  "id": "f040",
+  "date": "2026-09-29",
+  "class": "The same fact in another shape: a chosen value shown as a tag read as an empty box, and a dial code read as the owner's country",
+  "symptom": "Rackspace (Workday): the run stopped with 'could not set: Country Phone Code = United States' although the box held 'United States of America (+1)'; it had 'corrected' it four times, and asked the AI about 'items selected' as if it were a question (also on Blue Cross and Blue Shield of Louisiana).",
+  "site": "Workday search-and-pick boxes (Country Phone Code, Skills, and the like)",
+  "root_cause": "Workday shows a choice as a tag beside an empty search box ('1 item selected, United States of America (+1)', and a listbox 'items selected' holding the tag); the reader read only the empty box, and took the tag list for a question. Separately, the label rule for the owner's own details matched 'Country Phone Code' as 'country', so a correct dial code would have been 'corrected' to the country's name.",
+  "why_tests_missed": "The Workday fixtures had dropdown buttons and plain boxes; none had a search box whose choice is a tag, and the dial-code test (f011) covered a box showing '+1', not one labelled with 'Country' and holding a country with its code.",
+  "fix": "parse_snapshot reads 'N item(s) selected, <value>' and a '<value>, press delete to clear value' tag as the answer of the box before them, and does not make the 'items selected' tag list a control. _detail_field never takes a phone, dial or calling-code label for the owner's country.",
+  "tests": [
+    "tests/test_chosen_value_tags.py",
+    "tests/test_chosen_value_tags.py::test_the_tag_is_the_boxs_answer",
+    "tests/test_chosen_value_tags.py::test_the_list_of_tags_is_not_a_question",
+    "tests/test_chosen_value_tags.py::test_an_answered_box_is_neither_filled_nor_corrected_again",
+    "tests/test_chosen_value_tags.py::test_a_dial_code_box_is_never_read_as_the_owners_country"
+  ],
+  "prevention": "Read a control's value from everything the page shows for it (the box, its tags, its status line), and match a label to a profile field by what the whole label asks, not by its first word."
+}

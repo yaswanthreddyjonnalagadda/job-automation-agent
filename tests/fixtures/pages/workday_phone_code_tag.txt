@@ -1,0 +1,20 @@
+- generic [ref=f4e188]:
+  - generic [ref=f4e190]:
+    - generic [ref=f4e192]: Phone Device Type*
+    - button "Phone Device Type Mobile Required" [ref=f4e287]: Mobile
+  - generic [ref=f4e198]:
+    - generic [ref=f4e199]: Country Phone Code*
+    - generic [ref=f4e205] [cursor=pointer]:
+      - generic:
+        - textbox "Country Phone Code" [ref=f4e206]:
+          - /placeholder: Search
+        - generic [aria-hidden] [ref=f4e207]: 1 item selected, United States of America (+1)
+      - listbox "items selected" [ref=f4e209]:
+        - option "United States of America (+1), press delete to clear value." [ref=f4e210]:
+          - paragraph [ref=f4e215]: United States of America (+1)
+  - generic [ref=f4e219]:
+    - generic [ref=f4e220]: Phone Number*
+    - textbox "Phone Number" [ref=f4e288]: (217) 555-0142
+  - generic [ref=f4e230]:
+    - generic [ref=f4e231]: Phone Extension
+    - textbox "Phone Extension" [ref=f4e232]

@@ -265,6 +265,17 @@ def parse_snapshot(snapshot: str) -> list[Control]:
 
         if role in ("text", "paragraph", "heading", "strong", "emphasis", "generic") and (value or name):
             candidate_text = (value or name).strip()[:200]
+            # Workday's search-and-pick boxes show the choice as a tag beside an empty search box:
+            # "1 item selected, United States of America (+1)". That is the box's answer, not a label.
+            # Read as empty, Rackspace's Country Phone Code was "corrected" four times and the run stopped
+            # with "could not set" (29 September).
+            tagged = _SELECTED_TAG.fullmatch(candidate_text)
+            if tagged:
+                box = _last_entry_box(controls)
+                if box is not None and not box.value and int(tagged.group(1)) > 0 and tagged.group(2):
+                    box.value = tagged.group(2).strip()
+                stack.append((indent, "", None))
+                continue
             # Keep the field label when an accessibility tree emits its
             # required marker as a later child ("First Name" then "(required)").
             if not re.fullmatch(r"\(?\s*required\s*\)?|\*", candidate_text, re.IGNORECASE):
@@ -310,6 +321,17 @@ def parse_snapshot(snapshot: str) -> list[Control]:
                 owner.selected_option = name or value
         elif role in ("radio", "checkbox", "switch") and not ref_m and (name or value):
             unclickable = (role, name or value, "[checked]" in attrs, 6)
+        chip = _TAG_CHOICE.match((name or value or "").strip()) if role in OPTION_ROLES else None
+        if chip:
+            box = _last_entry_box(controls)
+            if box is not None and not box.value:
+                box.value = chip.group(1).strip()
+            stack.append((indent, "", None))
+            continue
+        if ref_m and role == "listbox" and _TAG_LIST.fullmatch((name or "").strip()):
+            # The list of chosen tags ("items selected") belongs to the box before it; it is not a question.
+            stack.append((indent, "", None))
+            continue
         if role in OPTION_ROLES and owner is not None and owner.role in ("combobox", "listbox"):
             owner.options.append(name or value)
             if "[selected]" in attrs:
@@ -476,6 +498,11 @@ def _detail_field(question: str) -> str:
     if not question or re.search(r"employer|company|school|university|reference|referr|emergency|previous|"
                                  r"supervisor|manager|work address", question, re.IGNORECASE):
         return ""
+    # "Country Phone Code" asks for a dial code, not where the owner lives: read as the country, Rackspace's
+    # "United States of America (+1)" was "corrected" to "United States" and the run stopped (29 September).
+    if re.search(r"phone|dial|calling|mobile|telephone|\bcode\b", question, re.IGNORECASE) \
+            and not re.search(r"\b(zip|postal)\b", question, re.IGNORECASE):
+        return ""
     for pattern, field in _DETAIL_FIELDS:
         if pattern.search(question):
             return field
@@ -623,6 +650,19 @@ def keep_latest_runs(folder: Path, keep: int = RUNS_KEPT) -> None:
     import shutil
     for old in runs[:-keep] if keep > 0 else runs:
         shutil.rmtree(old, ignore_errors=True)
+
+
+_SELECTED_TAG = re.compile(r"(\d+)\s+items?\s+selected(?:,\s*(.+))?", re.IGNORECASE)
+_TAG_CHOICE = re.compile(r"(.+?),\s*press (?:delete|backspace) to (?:clear|remove)", re.IGNORECASE)
+_TAG_LIST = re.compile(r"\d*\s*items?\s+selected", re.IGNORECASE)
+
+
+def _last_entry_box(controls: list) -> Optional["Control"]:
+    """The search-and-pick box a chosen-value tag belongs to: the last box read."""
+    for control in reversed(controls[-3:]):
+        if control.role in ("textbox", "searchbox", "combobox"):
+            return control
+    return None
 
 
 def published_choices(question: str, published: list) -> list[str]:
