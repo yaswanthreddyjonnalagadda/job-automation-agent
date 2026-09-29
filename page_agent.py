@@ -586,6 +586,31 @@ def _learnable_recipe_question(question: str) -> bool:
     ))
 
 
+_ERROR_TEXT = re.compile(
+    r"is required and must have a value|\bis required\b|\bare required\b|must have a value|"
+    r"^please (enter|select|provide|upload|choose|complete|fill)|^(error|errors found)\b|\binvalid\b|"
+    r"must be (a|an|at|in|between|less|more)\b|not a valid", re.IGNORECASE)
+_NOT_AN_ERROR = re.compile(r"indicates a required field|^\*|^required$|^error$|^errors found$", re.IGNORECASE)
+_UPLOAD_ERROR = re.compile(r"upload|attach|resume|\bcv\b|file", re.IGNORECASE)
+
+
+def page_errors(snapshot: str) -> list[str]:
+    """What the page says is wrong with the form, in its own words, once each.
+
+    OCC's Workday My Experience said "The field Upload a file (5MB max) is required and must have a value."
+    in an Errors Found panel, and the agent pressed Save and Continue some thirty times without reading it."""
+    found: list[str] = []
+    for line in (snapshot or "").splitlines():
+        if "/url:" in line:
+            continue
+        for quoted, trailing in re.findall(r'"((?:[^"\\]|\\.)*)"|:\s+(.+)$', line.strip()):
+            text = " ".join((quoted or trailing or "").split()).strip('"')
+            if 8 <= len(text) <= 200 and _ERROR_TEXT.search(text) and not _NOT_AN_ERROR.search(text) \
+                    and not text.lower().startswith("error ") and text not in found:
+                found.append(text)
+    return found[:8]
+
+
 def published_choices(question: str, published: list) -> list[str]:
     """The choices the job site publishes for this question (Greenhouse's question list), or [].
 
@@ -943,6 +968,7 @@ class PageAgent:
         self.account_blocker = ""               # what only the owner can do at the account step, or ""
         self._account_seen: dict[str, tuple] = {}   # the last account state logged, per site
         self._account_waits: dict[str, int] = {}    # reads of an account step still drawing its form
+        self._last_press_errors: tuple = ()          # what the page said was wrong after the last press
         self.unanswered_path: Path = UNANSWERED_FILE
         self._logged_unanswered: set[tuple[str, str]] = set()   # (question, site) already counted this run
         self._profile_answer_library: Optional[dict] = None
@@ -1036,7 +1062,7 @@ class PageAgent:
                               ("_resume_autofill_attempted", bool), ("_pending_memories", list),
                               ("_choice_methods", dict), ("_reused_recipes", dict), ("_chosen_instead", dict),
                               ("_current_host", str), ("account_blocker", str), ("_account_seen", dict),
-                              ("_account_waits", dict)):
+                              ("_account_waits", dict), ("_last_press_errors", tuple)):
             if not hasattr(self, name):
                 setattr(self, name, default())
 
@@ -1890,6 +1916,29 @@ class PageAgent:
         return filled, open_questions
 
 
+    def stuck_on_errors(self, page) -> str:
+        """After a press that did not move the page on: what its own errors say to do.
+
+        The first time, the errors are acted on -- an error about a file makes the agent attach it again (it
+        believed it attached) -- and passed to the planner as feedback. The same errors after the next press
+        mean pressing again will not help: "stop:" and the page's own words, for the owner."""
+        try:
+            errors = page_errors(self.snapshot(page))
+        except Exception:
+            return ""
+        if not errors:
+            return ""
+        key = tuple(sorted(errors))
+        if key == getattr(self, "_last_press_errors", ()):
+            return "stop:the form will not go on; it says: " + "; ".join(errors[:4])
+        self._last_press_errors = key
+        if any(_UPLOAD_ERROR.search(e) for e in errors):
+            logger.info("The form says a file is missing -- attaching it again")
+            self.resume_uploaded = False
+            self._letter_attached = False
+        logger.info("THE FORM SAYS: %s", "; ".join(errors[:4])[:200])
+        return "the form says: " + "; ".join(errors[:4])
+
     def _published_questions(self) -> list:
         analysis = getattr(self.job, "analysis", None)
         return list((analysis or {}).get("published_questions") or []) if isinstance(analysis, dict) else []
@@ -2267,7 +2316,14 @@ class PageAgent:
                             "open each one's list and choose from it -- " + "; ".join(rejected))
                 logger.info("REFUSED BY THE PAGE: %s", "; ".join(rejected)[:160])
             moved, page, feedback = self.press_next(page, plan, after) if not rejected else ("retry", page, feedback)
+            if moved == "retry":
+                stuck = self.stuck_on_errors(page)
+                if stuck.startswith("stop:"):
+                    return Outcome("owner_needed", page, [stuck[5:]])
+                if stuck:
+                    feedback = stuck
             if moved == "moved":
+                self._last_press_errors = ()
                 stick_tries = 0
             if moved == "submitted":
                 return Outcome("submitted", page, ["the site confirmed the application"])
@@ -3008,8 +3064,8 @@ class PageAgent:
                 return False
             # Workday's "Select files" button is only a visual trigger; its
             # real file input is hidden inside the upload widget and does not
-            # reliably emit Playwright's filechooser event.
-            if answer.action == "upload_resume":
+            # reliably emit Playwright's filechooser event. The same for a cover letter's.
+            if answer.action in ("upload_resume", "upload_cover_letter"):
                 try:
                     for depth in range(1, 8):
                         nearby = loc.locator(
@@ -3017,14 +3073,15 @@ class PageAgent:
                         ).locator("input[type='file']")
                         if nearby.count():
                             nearby.last.set_input_files(str(path), timeout=15_000)
-                            self.resume_uploaded = True
-                            self._record_resume_attached()
-                            if hasattr(self.assistant, "attached_resume"):
-                                self.assistant.attached_resume = str(path)
+                            if answer.action == "upload_resume":
+                                self.resume_uploaded = True
+                                self._record_resume_attached()
+                                if hasattr(self.assistant, "attached_resume"):
+                                    self.assistant.attached_resume = str(path)
                             self.settle(page, 1_500)
                             return True
                 except Exception as exc:
-                    logger.info("Nearby resume file input was unavailable: %s", str(exc).splitlines()[0][:120])
+                    logger.info("Nearby file input was unavailable: %s", str(exc).splitlines()[0][:120])
             if answer.action == "upload_resume" and hasattr(self.assistant, "upload_via_chooser"):
                 try:
                     if self.assistant.upload_via_chooser(

@@ -389,6 +389,16 @@ your answer (from your profile, then your saved answers) is matched to the exact
 choice Greenhouse published for that question, and the AI, when it is asked, is
 given the same list. Nothing is sent to Greenhouse: the list is public.
 
+## When the form will not go on
+
+When pressing Next (Save and Continue) leaves the page where it was, the agent reads
+what the page says is wrong, in its own words ("The field Upload a file is required",
+"Please select a state"). The first time it acts on it -- a message about a file makes
+it attach the file again -- and tries once more. If the page says the same thing after
+that, it stops and shows you those messages, instead of pressing again. Files are put
+into a drop zone's own file box when its "Select files" button opens no file window
+(Workday's), for a cover letter as for a resume.
+
 ## When you press Continue
 
 Pressing Continue on the dashboard gives the agent its three tries at moving on
