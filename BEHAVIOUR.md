@@ -62,6 +62,13 @@ there: not an answer about the one employer ("Have you worked for Acme?", "for u
 come from your profile every time), not a signed statement, and never over an answer
 you saved yourself. Yes and No answers are learned too; they used to be skipped.
 
+"Have you worked at <company>?" -- however it is worded: as an employee, a
+contractor, an intern or a consultant, "provided services to", "a former employee of",
+"for us", "here" -- is answered from your own work history: **No**, unless that company
+is one you worked for, which your profile and your resume say (then **Yes**). A
+question that names no one in particular ("a government agency", "a competitor") is
+not answered this way. An answer you saved yourself still comes first.
+
 Fixed facts live in `config.py` (`UserProfile`) and are filled on every
 application without asking: citizenship, clearance, years of experience,
 salary range, education, EEO answers. A pay-band dropdown is answered with the

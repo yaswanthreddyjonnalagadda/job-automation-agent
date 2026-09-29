@@ -44,6 +44,7 @@ import concept_matcher
 import emailed_codes
 import geo_reference
 import account_state
+import employment_history
 import login_guard
 import open_answers
 from config import resume_to_attach, site_prefill_policy
@@ -1712,6 +1713,13 @@ class PageAgent:
         if regex_explicit:
             return regex_explicit, "profile.answer_library"
 
+        # 3b. "Have you worked at <company>?" -- from the person's own work history: "No" unless the company is
+        # one they worked for (the owner's rule, 29 September).
+        worked = employment_history.answer(question, getattr(self.job, "company", "") or "",
+                                           self._past_employers())
+        if worked:
+            return worked, "profile.work_history"
+
         field = _name_field(question) or _detail_field(question)
         if field:
             value = str(getattr(self.profile, field, "") or "").strip()
@@ -1771,10 +1779,6 @@ class PageAgent:
             value = str(getattr(self.profile, "willing_to_submit_to_pre_employment_background_check", "") or "").strip()
             if value:
                 return value, "profile.willing_to_submit_to_pre_employment_background_check"
-        if re.search(r"worked for occ as an intern or employee", question, re.IGNORECASE):
-            return str(getattr(self.profile, "worked_for_occ", "") or "").strip(), "profile.worked_for_occ"
-        if re.search(r"provided services to occ as a consultant or contractor", question, re.IGNORECASE):
-            return str(getattr(self.profile, "provided_services_to_occ", "") or "").strip(), "profile.provided_services_to_occ"
         if re.search(r"bonus expectations", question, re.IGNORECASE):
             return str(getattr(self.profile, "bonus_expectations", "") or "").strip(), "profile.bonus_expectations"
         if re.search(r"willing and able to work.*office location.*3 days|minimum of 3 days per week", question,
@@ -1952,6 +1956,13 @@ class PageAgent:
             self._letter_attached = False
         logger.info("THE FORM SAYS: %s", "; ".join(errors[:4])[:200])
         return "the form says: " + "; ".join(errors[:4])
+
+    def _past_employers(self) -> list[str]:
+        """Who the person has worked for, from the profile and the resume (read once per run)."""
+        if getattr(self, "_employers_cache", None) is None:
+            self._employers_cache = employment_history.past_employers(
+                self.profile, getattr(self.resume, "raw_text", "") or "")
+        return self._employers_cache
 
     def _published_questions(self) -> list:
         analysis = getattr(self.job, "analysis", None)
