@@ -69,3 +69,17 @@ import pytest
 ])
 def test_a_dial_code_box_is_never_read_as_the_owners_country(label, field):
     assert page_agent._detail_field(label) == field
+
+
+@pytest.mark.parametrize("child, picked", [
+    ('textbox "Eastern Illinois University" [ref=e2]', "Eastern Illinois University"),   # Avature's tag
+    ('textbox "Institution" [ref=e2]', ""),                  # the search box inside, named like the question
+    ('textbox "Search" [ref=e2]', ""),
+])
+def test_a_picked_tag_inside_a_search_box_is_its_answer(child, picked):
+    from page_agent import parse_snapshot
+    snapshot = f'- combobox "Institution" [ref=e1] [cursor=pointer]:\n  - {child}:\n    - button [ref=e3]: ×'
+    boxes = [c for c in parse_snapshot(snapshot) if c.role == "combobox"]
+    assert boxes and boxes[0].value == picked
+    if picked:
+        assert not [c for c in parse_snapshot(snapshot) if c.name == picked]   # the tag is not a question

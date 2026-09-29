@@ -1,0 +1,33 @@
+{
+  "portal": "Workday (<company>.wd<N>.myworkdayjobs.com)",
+  "studied": "2026-09-29 (from the agent's recordings of Rackspace, Aristocrat, Blue Cross Blue Shield of Louisiana and sites/workday.py)",
+  "single_page": false,
+  "steps": "My Information -> My Experience -> Application Questions -> Voluntary Disclosures -> (Self Identify) -> Review; progress bar lists 'completed step N of M' before 'current step M of M'",
+  "account": "an account (or 'Apply Manually' after sign-in) is needed; see BEHAVIOUR.md 'The account step'",
+  "fields": {
+    "ids": "stable data-automation-id attributes (promptOption, selectedItem, multiSelectContainer, dateSectionMonth-input, dateSectionYear-input, progressBarActiveStep, signInForm ...)",
+    "single_choice": {
+      "widget": "a button named '<question> Select One Required' (aria-haspopup=listbox); the list opens in a portal as role=listbox with role=option items",
+      "empty_means": "'Select One' in the button name",
+      "pick": "click the button, click the option whose text equals the answer"
+    },
+    "search_and_pick": {
+      "widget": "a textbox with placeholder 'Search' (Country Phone Code, How Did You Hear, School, Field of Study, Skills) inside multiSelectContainer, with a prompt icon",
+      "options": "[data-automation-id=promptOption] carrying the exact text in data-automation-label; some lists are two levels (a category, then the item)",
+      "value_shown": "a listbox 'items selected' holding an option '<value>, press delete to clear value' and a hidden '1 item selected, <value>' line -- the textbox itself stays empty",
+      "pick": "type the value, wait for promptOption items, click the one whose data-automation-label equals the answer; confirm it appears under 'items selected'",
+      "weakness": "the current code falls back to 'the option contains the answer' when nothing is equal -- 'Virginia' can take 'West Virginia'; the fallback must be removed or made word-exact"
+    },
+    "multi_choice": "the same prompt widget allowing several items (Skills, Languages)",
+    "dates": {
+      "widget": "a composite date: spinbutton inputs dateSectionMonth-input and dateSectionYear-input with ids '<section>-<n>--<startDate|endDate>-dateSection<Part>-input'",
+      "pick": "focus the first part and TYPE the digits as one stream (MMYYYY); setting a part's value directly scrambles the others",
+      "education": "year only (no month part)"
+    },
+    "repeated_entries": "Work Experience N and Education N groups added with 'Add' / 'Add Another'; each entry must be saved ('Save') before Next",
+    "yes_no": "single-choice buttons 'Select One' with Yes/No options",
+    "phone": "Country Phone Code (search-and-pick, 'United States of America (+1)'), Phone Device Type (single choice), Phone Number",
+    "file": "input type=file under 'Resume/CV' ('Upload a file (5MB max)' / 'Select files'); a separate 'Autofill with Resume' on the first page re-fills the form",
+    "errors": "an 'Errors Found' panel listing each field after Next"
+  }
+}

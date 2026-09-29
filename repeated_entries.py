@@ -155,6 +155,21 @@ def record_for(entry: Entry, history: dict) -> Optional[dict]:
     return records[number] if number is not None else None
 
 
+def describe(entry: Optional[Entry], history: dict) -> str:
+    """The entry in words, for a question asked about one of its boxes: "Masters of Science in Computer
+    Technology, Eastern Illinois University" or "Network Engineer, Globex (2021-2024)". Empty if unknown."""
+    if entry is None:
+        return ""
+    record = record_for(entry, history) or {}
+    if entry.section == "education":
+        degree = " in ".join(p for p in (record.get("degree", ""), record.get("field", "")) if p)
+        return ", ".join(p for p in (degree, record.get("school", "")) if p)
+    span = "-".join(p for p in (str(record.get("start", ""))[-4:], "present" if record.get("current")
+                                else str(record.get("end", ""))[-4:]) if p)
+    words = ", ".join(p for p in (record.get("title", ""), record.get("company", "")) if p)
+    return f"{words} ({span})" if words and span else words
+
+
 # What a label asks for, in an entry of each kind: (pattern, the record's field).
 _WORK_FIELDS = (
     (r"\bcurrent(ly)?\b|\bstill\b|present", "current"),       # before "title": "Is current position?"

@@ -1,0 +1,24 @@
+{
+  "portal": "Dayforce (jobs.dayforcehcm.com/<lang>/<company>/CANDIDATEPORTAL/jobs/<id>)",
+  "studied": "2026-09-29",
+  "sample": "https://jobs.dayforcehcm.com/en-US/lumos/CANDIDATEPORTAL/jobs/9416",
+  "single_page": false,
+  "opens_with": "'Apply for <title>' -> a chooser: 'Apply without an Account' / 'Sign In' (plus a cookie banner: Accept / Reject / Cookie Settings)",
+  "steps": "Candidate Info -> Questionnaire -> Submit",
+  "fields": {
+    "blocking_dialog": "an 'SMS Consent' dialog (Radix) opens over the form on arrival, preset to 'I do not consent', with a Save button; it takes every click until answered -- a consent the owner gives, never the agent",
+    "components": "Ant Design: text inputs .ant-input, selects .ant-select (input role=combobox type=search aria-autocomplete=list), uploads .ant-upload (hidden input type=file), number .ant-input-number (G.P.A.)",
+    "choice": {
+      "widget": "Ant select: input role=combobox inside .ant-select; options in a portal .ant-select-dropdown, virtualised (.rc-virtual-list-holder: only the rows in view exist)",
+      "pick": "see interaction.resolve_ant_dropdown(): open with mousedown on the selector, read the list WHOLE by scrolling it, click the exact row, confirm the select shows it"
+    },
+    "email": "Email Address and Confirm Email Address (the same twice)",
+    "name": "Prefix (select), First, Middle, Last, Suffix (select)",
+    "phone": "two phones (Home, Mobile), each with its own 'Country dialing code' select",
+    "address": "Country (select) -> State/Province (select, depends on the country) -> Address Line 1-3, City (text), County (text), Zip / Postal Code",
+    "education": "repeated entries ('Add Education History'): Degree (text), Not Completed (checkbox), Major, Minor, School (text, free), Country and State/Province (selects, dependent), City, G.P.A. (number)",
+    "file": "hidden ant-upload inputs: 'Import Resume' (parses the resume into the form), 'Add Cover Letter', 'Add Additional Documents'",
+    "source": "'How did you hear about this job?' (select, required)",
+    "language": "a 'Language' select at the top of the form (the form's own language, not a question about the candidate)"
+  }
+}

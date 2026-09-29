@@ -1,0 +1,28 @@
+{
+  "portal": "Greenhouse (job-boards.greenhouse.io, 2025+ board)",
+  "studied": "2026-09-29",
+  "sample": "https://job-boards.greenhouse.io/eplusinc/jobs/4407697009",
+  "single_page": true,
+  "fields": {
+    "text": "input type=text/tel/email with <label for>; required marked by * in the label and aria-required",
+    "choice": {
+      "widget": "react-select: input role=combobox aria-autocomplete=list aria-haspopup=true, id = question id; a hidden sibling input holds the chosen value",
+      "open": "a real mouse press on the control opens it; synthetic keydown/ArrowDown from page script does NOT",
+      "options": "rendered in the page (not a portal) in the listbox named by aria-controls (react-select-<id>-listbox); all options present (Country: 244), not virtualised",
+      "filter": "typing filters the options (\"Unit\" -> United States, United Arab Emirates, United Kingdom)",
+      "pick": "type part of the answer, then click the option whose text matches; never press Enter (takes the first row)",
+      "value_shown": "div.select__single-value inside div.select__value-container; empty shows div.select__placeholder",
+      "gotcha": "Country beside Phone is the phone country: options read 'United States +1' -- match the leading text, not the whole option"
+    },
+    "yes_no": "react-select with Yes/No options (18+, authorized, sponsorship, non-compete, previously employed, worked for X)",
+    "long_answer": "textarea (screening questions)",
+    "file": {
+      "widget": "input type=file accept=.pdf,.doc,.docx,.txt,.rtf, labelled only 'Attach'",
+      "which": "resume vs cover letter only by the section heading above ('Resume/CV', 'Cover Letter'); both inputs are named 'Attach'",
+      "fill": "set_input_files on the input[type=file] in the section whose heading says resume"
+    },
+    "eeo": "react-select comboboxes (gender, Hispanic/Latino, race), optional",
+    "bot_trap": "a hidden (not shown) required textarea labelled 'First Name*' -- never fill a field that is not visible",
+    "captcha": "reCAPTCHA enterprise in an iframe"
+  }
+}

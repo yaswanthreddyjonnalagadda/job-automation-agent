@@ -271,6 +271,18 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         if entry_box is not None and role == "text" and value and not entry_box[1].value:
             entry_box[1].value = value
             continue
+        # A search-and-pick box shows what was picked as a tag inside it, named by the choice:
+        #   - combobox "Institution" [ref=e179]:
+        #     - textbox "Eastern Illinois University" [ref=e1006]:
+        #       - button: ×
+        # (Avature, Steelcase, 29 September). Read as empty, the school was typed again on every pass and the
+        # tag was taken for a question of its own. The tag is the box's answer.
+        if role in ("textbox", "searchbox") and name and owner is not None and owner.role == "combobox" \
+                and not owner.value and not _same_question(name, owner.name) \
+                and not re.fullmatch(r"(?:search|type|select|choose|start typing)\b.*", name, re.IGNORECASE):
+            owner.value = name
+            stack.append((indent, "", None))
+            continue
 
         if role in ("text", "paragraph", "heading", "strong", "emphasis", "generic") and (value or name):
             candidate_text = (value or name).strip()[:200]
@@ -2347,8 +2359,13 @@ class PageAgent:
                                 # asks beside the label ("max 150 words", "0/500").
                                 box = open_answers.read_box(self.locate(page, ctrl.ref)) \
                                     if ctrl.role in ("textbox", "searchbox") else {}
+                                # A box inside a job or degree entry is asked about with that entry named: "Country
+                                # of Institution" alone got one answer (India) for both degrees (Steelcase).
+                                entry = getattr(self, "_entries", {}).get(ctrl.ref)
+                                about = repeated_entries.describe(entry, getattr(self, "history", {}) or {}) \
+                                    if entry is not None else ""
                                 val = self.claude.answer_single_question(
-                                    question=ctrl.question,
+                                    question=f"{ctrl.question} (for: {about})" if about else ctrl.question,
                                     options=ctrl.options,
                                     resume_text=self._resume_text_cache,
                                     profile=self.profile,

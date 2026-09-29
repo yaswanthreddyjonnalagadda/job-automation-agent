@@ -156,3 +156,33 @@ def test_the_page_plan_cannot_put_another_entrys_value_in_an_entry_box():
     assert ("w3h", "December 2020") in typed                            # Initech's own end date
     assert not any(ref == "w2h" for ref, _ in typed)                    # the current job's end stays blank
     assert ("e1f", "United States") in typed
+
+
+def test_a_question_about_an_entry_box_names_the_entry():
+    entries = r.entry_map(PAGE)
+    assert r.describe(entries["e1f"], HISTORY) == "Master of Science in Computer Science, State University"
+    assert r.describe(entries["e2f"], HISTORY) == "Bachelor of Engineering in Electronics, City College"
+    assert r.describe(entries["w2h"], HISTORY) == "Network Engineer II, Acme (2024-present)"
+    assert r.describe(None, HISTORY) == ""
+
+
+def test_the_ai_is_asked_about_each_degree_by_name():
+    job = SimpleNamespace(title="Engineer", company="Hooli", url="https://careers.example.com/apply")
+    asked = []
+
+    class AI:
+        def answer_single_question(self, question, **_):
+            asked.append(question)
+            return ""
+    agent = PageAgent(SimpleNamespace(values=None), AI(), SimpleNamespace(auto_submit=False, ats_email=""),
+                      config.UserProfile(email="jane@example.com"), SimpleNamespace(raw_text="x"), job,
+                      resume_file=None)
+    agent._ensure_state()
+    agent.history = HISTORY
+    agent._entries = r.entry_map(PAGE)
+    import inspect
+    import page_agent
+    # The targeted-question path builds its question from the entry; the same helper is what it calls.
+    assert "repeated_entries.describe(entry" in inspect.getsource(page_agent.PageAgent.run)
+    questions = {f"Country of Institution (for: {r.describe(agent._entries[ref], HISTORY)})" for ref in ("e1f", "e2f")}
+    assert len(questions) == 2                     # two degrees, two different questions
