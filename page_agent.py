@@ -1525,7 +1525,8 @@ class PageAgent:
         """
         if self._profile_answer_library is not None:
             return self._profile_answer_library
-        path = Path("data/profile_answers.json")
+        import profile_setup
+        path = Path(profile_setup.ANSWERS_PATH)     # the one place that names the saved answers
         try:
             loaded = json.loads(path.read_text(encoding="utf-8-sig")) if path.is_file() else {}
             self._profile_answer_library = loaded if isinstance(loaded, dict) else {}
@@ -2887,6 +2888,30 @@ class PageAgent:
             if question in self._paused_state and value != self._paused_state[question]:
                 self.owner_answers[question] = value
                 logger.info("YOURS: %r is now %r -- the agent leaves it as you set it", question[:60], value[:40])
+                self._keep_owner_answer(page, question, value)
+
+    def _keep_owner_answer(self, page, question: str, value: str) -> None:
+        """Saves, at once, an answer the owner gave while the run waited for them.
+
+        It used to live only in this run's memory: answers were learned at the Review page, from what that page
+        shows, and a question answered on step 3 is not on it -- so the same question came back on the next
+        form. The rules are the learning step's: never a legal, visa or signed answer; a general question
+        answered in a few words joins the saved answers (profile_setup.worth_keeping); every answer is also
+        kept against this application, for this employer's next form."""
+        if safety.is_attestation(question) or safety.is_legal_status_question(question) or safety.is_attestation(value):
+            return
+        if self.tracker is not None and self.key and hasattr(self.tracker, "record_answer"):
+            try:
+                self.tracker.record_answer(self.key, self._learning_host() or urlparse(self.tab(page).url).netloc,
+                                           question, value, answered_by="user")
+            except Exception as exc:
+                logger.debug("Could not keep %r for this employer: %s", question[:50], exc)
+        try:
+            import profile_setup
+            if profile_setup.remember_answer(question, value, getattr(self.job, "company", "") or ""):
+                logger.info("SAVED ANSWER: %r = %r, for every application", question[:60], value[:40])
+        except Exception as exc:
+            logger.debug("Could not add %r to the saved answers: %s", question[:50], exc)
 
     def _owner_gave(self, question: str) -> bool:
         return any(_same_question(question, q) for q in self.owner_answers)

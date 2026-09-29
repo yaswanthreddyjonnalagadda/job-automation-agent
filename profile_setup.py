@@ -380,10 +380,13 @@ def saved_answers(path: Optional[Path] = None) -> list[dict[str, str]]:
 def waiting_questions(unanswered: Optional[Path] = None, answers: Optional[Path] = None) -> list[dict[str, Any]]:
     """Questions the agent had to leave, that have no saved answer yet: the most asked first."""
     saved = _read(Path(answers or ANSWERS_PATH))
+    saved_plain = {" ".join(k.split()).rstrip(" *").lower() for k in saved if not k.startswith("re:")}
     rows = []
     for entry in _read(Path(unanswered or UNANSWERED_PATH)).values():
         if not isinstance(entry, dict) or not entry.get("answer_key") or entry.get("answer_key") in saved:
             continue
+        if " ".join(str(entry.get("question") or "").split()).rstrip(" *").lower() in saved_plain:
+            continue                                # answered while applying, saved under its own words
         rows.append({"key": entry["answer_key"], "question": entry.get("question", ""),
                      "options": entry.get("options") or [], "times": entry.get("times", 1),
                      "companies": entry.get("companies") or []})

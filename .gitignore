@@ -43,3 +43,5 @@ runs/
 
 # Run logs: they name employers and carry answers.
 data/*.log
+# Backups of the owner's own records.
+data/*.backup*.json

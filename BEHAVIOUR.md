@@ -69,6 +69,12 @@ is one you worked for, which your profile and your resume say (then **Yes**). A
 question that names no one in particular ("a government agency", "a competitor") is
 not answered this way. An answer you saved yourself still comes first.
 
+When the agent stops in the middle and you answer on the form, then press Continue,
+each answer you gave is kept at once -- not only at the Review page -- under the same
+rules: a general one joins **Your saved answers**, one about that employer is kept for
+that employer, and legal, visa and signed answers are not kept. It then leaves the
+dashboard's "Waiting for your answer" list.
+
 Fixed facts live in `config.py` (`UserProfile`) and are filled on every
 application without asking: citizenship, clearance, years of experience,
 salary range, education, EEO answers. A pay-band dropdown is answered with the
