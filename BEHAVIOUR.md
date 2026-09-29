@@ -479,6 +479,14 @@ page, portal entry or confirmation email is found — clicking is not evidence.
 Every decision, eligible or not, is written to the audit trail and shown on the
 dashboard with its reasons.
 
+## Progress
+
+The dashboard's **Progress** page shows how far applications get: started, reached
+Review, submitted, replied, interviews -- overall and for each job site -- and the
+most common reasons runs stopped before Review. After you submit, set what happened
+on the application's page (**Interviewing**, **Rejected** or **Offer**) and the last
+steps fill in. It reads only what the tracker already keeps.
+
 ## Statuses
 
 `prepared` → `form_filled` → `ready_to_submit` → `submitted`,
