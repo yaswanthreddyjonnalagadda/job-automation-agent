@@ -29,7 +29,7 @@ from flask import Flask, Response, abort, redirect, render_template_string, requ
 
 import visible_desktop
 from config import get_app_config
-from db import get_tracker
+from tracking import open_tracker as get_tracker
 
 BASE_DIR = Path(__file__).resolve().parent
 app = Flask(__name__)
@@ -534,17 +534,8 @@ def application(app_id: int):
     record = next((a for a in tracker.list_all() if a.id == app_id), None)
     if not record:
         abort(404)
-    with tracker._connect() as conn:
-        docs = conn.execute(
-            "SELECT id, kind, filename, byte_size, created_at FROM documents "
-            "WHERE application_id = %s ORDER BY created_at DESC",
-            (app_id,),
-        ).fetchall()
-        answers = conn.execute(
-            "SELECT question, answer, host, answered_by FROM form_answers "
-            "WHERE application_id = %s ORDER BY question",
-            (app_id,),
-        ).fetchall()
+    docs = tracker.documents_for(app_id)
+    answers = tracker.answers_for(app_id)
     events = tracker.events(record.dedup_key) if hasattr(tracker, "events") else []
     decision, validation = latest_decision(events), latest_validation(record)
     latest_screenshot = ""
@@ -612,11 +603,7 @@ def evidence():
 @app.get("/document/<int:doc_id>")
 def document(doc_id: int):
     """Serves a stored document straight from the database."""
-    tracker = get_tracker()
-    with tracker._connect() as conn:
-        row = conn.execute(
-            "SELECT filename, content_type, content FROM documents WHERE id = %s", (doc_id,)
-        ).fetchone()
+    row = get_tracker().document(doc_id)
     if not row:
         abort(404)
     return send_file(

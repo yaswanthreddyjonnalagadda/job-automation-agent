@@ -83,6 +83,11 @@ Open **Settings** on the dashboard:
 
 Keys and the password are kept in `.env` in this folder, on your computer only.
 
+**No database to install.** Applications, the documents sent, run history and learned
+answers are kept in `data/applications.db` on your computer. (If you already run the
+Postgres setup -- `POSTGRES_PASSWORD` in `.env` -- it keeps being used; `TRACKER=sqlite`
+or `TRACKER=postgres` in `.env` chooses explicitly.)
+
 ## 5. Apply to a job
 
 Paste the job's link (a company career page, or a LinkedIn link to one) into the

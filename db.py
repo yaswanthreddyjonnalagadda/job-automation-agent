@@ -501,6 +501,27 @@ class PostgresTracker:
         return row["id"]
 
 
+    def documents_for(self, application_id: int) -> list[dict]:
+        """An application's stored documents, newest first (without their bytes), for the dashboard."""
+        with self._connect() as conn:
+            rows = conn.execute("SELECT id, kind, filename, byte_size, created_at FROM documents "
+                                "WHERE application_id = %s ORDER BY created_at DESC", (application_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def document(self, document_id: int) -> Optional[dict]:
+        """One stored document: filename, content_type and its bytes."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT filename, content_type, content FROM documents WHERE id = %s",
+                               (document_id,)).fetchone()
+        return dict(row) if row else None
+
+    def answers_for(self, application_id: int) -> list[dict]:
+        """What was answered on an application's forms, by question, for the dashboard."""
+        with self._connect() as conn:
+            rows = conn.execute("SELECT question, answer, host, answered_by FROM form_answers "
+                                "WHERE application_id = %s ORDER BY question", (application_id,)).fetchall()
+        return [dict(r) for r in rows]
+
     # ------------------------------------------------------------------
     # Form answers -- the reusable memory of what was answered where
     # ------------------------------------------------------------------

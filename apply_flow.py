@@ -109,25 +109,11 @@ class JsonLogHandler(logging.Handler):
 
 
 def open_tracker(config):
-    """Use Postgres, with SQLite only for a transient connection outage.
-
-    Authentication, schema, and programming errors fail closed so tracking
-    cannot silently split between two databases."""
-    from db import is_transient_connection_error
-    try:
-        from db import get_tracker
-        tracker = get_tracker()
-        logger.info("Tracking to Postgres")
-        return tracker
-    except Exception as exc:
-        if not is_transient_connection_error(exc):
-            raise RuntimeError(f"Postgres tracking failed; refusing SQLite fallback: {exc}") from exc
-        logger.warning(
-            "Postgres unavailable (%s) -- falling back to SQLite at %s. "
-            "Start it with `docker compose up -d`.",
-            str(exc).splitlines()[0][:120], config.db_path,
-        )
-        return JobTracker(config.db_path)
+    """The tracker, as tracking.open_tracker() decides: Postgres when configured, otherwise SQLite."""
+    import tracking
+    tracker = tracking.open_tracker(getattr(config, "db_path", None))
+    logger.info("Tracking to %s", "SQLite" if isinstance(tracker, JobTracker) else "Postgres")
+    return tracker
 
 
 def phone_for_documents(profile) -> str:

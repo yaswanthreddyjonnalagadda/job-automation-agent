@@ -41,35 +41,17 @@ def already_submitted(job: dict) -> bool:
 
     When the Postgres tracker is unreachable (e.g. Docker is not running) this
     falls back to the SQLite tracker so the run is never blocked by a DB outage."""
-    import db
+    import tracking
     try:
-        tracker = db.get_tracker()
+        tracker = tracking.open_tracker()
         found = tracker.find_submitted(url=job.get("url", ""), company=job.get("company", ""),
                                        title=job.get("title", ""))
-        if found:
-            logger.error("DUPLICATE: %s at %s was already submitted (%s) -- not applying again",
-                         found.title, found.company, found.updated_at)
-        return bool(found)
     except Exception as exc:
-        is_transient = getattr(db, "is_transient_connection_error", lambda e: False)
-        if is_transient(exc):
-            # Postgres is down (Docker not started etc.) -- fall back to SQLite.
-            logger.warning(
-                "Postgres unavailable (%s); falling back to SQLite for duplicate check",
-                str(exc).splitlines()[0][:120],
-            )
-            from job_tracker import JobTracker
-            from jd_analyzer import dedup_key_for_url
-            from config import DATA_DIR
-            sqlite_tracker = JobTracker(DATA_DIR / "applications.db")
-            key = dedup_key_for_url(job.get("url", ""))
-            record = sqlite_tracker.get(key)
-            if record and record.status == "submitted":
-                logger.error("DUPLICATE (SQLite): %s at %s was already submitted (%s) -- not applying again",
-                             job.get("title"), job.get("company"), record.updated_at)
-                return True
-            return False
         raise RuntimeError(f"Could not check for duplicate applications: {exc}") from exc
+    if found:
+        logger.error("DUPLICATE: %s at %s was already submitted (%s) -- not applying again",
+                     found.title, found.company, found.updated_at)
+    return bool(found)
 
 
 def skipped_for_sponsorship(job: dict) -> bool:
@@ -86,10 +68,10 @@ def skipped_for_sponsorship(job: dict) -> bool:
         return False
     logger.warning("SKIPPED: %s at %s does not sponsor visas -- %r", job.get("title"), job.get("company"), said)
     try:
-        from db import get_tracker
+        import tracking
         from jd_analyzer import dedup_key_for_url
 
-        tracker = get_tracker()
+        tracker = tracking.open_tracker()
         key = dedup_key_for_url(job.get("url", ""))
         tracker.create(dedup_key=key, title=job.get("title") or "Unknown role",
                        company=job.get("company") or "Unknown", location=job.get("location") or "",

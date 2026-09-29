@@ -497,7 +497,7 @@ job that was declined.
 | `job_sources.py` | reading a posting (Workday, Greenhouse, Lever, Ashby, Eightfold, schema.org, plain page) |
 | `apply_flow.py` | one application from start to hand-over |
 | `apply.py` / `web_ui.py` | entry points |
-| `db.py` / `job_tracker.py` | tracker (Postgres, SQLite fallback) |
+| `tracking.py` / `job_tracker.py` / `db.py` | which tracker (one place), SQLite (no server), Postgres |
 | `tests/` | the rules as tests: `venv\Scripts\python -m pytest tests -q` |
 
 Workday's repeated-entry wizard (`fill_experience_section`, the date spinners,

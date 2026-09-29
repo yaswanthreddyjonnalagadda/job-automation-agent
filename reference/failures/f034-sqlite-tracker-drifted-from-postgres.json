@@ -1,0 +1,17 @@
+{
+  "id": "f034",
+  "date": "2026-09-29",
+  "class": "A second implementation kept as a stand-in drifted until it could no longer stand in",
+  "symptom": "The agent could not be used without a Postgres server (Docker): the dashboard opened Postgres only, and the SQLite tracker, kept for outages, lacked 10 of the 21 methods the agent and dashboard call (events, documents, employer accounts, last page, delete...). Two dashboard pages queried Postgres directly in its own SQL.",
+  "site": "Setup (every user)",
+  "root_cause": "Features were added to the Postgres tracker only; the SQLite one was treated as a temporary fallback and never kept level, and no test compared the two. The choice of tracker was made in three places (web_ui, apply_flow, apply) with different rules.",
+  "why_tests_missed": "Tests used the Postgres tracker or a stand-in with the one method they needed; nothing checked that the SQLite tracker offered what callers use.",
+  "fix": "job_tracker.JobTracker has the Postgres tracker's whole surface (an older applications.db is upgraded in place); tracking.open_tracker() is the one place that chooses (TRACKER, else Postgres when configured, else SQLite with nothing to install); the dashboard reads documents and answers through tracker methods.",
+  "tests": [
+    "tests/test_tracker_without_a_server.py",
+    "tests/test_tracker_without_a_server.py::test_the_sqlite_tracker_does_everything_the_postgres_one_does",
+    "tests/test_tracker_without_a_server.py::test_the_dashboard_works_on_sqlite",
+    "tests/test_tracker_without_a_server.py::test_an_older_database_file_is_brought_up_to_date_in_place"
+  ],
+  "prevention": "Two implementations of one interface get a contract test that fails when one gains a method the other lacks; and the choice between them is made in one function."
+}
