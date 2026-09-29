@@ -1299,6 +1299,7 @@ class PageAgent:
             created=host in self._created_at, signed_in_tried=host in self._signed_in_at,
             email_given=host in self._emailed_in, account_exists=exists or host in self._account_known,
             reset_tried=host in self._reset_asked,
+            refused_before=bool(email) and login_guard.refused_before(host, email),
             held=str(getattr(self.assistant, "_login_paused", "") or ""))
         step = account_state.next_step(state, memory)
         self._note_account_state(page, host, state, step)
@@ -1309,8 +1310,11 @@ class PageAgent:
         if step.action == account_state.RESET_PASSWORD:
             if email and self._reset_refused_password(tab, host, email):
                 return True
+            # Why the reset stopped, in the assistant's words; else what the table says now that it was tried.
             self.account_blocker = str(getattr(self.assistant, "_login_paused", "") or "") \
-                or account_state.next_step(state, replace(memory, reset_tried=True)).why
+                or account_state.next_step(state, replace(memory, reset_tried=True)).why \
+                or "the site refused the password and the reset to your ATS password did not go through: set it " \
+                   "on the site to the password in Settings, then press Continue"
             return False
         if step.action == account_state.WAIT:
             waited = self._account_waits.get(host, 0)

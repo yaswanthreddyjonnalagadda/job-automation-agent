@@ -349,3 +349,29 @@ def test_the_dropdown_matcher_asks_gemini_too_when_gemini_answers(google):
     other = JobApplicationAssistant.__new__(JobApplicationAssistant)
     other._config = make_config(google, form_answer_mode="claude")
     assert type(other._claude_client()) is ClaudeClient
+
+
+# --- a code reload keeps the owner's choice (Mutual of Enumclaw, 29 September, 19:09) ----------------------------------
+
+@pytest.mark.parametrize("mode, brain", [("profile", "session"), ("gemini", "session"), ("claude", "api"),
+                                         ("claude", "session"), ("openai", "session")])
+def test_a_code_reload_chooses_the_brain_the_way_the_start_does(google, mode, brain):
+    """The run started with 'form answers use the local profile planner' (FORM_ANSWER_MODE=profile); a code reload
+    read AGENT_BRAIN=session on its own and moved the pages to the Claude Code session. The reload now asks the same
+    brain_kind the start does, and keeps the brain in use when the settings still choose it."""
+    import apply_flow
+    job = SimpleNamespace(company="Praxis", title="Engineer")
+    settings = make_config(google, form_answer_mode=mode, agent_brain=brain, openai_api_key="sk-x")
+    started = apply_flow.brain_for(settings, job)
+    assert apply_flow.rechoose_brain(started, settings, job) is started
+    assert type(apply_flow.rechoose_brain(object(), settings, job)) is type(started)
+
+
+def test_a_changed_setting_moves_the_pages_on_a_code_reload(google):
+    import apply_flow
+    import session_planner
+    job = SimpleNamespace(company="Praxis", title="Engineer")
+    started = apply_flow.brain_for(make_config(google, form_answer_mode="profile", agent_brain="session"), job)
+    moved = apply_flow.rechoose_brain(started, make_config(google, form_answer_mode="claude", agent_brain="session"),
+                                      job)
+    assert isinstance(moved, session_planner.SessionPlanner)

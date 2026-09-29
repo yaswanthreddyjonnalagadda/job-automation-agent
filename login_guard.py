@@ -101,6 +101,12 @@ def may_sign_in(host: str, email: str) -> Optional[str]:
     return None
 
 
+def refused_before(host: str, email: str) -> bool:
+    """This account's last sign-in here was refused, and nothing has worked since (kept across runs until a
+    sign-in works or the owner presses Continue there)."""
+    return _entry(_load(), host, email).get("hold") == "rejected"
+
+
 def may_create_account(host: str, email: str) -> Optional[str]:
     entry = _entry(_load(), host, email)
     made = _recent(entry.get("creations"), _now())

@@ -1,0 +1,15 @@
+{
+  "id": "f067",
+  "date": "2026-09-29",
+  "class": "The same decision made twice, from different settings, at start and at reload",
+  "symptom": "Mutual of Enumclaw (iCIMS), 29 September, 19:09: the run began with 'BRAIN: form answers use the local profile planner' (FORM_ANSWER_MODE=profile); a 'Reload code' then logged 'BRAIN: now asking the Claude Code session about each page', so every later page would have waited up to an hour for a session to answer.",
+  "site": "Every site (any run sent 'Reload code' while AGENT_BRAIN=session is also set)",
+  "root_cause": "brain_kind() decides who answers the pages, and FORM_ANSWER_MODE wins over AGENT_BRAIN. The reload branch in run_page_agent did not ask it: it read AGENT_BRAIN on its own (checking only whether FORM_ANSWER_MODE was gemini), so under profile, claude or openai mode with AGENT_BRAIN=session it moved the pages to the session planner the owner had not chosen.",
+  "why_tests_missed": "brain_for and brain_kind were tested; the reload's copy of the decision lived inline in run_page_agent, where no test reached it.",
+  "fix": "brain_for marks each brain with the kind it was made for; rechoose_brain, used by the reload, asks brain_kind and keeps the brain in use when the settings still choose it (a session brain takes its new class), else builds the one brain_for builds at the start.",
+  "tests": [
+    "tests/test_gemini_answers.py::test_a_code_reload_chooses_the_brain_the_way_the_start_does",
+    "tests/test_gemini_answers.py::test_a_changed_setting_moves_the_pages_on_a_code_reload"
+  ],
+  "prevention": "A decision that is made again later (after a reload, a resume, a retry) calls the function that made it the first time; inline re-derivations of a setting are replaced by that call, and tested by comparing the second answer with the first."
+}

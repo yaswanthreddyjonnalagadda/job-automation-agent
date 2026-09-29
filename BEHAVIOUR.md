@@ -261,6 +261,13 @@ for the username and password (Mutual of Enumclaw, 29 September). A "wrong email
 or password" on an account the site has not shown it knows is still yours: it may
 mean there is no account there.
 
+A refusal is remembered across runs, so a refused password is never typed again.
+When a later run reaches that site's password page with the refusal on record, the
+agent goes straight to the reset instead of stopping with "sign-in paused" as it
+did before. If the reset cannot finish -- the site emails a link rather than a code,
+no code step appears, or no code reaches your Gmail -- the dashboard says which, and
+what to do: set the password on the site to the one in Settings, then press Continue.
+
 It happens only on employer ATS domains (never Google, Microsoft, Apple,
 LinkedIn, Indeed, Dice or the other blocked sites, per `safety.password_allowed`),
 once per site per run whichever way it got there, and only for an account the site
@@ -738,6 +745,8 @@ or run `python web_ui.py` in a terminal you opened.
   Every part of the agent it uses is reloaded, each after the parts it relies on;
   before, only a few were, so new code could meet an old helper and stop the run.
   If any file has a syntax error, the run keeps the whole version it started with.
+  Who answers the form pages is decided the same way as when the run started (Settings'
+  form-answering choice); before, a reload could move them to the Claude Code session.
 * **Structured logs** — each run also writes `logs/run_<timestamp>.jsonl`.
 * **No secrets in logs** — every log line passes through `safety.redact()`,
   which masks API keys, passwords, email addresses and phone numbers. The page text

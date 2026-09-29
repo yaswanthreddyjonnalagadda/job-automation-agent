@@ -182,3 +182,22 @@ def test_a_refused_password_on_an_account_nobody_knows_is_the_owners():
 
 def test_a_locked_account_is_never_reset_by_the_agent():
     assert step(A.LOCKED, account_exists=True, email_given=True).action == A.FOR_OWNER
+
+
+# --- a refusal remembered from an earlier run (Mutual of Enumclaw, iCIMS, 29 September, 18:54) ------------------------
+
+def test_a_password_refused_in_an_earlier_run_is_reset_not_retyped_or_handed_over():
+    """The earlier run's refusal was kept (login_guard) and the next run stopped at the password page with 'sign-in
+    paused' -- neither retyping the password (right) nor resetting it (the owner's rule)."""
+    assert step(A.SIGN_IN_FORM, refused_before=True, email_given=True).action == A.RESET_PASSWORD
+    assert step(A.SIGN_IN_FORM, refused_before=True, account_exists=True).action == A.RESET_PASSWORD
+
+
+def test_a_password_refused_before_is_never_retyped():
+    for memory in ({"reset_tried": True, "email_given": True}, {}):
+        result = step(A.SIGN_IN_FORM, refused_before=True, **memory)
+        assert result.action == A.FOR_OWNER and "refused" in result.why
+
+
+def test_google_still_comes_first_on_a_sign_in_page_after_a_refusal():
+    assert step(A.SIGN_IN_FORM, google=True, refused_before=True, email_given=True).action == A.GOOGLE

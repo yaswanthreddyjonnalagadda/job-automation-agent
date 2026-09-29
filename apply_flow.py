@@ -989,8 +989,12 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             logger.info("  %s", reason)
         for note in agent.notes[:5]:
             logger.info("  worth checking: %s", note)
-        logger.info("Deal with it in the browser window, then press Continue on the dashboard: "
-                    "the agent reads the page again and carries on.")
+        if outcome.kind == "captcha":
+            logger.info("Solve it in the browser window: the agent notices when it is gone and carries on by "
+                        "itself (Continue on the dashboard works too).")
+        else:
+            logger.info("Deal with it in the browser window, then press Continue on the dashboard: "
+                        "the agent reads the page again and carries on.")
         save_stop_page(page, job_dir)
         logger.info(banner)
         assistant.raise_window(page)
@@ -1048,28 +1052,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 # (or back) without restarting, keeping the form as it stands.
                 import session_planner
                 importlib.reload(session_planner)
-                fresh = config_module.get_app_config()
-                on_gemini = agent.claude.__class__.__name__ == "GeminiBrain"
-                wanted = getattr(fresh, "agent_brain", "api")
-                on_session = agent.claude.__class__.__name__ == "SessionPlanner"
-                if brain_kind(fresh) == "gemini":
-                    # FORM_ANSWER_MODE=gemini decides it, whatever AGENT_BRAIN says.
-                    if not on_gemini:
-                        agent.claude = brain_for(fresh, job)
-                        logger.info("BRAIN: now Gemini answers the pages; Claude writes the documents")
-                elif on_gemini:
-                    agent.claude = brain_for(fresh, job)
-                    logger.info("BRAIN: Gemini no longer answers the pages")
-                elif wanted == "session" and not on_session:
-                    api = agent.claude
-                    agent.claude = session_planner.SessionPlanner(config, folder=Path("data"), fallback=api)
-                    agent.claude.now_applying = f"{job.company} -- {job.title}"
-                    logger.info("BRAIN: now asking the Claude Code session about each page")
-                elif on_session:
-                    agent.claude.__class__ = session_planner.SessionPlanner
-                    if wanted != "session":
-                        agent.claude = agent.claude._fallback
-                        logger.info("BRAIN: back to asking the API about each page")
+                agent.claude = rechoose_brain(agent.claude, config_module.get_app_config(), job)
             except Exception as exc:
                 logger.warning("Could not switch the brain over: %s", exc)
             logger.info("Reloaded the reading agent, your profile and the instructions")
@@ -1148,20 +1131,38 @@ def brain_for(config, job=None):
     kind = brain_kind(config)
     if kind == "profile":
         logger.info("BRAIN: form answers use the local profile planner; the writers write the documents")
-        return ai_choice.Brain(ClaudeClient(config), documents)
-    if kind == "session":
+        brain = ai_choice.Brain(ClaudeClient(config), documents)
+    elif kind == "session":
         import session_planner
         brain = session_planner.SessionPlanner(config, folder=Path("data"), fallback=ClaudeClient(config))
         brain.now_applying = f"{getattr(job, 'company', '')} -- {getattr(job, 'title', '')}".strip(" -")
         logger.info("BRAIN: this run asks the Claude Code session about each page (no API credit used)")
-        return brain
-    if kind == "gemini":
+    elif kind == "gemini":
         from gemini_integration import GeminiBrain
         logger.info("BRAIN: Gemini answers the application pages; the chosen writer writes the documents")
-        return GeminiBrain(config, documents=documents)
-    logger.info("BRAIN: %s answers the application pages; the chosen writer writes the documents",
-                "OpenAI" if kind == "openai" else "Claude")
-    return ai_choice.Brain(ai_choice.answer_client(config, "openai" if kind == "openai" else "claude"), documents)
+        brain = GeminiBrain(config, documents=documents)
+    else:
+        logger.info("BRAIN: %s answers the application pages; the chosen writer writes the documents",
+                    "OpenAI" if kind == "openai" else "Claude")
+        brain = ai_choice.Brain(ai_choice.answer_client(config, "openai" if kind == "openai" else "claude"),
+                                documents)
+    brain.made_for = kind          # what rechoose_brain compares with after a code reload
+    return brain
+
+
+def rechoose_brain(current, config, job=None):
+    """After a code reload: the brain the settings choose now -- the same decision as at the start (brain_kind),
+    never a second reading of the settings. The brain in use is kept when they still choose it (a session brain
+    takes its class's new code). Mutual of Enumclaw, 29 September: a run started on the profile planner was moved
+    to the Claude Code session by a reload that read AGENT_BRAIN on its own."""
+    kind = brain_kind(config)
+    if getattr(current, "made_for", None) == kind:
+        if kind == "session":
+            import session_planner
+            current.__class__ = session_planner.SessionPlanner
+        return current
+    logger.info("BRAIN: after the reload, the settings choose '%s' for the pages", kind)
+    return brain_for(config, job)
 
 
 def confirmed_after_all(agent, page, tracker, key: str) -> bool:

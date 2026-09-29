@@ -6289,7 +6289,7 @@ class JobApplicationAssistant:
         r"submit|continue|verify|confirm|next)\s*$", re.IGNORECASE)
     _LINK_ONLY = re.compile(
         r"(?:reset|password) link|link (?:has been |was )?(?:sent|emailed)|click (?:on )?the link|"
-        r"emailed you a link", re.IGNORECASE)
+        r"emailed you a link|instructions to reset", re.IGNORECASE)
     _CODE_REFUSED = re.compile(r"invalid|incorrect|expired|didn'?t match|not valid|wrong code", re.IGNORECASE)
     _PASSWORD_REFUSED = re.compile(
         r"does not meet|must (?:contain|be|include|have)|too (?:short|weak|common)|cannot (?:be|reuse)|"
@@ -6488,10 +6488,15 @@ class JobApplicationAssistant:
             if field is not None:
                 break
             if self._page_says(page, self._LINK_ONLY):
+                self._login_paused = (f"{domain} emailed you a link to reset the password, not a code: open it, set "
+                                      f"the password to the one in Settings, then press Continue")
                 logger.info("RECOVERY: %s sends a link, not a code -- leaving it to the user", domain)
                 return False
             page.wait_for_timeout(1_000)
         if field is None:
+            self._login_paused = (f"{domain} was asked to reset the password, but no box for an emailed code came up: "
+                                  f"look at the page (or the email it sent), set the password to the one in Settings, "
+                                  f"then press Continue")
             logger.info("RECOVERY: no code step appeared on %s -- leaving it to the user", domain)
             return False
 
@@ -6499,6 +6504,8 @@ class JobApplicationAssistant:
         for _attempt in (1, 2):
             code = self.passcode_from_gmail(page, previous=previous)
             if not code:
+                self._login_paused = (f"no reset code from {domain} arrived in your Gmail: find the email, enter its "
+                                      f"code with the password from Settings, then press Continue")
                 logger.info("RECOVERY: no code arrived in Gmail -- leaving it to the user")
                 return False
             field = self._passcode_field(page) or field

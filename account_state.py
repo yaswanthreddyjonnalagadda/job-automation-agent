@@ -180,6 +180,7 @@ class Memory:
     email_given: bool = False
     account_exists: bool = False
     reset_tried: bool = False        # a reset to the ATS password was already asked for on this site
+    refused_before: bool = False     # login_guard: this account's last sign-in here was refused (kept across runs)
     held: str = ""                   # login_guard's reason for holding back, if any
 
 
@@ -187,6 +188,11 @@ class Memory:
 class Step:
     action: str
     why: str = ""
+
+
+def _knows_account(memory: Memory) -> bool:
+    """The site knows this account: it is on record, or the site took the email and asked for its password."""
+    return memory.account_exists or memory.email_given
 
 
 def next_step(state: AccountState, memory: Memory) -> Step:
@@ -207,13 +213,24 @@ def next_step(state: AccountState, memory: Memory) -> Step:
         # asked for its password -- whose password it refused is reset to the same ATS password with the code
         # emailed to the owner, once per site per run. 'Wrong email or password' alone does not say the account
         # exists, so an unknown one stays the owner's. (Mutual of Enumclaw, iCIMS, 29 September.)
-        if (memory.account_exists or memory.email_given) and not memory.reset_tried:
+        if _knows_account(memory) and not memory.reset_tried:
             return Step(RESET_PASSWORD, "the site knows this account and refused its password: resetting it to the "
                                         "ATS password with the code emailed to you")
         return Step(FOR_OWNER, f"the site refused the email and password ({state.why}). Check them on the site "
                                f"(or reset the password to the one in Settings), then press Continue")
     if state.google_offered and not memory.google_tried and not memory.google_refused:
         return Step(GOOGLE, "the site offers Google sign-in")
+    if kind == SIGN_IN_FORM and memory.refused_before:
+        # The same refusal, remembered from an earlier run: the password is never typed again (every wrong one
+        # counts towards a lock); the owner's rule resets it instead. (Mutual of Enumclaw, 29 September, 18:54: the
+        # run stopped at the password page with 'sign-in paused' and did neither.)
+        if _knows_account(memory) and not memory.reset_tried:
+            return Step(RESET_PASSWORD, "this account's password was refused here before: resetting it to the "
+                                        "ATS password with the code emailed to you")
+        return Step(FOR_OWNER, "this account's password was refused here before"
+                               + (" and the reset did not go through" if memory.reset_tried else "")
+                               + ": set it on the site to the password in Settings (or check the account), "
+                                 "then press Continue")
     if memory.held and kind in (CREATE_FORM, SIGN_IN_FORM, ACCOUNT_EXISTS):
         return Step(FOR_OWNER, memory.held)
     if kind == ACCOUNT_EXISTS:
