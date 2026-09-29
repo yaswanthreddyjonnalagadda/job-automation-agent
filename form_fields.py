@@ -550,6 +550,26 @@ def choose(page, f: Field, answer: str, timeout_ms: int = 5_000) -> bool:
     return _kept(f, chosen)
 
 
+def read_choices(f: Field, timeout_ms: int = 4_000) -> list[str]:
+    """What a list offers, read by opening it and closed again without choosing. A list that draws its rows only
+    when opened (Greenhouse's type-to-search) shows no choices until then: asked without them, the AI took Lucid's
+    "sexual orientation (mark all that apply)" for an essay question (29 September)."""
+    if f.kind == "select":
+        return [o for o in f.options if not is_placeholder(o)]
+    try:
+        f.locator().scroll_into_view_if_needed(timeout=timeout_ms)
+        f.locator().click(timeout=timeout_ms)
+        rows = _wait_for_options(f, timeout_ms)
+    except Exception as exc:
+        logger.debug("Could not open the list %r to read it: %s", f.question, str(exc).splitlines()[0][:100])
+        rows = []
+    try:
+        f.frame.keyboard.press("Escape")
+    except Exception:
+        pass
+    return [r for r in rows if r and not is_placeholder(r)]
+
+
 def choose_from_button_list(page, f: Field, answer: str, timeout_ms: int = 4_000) -> bool:
     """A list drawn as a button (BambooHR, Workday 'Select One'): see choose()."""
     return choose(page, f, answer, timeout_ms)

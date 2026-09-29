@@ -2483,6 +2483,12 @@ class PageAgent:
                                 entry = getattr(self, "_entries", {}).get(ctrl.ref)
                                 about = repeated_entries.describe(entry, getattr(self, "history", {}) or {}) \
                                     if entry is not None else ""
+                                # A list is asked about with its choices: one that draws them only when opened
+                                # is opened and read first, or the AI writes an essay for a pick-one question.
+                                if not ctrl.options and ctrl.role in ("combobox", "listbox"):
+                                    field = self._inventory_field(page, ctrl)
+                                    if field is not None:
+                                        ctrl.options = form_fields.read_choices(field)
                                 val = self.claude.answer_single_question(
                                     question=f"{ctrl.question} (for: {about})" if about else ctrl.question,
                                     options=ctrl.options,
