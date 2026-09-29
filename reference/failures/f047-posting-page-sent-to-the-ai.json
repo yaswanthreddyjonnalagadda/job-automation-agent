@@ -1,0 +1,16 @@
+{
+  "id": "f047",
+  "date": "2026-09-29",
+  "class": "Controls that are not the applicant's questions counted as open questions",
+  "symptom": "Embry-Riddle (Workday), 28 September: the job posting page went to the AI three times, which answered only 'click Apply' -- three requests of a 20-a-day allowance.",
+  "site": "Workday (Embry-Riddle); any posting with a search box or a language picker",
+  "root_cause": "The shortcut that skips the AI applied only when no question was open and no dropdown showed 'Select'. A posting's job search box or language picker is neither the owner's question nor part of the application, but it counted as one.",
+  "why_tests_missed": "The profile-first tests used pages with only application fields; none had a posting's own boxes beside its Apply button.",
+  "fix": "PageAgent.posting_plan(): when the way on is a plain Apply and nothing still open is required, the page is opened without the AI.",
+  "tests": [
+    "tests/test_posting_page_and_bot_traps.py::test_a_posting_with_other_boxes_is_opened_without_the_ai",
+    "tests/test_posting_page_and_bot_traps.py::test_a_form_with_a_required_question_and_an_apply_button_is_not_treated_as_a_posting",
+    "tests/test_posting_page_and_bot_traps.py::test_the_run_presses_apply_on_a_posting_without_asking_the_ai"
+  ],
+  "prevention": "Decide what a page is for before deciding what on it needs answering, and keep the cheapest path for pages whose only purpose is to be moved past."
+}

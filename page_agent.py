@@ -394,7 +394,20 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         stack.append((indent, name if role in ("group", "radiogroup", "region") else "", control))
     if toggle_row:
         _settle_toggle_row(toggle_row, toggle_question)
-    return controls
+    return [c for c in controls if not is_bot_trap(c)]
+
+
+# A field a site hides from people to catch programs: "Enter website. This input is for robots only, do not
+# enter if you're human." Filled, it marks the application as a bot's; asked about, it spent an AI request
+# (Writer, 28 September). It is not the owner's question, so it is not read as a control at all.
+_BOT_TRAP = re.compile(
+    r"\b(?:for robots only|robots? only|do not (?:enter|fill|type)[^.]{0,40}\bif you(?:'| a)re (?:a )?human|"
+    r"if you are (?:a )?human,? (?:leave|do not))", re.IGNORECASE)
+
+
+def is_bot_trap(control: "Control") -> bool:
+    return control.role in ANSWER_ROLES and bool(
+        _BOT_TRAP.search(" ".join(filter(None, (control.name, control.question, control.context)))))
 
 
 # What a button that does something is called -- never an answer to a question.
@@ -675,6 +688,14 @@ def published_choices(question: str, published: list) -> list[str]:
                                                                                 question or ""):
             return [str(o) for o in entry["options"]]
     return []
+
+
+def _open_is_required(question: str, controls: list["Control"], required: set[str]) -> bool:
+    """Whether a question still open is marked required -- by a star, or by the page's own required list."""
+    if question.rstrip().endswith("*") or any(_same_question(question, marked) for marked in required):
+        return True
+    control = next((c for c in controls if _same_question(c.question, question.rstrip("*").strip())), None)
+    return control is not None and ("*" in control.question or "*" in (control.name or ""))
 
 
 def _same_question(a: str, b: str) -> bool:
@@ -1689,6 +1710,25 @@ class PageAgent:
             ),
         )
 
+    def posting_plan(self, controls: list[Control], required: set[str], still_open: list[str],
+                     snapshot: str = "") -> Optional[PagePlan]:
+        """A job posting whose way on is a plain Apply: press it, without asking the AI.
+
+        The posting page's own boxes -- a job search, a language picker, "email me jobs like this" -- looked like
+        open questions, so the page went to the AI, which answered "click Apply" (Embry-Riddle, 28 September:
+        three requests of a 20-a-day allowance). Nothing on a posting is the owner's to answer. Only when no
+        question still open is required, so a form whose last button happens to say "Apply" still goes the
+        usual way."""
+        if any(_open_is_required(q, controls, required) for q in still_open):
+            return None
+        plan = self.profile_plan(controls, required, [], snapshot)
+        if plan.next_kind != "open_application" or plan.for_owner:
+            return None
+        if still_open or _blank_choice_on_page(controls):
+            logger.info("POSTING_PAGE: '%s' opens the application -- the page's other boxes are not questions, "
+                        "no AI call", plan.next_label)
+        return plan
+
     def profile_forward(self, controls: list[Control]) -> Optional[Control]:
         """The safest clearly-labelled application action on a local-plan page."""
         options = [c for c in controls if c.role in PRESS_ROLES and c.name and not c.disabled
@@ -2190,6 +2230,8 @@ class PageAgent:
                 # choice to Claude/the session; unknown *required* questions
                 # are returned as a clear profile-data gap instead.
                 plan = self.profile_plan(controls, required, still_open, snapshot)
+            if plan is None:
+                plan = self.posting_plan(controls, required, still_open, snapshot)
             if plan is None:
                 # 1. Profile-first: if the profile already answered everything on
                 # this page (still_open is empty), build the plan from the
