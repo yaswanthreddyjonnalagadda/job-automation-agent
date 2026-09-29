@@ -10,4 +10,7 @@ case "$branch" in
     exit 1
     ;;
 esac
+# A committed file must not import a project module that is not committed (28 September).
+py=python; [ -x venv/Scripts/python.exe ] && py=venv/Scripts/python.exe; [ -x venv/bin/python ] && py=venv/bin/python
+"$py" .githooks/check_imports.py || exit 1
 exit 0

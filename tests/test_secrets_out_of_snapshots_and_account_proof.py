@@ -133,7 +133,8 @@ def test_what_the_agent_reads_saves_and_hands_over_never_holds_a_typed_password(
     assert SECRET not in snapshot and "jane@example.com" in snapshot
     agent.pages_read = 1
     agent._save(snapshot)
-    assert SECRET not in (tmp_path / "pages" / "page_01.txt").read_text(encoding="utf-8")
+    (saved,) = (tmp_path / "pages").glob("*/page_01.txt")        # one folder per run
+    assert SECRET not in saved.read_text(encoding="utf-8")
     assert SECRET not in page_agent.compact_snapshot(snapshot)
 
 

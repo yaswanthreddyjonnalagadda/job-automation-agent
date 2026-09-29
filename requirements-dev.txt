@@ -2,6 +2,8 @@
 #   pip install -r requirements.txt -r requirements-dev.txt
 pytest>=8.0
 hypothesis>=6.100
+# Runs the suite in parallel: python -m pytest -n auto (about 10 minutes instead of 40).
+pytest-xdist>=3.6
 
 # ISO 3166 names: regenerates reference/geo.json (reference/build_geo.py) and
 # lets tests/test_no_place_literals.py recognise any province or region.

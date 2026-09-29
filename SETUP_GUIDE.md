@@ -119,9 +119,11 @@ Changes reach `main` only through a branch and a pull request (see section 7
 of `CLAUDE.md`). Once per clone:
 
 ```bash
-git config core.hooksPath .githooks          # refuse commits and pushes to main
+git config core.hooksPath .githooks          # refuse commits to main, and commits whose code
+                                             # imports a project file that is not committed
 pip install -r requirements.txt -r requirements-dev.txt
-python -m pytest -q                          # the whole suite, as CI runs it
+python -m pytest -q -n auto                  # the whole suite in parallel, as CI runs it (~10 min)
+python -m pytest -q tests/test_<area>.py     # only the tests for what you changed
 ```
 
 On GitHub, protect `main` (Settings -> Branches -> Add rule: require a pull

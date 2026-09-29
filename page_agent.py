@@ -611,6 +611,18 @@ def page_errors(snapshot: str) -> list[str]:
     return found[:8]
 
 
+RUNS_KEPT = 10     # the page recordings of the most recent runs of one application
+
+
+def keep_latest_runs(folder: Path, keep: int = RUNS_KEPT) -> None:
+    """Deletes all but the `keep` most recent run folders (named by their start time) under `folder`."""
+    runs = sorted((p for p in Path(folder).iterdir() if p.is_dir() and re.fullmatch(r"\d{8}_\d{6}", p.name)),
+                  key=lambda p: p.name)
+    import shutil
+    for old in runs[:-keep] if keep > 0 else runs:
+        shutil.rmtree(old, ignore_errors=True)
+
+
 def published_choices(question: str, published: list) -> list[str]:
     """The choices the job site publishes for this question (Greenhouse's question list), or [].
 
@@ -969,6 +981,7 @@ class PageAgent:
         self._account_seen: dict[str, tuple] = {}   # the last account state logged, per site
         self._account_waits: dict[str, int] = {}    # reads of an account step still drawing its form
         self._last_press_errors: tuple = ()          # what the page said was wrong after the last press
+        self._run_stamp = time.strftime("%Y%m%d_%H%M%S")   # this run's folder for its page recordings
         self.unanswered_path: Path = UNANSWERED_FILE
         self._logged_unanswered: set[tuple[str, str]] = set()   # (question, site) already counted this run
         self._profile_answer_library: Optional[dict] = None
@@ -1062,7 +1075,8 @@ class PageAgent:
                               ("_resume_autofill_attempted", bool), ("_pending_memories", list),
                               ("_choice_methods", dict), ("_reused_recipes", dict), ("_chosen_instead", dict),
                               ("_current_host", str), ("account_blocker", str), ("_account_seen", dict),
-                              ("_account_waits", dict), ("_last_press_errors", tuple)):
+                              ("_account_waits", dict), ("_last_press_errors", tuple),
+                              ("_run_stamp", lambda: time.strftime("%Y%m%d_%H%M%S"))):
             if not hasattr(self, name):
                 setattr(self, name, default())
 
@@ -4343,8 +4357,12 @@ class PageAgent:
         if not self.job_dir:
             return
         try:
-            folder = self.job_dir / "pages"
-            folder.mkdir(parents=True, exist_ok=True)
+            # One folder per run: every run numbered its pages from 1 in the same folder, so each run's pages
+            # were written over the last one's, and the pages a failure happened on were gone by the next try.
+            folder = Path(self.job_dir) / "pages" / self._run_stamp
+            if not folder.is_dir():
+                folder.mkdir(parents=True, exist_ok=True)
+                keep_latest_runs(folder.parent, RUNS_KEPT)
             (folder / f"page_{self.pages_read:02d}.txt").write_text(snapshot, encoding="utf-8")
         except Exception:
             pass
