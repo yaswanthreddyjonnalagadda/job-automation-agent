@@ -200,7 +200,7 @@ details.menu .menu-items hr { border:0; border-top:1px solid var(--line-2); marg
 .badge.inactive { background:var(--grey-soft); color:var(--muted); }
 .crumbs { font-size:13px; color:var(--muted); margin:0 0 8px; }
 .crumbs a { color:var(--muted); }
-.meta { display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; color:var(--muted); margin-top:8px; }
+.head-facts { display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; color:var(--muted); margin-top:8px; }
 .run { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px 20px; align-items:center; }
 .run .where { min-width:0; }
 .run .url { color:var(--muted); font-size:13px; display:block; max-width:100%; }

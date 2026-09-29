@@ -72,7 +72,6 @@ PER_MINUTE = DAILY.replace("PerDay", "PerMinute")
 @pytest.fixture
 def gemini(monkeypatch):
     calls, sleeps = [], []
-    monkeypatch.setattr(gemini_integration, "_DAILY_SPENT_AT", 0.0)
     monkeypatch.setattr(gemini_integration.time, "sleep", lambda s: sleeps.append(s))
     config = SimpleNamespace(gemini_api_key="AIza" + "x" * 35, gemini_base_url="https://g.example",
                              gemini_model="m", claude_request_timeout=5, claude_max_retries=3)

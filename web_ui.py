@@ -308,7 +308,17 @@ def settings():
         has_gemini=bool(current.get("GEMINI_API_KEY")),
         has_openai=bool(current.get("OPENAI_API_KEY")),
         has_password=bool(current.get("ATS_PASSWORD")),
+        ai_usage=_ai_usage(),
     )
+
+
+def _ai_usage() -> list[dict]:
+    """Each Gemini model the agent may use, with today's calls and whether it is resting."""
+    try:
+        import gemini_integration
+        return gemini_integration.usage_today(get_app_config())
+    except Exception:
+        return []
 
 
 @app.post("/resume/<int:app_id>")
@@ -736,6 +746,27 @@ SETTINGS_HTML = ui_shell.page("Settings", """
       <button type="submit" style="margin-top:20px">Save settings</button>
     </form>
   </div>
+
+  {% if ai_usage %}
+  <h2>Gemini models today</h2>
+  <p class="hint" style="margin:-4px 0 10px">Each model has its own free daily allowance. Whole pages and written
+    answers go to the <b>page</b> models first; a single choice or short question to the <b>quick</b> ones.
+    A model whose allowance is spent rests until midnight Pacific time and the next one answers.</p>
+  <div class="card flush">
+    <table>
+      <thead><tr><th>Model</th><th>Used for</th><th class="num">Calls today</th><th>State</th></tr></thead>
+      {% for m in ai_usage %}
+      <tr><td><code>{{ m.model }}</code></td>
+          <td class="muted">{{ 'page' if m.page }}{{ ' · ' if m.page and m.quick }}{{ 'quick' if m.quick }}</td>
+          <td class="num">{{ m.calls }}</td>
+          <td>{% if m.why == 'daily' %}<span class="pill needs_user_review">Spent until {{ m.until }}</span>
+              {% elif m.why == 'missing' %}<span class="pill skipped">Not available to this key</span>
+              {% elif m.why %}<span class="pill form_filled">Paused until {{ m.until }}</span>
+              {% else %}<span class="pill submitted">Ready</span>{% endif %}</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
 </main>
 """)
 
@@ -972,7 +1003,7 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
   <div class="page-head">
     <div style="min-width:0">
       <h1>{{ a.title }}</h1>
-      <div class="meta">
+      <div class="head-facts">
         <strong style="color:var(--ink)">{{ a.company }}</strong>
         {% if a.location %}<span>{{ a.location }}</span>{% endif %}
         <span class="pill {{ status_class(a.status) }}">{{ status_label(a.status) }}</span>

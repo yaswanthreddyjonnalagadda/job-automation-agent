@@ -143,7 +143,7 @@ def test_the_checks_on_a_dropdown_answer_are_the_same_with_gemini(google, client
     google.default = ok_reply(json.dumps({"choice": "Masters", "equivalent": True, "reason": "same level"}))
     assert client.choose_option("Masters of Science", ["Bachelors", "Masters"], "Degree")["choice"] == "Masters"
     google.default = ok_reply(json.dumps({"choice": "Doctorate", "equivalent": True, "reason": "x"}))
-    refused = client.choose_option("Masters of Science", ["Bachelors", "Masters"], "Degree")
+    refused = client.choose_option("Masters of Science", ["Bachelors", "Masters"], "Highest degree")
     assert refused["choice"] == "" and refused["equivalent"] is False        # not on the page: never trusted
 
 

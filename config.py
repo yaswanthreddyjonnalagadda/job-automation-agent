@@ -159,6 +159,28 @@ class UserProfile:
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
+# Google's free tier gives every model its own allowance (AI Studio's Rate Limit page, 29 September 2026): each
+# Flash about 20 requests a day, each Flash Lite about 500, Gemma thousands but only ~16,000 tokens a minute.
+# One model alone ran out after two or three applications. So each kind of call has a ladder of models, tried
+# in order; one that is spent rests until Google's daily reset and the next answers (gemini_integration.py).
+# "page": planning a whole page and writing open answers -- the stronger models first.
+# "quick": one dropdown choice, one short question, a screenshot -- the models with big allowances first.
+# GEMINI_PAGE_MODELS / GEMINI_QUICK_MODELS in .env (comma-separated) replace these lists.
+DEFAULT_GEMINI_PAGE_MODELS = ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+                              "gemini-3-flash-preview", "gemini-2.5-flash", "gemini-3.5-flash-lite",
+                              "gemini-3.1-flash-lite", "gemma-4-31b-it")
+DEFAULT_GEMINI_QUICK_MODELS = ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite",
+                               "gemma-4-31b-it", "gemma-4-26b-a4b-it", "gemini-3.8-flash", "gemini-3.7-flash",
+                               "gemini-3.6-flash", "gemini-3.5-flash")
+# Where the free allowances start again: midnight in Google's Pacific time.
+GEMINI_QUOTA_RESET_TZ = "America/Los_Angeles"
+GEMINI_QUOTA_RESET_UTC_OFFSET_HOURS = -8     # used if this computer has no time-zone database
+
+
+def _models_from_env(name: str, default: tuple) -> tuple:
+    listed = tuple(m.strip() for m in os.getenv(name, "").split(",") if m.strip())
+    return listed or default
+
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -174,6 +196,10 @@ class AppConfig:
         default_factory=lambda: os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_GEMINI_MODEL)
     gemini_base_url: str = field(
         default_factory=lambda: os.getenv("GEMINI_BASE_URL", "").strip() or DEFAULT_GEMINI_BASE_URL)
+    gemini_page_models: tuple = field(
+        default_factory=lambda: _models_from_env("GEMINI_PAGE_MODELS", DEFAULT_GEMINI_PAGE_MODELS))
+    gemini_quick_models: tuple = field(
+        default_factory=lambda: _models_from_env("GEMINI_QUICK_MODELS", DEFAULT_GEMINI_QUICK_MODELS))
     # OpenAI API key for resume tailoring fallback (optional).
     openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", "").strip())
     openai_model: str = field(

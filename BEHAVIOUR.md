@@ -174,10 +174,23 @@ passes -- decide what is done with an answer, whoever proposed it. The key
 (`GEMINI_API_KEY`) travels in a request header, never in an address, and is never
 written to a log. If it is missing, the run says so before it starts; if it does
 not look like a Google key (`AIza` and 39 characters, or `AQ.` and longer) it says
-that too, without printing it. If Google has retired the model (`GEMINI_MODEL`),
-the message says so and where to change it. When Google refuses or is busy the agent waits and asks
-again (it waits as long as Google asks for a per-minute limit), and a page it
-still cannot get an answer for is handed to you as before.
+that too, without printing it.
+
+Gemini is several models, each with its own free daily allowance (on the free
+tier, about 20 requests a day for each Flash model and about 500 for each Flash
+Lite). The agent keeps two lists and tries each in order. A whole page or a
+written answer ("Why do you want to work here?") goes to the stronger Flash
+models first. A single dropdown choice, a short question or a screenshot goes to
+the Flash Lite models first. When a model says its day is spent, the next one
+answers, and the spent one is not asked again until midnight Pacific time, when
+Google resets the allowances. That holds for later applications too. A per-minute
+limit moves straight to the next model; the agent waits only when every model is
+paused for the minute. A model your key cannot use is skipped for a week, and
+the log says so. The same question asked twice in one run is sent once. Settings
+shows each model's calls today and whether it is resting. The lists can be
+changed with `GEMINI_PAGE_MODELS` and `GEMINI_QUICK_MODELS` in `.env`. Every
+model is Google's, so what leaves your computer is the same as above. When no
+model can answer, a page is handed to you as before.
 
 The AI that answers a form is given the job posting as well as your profile and
 resume, so an answer fits what the employer is asking about. It is told the posting
