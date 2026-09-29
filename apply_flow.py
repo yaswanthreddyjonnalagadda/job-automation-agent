@@ -582,6 +582,43 @@ def worth_returning_to(url: str) -> bool:
     ))
 
 
+def save_stop_page(page, job_dir: Path) -> None:
+    """A screenshot and the page's text where the agent stopped for the owner.
+
+    KBI, 28 September: the run stopped on a sign-in step and left nothing to show which page it was on.
+    The text goes through hide_secrets, so a typed password is never written."""
+    from perception import hide_secrets
+    try:
+        stem = Path(job_dir) / f"stopped_{datetime.now():%Y%m%d_%H%M%S}"
+        stem.parent.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(stem.with_suffix(".png")), full_page=True)
+        stem.with_suffix(".txt").write_text(
+            f"{page.url}\n\n" + hide_secrets(page.locator("body").aria_snapshot(mode="ai")), encoding="utf-8")
+        logger.info("Where it stopped: %s", stem.with_suffix(".png"))
+    except Exception as exc:
+        logger.info("Could not save the page it stopped on: %s", str(exc).splitlines()[0][:100])
+
+
+def shows_the_application(assistant, page) -> bool:
+    """A reopened page still holds the application: a form to fill (any frame), or the job posting.
+
+    Judged by what is on the page, not by its address: a careers home looked like any other page."""
+    try:
+        page.wait_for_timeout(2_000)            # Workday draws the form after the page has loaded
+        if assistant.on_job_description(page):
+            return True
+        for frame in page.frames:
+            found = frame.evaluate("""() => [...document.querySelectorAll(
+                    'input:not([type=hidden]):not([type=search]):not([type=submit]):not([type=button]), '
+                    + 'textarea, select, [role=combobox], [role=radio], [role=checkbox]')]
+                .some(e => !!(e.offsetParent || e.getClientRects().length))""")
+            if found:
+                return True
+    except Exception:
+        return True                             # when the page cannot be read, leave it as it was
+    return False
+
+
 def remember_progress(tracker, key: str, page, note: str = "") -> None:
     """Writes down where this application has got to.
 
@@ -942,6 +979,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             logger.info("  worth checking: %s", note)
         logger.info("Deal with it in the browser window, then press Continue on the dashboard: "
                     "the agent reads the page again and carries on.")
+        save_stop_page(page, job_dir)
         logger.info(banner)
         assistant.raise_window(page)
         agent.remember_page_state(page)
@@ -1283,6 +1321,15 @@ def main() -> None:
             # the run, not only at a hand-over.
             assistant.raise_window(page)
             page = assistant.open_embedded_form(page)
+            if resume_at and not shows_the_application(assistant, page):
+                # KBI's last page was recorded as the careers home (/en-US/KBI_Biopharma/): no form, no
+                # posting, nothing to read, and the run stopped there. The address said nothing wrong;
+                # the page does.
+                logger.info("The page the last run reached no longer shows the application; "
+                            "starting from the posting")
+                page.goto(job.url, wait_until="domcontentloaded")
+                page.wait_for_timeout(3_000)
+                page = assistant.open_embedded_form(page)
             if assistant.on_job_description(page):
                 page = assistant.click_apply_button(page)
                 page = assistant.dismiss_apply_chooser(page)
