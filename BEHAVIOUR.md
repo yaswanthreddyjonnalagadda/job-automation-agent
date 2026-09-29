@@ -607,6 +607,16 @@ submitted, even when the same page offers to make an account to track it. A page
 that says something is still left to finish the application is not a
 confirmation.
 
+On a form that repeats the same boxes for each job or each degree ("Company,
+Position title, Start date, End date ..." again and again), every box is answered
+from *that* job's or degree's record in your work history -- never from one value
+for all of them. An entry that already shows a company (or degree), perhaps put
+there by the site's own resume reader, takes that company's record; the others take
+the remaining jobs in order. Your current job's end date is left blank, and if the
+site filled one in, the agent tells you to clear it. What your records do not hold
+-- the country of a school, a degree's status -- is left for the AI or you, not
+copied from another box.
+
 An application's page lists its documents with the one **In use** first;
 files from an earlier attempt are marked **Earlier attempt** -- the employer
 received only what was attached when the application was sent. A stored resume is

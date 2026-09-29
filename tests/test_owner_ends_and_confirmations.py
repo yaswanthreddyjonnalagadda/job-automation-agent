@@ -150,4 +150,4 @@ def test_the_agent_does_not_type_a_non_answer_but_may_choose_a_none_option(caplo
         agent.do(None, Answer("e2", "Disability", "choose", "N/A", "ai"), choice)
     except Exception:
         pass                                    # the choice itself needs a page; only the check is tested here
-    assert "NOT TYPED" not in caplog.text       # "N/A" is one of the options: a real choice, not "unknown"
+    assert "NOT TYPED" not in caplog.text       # a choice takes a list's own option: "N/A" can be the right one

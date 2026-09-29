@@ -882,6 +882,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
     store_materials(tracker, key, resume_file, None)
     agent = page_agent.PageAgent(assistant, claude, config, profile, resume, job, tracker, key,
                                  job_dir, resume_file, cover_letter)
+    agent.history = experience_data   # each job and degree, for boxes that repeat per entry
     while True:
         try:
             outcome = agent.run(page)

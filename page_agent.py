@@ -46,6 +46,7 @@ import geo_reference
 import account_state
 from claude_integration import JOB_POSTING_CHARS, is_non_answer
 import employment_history
+import repeated_entries
 import login_guard
 import open_answers
 from config import resume_to_attach, site_prefill_policy
@@ -1172,6 +1173,7 @@ class PageAgent:
         """Code reloaded into a run that is already going keeps its old object:
         anything added since starts empty rather than failing."""
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
+                              ("_entries", dict), ("_entry_blank", set), ("history", dict),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
                               ("_google_reloads", dict), ("_peeked", dict),
                               ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set), ("_list_retries", int), ("_shapes", dict),
@@ -1798,6 +1800,24 @@ class PageAgent:
         if not question or safety.is_attestation(question):
             return "", ""
 
+        # A box inside a repeated Work or Education entry belongs to that job or that degree: it is answered from
+        # that entry's own record, never from one value for the whole person (Steelcase, 29 September: a job's
+        # "End date" took the education end date, and both degrees took the first one's school).
+        entry = getattr(self, "_entries", {}).get(control.ref)
+        if entry is not None:
+            value, source, blank = repeated_entries.answer(entry, getattr(self, "history", {}) or {})
+            if blank:
+                if not isinstance(getattr(self, "_entry_blank", None), set):
+                    self._entry_blank = set()
+                self._entry_blank.add(control.ref)
+                shown = (control.value or entry.values.get(entry.label.lower()) or "").strip()
+                if shown:
+                    note = (f"{(repeated_entries.record_for(entry, self.history) or {}).get('company', 'your current job')} "
+                            f"is your current job, but its {entry.label!r} shows {shown!r} -- clear it")
+                    if note not in self.notes:
+                        self.notes.append(note)
+            return value, source
+
         # 0. Privacy & Recruiting Communications consent checkbox (authorized by profile.accept_application_privacy_prompts)
         if getattr(self.profile, "accept_application_privacy_prompts", True):
             combined_text = f"{control.question} {control.name} {control.container} {control.context}".strip()
@@ -2018,6 +2038,8 @@ class PageAgent:
             if not control.options and control.role in ("combobox", "listbox", "button"):
                 control.options = published_choices(control.question, self._published_questions())
             value, source = self.known_answer(control)
+            if not value and control.ref in getattr(self, "_entry_blank", ()):
+                continue                     # the end date of the job the owner still has: blank is the answer
             if not value:
                 # Every box still empty is left open, not only the starred
                 # ones: a form that marks nothing as required still has
@@ -2311,7 +2333,8 @@ class PageAgent:
 
                         newly_answered = 0
                         for ctrl in list(controls):
-                            if not ctrl.question or ctrl.answer or ctrl.disabled:
+                            if not ctrl.question or ctrl.answer or ctrl.disabled \
+                                    or ctrl.ref in getattr(self, "_entry_blank", ()):
                                 continue
                             if not any(_same_question(ctrl.question, q) for q in still_open):
                                 continue
@@ -3107,8 +3130,9 @@ class PageAgent:
 
     def do(self, page, answer: Answer, control: Control) -> bool:
         tab = self.tab(page)
-        offered = {o.strip().lower() for o in (control.options or [])}
-        if answer.action in ("fill", "choose") and is_non_answer(answer.value)                 and (answer.value or "").strip().lower() not in offered:     # "None" can be a real choice
+        # Only typed text: a choice can only ever take one of the list's own options, and "N/A" or "None" is
+        # often the right one -- even when the list shows its options only once it is opened.
+        if answer.action == "fill" and is_non_answer(answer.value):
             # Whoever proposed it -- the page plan or a single question -- "Not provided in the resume" is not the
             # owner's answer and is never typed (Steelcase's Work Phone, 29 September).
             logger.info("NOT TYPED: %r for %r is a way of saying 'unknown'", answer.value[:60], control.question[:60])
@@ -4573,6 +4597,11 @@ class PageAgent:
             and time.time() < deadline:
             self.tab(page).wait_for_timeout(1_000)
             snapshot = self.snapshot(page)
+        try:
+            self._entries = repeated_entries.entry_map(snapshot)
+        except Exception as exc:
+            logger.debug("Could not read the page's repeated entries: %s", exc)
+            self._entries = {}
         return snapshot
 
     def _save(self, snapshot: str) -> None:
