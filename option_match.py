@@ -106,4 +106,16 @@ def best_option(options: list[str], answer: str) -> Optional[int]:
             rest = text[len((answer or "").strip()):]
             if not rest or re.match(r"\s*[,(\[+\-–—:;/]", rest):
                 starts.append(i)
-    return _only_one(starts)
+    hit = _only_one(starts)
+    if hit is not None:
+        return hit
+    # 5. a plain No where the choices say it in words: the one choice that is a no ("Never been a contractor or an
+    #    employee" among "Currently a contractor", "Previously an employee" ... -- Lucid, 29 September). Two such
+    #    choices, or none, and there is no answer. A Yes is never read this way: several choices can mean yes.
+    if want in ("no", "none", "never"):
+        return _only_one([i for i, o in real if _SAYS_NO.match(plain(o))])
+    return None
+
+
+_SAYS_NO = re.compile(r"^(?:no|not|never|none|neither|i\s+(?:have|had|do|did|am|was|will)\s+not|"
+                      r"i\s+(?:havent|hadnt|dont|didnt|wasnt|wont|am\s+not))\b")

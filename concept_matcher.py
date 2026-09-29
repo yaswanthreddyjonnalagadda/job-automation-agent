@@ -414,7 +414,7 @@ def match_concept(
         return None
 
     # Step 1: Specific pattern checks with negative guardrails
-    candidates: list[tuple[int, str, bool]] = []   # (score, concept, matched in the question itself)
+    candidates: list[tuple[int, str, bool, int]] = []   # (score, concept, matched in the question, where in it)
 
     for concept_name, defn in CONCEPTS.items():
         patterns = defn.get("patterns", [])
@@ -441,20 +441,45 @@ def match_concept(
                 # (e.g., name="Title" in container="Work Experience")
                 if container_boost and re.search(container_boost, clean_c, re.IGNORECASE):
                     score += 20
-                candidates.append((score, concept_name, bool(match_q)))
+                candidates.append((score, concept_name, bool(match_q), match_q.start() if match_q else 10_000))
 
     # A place named inside a question that asks something else is where the
     # question applies, not what it asks: "Are you legally authorized to work
     # in the country ...?" was answered "United States" because COUNTRY tied
     # WORK_AUTHORIZATION and came first in the table (Writer, 28 September).
-    if any(in_q and concept not in PLACE_CONCEPTS for _s, concept, in_q in candidates):
+    if any(in_q and concept not in PLACE_CONCEPTS for _s, concept, in_q, _p in candidates):
         candidates = [c for c in candidates if c[1] not in PLACE_CONCEPTS]
 
-    best_concept, best_score = None, 0
-    for score, concept_name, _in_q in candidates:     # table order breaks a tie, as before
-        if score > best_score:
-            best_score, best_concept = score, concept_name
+    # A question put as Yes/No ("Would you like to receive communications via SMS and email?", "Do you have a
+    # disability ... that limits one or more of your major life activities?") is never answered with a fact such
+    # as an email address or a field of study: Lucid (Greenhouse, 29 September) got the owner's email for the first
+    # and "Computer Technology" for the second, from the words "email" and "major".
+    if _YES_NO_QUESTION.match(clean_q) and not _REQUEST.match(clean_q):
+        candidates = [c for c in candidates if c[1] not in VALUE_CONCEPTS]
+
+    # The best score wins; between equals, what the question names first is what it asks ("disability" before
+    # "major life activities"); the table's order settles the rest, as before.
+    best_concept, best_key = None, (0, 0)
+    for score, concept_name, _in_q, where in candidates:
+        if (score, -where) > best_key:
+            best_key, best_concept = (score, -where), concept_name
     return best_concept
+
+
+# How a Yes/No question opens -- and the requests that open the same way but want a value ("Can you provide your
+# phone number?").
+_YES_NO_QUESTION = re.compile(r"^(?:do|does|did|are|is|was|were|have|has|had|will|would|can|could|should|may|"
+                              r"might)\s+(?:you|your)\b")
+_REQUEST = re.compile(r"^(?:can|could|would|will)\s+you\s+(?:please\s+)?(?:provide|share|enter|list|give|tell|"
+                      r"describe|explain|specify|state|confirm\s+your)\b")
+# Concepts answered with a fact of the owner's (a name, an address, a date, a school) rather than Yes/No or a choice.
+VALUE_CONCEPTS = frozenset({
+    "FIRST_NAME", "LAST_NAME", "MIDDLE_NAME", "FULL_NAME", "EMAIL", "PHONE_MOBILE", "PHONE_COUNTRY_CODE",
+    "STREET_ADDRESS", "CITY_STATE", "CITY", "COUNTRY", "STATE_PROVINCE", "POSTAL_CODE", "CURRENT_JOB_TITLE",
+    "CURRENT_EMPLOYER", "SCHOOL_UNIVERSITY", "DEGREE_LEVEL", "MAJOR_FIELD_OF_STUDY", "GRADUATION_YEAR",
+    "LINKEDIN_URL", "WORK_START_DATE", "EDUCATION_END_DATE", "TODAYS_DATE", "DESIRED_SALARY", "NOTICE_PERIOD",
+    "HOW_DID_YOU_HEAR",
+})
 
 
 # Questions about where the owner lives. The options on offer can correct the

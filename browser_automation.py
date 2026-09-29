@@ -34,6 +34,7 @@ import geo_reference
 import emailed_codes
 import login_guard
 import provenance
+import option_match
 import safety
 import visible_desktop
 from config import AppConfig, UserProfile, get_user_profile, resume_to_attach
@@ -1373,6 +1374,16 @@ class JobApplicationAssistant:
         disability and have not had one...'), then containing it. Short
         candidates ('Yes', 'Male') only match exactly -- 'male' is inside
         'female'."""
+        # The one matcher for every list first (option_match: same words, same place, the portal's own words, the
+        # whole answer then punctuation, a plain No in words). Lucid, 29 September: "Master's" was not taken for
+        # "Masters Degree", nor "No" for "Never been a contractor or an employee", because this older matcher was
+        # asked and the shared one never was. What follows stays for the answers only it knows (veteran and
+        # disability wordings).
+        for candidate in candidates:
+            index = option_match.best_option(list(options), candidate)
+            if index is not None:
+                return index
+
         def norm(s: str) -> str:
             s = re.sub(r"[^\w\s()+,'-]", " ", s)  # drops flag emoji etc.
             return re.sub(r"\s+", " ", s).strip().lower()

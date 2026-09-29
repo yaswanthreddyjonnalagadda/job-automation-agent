@@ -1156,6 +1156,9 @@ class PageAgent:
         # Sites that took the email and then asked for its password: they know the account. Kept when a run
         # resumes (unlike _emailed_in), because it is what the site said, not something the agent tried.
         self._account_known: set[str] = set()
+        # Questions whose answer from the profile is not among their choices: they go to the AI (or the owner) with
+        # the choices, instead of the same answer failing on every pass (Lucid, 29 September: three passes).
+        self._misfit: set[str] = set()
         self._reset_asked: set[str] = set()     # sites where a reset to the ATS password was asked for this run
         self.account_blocker = ""               # what only the owner can do at the account step, or ""
         self._account_seen: dict[str, tuple] = {}   # the last account state logged, per site
@@ -1250,7 +1253,7 @@ class PageAgent:
                               ("_entries", dict), ("_entry_blank", set), ("history", dict), ("_attached_here", set),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
                               ("_google_reloads", dict), ("_peeked", dict),
-                              ("_emailed_in", set), ("_created_at", set), ("_account_known", set), ("_reset_asked", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set), ("_list_retries", int), ("_shapes", dict),
+                              ("_emailed_in", set), ("_created_at", set), ("_account_known", set), ("_reset_asked", set), ("_misfit", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set), ("_list_retries", int), ("_shapes", dict),
                               ("_refreshed", bool),
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict),
                               ("_profile_answer_library", lambda: None),
@@ -2149,6 +2152,10 @@ class PageAgent:
                 handled_groups.add(group_key)
             if control.question in self.owner_answers:
                 continue
+            if control.question in self._misfit:
+                star = "*" if any(_same_question(control.question, q) for q in required) else ""
+                open_questions.append(control.question + star)
+                continue
             if not control.options and control.role in ("combobox", "listbox", "button"):
                 control.options = published_choices(control.question, self._published_questions())
             value, source = self.known_answer(control)
@@ -2186,6 +2193,8 @@ class PageAgent:
                     star = "*" if any(_same_question(control.question, q) for q in required) else ""
                     open_questions.append(control.question + star)
                     self.failed.append(f"{control.question[:60]} = {value[:40]!r}")
+                    if action == "choose":
+                        self._misfit.add(control.question)
             except Exception as exc:
                 star = "*" if any(_same_question(control.question, q) for q in required) else ""
                 open_questions.append(control.question + star)
@@ -3653,6 +3662,17 @@ class PageAgent:
             return self.choose(page, control, answer.value, self._page_controls(page))
         return False
 
+    def _inventory_field(self, page, control: Control):
+        """The field inventory's entry for this list, found by its question -- or None when there is not exactly
+        one."""
+        try:
+            fields = form_fields.inventory(self.tab(page))
+        except Exception:
+            return None
+        found = [f for f in fields if f.kind in ("combobox", "select", "button_list") and f.visible and not f.trap
+                 and _same_question(f.question or f.label, control.question)]
+        return found[0] if len(found) == 1 else None
+
     def _tick_several(self, page, boxes: list[Control], value: str) -> bool:
         """Ticks the boxes a "select any that apply" answer names: the whole answer when it is one of them, else each
         part of it ("CCNP; NSE7", "English, Telugu"). Every part must be one of the boxes, or nothing is ticked and
@@ -3767,6 +3787,19 @@ class PageAgent:
                 return True
             except Exception:
                 pass   # a listbox drawn by script: pick the option instead
+
+        # A list whose choices exist only once it is opened -- Greenhouse's type-to-search lists, a server's
+        # suggestions -- is filled by the field inventory's filler, which opens it the way its portal builds it,
+        # reads the rows, clicks the one that is the answer and confirms it (form_fields.choose). Lucid's gender
+        # and disability lists were left empty on three passes (29 September). Not among the rows: nothing else is
+        # tried, and the question goes on with its choices.
+        if not control.options and control.role == "combobox":
+            field = self._inventory_field(page, control)
+            if field is not None:
+                if form_fields.choose(tab, field, value):
+                    self._choice_methods[control.ref] = "inventory_filler"
+                    return True
+                return False
 
         # An Ant Design list (Dayforce): read whole, chosen by label, and
         # confirmed by what the select then shows (interaction.resolve_ant_dropdown).
