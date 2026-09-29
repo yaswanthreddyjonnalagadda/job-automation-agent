@@ -1,0 +1,16 @@
+{
+  "id": "f039",
+  "date": "2026-09-29",
+  "class": "An outside service's outage stopping work that did not need the service",
+  "symptom": "Blue Cross and Blue Shield of Louisiana (Workday): after signing in and filling My Information, the run stopped on My Experience with 'could not read this page (Gemini 429: daily allowance used up)', although that page needed only the resume, which the agent attaches itself; the questions left open (Skills, Phone Extension) were optional.",
+  "site": "Workday (Blue Cross and Blue Shield of Louisiana); any page with optional boxes",
+  "root_cause": "Every empty box counts as an open question; open questions go to the AI; when the AI could not be asked, the run stopped whatever the questions were -- required or not.",
+  "why_tests_missed": "The tests with a failing AI had required questions left open; none had only optional ones.",
+  "fix": "PageAgent.carry_on_without_the_ai(): when the AI cannot be asked and no required question is open and the page has a plain way forward, the profile plan is used -- optional boxes are left blank, documents attached, Next pressed -- and the hand-over notes what was left blank. A required question open still stops the run.",
+  "tests": [
+    "tests/test_carry_on_without_the_ai.py",
+    "tests/test_carry_on_without_the_ai.py::test_the_run_goes_on_past_optional_questions_with_no_ai",
+    "tests/test_carry_on_without_the_ai.py::test_the_run_stops_at_a_required_question_with_no_ai"
+  ],
+  "prevention": "When a helper service is down, ask whether the step actually needs it before stopping; degrade to what can be done without it and say what was skipped."
+}

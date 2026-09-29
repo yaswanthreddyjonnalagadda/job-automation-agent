@@ -1959,6 +1959,30 @@ class PageAgent:
         logger.info("THE FORM SAYS: %s", "; ".join(errors[:4])[:200])
         return "the form says: " + "; ".join(errors[:4])
 
+    def carry_on_without_the_ai(self, controls: list[Control], required: set[str], still_open: list[str],
+                                snapshot: str, why: str) -> Optional["PagePlan"]:
+        """The page plan when the AI cannot be asked, or None when the page needs it.
+
+        Blue Cross and Blue Shield of Louisiana (29 September): My Experience needed only the resume, which the
+        agent attaches itself; the questions left open were optional (Skills, Phone Extension). The AI's daily
+        allowance was spent, and the run stopped although nothing on the page needed an answer. Now, with every
+        required question answered and a plain way forward, the optional ones are left blank and the run goes on;
+        a required question still open stops it, as before."""
+        required_open = [q for q in still_open
+                         if q.rstrip().endswith("*") or any(_same_question(q.rstrip(" *"), r) for r in required)]
+        if required_open:
+            return None
+        plan = self.profile_plan(controls, required, [], snapshot)
+        if not plan.next_ref or _blank_choice_on_page([c for c in controls if "*" in (c.question or "")]):
+            return None
+        logger.info("NO AI (%s): only optional questions are left (%s) -- leaving them blank and going on",
+                    why.splitlines()[0][:80] if why else "unavailable", "; ".join(q[:40] for q in still_open[:4]) or "none")
+        if still_open:
+            note = "left blank without the AI (optional): " + "; ".join(q[:50] for q in still_open[:6])
+            if note not in self.notes:
+                self.notes.append(note)
+        return plan
+
     def _past_employers(self) -> list[str]:
         """Who the person has worked for, from the profile and the resume (read once per run)."""
         if getattr(self, "_employers_cache", None) is None:
@@ -2225,10 +2249,12 @@ class PageAgent:
                                                                         self.facts(controls), asked))
                     except Exception as exc:
                         message = str(exc)
-                        if "out of credit" in message or "credit balance" in message.lower():
-                            return Outcome("owner_needed", page, [message.split(": ", 1)[-1][:200]])
-                        return Outcome("owner_needed", page,
-                                                             [f"could not read this page ({message.splitlines()[0][:120]})"])
+                        plan = self.carry_on_without_the_ai(controls, required, still_open, snapshot, message)
+                        if plan is None:
+                            if "out of credit" in message or "credit balance" in message.lower():
+                                return Outcome("owner_needed", page, [message.split(": ", 1)[-1][:200]])
+                            return Outcome("owner_needed", page,
+                                           [f"could not read this page ({message.splitlines()[0][:120]})"])
             logger.info("READ: %s%s -- %d to answer, %d for you, next: %s %r", plan.page_kind.replace("_", " "),
                         f" ({plan.step})" if plan.step else "", len(plan.answers), len(plan.for_owner),
                         plan.next_kind.replace("_", " "), plan.next_label[:40])

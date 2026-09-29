@@ -186,6 +186,12 @@ resume or profile shows it. Legal and visa questions are still never sent to it.
 Google's free tier, what is sent may be used by Google to improve its products; a
 project with billing turned on is not.
 
+When the AI cannot be asked -- its daily allowance is spent, it is busy, or there is
+no credit -- a page is not a reason to stop if every required question on it (marked
+*) is answered: the optional ones are left blank, the resume is attached, the agent
+presses Next, and the hand-over lists what it left blank. A required question still
+open stops the run for you, as before.
+
 ## An account that already exists
 
 When an employer's page says an account already exists for your email, the
