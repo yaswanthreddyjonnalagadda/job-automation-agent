@@ -1,0 +1,45 @@
+- generic [active] [ref=f12e1]:
+  - generic [ref=f12e3]:
+    - generic [ref=f12e4]:
+      - generic [ref=f12e6]:
+        - generic [ref=f12e7]: Loading
+        - progressbar [ref=f12e8]
+      - main [ref=f12e15]:
+        - generic [ref=f12e16]:
+          - generic [ref=f12e17]: Sign in with Google
+          - generic [ref=f12e23]:
+            - heading "Choose an account" [level=1] [ref=f12e24]
+            - generic [ref=f12e26]:
+              - text: to continue to
+              - button "myworkday.com" [ref=f12e27] [cursor=pointer]
+        - list [ref=f12e38]:
+          - listitem [ref=f12e39]:
+            - link "Jane Doe jane.doe@example.com" [ref=f12e40] [cursor=pointer]:
+              - generic [ref=f12e44]:
+                - generic [ref=f12e45]: Jane Doe
+                - generic [ref=f12e46]: jane.doe@example.com
+          - listitem [ref=f12e47]:
+            - link "Jane Marie Doe jane.doe@example.com" [ref=f12e48] [cursor=pointer]:
+              - generic [ref=f12e52]:
+                - generic [ref=f12e53]: Jane Marie Doe
+                - generic [ref=f12e54]: jane.doe@example.com
+          - listitem [ref=f12e55]:
+            - link "Use another account" [ref=f12e56] [cursor=pointer]
+    - contentinfo [ref=f12e67]:
+      - combobox "Change language English (United Kingdom)" [ref=f12e71] [cursor=pointer]:
+        - generic: English (United Kingdom)
+      - list [ref=f12e73]:
+        - listitem [ref=f12e74]:
+          - link "Open Google Account Help Centre (external, opens in a new window)" [ref=f12e75] [cursor=pointer]:
+            - /url: https://support.google.com/accounts?hl=en-GB&p=account_iph
+            - text: Help
+        - listitem [ref=f12e76]:
+          - link "Privacy Policy (external, opens in a new window)" [ref=f12e77] [cursor=pointer]:
+            - /url: https://accounts.google.com/TOS?loc=US&hl=en-GB&privacy=true
+            - text: Privacy
+        - listitem [ref=f12e78]:
+          - link "Google Terms of Service (external, opens in a new window)" [ref=f12e79] [cursor=pointer]:
+            - /url: https://accounts.google.com/TOS?loc=US&hl=en-GB
+            - text: Terms
+  - iframe [ref=f12e80]:
+    

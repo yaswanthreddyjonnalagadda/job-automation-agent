@@ -207,6 +207,30 @@ hours. A code is never written to the logs. Before this the reset did not ask
 whether you had allowed mail reads, and the code step of a form did not ask about
 the site; they now all do.
 
+## The account step, one state at a time
+
+Before it does anything on an account page, the agent reads which step the page is
+at: a new-account form, a sign-in form, a sign-in that asks for the email first, a
+choice of ways in, a page still loading, a box for an emailed code, a message saying
+to verify the email, that the email already has an account, that the password was
+refused, or that the account is locked -- or already signed in. What the site says
+counts before what the form looks like. Then one table decides:
+
+- **Sign in with Google** when the site offers it and it has not been tried here yet.
+- **Create the account** on a new-account form -- once per site per run; if the email
+  already has an account there, it goes to sign-in instead of making another.
+- **Sign in** on a sign-in form, once per site per run, with the password from
+  Settings; give the email first where the site asks for it on its own.
+- **Enter an emailed code** under the rules below.
+- **Stop and tell you** when only you can act: open the verification email and click
+  its link, a refused password, a locked account, or sign-in held back to protect the
+  account. The run says exactly what to do; press Continue when it is done. It no
+  longer treats a sign-in page it could not get past as a form to fill in.
+
+Every change of state is written to the run's log (`ACCOUNT_STATE`) with a
+screenshot and the page's text in the job's `account/` folder, so a sign-in that
+did not work shows what the site said.
+
 ## Creating an account
 
 On an employer's create-account form the agent ticks two kinds of box and no

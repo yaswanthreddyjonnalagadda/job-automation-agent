@@ -1,0 +1,80 @@
+- generic [ref=e4]:
+  - link "Skip to main content" [ref=e5] [cursor=pointer]:
+    - /url: ""
+  - banner [ref=e8]:
+    - generic [ref=e10]:
+      - link [ref=e13] [cursor=pointer]:
+        - /url: /en-US/KBI_Biopharma
+        - img "search for jobs" [ref=e14]
+      - generic [ref=e15]:
+        - heading [level=1]
+      - generic [ref=e17]:
+        - button "Sign In" [ref=e19] [cursor=pointer]
+        - navigation [ref=e25]:
+          - button "Search for Jobs" [ref=e26] [cursor=pointer]
+          - button "Introduce Yourself" [ref=e27] [cursor=pointer]
+  - main [ref=e30]:
+    - generic [ref=e31]:
+      - generic [ref=e32]:
+        - link "Back to Job Posting" [ref=e34] [cursor=pointer]
+        - heading "Network Engineer" [level=2] [ref=e39]
+      - generic "Application Progress" [ref=e40]:
+        - list [ref=e41]:
+          - listitem [ref=e42]:
+            - generic: current step 1 of 7
+            - generic [ref=e48]: Create Account/Sign In
+          - listitem [ref=e49]:
+            - generic: step 2 of 7
+            - generic [ref=e55]: My Information
+          - listitem [ref=e56]:
+            - generic: step 3 of 7
+            - generic [ref=e62]: My Experience
+          - listitem [ref=e63]:
+            - generic: step 4 of 7
+            - generic [ref=e69]: Application Questions
+          - listitem [ref=e70]:
+            - generic: step 5 of 7
+            - generic [ref=e76]: Voluntary Disclosures
+          - listitem [ref=e77]:
+            - generic: step 6 of 7
+            - generic [ref=e83]: Self Identify
+          - listitem [ref=e84]:
+            - generic: step 7 of 7
+            - generic [ref=e90]: Review
+      - generic [ref=e93]:
+        - generic [ref=e96]:
+          - heading "Create Account" [active] [level=3] [ref=e97]
+          - generic [ref=e100]:
+            - paragraph [ref=e101]: "Password Requirements:"
+            - list [ref=e102]:
+              - listitem [ref=e103]: A lowercase character
+              - listitem [ref=e104]: A minimum of 8 characters
+              - listitem [ref=e105]: An alphabetic character
+              - listitem [ref=e106]: An uppercase character
+              - listitem [ref=e107]: A numeric character
+              - listitem [ref=e108]: A special character
+          - generic [ref=e109]:
+            - generic [ref=e110]:
+              - generic [ref=e111]: Email Address*
+              - textbox "Email Address" [ref=e115]
+            - generic [ref=e117]:
+              - generic [ref=e118]: Password*
+              - textbox "Password" [ref=e122]
+            - generic [ref=e123]:
+              - generic [ref=e124]: Verify New Password*
+              - textbox "Verify New Password" [ref=e128]
+            - generic [ref=e133]:
+              - button "Create Account" [ref=e134] [cursor=pointer]
+              - button [aria-hidden] [ref=e135] [cursor=pointer]: Create Account
+          - generic [ref=e136]:
+            - text: Already have an account?
+            - button "Sign In" [ref=e137] [cursor=pointer]
+          - button "Forgot your password?" [ref=e139] [cursor=pointer]
+        - generic:
+          - generic:
+            - generic [ref=e140]: Enter website. This input is for robots only, do not enter if you're human.
+            - textbox "Enter website. This input is for robots only, do not enter if you're human." [ref=e141]
+  - generic [ref=e142]:
+    - link "Privacy Policy" [ref=e144] [cursor=pointer]:
+      - /url: https://www.jsrmicro.com/privacy-policy-0
+    - generic [ref=e145]: © 2026 Workday, Inc. All rights reserved.

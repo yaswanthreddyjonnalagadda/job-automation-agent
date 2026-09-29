@@ -1,0 +1,81 @@
+- generic [ref=f11e1]:
+  - generic [ref=f11e4]:
+    - link [ref=f11e194] [cursor=pointer]:
+      - /url: ""
+      - text: Skip to main content
+    - banner [ref=f11e8]:
+      - generic [ref=f11e10]:
+        - link [ref=f11e195] [cursor=pointer]:
+          - /url: https://theocc.wd5.myworkdayjobs.com/en-US/careers
+        - generic [ref=f11e17]:
+          - button [ref=f11e197] [cursor=pointer]:
+            - generic [ref=f11e24]: Sign In
+          - navigation [ref=f11e25]:
+            - button [ref=f11e198] [cursor=pointer]: Home
+            - button [ref=f11e199] [cursor=pointer]: Search for Jobs
+    - main [ref=f11e30]:
+      - generic [ref=f11e31]:
+        - generic [ref=f11e32]:
+          - link [ref=f11e200] [cursor=pointer]:
+            - generic [ref=f11e38]: Back to Job Posting
+          - heading [level=2] [ref=f11e201]: Associate Principal, Cloud Engineering
+        - list [ref=f11e41]:
+          - listitem [ref=f11e42]:
+            - generic [ref=f11e48]: Create Account/Sign In
+          - listitem [ref=f11e49]:
+            - generic [ref=f11e55]: Autofill with Resume
+          - listitem [ref=f11e56]:
+            - generic [ref=f11e62]: My Information
+          - listitem [ref=f11e63]:
+            - generic [ref=f11e69]: My Experience
+          - listitem [ref=f11e70]:
+            - generic [ref=f11e76]: Application Questions
+          - listitem [ref=f11e77]:
+            - generic [ref=f11e83]: Voluntary Disclosures
+          - listitem [ref=f11e84]:
+            - generic [ref=f11e90]: Review
+        - generic [ref=f11e148]:
+          - heading [level=2] [ref=f11e203]: Sign In
+          - generic [ref=f11e151]:
+            - heading [level=2] [ref=f11e204]: If you are creating an account using your Apple ID, please avoid using “Hide My E-mail” as this will prevent you from receiving communications from OCC and potentially accessing your account.
+            - heading [level=2] [ref=f11e205]: Thank you.
+          - button [ref=f11e206] [cursor=pointer]:
+            - generic [ref=f11e159]: Sign in with Apple
+          - button [ref=f11e207] [cursor=pointer]:
+            - generic [ref=f11e169]: Sign in with Google
+          - button [ref=f11e208] [cursor=pointer]:
+            - generic [ref=f11e182]: Sign in with LinkedIn
+          - generic [ref=f11e188]:
+            - generic [ref=f11e189]: OR
+            - button [ref=f11e209] [cursor=pointer]: Sign in with email
+    - generic [ref=f11e97]:
+      - heading [level=4] [ref=f11e210]: Follow Us
+      - list [ref=f11e99]:
+        - listitem [ref=f11e100] [cursor=pointer]:
+          - link [ref=f11e211]:
+            - /url: https://plus.google.com/u/1/b/102920950054418934398/102920950054418934398/posts?gmbpt=true&hl=en
+        - listitem [ref=f11e105] [cursor=pointer]:
+          - link [ref=f11e212]:
+            - /url: https://twitter.com/OptionsClearing
+        - listitem [ref=f11e110] [cursor=pointer]:
+          - link [ref=f11e213]:
+            - /url: https://www.linkedin.com/company/occ
+        - listitem [ref=f11e115] [cursor=pointer]:
+          - link [ref=f11e214]:
+            - /url: https://www.facebook.com/OptionsClearingCorporation
+      - generic [ref=f11e120]: © 2026 Workday, Inc. All rights reserved.
+  - dialog "Sign In" [ref=f11e217]:
+    - button "Close" [active] [ref=f11e218] [cursor=pointer]
+    - generic [ref=f11e224]:
+      - img "logo" [ref=f11e226]
+      - generic [ref=f11e229]:
+        - heading "Sign In" [level=2] [ref=f11e230]
+        - generic [ref=f11e232]:
+          - heading "If you are creating an account using your Apple ID, please avoid using “Hide My E-mail” as this will prevent you from receiving communications from OCC and potentially accessing your account." [level=2] [ref=f11e233]
+          - heading "Thank you." [level=2] [ref=f11e234]
+        - button "Sign in with Apple" [ref=f11e239] [cursor=pointer]
+        - button "Sign in with Google" [ref=f11e249] [cursor=pointer]
+        - button "Sign in with LinkedIn" [ref=f11e262] [cursor=pointer]
+        - generic [ref=f11e269]:
+          - generic [ref=f11e270]: OR
+          - button "Sign in with email" [ref=f11e274] [cursor=pointer]

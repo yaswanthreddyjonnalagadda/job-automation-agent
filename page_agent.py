@@ -43,6 +43,7 @@ from urllib.parse import urlparse
 import concept_matcher
 import emailed_codes
 import geo_reference
+import account_state
 import login_guard
 import open_answers
 from config import resume_to_attach, site_prefill_policy
@@ -927,6 +928,9 @@ class PageAgent:
         self._google_reloads: dict[str, int] = {}   # times a site's dead Google button was answered with a fresh load
         self._emailed_in: set[str] = set()      # sites where the email has been given on its own page
         self._created_at: set[str] = set()      # sites where an account has been created
+        self.account_blocker = ""               # what only the owner can do at the account step, or ""
+        self._account_seen: dict[str, tuple] = {}   # the last account state logged, per site
+        self._account_waits: dict[str, int] = {}    # reads of an account step still drawing its form
         self.unanswered_path: Path = UNANSWERED_FILE
         self._logged_unanswered: set[tuple[str, str]] = set()   # (question, site) already counted this run
         self._profile_answer_library: Optional[dict] = None
@@ -982,6 +986,9 @@ class PageAgent:
         if owner_acted:
             login_guard.owner_resumed(getattr(self, "_current_host", "") or "")
         self._google_reloads = {}   # ... and give a dead Google button its fresh loads again
+        self.account_blocker = ""
+        self._account_seen = {}
+        self._account_waits = {}
         self._retried_after_error = False
         self._code_tries = 0        # a resumed run may fetch a fresh code
         self._asked_for_new_code = False
@@ -1016,7 +1023,8 @@ class PageAgent:
                               ("_profile_answer_library", lambda: None),
                               ("_resume_autofill_attempted", bool), ("_pending_memories", list),
                               ("_choice_methods", dict), ("_reused_recipes", dict), ("_chosen_instead", dict),
-                              ("_current_host", str)):
+                              ("_current_host", str), ("account_blocker", str), ("_account_seen", dict),
+                              ("_account_waits", dict)):
             if not hasattr(self, name):
                 setattr(self, name, default())
 
@@ -1081,110 +1089,65 @@ class PageAgent:
     def sign_in_step(self, page, controls: list[Control]) -> bool:
         """Signs in where the page asks for it. True when something was done.
 
-        Google first, always, when the site offers it -- the owner's standing
-        instruction. NVIDIA's (Workday) page offered "Sign in with Google",
-        "Sign in with LinkedIn" and "Sign in with email"; the agent took email
-        and got nowhere. LinkedIn, Indeed, Facebook, Apple and Microsoft are
-        never used. Otherwise the employer-account password, once per site.
+        What the page is, and what to do about it, is decided in account_state: one reading of the page and
+        one table, instead of each step below reading the page its own way (KBI, 28 September). The actions
+        are the agent's own. Google first, always, when the site offers it -- the owner's standing
+        instruction; LinkedIn, Indeed, Facebook, Apple and Microsoft are never used; otherwise the
+        employer-account password, once per site. Whatever only the owner can do is set in
+        `account_blocker`, and the run stops for it rather than reading the sign-in page as a form.
         """
         tab = self.tab(page)
         email = getattr(self.config, "ats_email", "") or getattr(self.profile, "email", "")
         host = urlparse(tab.url).netloc
+        self.account_blocker = ""
+        try:
+            snapshot = self.snapshot(page)
+        except Exception:
+            return False
+        state = account_state.read_state(snapshot, password_boxes=self._password_boxes(tab))
         try:
             candidate_state = self.assistant.adapter(tab).candidate_account_state(tab)
         except Exception:
             candidate_state = ""
-        if candidate_state == "verification":
-            logger.info("LOGIN: Workday Candidate Home needs verification; leaving it for account-code handling")
+        if candidate_state == "verification" and state.kind != account_state.CODE_ENTRY:
+            state = account_state.AccountState(account_state.VERIFY_EMAIL, "the site's own account page says so",
+                                               state.google_offered, state.password_boxes, state.form_error)
+        try:
+            exists = self.assistant.account_on_record() is True
+        except Exception:
+            exists = False
+        memory = account_state.Memory(
+            google_tried=host in self._google_tried, google_refused=host in self._google_failed,
+            created=host in self._created_at, signed_in_tried=host in self._signed_in_at,
+            email_given=host in self._emailed_in, account_exists=exists,
+            held=str(getattr(self.assistant, "_login_paused", "") or ""))
+        step = account_state.next_step(state, memory)
+        self._note_account_state(page, host, state, step)
+
+        if step.action == account_state.FOR_OWNER:
+            self.account_blocker = step.why
             return False
-        google = next((c for c in controls if c.role in PRESS_ROLES and self.GOOGLE_SIGN_IN.search(c.name or "")), None)
-        if google is not None and host not in self._google_tried and host not in self._google_failed and email:
-            self._google_tried.add(host)
-            logger.info("LOGIN: this site offers Google sign-in -- using it")
-            try:
-                # Through the snapshot's reference, so a sign-in box inside a
-                # frame is reached as well.
-                button = self.locate(page, google.ref).element_handle(timeout=5_000)
-                if self.assistant._sign_in_with_google(tab, button, email, host,
-                                                       lambda: self._google_still_offered(page)):
-                    logger.info("LOGIN: signed in with Google")
-                elif getattr(self.assistant, "google_press_ignored", False) \
-                        and self._google_reloads.get(host, 0) < self.GOOGLE_RELOADS:
-                    # The site did not react at all: its button is dead until the
-                    # page is loaded again. That says nothing about the account.
-                    self._google_reloads[host] = self._google_reloads.get(host, 0) + 1
-                    self._google_tried.discard(host)
-                    logger.info("LOGIN: %s did not react to its Google button -- loading the page again (%d of %d)",
-                                host, self._google_reloads[host], self.GOOGLE_RELOADS)
-                    tab.reload(wait_until="domcontentloaded", timeout=30_000)
-                    self.settle(page, 3_000)
-                else:
-                    # The site would not take it (NVIDIA: "Account is Inactive").
-                    # Its own sign-in is used from here on.
-                    self._google_failed.add(host)
-                    self.assistant.google_refused_on = set(self._google_failed)
-                    logger.info("LOGIN: %s did not accept the Google account -- using its own sign-in", host)
-                return True
-            except Exception as exc:
-                logger.warning("LOGIN: Google sign-in did not go through (%s)", str(exc).splitlines()[0][:100])
-                return True   # the page has changed; read it again
-        # A sign-in that asks for the email on its own page first (Workday's
-        # does, after "Sign in with email"): give it, and press on. The password
-        # is never typed here -- that is the sign-in code's, below.
-        is_app_form = any(
-            re.search(r"first\s*name|last\s*name|phone|resume|education|work\s*history", f"{c.name} {c.question}", re.IGNORECASE)
-            for c in controls if c.role in ("textbox", "searchbox", "combobox")
-        )
-        if not is_app_form and not self._password_box(tab) and email and host not in self._emailed_in:
-            box = next((c for c in controls
-                        if c.role in ("textbox", "searchbox") and not c.answer
-                        and re.search(r"e-?mail|user ?name", f"{c.name} {c.question}", re.IGNORECASE)), None)
-            if box is not None:
-                self._emailed_in.add(host)
-                logger.info("LOGIN: this sign-in asks for the email first -- giving it")
-                try:
-                    fill_and_dispatch(self.locate(page, box.ref), email, timeout=8_000)
-                    go = next((c for c in controls if c.role in PRESS_ROLES and re.match(
-                        r"^(sign ?in|log ?in|continue|next|submit)$",
-                        " ".join((c.name or "").split()), re.IGNORECASE)), None)
-                    if go is not None:
-                        self.locate(page, go.ref).click(timeout=8_000)
-                    else:
-                        self.locate(page, box.ref).press("Enter", timeout=5_000)
-                    return True
-                except Exception as exc:
-                    logger.warning("LOGIN: could not give the email (%s)", str(exc).splitlines()[0][:100])
-        # Workday's explicit Candidate Home state wins over password-box
-        # counts: the page can retain a stale sign-in form beside registration.
-        making_account = candidate_state in ("registration", "registration_error") or self._password_boxes(tab) >= 2
-        page_text = ""
-        if making_account:
-            try:
-                page_text = tab.inner_text("body", timeout=2_000)
-            except Exception:
-                page_text = ""
-            try:
-                account_exists = self.assistant.account_on_record() is True
-            except Exception:
-                account_exists = False
-            if account_exists and self.assistant._create_account_control(tab) is not None:
-                current_errors = re.search(
-                    r"passwords? (?:do not|don't) match|please check (?:the )?box|field is required|"
-                    r"(?:email|password).{0,30}(?:invalid|required)", page_text, re.IGNORECASE,
-                )
-                if not current_errors:
-                    # An account already exists here: sign in rather than
-                    # register again, even when a registration form is showing.
-                    logger.info("LOGIN: account already exists -- opening sign-in instead of registering")
-                    if self.assistant._goto_login_page(tab):
-                        return True
-                else:
-                    logger.info("LOGIN: visible registration errors override the unverified account record")
-        if making_account and host in self._created_at:
-            if not re.search(r"invalid|valid email|error|required", page_text, re.IGNORECASE):
+        if step.action == account_state.WAIT:
+            waited = self._account_waits.get(host, 0)
+            if waited >= 3:
+                self.account_blocker = "the account step never showed its form: look at the page, then press Continue"
                 return False
-            logger.info("LOGIN: retrying account creation after the site left a validation error")
-        if self._password_box(tab) and (making_account or host not in self._signed_in_at):
+            self._account_waits[host] = waited + 1
+            self.settle(page, 3_000)
+            return True
+        if step.action == account_state.OPEN_SIGN_IN:
+            logger.info("LOGIN: %s -- opening sign-in instead of making another account", step.why)
+            try:
+                return bool(self.assistant._goto_login_page(tab) or self._press_named(tab, r"^\s*(sign in|log in)\s*$"))
+            except Exception as exc:
+                logger.warning("LOGIN: could not open sign-in (%s)", str(exc).splitlines()[0][:100])
+                return False
+        if step.action == account_state.GOOGLE and email:
+            return self._sign_in_with_google_step(page, tab, host, email, controls)
+        if step.action == account_state.GIVE_EMAIL and email:
+            return self._give_email_first(page, host, email, controls)
+        if step.action in (account_state.CREATE, account_state.SIGN_IN):
+            making_account = step.action == account_state.CREATE
             (self._created_at if making_account else self._signed_in_at).add(host)
             logger.info("LOGIN: %s on %s", "creating the account" if making_account else "signing in", host)
             try:
@@ -1199,7 +1162,100 @@ class PageAgent:
                 if note not in self.notes:
                     self.notes.append(note)
                     logger.info("LOGIN: %s", note[:200])
+                self.account_blocker = note
+            return False
         return False
+
+    def _note_account_state(self, page, host: str, state, step) -> None:
+        """Logs each change of account state, and saves a screenshot and the page text for it.
+
+        KBI's run stopped on its sign-in step and left nothing to show which page it was on."""
+        seen = (state.kind, step.action)
+        if self._account_seen.get(host) == seen or state.kind == account_state.NONE:
+            return
+        self._account_seen[host] = seen
+        logger.info("ACCOUNT_STATE: %s -> %s%s", state, step.action, f" ({step.why[:100]})" if step.why else "")
+        if self.job_dir is None:
+            return
+        try:
+            folder = Path(self.job_dir) / "account"
+            folder.mkdir(parents=True, exist_ok=True)
+            stem = folder / f"{time.strftime('%Y%m%d_%H%M%S')}_{state.kind}"
+            self.tab(page).screenshot(path=str(stem.with_suffix(".png")), full_page=True)
+            stem.with_suffix(".txt").write_text(f"{self.tab(page).url}\n{state}\n-> {step.action} {step.why}\n\n"
+                                                + self.snapshot(page), encoding="utf-8")
+        except Exception as exc:
+            logger.debug("Could not save the account page: %s", str(exc).splitlines()[0][:100])
+
+    @staticmethod
+    def _press_named(tab, pattern: str) -> bool:
+        """Presses the first visible button or link whose name, as a person reads it, matches."""
+        wanted = re.compile(pattern, re.IGNORECASE)
+        for role in ("button", "link"):
+            found = tab.get_by_role(role, name=wanted)
+            for i in range(min(found.count(), 5)):
+                if found.nth(i).is_visible():
+                    found.nth(i).click(timeout=8_000)
+                    return True
+        return False
+
+    def _sign_in_with_google_step(self, page, tab, host: str, email: str, controls: list[Control]) -> bool:
+        """Google sign-in, found by the words a person reads on the button.
+
+        OCC's "Sign in with Google" button carries its words inside it, not as a label, and was not found."""
+        self._google_tried.add(host)
+        logger.info("LOGIN: this site offers Google sign-in -- using it")
+        try:
+            google = next((c for c in controls if c.role in PRESS_ROLES and self.GOOGLE_SIGN_IN.search(c.name or "")),
+                          None)
+            if google is not None:
+                button = self.locate(page, google.ref).element_handle(timeout=5_000)
+            else:
+                button = tab.get_by_role("button", name=self.GOOGLE_SIGN_IN).first.element_handle(timeout=5_000)
+            if self.assistant._sign_in_with_google(tab, button, email, host, lambda: self._google_still_offered(page)):
+                logger.info("LOGIN: signed in with Google")
+            elif getattr(self.assistant, "google_press_ignored", False) \
+                    and self._google_reloads.get(host, 0) < self.GOOGLE_RELOADS:
+                # The site did not react at all: its button is dead until the
+                # page is loaded again. That says nothing about the account.
+                self._google_reloads[host] = self._google_reloads.get(host, 0) + 1
+                self._google_tried.discard(host)
+                logger.info("LOGIN: %s did not react to its Google button -- loading the page again (%d of %d)",
+                            host, self._google_reloads[host], self.GOOGLE_RELOADS)
+                tab.reload(wait_until="domcontentloaded", timeout=30_000)
+                self.settle(page, 3_000)
+            else:
+                # The site would not take it (NVIDIA: "Account is Inactive").
+                # Its own sign-in is used from here on.
+                self._google_failed.add(host)
+                self.assistant.google_refused_on = set(self._google_failed)
+                logger.info("LOGIN: %s did not accept the Google account -- using its own sign-in", host)
+            return True
+        except Exception as exc:
+            logger.warning("LOGIN: Google sign-in did not go through (%s)", str(exc).splitlines()[0][:100])
+            return True   # the page has changed; read it again
+
+    def _give_email_first(self, page, host: str, email: str, controls: list[Control]) -> bool:
+        """A sign-in that asks for the email on its own page first (Workday's does, after "Sign in with
+        email"): give it, and press on. The password is never typed here -- that is handle_auth_gate's."""
+        box = next((c for c in controls if c.role in ("textbox", "searchbox") and not c.answer
+                    and re.search(r"e-?mail|user ?name", f"{c.name} {c.question}", re.IGNORECASE)), None)
+        if box is None:
+            return False
+        self._emailed_in.add(host)
+        logger.info("LOGIN: this sign-in asks for the email first -- giving it")
+        try:
+            fill_and_dispatch(self.locate(page, box.ref), email, timeout=8_000)
+            go = next((c for c in controls if c.role in PRESS_ROLES and re.match(
+                r"^(sign ?in|log ?in|continue|next|submit)$", " ".join((c.name or "").split()), re.IGNORECASE)), None)
+            if go is not None:
+                self.locate(page, go.ref).click(timeout=8_000)
+            else:
+                self.locate(page, box.ref).press("Enter", timeout=5_000)
+            return True
+        except Exception as exc:
+            logger.warning("LOGIN: could not give the email (%s)", str(exc).splitlines()[0][:100])
+            return False
 
     # A code emailed to the owner for their own account or email address.
     ACCOUNT_CODE = re.compile(
@@ -1919,6 +1975,10 @@ class PageAgent:
             if self.sign_in_step(page, controls):
                 self.settle(page)
                 continue
+            if self.account_blocker:
+                # Only the owner can do this (a verification link, a locked account, a refused password):
+                # say so, rather than read the sign-in page as a form to answer.
+                return Outcome("owner_needed", page, [self.account_blocker])
             if self.complete_account_code(page, controls, snapshot):
                 self.settle(page)
                 continue
