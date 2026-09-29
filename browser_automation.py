@@ -2126,7 +2126,7 @@ class JobApplicationAssistant:
                 logger.info("Answered Ant Design combobox %r with %r", control.get("question", "")[:40], candidates[0])
                 page.wait_for_timeout(500)
                 return
-        wants_dial_code = bool(re.search(r"country code|dial|phone|^\s*\*?\s*country",
+        wants_dial_code = bool(re.search(r"country code|dial|phone|^\s*\*?\s*country\b",
                                          control.get("question", ""), re.I))
         scope = page.locator(f"[id={json.dumps(control['listbox'])}]") if control["listbox"] else page
         if scope is not page and scope.count() == 0:

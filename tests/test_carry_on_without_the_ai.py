@@ -92,3 +92,40 @@ def test_the_run_stops_at_a_required_question_with_no_ai(page):
     a = agent(NoAI())
     outcome = a.run(page)
     assert outcome.kind == "owner_needed" and page.url.endswith("/apply/1")
+
+
+# --- Rackspace, 29 September: a required list whose star is on a line of its own ----------------------
+
+CONSENT = ("To support our recruiting process, we may use AI-assisted tools to help identify skills and experience. "
+           "If you prefer not to have your resume reviewed using AI-assisted tools, simply select \"No\" below.")
+
+
+def test_a_workday_list_named_required_still_showing_select_one_stops_the_run():
+    a = agent()
+    still_open = [CONSENT]                                           # no star: Workday draws it on its own line
+    box = Control(ref="e1", role="button", name=f"{CONSENT} Select One Required", value="Select One")
+    assert a.carry_on_without_the_ai([box, NEXT], set(), still_open, "", "no AI") is None
+    assert a.required_left and a.required_left[0].startswith("To support our recruiting process")
+
+
+def test_an_errors_panel_on_the_page_stops_the_run():
+    a = agent()
+    snapshot = '- alert [ref=e1]: The field Notice period is required and must have a value.'
+    assert a.carry_on_without_the_ai([NEXT], set(), [], snapshot, "no AI") is None
+    assert a.required_left == ["The field Notice period is required and must have a value."]
+
+
+def test_the_stop_names_the_question(page):
+    body = (f'<h1>Application Questions</h1><p>current step 4 of 6</p>'
+            f'<label id="l">{CONSENT}</label><span>*</span>'
+            f'<button aria-labelledby="l b" id="b">Select One</button><span id="r">Required</span>'
+            f'<button onclick="location.href=\'/apply/2\'">Next</button>')
+    page.route("https://jobs.example.com/**", lambda route: route.fulfill(
+        status=200, content_type="text/html", body=f"<html><body>{body}</body></html>"))
+    page.goto("https://jobs.example.com/apply/1")
+    a = agent(NoAI())
+    controls = page_agent.parse_snapshot(a.snapshot(page))
+    button = next(c for c in controls if c.role == "button" and "Select One" in (c.name or ""))
+    button.name = f"{CONSENT} Select One Required"                   # as Workday names it
+    assert a.carry_on_without_the_ai(controls, set(), [CONSENT], a.snapshot(page), "no AI") is None
+    assert "To support our recruiting" in a.required_left[0]

@@ -88,7 +88,7 @@ NEVER_PRESS = re.compile(
 # dialog belongs to Windows, not to the page: nothing on the page can close it,
 # and a whole run sat frozen behind it until it was killed.
 OPENS_A_FILE_DIALOG = re.compile(
-    r"autofill|upload|attach|choose (a )?file|browse|import (your )?(profile|resume|cv)", re.IGNORECASE)
+    r"autofill|upload|attach|choose (a )?file|\bbrowse\b|import (your )?(profile|resume|cv)", re.IGNORECASE)
 
 # Workday answered a page press with "Something went wrong. Please refresh the
 # page and then try again." -- a passing fault, and the page says what to do.
@@ -1024,6 +1024,7 @@ class PageAgent:
         self._account_waits: dict[str, int] = {}    # reads of an account step still drawing its form
         self._last_press_errors: tuple = ()          # what the page said was wrong after the last press
         self._run_stamp = time.strftime("%Y%m%d_%H%M%S")   # this run's folder for its page recordings
+        self.required_left: list[str] = []            # required questions the AI could not be asked about
         self.unanswered_path: Path = UNANSWERED_FILE
         self._logged_unanswered: set[tuple[str, str]] = set()   # (question, site) already counted this run
         self._profile_answer_library: Optional[dict] = None
@@ -1118,7 +1119,7 @@ class PageAgent:
                               ("_choice_methods", dict), ("_reused_recipes", dict), ("_chosen_instead", dict),
                               ("_current_host", str), ("account_blocker", str), ("_account_seen", dict),
                               ("_account_waits", dict), ("_last_press_errors", tuple),
-                              ("_run_stamp", lambda: time.strftime("%Y%m%d_%H%M%S"))):
+                              ("_run_stamp", lambda: time.strftime("%Y%m%d_%H%M%S")), ("required_left", list)):
             if not hasattr(self, name):
                 setattr(self, name, default())
 
@@ -2008,9 +2009,19 @@ class PageAgent:
         allowance was spent, and the run stopped although nothing on the page needed an answer. Now, with every
         required question answered and a plain way forward, the optional ones are left blank and the run goes on;
         a required question still open stops it, as before."""
+        self.required_left = []
         required_open = [q for q in still_open
                          if q.rstrip().endswith("*") or any(_same_question(q.rstrip(" *"), r) for r in required)]
-        if required_open:
+        # Workday names a required list "<question> Select One Required": the star it draws is on a line of its
+        # own, so the question was taken for optional and Next was pressed into the same error three times
+        # (Rackspace's AI-screening consent, 29 September).
+        required_open += [c.question for c in controls
+                          if c.role in ("button", "combobox", "listbox") and not c.disabled and not c.answer
+                          and re.search(r"\brequired\s*$", c.name or "", re.IGNORECASE)
+                          and c.question not in required_open]
+        errors = page_errors(snapshot)
+        if required_open or errors:
+            self.required_left = required_open or errors
             return None
         plan = self.profile_plan(controls, required, [], snapshot)
         if not plan.next_ref or _blank_choice_on_page([c for c in controls if "*" in (c.question or "")]):
@@ -2290,6 +2301,9 @@ class PageAgent:
                     except Exception as exc:
                         message = str(exc)
                         plan = self.carry_on_without_the_ai(controls, required, still_open, snapshot, message)
+                        if plan is None and self.required_left:
+                            return Outcome("owner_needed", page, [
+                                "needs your answer (the AI is unavailable): " + q[:160] for q in self.required_left[:4]])
                         if plan is None:
                             if "out of credit" in message or "credit balance" in message.lower():
                                 return Outcome("owner_needed", page, [message.split(": ", 1)[-1][:200]])
@@ -4235,7 +4249,7 @@ class PageAgent:
         self._pressed[label.lower()] = pressed + 1
         if re.search(r"linked ?in|indeed|facebook|apple|microsoft", label, re.IGNORECASE):
             return "stop", page, f"{label!r} is a sign-in the agent never uses"
-        if plan.next_kind == "consent" or re.search(r"(i )?(agree|accept|acknowledge|consent)", label, re.IGNORECASE):
+        if plan.next_kind == "consent" or re.search(r"\b(i )?(agree|accept|acknowledge|consent)\b", label, re.IGNORECASE):
             if safety.is_attestation(label) or re.search(r"certif|attest|sign", label, re.IGNORECASE):
                 return "stop", page, f"{label!r} is a declaration -- only you can give it"
             if not getattr(self.profile, "accept_application_privacy_prompts", False):
