@@ -104,6 +104,14 @@ CONFIRMATION_TEXT = re.compile(
     r"your application is complete|"
     r"(?<!if )(?<!jobs )(?<!positions )(?:you've|you have) (?:successfully |already )?applied(?! before|\?|\s+to check)",
     re.IGNORECASE)
+# The words that say, beyond doubt, the application has already arrived.
+RECEIVED_TEXT = re.compile(
+    r"we('ve| have) received your application|your application (has been|was) (received|submitted|sent)|"
+    r"application (was |has been )?successfully submitted|successfully submitted your application", re.IGNORECASE)
+# ... and the ones that say it has not: something is left to do before it counts.
+STILL_TO_DO_TEXT = re.compile(
+    r"\b(to|and|then) (complete|finish|continue|submit) (your|the|this) application\b|"
+    r"\bbefore (your|the) application (is|can be) (complete|submitted|considered)", re.IGNORECASE)
 
 # What a site says when the account behind a sign-in cannot be used.
 ACCOUNT_ERROR = re.compile(
@@ -2213,6 +2221,13 @@ class PageAgent:
             if self._shapes[hash(shape)] > MAX_READS_PER_PAGE:
                 return Outcome("owner_needed", page, ["this page keeps asking the same things and is not "
                                                       "moving on -- the rest of it needs you"])
+            # A confirmation is read before anything else on the page: Workday's says "We've Received Your
+            # Application!" over a form to make a Candidate Home account, and was taken for a sign-in page --
+            # the application went unrecorded and the run went on asking about an account (Aristocrat, 29 Sept).
+            if self._site_confirms(tab):
+                if self.final_pressed:
+                    return Outcome("submitted", page, ["the site confirmed the application"])
+                return Outcome("owner_needed", page, ["the site says this application was already sent"])
             if self.sign_in_step(page, controls):
                 self.settle(page)
                 continue
@@ -4479,7 +4494,12 @@ class PageAgent:
             texts += [f.locator("body").inner_text(timeout=3_000) for f in frames]
             if not any(CONFIRMATION_TEXT.search(t or "") for t in texts):
                 return False
-            return not any(self._asks_for_input(part) for part in [tab, *frames])
+            if not any(self._asks_for_input(part) for part in [tab, *frames]):
+                return True
+            # A form on a confirmation page is an offer ("create a Candidate Home account to track your
+            # progress"), not a step still to do -- when the page says in the past tense that the application
+            # was received, and does not say there is something left to finish it.
+            return any(RECEIVED_TEXT.search(t or "") and not STILL_TO_DO_TEXT.search(t or "") for t in texts)
         except Exception:
             return False
 

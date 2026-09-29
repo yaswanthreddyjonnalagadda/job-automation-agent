@@ -36,6 +36,8 @@ import psycopg
 from psycopg.types.json import Json
 from psycopg.rows import dict_row
 
+import application_status
+
 logger = logging.getLogger(__name__)
 
 
@@ -400,7 +402,13 @@ class PostgresTracker:
             conn.execute("DELETE FROM applications WHERE id = %s", (application_id,))
         return True
 
-    def update_status(self, dedup_key: str, status: str, notes: Optional[str] = None) -> None:
+    def update_status(self, dedup_key: str, status: str, notes: Optional[str] = None,
+                      by_owner: bool = False) -> None:
+        current = self.get(dedup_key)
+        if current is not None and not application_status.may_replace(current.status, status, by_owner):
+            logger.info("KEPT: %s stays %s -- a run does not move an application that has gone back to %s",
+                        dedup_key[:12], current.status, status)
+            return
         with self._connect() as conn:
             conn.execute(
                 """

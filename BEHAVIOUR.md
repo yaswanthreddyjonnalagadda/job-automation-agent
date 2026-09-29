@@ -591,6 +591,24 @@ steps fill in. It reads only what the tracker already keeps.
 with `needs_user_review` whenever a person has to look, and `skipped` for a
 job that was declined.
 
+Once an application has gone -- `submitted`, then `interviewing`, `offer` or
+`rejected` -- a run never moves it back to an unfinished status; you can still
+change any status yourself on the dashboard, and your change stands. Marking the
+application a run is working on as submitted (or interviewing, offer, rejected,
+skipped) ends that run: it has nothing left to do. **Close browser** on the
+dashboard ends the run too (it used to be read as "carry on").
+
+When a site says the application was received ("We've received your
+application", "Your application has been submitted"), the agent records it as
+submitted, even when the same page offers to make an account to track it. A page
+that says something is still left to finish the application is not a
+confirmation.
+
+An application's page lists its documents with the one **In use** first;
+files from an earlier attempt are marked **Earlier attempt** -- the employer
+received only what was attached when the application was sent. A stored resume is
+reused however small it is, as long as it is a whole PDF.
+
 ## Layout
 
 | Path | Contents |

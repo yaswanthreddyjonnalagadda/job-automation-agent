@@ -219,6 +219,11 @@ def ensure_resume_header(text: str, profile, job) -> str:
     return header + "\n" + text.lstrip()
 
 
+def _whole_pdf(content: bytes) -> bool:
+    """A PDF that starts as one and ends as one, with a page in it."""
+    return content.startswith(b"%PDF") and b"%%EOF" in content[-2048:] and b"/Page" in content
+
+
 def reuse_stored_document(tracker, key: str, kind: str, job_dir: Path) -> Path | None:
     """Returns the document already generated for this posting, restored from
     the database into the job's output folder, or None if there isn't one.
@@ -236,13 +241,12 @@ def reuse_stored_document(tracker, key: str, kind: str, job_dir: Path) -> Path |
     if not doc or not doc.get("content"):
         return None
     content = bytes(doc["content"])
-    # A PDF smaller than 20 KB is almost certainly broken (bad tailoring output
-    # that got PDF'd as a near-empty file). Discard it so the run retailors.
-    if kind == "resume" and doc.get("filename", "").lower().endswith(".pdf") and len(content) < 20_000:
-        logger.warning(
-            "REUSE_SKIPPED: stored resume %s is only %d bytes (likely corrupt) -- will retailor",
-            doc["filename"], len(content),
-        )
+    # A broken PDF (cut off, or not a PDF at all) is discarded so the run retailors. Its size says nothing:
+    # a text-only tailored resume is about 5 KB, and the old "under 20 KB is corrupt" rule threw away
+    # Aristocrat's good resume (5,339 bytes, 29 September), so every retry would have written a new one.
+    if kind == "resume" and doc.get("filename", "").lower().endswith(".pdf") and not _whole_pdf(content):
+        logger.warning("REUSE_SKIPPED: stored resume %s is not a whole PDF (%d bytes) -- will retailor",
+                       doc["filename"], len(content))
         return None
     path = job_dir / doc["filename"]
     if not path.is_file() or path.read_bytes() != content:
@@ -961,7 +965,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 tracker.update_status(key, status, notes=note)
                 logger.info("SUBMITTED_BY_USER: %s", note)
                 return
-            if decision in ("browser_closed", "left_form"):
+            if decision in RUN_ENDS:
                 remember_progress(tracker, key, page, f"run ended: {decision}")
                 return
             if decision in ("skip", "decline", "abort", "quit"):
@@ -1001,7 +1005,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             tracker.update_status(key, status, notes=note)
             logger.info("SUBMITTED_BY_USER: %s", note)
             return
-        if decision in ("browser_closed", "left_form"):
+        if decision in RUN_ENDS:
             remember_progress(tracker, key, page, f"run ended: {decision}")
             return
         if decision in ("skip", "decline", "abort", "quit"):
@@ -1107,6 +1111,12 @@ def submit_verified(assistant, page, tracker, key, job, job_dir: Path, decision)
         delete_screenshots(job_dir)
     logger.info("AUTO_SUBMIT result: %s -- %s", status, note)
     return status == STATUS_SUBMITTED
+
+
+# What the owner can say, from the dashboard or by closing the window, that ends the run. "close" is the
+# dashboard's "Close browser" button: it was missing here, so the flow took it for "continue" and went on
+# reading pages and resetting the status after the owner had closed it (Aristocrat, 29 September).
+RUN_ENDS = ("browser_closed", "left_form", "close")
 
 
 def brain_kind(config) -> str:
@@ -1592,7 +1602,7 @@ def main() -> None:
                 logger.info("SUBMITTED_BY_USER: confirmation seen on %s", page.url)
                 return
 
-            if decision in ("browser_closed", "left_form"):
+            if decision in RUN_ENDS:
                 remember_progress(tracker, key, page, f"run ended: {decision}")
                 # The application left the screen without any confirmation. It
                 # may or may not have gone through, so it is never recorded as

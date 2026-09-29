@@ -1,0 +1,15 @@
+{
+  "id": "f053",
+  "date": "2026-09-29",
+  "class": "A confirmation page that also offered a form was taken for a form",
+  "symptom": "Aristocrat (Workday), 29 September: after the Submit, 'Congratulations! We've Received Your Application!' appeared over a form to make a Candidate Home account. The agent read it as a sign-in page, never recorded the application as submitted, and went on trying to make an account.",
+  "site": "Workday (Aristocrat); any site that offers an account after the application",
+  "root_cause": "_site_confirms refused any page showing a form field (to stop a create-account page reading as a confirmation), and the sign-in step ran before the confirmation was ever checked.",
+  "why_tests_missed": "The confirmation tests had either a plain thank-you page or a create-account page, never a confirmation with an optional account form on it.",
+  "fix": "The confirmation is checked before the sign-in step on every page. A page whose words say, in the past tense, that the application was received, and do not say something is left to finish, is a confirmation even with a form on it (RECEIVED_TEXT, STILL_TO_DO_TEXT).",
+  "tests": [
+    "tests/test_owner_ends_and_confirmations.py::test_a_confirmation_that_offers_an_account_is_still_a_confirmation",
+    "tests/test_owner_ends_and_confirmations.py::test_the_agent_reads_workdays_confirmation"
+  ],
+  "prevention": "Decide what a page says has happened before deciding what it asks for, and test the pages that do both."
+}

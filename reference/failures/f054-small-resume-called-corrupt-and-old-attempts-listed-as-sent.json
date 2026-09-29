@@ -1,0 +1,14 @@
+{
+  "id": "f054",
+  "date": "2026-09-29",
+  "class": "A size rule stood in for a validity check, and history was shown as current",
+  "symptom": "Aristocrat, 29 September: the tailored resume (5,339 bytes) would have been thrown away as 'likely corrupt' on the next retry and written again; and the application's page listed two resumes as 'Documents sent', one from an abandoned earlier attempt, which read as two resumes sent to the employer.",
+  "site": "Every site",
+  "root_cause": "reuse_stored_document discarded any stored resume PDF under 20 KB; a text-only tailored resume is about 5 KB. The details page listed every stored document as sent.",
+  "why_tests_missed": "The reuse test used a 30 KB fake PDF, and no test looked at a job with documents from two attempts.",
+  "fix": "A stored resume is discarded only when it is not a whole PDF (apply_flow._whole_pdf). The details page marks the newest of each kind 'In use' and older ones 'Earlier attempt'.",
+  "tests": [
+    "tests/test_resume_written_once_per_job.py::test_a_small_but_whole_pdf_is_reused_and_a_cut_off_one_is_not"
+  ],
+  "prevention": "Check what makes a file usable, not a number that happened to fit the first ones seen, and label records from earlier attempts as such."
+}

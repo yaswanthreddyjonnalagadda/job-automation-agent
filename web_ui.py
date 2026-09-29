@@ -28,6 +28,7 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, redirect, render_template_string, request, send_file, url_for
 
+import application_status
 import ui_shell
 import visible_desktop
 from config import get_app_config
@@ -470,9 +471,19 @@ def change_application_status(app_id: int):
     if not record:
         return redirect(url_for("index", error="That application is gone."))
     note = (request.form.get("notes") or "").strip() or f"Status updated to {new_status.replace('_', ' ')} via UI"
-    tracker.update_status(record.dedup_key, new_status, notes=note)
+    tracker.update_status(record.dedup_key, new_status, notes=note, by_owner=True)
     if hasattr(tracker, "record_event"):
         tracker.record_event(record.dedup_key, "status_change", f"Status set to {new_status} by user in web UI")
+    # An application the owner calls finished has nothing left for its run to do: the run is ended, not left
+    # re-reading the page and reopening tabs (Aristocrat, 29 September).
+    if new_status in application_status.DONE | {"skipped"} and record.url and _running_url() == record.url:
+        _end_any_run()
+        with _RUNS_LOCK:
+            run = _RUNS.get(record.url)
+            if run:
+                run["state"] = f"ended -- you marked it {new_status}"
+                run["proc"] = run["pid"] = None
+                _save_runs()
     next_url = request.form.get("next") or url_for("application", app_id=app_id)
     return redirect(next_url)
 
@@ -669,7 +680,17 @@ def application(app_id: int):
     record = next((a for a in tracker.list_all() if a.id == app_id), None)
     if not record:
         abort(404)
-    docs = tracker.documents_for(app_id)
+    docs = [dict(d) for d in tracker.documents_for(app_id)]
+    # The newest of each kind is the one in use; older ones were attached on an earlier attempt, which may have
+    # been abandoned -- listing them all as "sent" read as two resumes sent to one employer (Aristocrat).
+    newest = {}
+    for d in docs:
+        if d.get("kind") not in newest or (d.get("created_at"), d.get("id")) > (newest[d["kind"]].get("created_at"),
+                                                                                newest[d["kind"]].get("id")):
+            newest[d.get("kind")] = d
+    for d in docs:
+        d["current"] = newest.get(d.get("kind")) is d
+    docs.sort(key=lambda d: (not d["current"], str(d.get("kind")), str(d.get("created_at"))), reverse=False)
     answers = tracker.answers_for(app_id)
     events = tracker.events(record.dedup_key) if hasattr(tracker, "events") else []
     decision, validation = latest_decision(events), latest_validation(record)
@@ -1306,14 +1327,15 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
       </div>
     </div>
     <div>
-      <h2 style="margin-top:8px">Documents sent</h2>
+      <h2 style="margin-top:8px">Documents</h2>
       <div class="card flush">
         <table>
           <thead><tr><th>File</th><th class="num">Size</th><th class="when">Stored</th></tr></thead>
           {% for d in docs %}
           <tr>
             <td><a href="/document/{{ d.id }}" target="_blank">{{ d.filename }}</a>
-                <div class="hint">{{ d.kind.replace('_',' ') }}</div></td>
+                <div class="hint">{{ d.kind.replace('_',' ') }} ·
+                  {% if d.current %}<span class="pill submitted">In use</span>{% else %}<span class="pill skipped">Earlier attempt</span>{% endif %}</div></td>
             <td class="num muted">{{ '%.1f'|format(d.byte_size/1024) }} KB</td>
             <td class="when">{{ d.created_at|local }}</td>
           </tr>
