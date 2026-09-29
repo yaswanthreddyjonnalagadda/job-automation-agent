@@ -1,0 +1,17 @@
+{
+  "id": "f043",
+  "date": "2026-09-29",
+  "class": "A marker a process leaves for the dashboard outlives the process",
+  "symptom": "Aristocrat (Workday): the run stopped for three required questions, was then stopped from the dashboard, and the dashboard went on showing it as 'Paused in the browser' with a Continue button. Pressing Reload code wrote a signal no process would ever read, so the application looked stalled.",
+  "site": "Dashboard (every site)",
+  "root_cause": "A waiting run writes data/_waiting_<run>.txt and removes it when its wait ends; a killed run cannot remove it. The Stop cleanup cleared only the older _signal_ files, and the dashboard listed every _waiting_ note without asking whether any run was alive to read an answer.",
+  "why_tests_missed": "The Continue-button tests covered a run that waits and a run that is answered, never a run that dies while waiting.",
+  "fix": "web_ui.clear_waiting_files() removes both kinds of leftover; Stop and the process sweep call it, and the Applications page lists waiting runs only while a run is live, clearing the notes otherwise. The run card and the application page also link the run's log.",
+  "tests": [
+    "tests/test_continue_button.py::test_a_note_left_by_a_run_that_is_gone_shows_no_continue_and_is_cleared",
+    "tests/test_continue_button.py::test_a_live_run_keeps_its_continue",
+    "tests/test_continue_button.py::test_stopping_clears_the_waiting_note",
+    "tests/test_dashboard_layout.py::test_an_application_page_links_its_runs_log"
+  ],
+  "prevention": "Anything a process leaves on disk to say 'I am here' is checked against the process being alive before it is shown, and every way a process can end (finish, stop, crash) clears it."
+}

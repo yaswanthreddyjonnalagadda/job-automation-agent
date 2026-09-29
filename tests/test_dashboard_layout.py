@@ -62,6 +62,14 @@ def test_every_status_on_the_list_is_a_pill_with_words(client):
     assert "DISQUALIFIED POLICY MISMATCH" not in page and "Skipped (policy)" in page
 
 
+def test_an_application_page_links_its_runs_log(client, monkeypatch, tmp_path):
+    log = tmp_path / "ui_run_x.log"
+    log.write_text("READ: application form")
+    monkeypatch.setitem(web_ui._RUNS, "https://jobs.example.com/0", {"state": "ended", "log": str(log)})
+    assert f'href="/log?path={log}"' in client.get("/application/1").get_data(as_text=True)
+    assert "View log" not in client.get("/application/2").get_data(as_text=True)     # no run, no link
+
+
 def test_the_filter_counts_match_the_groups(client):
     page = client.get("/").get_data(as_text=True)
     assert re.search(r'data-filter="needs"[^>]*>Needs you<span class="n">3</span>', page)

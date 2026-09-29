@@ -52,7 +52,7 @@ app.register_blueprint(progress_pages)
 # is still going in its own process.
 _RUNS: dict[str, dict] = {}
 _RUNS_LOCK = threading.Lock()
-_RUNS_FILE = BASE_DIR / "data" / "_runs.json"
+_RUNS_FILE = BASE_DIR / "data" / "_runs.json"   # its folder also holds the runs' waiting and signal files
 
 
 def _save_runs() -> None:
@@ -217,10 +217,18 @@ def stop_apply():
             _save_runs()
     if proc is None and not pid and not ended:
         return redirect(url_for("index", error="Nothing was running."))
-    # Leftover signal files would otherwise sit in "Waiting for a decision".
-    for leftover in (BASE_DIR / "data").glob("_signal_*.txt"):
-        leftover.unlink(missing_ok=True)
+    clear_waiting_files(_RUNS_FILE.parent)
     return redirect(url_for("index"))
+
+
+def clear_waiting_files(data_dir: Path) -> None:
+    """Remove what a run leaves while it waits: its answer file and its waiting note.
+
+    A run removes its own note when the wait ends; a run that is killed cannot, and the dashboard went on
+    showing it as "Paused in the browser" with a Continue nobody would read (Aristocrat, 29 September)."""
+    for pattern in ("_signal_*.txt", "_waiting_*.txt"):
+        for leftover in Path(data_dir).glob(pattern):
+            leftover.unlink(missing_ok=True)
 
 
 def _end_any_run() -> int:
@@ -241,8 +249,7 @@ def _end_any_run() -> int:
             if any(m in (r.get("CommandLine") or "").lower() for m in marks)]
     for pid in pids:
         subprocess.run(["taskkill", "/PID", pid, "/T", "/F"], capture_output=True, check=False)
-    for leftover in (BASE_DIR / "data").glob("_signal_*.txt"):
-        leftover.unlink(missing_ok=True)
+    clear_waiting_files(_RUNS_FILE.parent)
     return len(pids)
 
 
@@ -457,8 +464,13 @@ def index():
         return redirect(url_for("setup_pages.setup"))
     tracker = get_tracker()
     apps = tracker.list_all()
-    signals = waiting_runs(BASE_DIR / "data")
     runs = _current_runs()
+    # Only a live run can read a Continue; notes left by a run that died or was stopped are cleared.
+    if _running_url():
+        signals = waiting_runs(_RUNS_FILE.parent)
+    else:
+        clear_waiting_files(_RUNS_FILE.parent)
+        signals = []
     try:
         show = int(request.args.get("show", PAGE_SIZE))
     except ValueError:
@@ -575,8 +587,15 @@ def application(app_id: int):
         DETAIL_HTML, a=record, docs=docs, answers=answers, events=events,
         decision=decision, validation=validation, progress=progress_of(record, validation),
         auto_submit_on=get_app_config().auto_submit_verified_only,
-        latest_screenshot=latest_screenshot,
+        latest_screenshot=latest_screenshot, run_log=run_log_for(record.url),
     )
+
+
+def run_log_for(url: str) -> str:
+    """The log of the latest run on this posting, if it is still on disk."""
+    with _RUNS_LOCK:
+        path = (_RUNS.get(url or "") or {}).get("log") or ""
+    return path if path and Path(path).is_file() else ""
 
 
 def latest_decision(events) -> dict:
@@ -813,13 +832,11 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
         {% if r.last_page_url and r.last_page_url != url %}
           <span class="url truncate" title="{{ r.last_page_url }}">Now at: {{ r.last_page_url }}</span>
         {% endif %}
-        <div class="links">
-          {% if r.started %}<span class="muted">Started {{ r.started|local }}</span>{% endif %}
-          {% if r.log %}<a href="/log?path={{ r.log }}" target="_blank">Log</a>{% endif %}
-          {% if r.screenshot %}<a href="/evidence?path={{ r.screenshot }}" target="_blank">Screen</a>{% endif %}
-        </div>
+        {% if r.started %}<div class="links"><span class="muted">Started {{ r.started|local }}</span></div>{% endif %}
       </div>
       <div class="row-actions">
+        {% if r.log %}<a href="/log?path={{ r.log }}" target="_blank"><button class="ghost" type="button" title="What the agent did, step by step">View log</button></a>{% endif %}
+        {% if r.screenshot %}<a href="/evidence?path={{ r.screenshot }}" target="_blank"><button class="ghost" type="button">View screen</button></a>{% endif %}
         {% if r.app_id %}<a href="/application/{{ r.app_id }}"><button class="ghost" type="button">Details</button></a>{% endif %}
         {% if r.state == 'running' %}
         <form method="post" action="/reload-agent">
@@ -960,6 +977,7 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
         {% if a.location %}<span>{{ a.location }}</span>{% endif %}
         <span class="pill {{ status_class(a.status) }}">{{ status_label(a.status) }}</span>
         <a href="{{ a.url }}" target="_blank" rel="noopener">Open posting &rarr;</a>
+        {% if run_log %}<a href="/log?path={{ run_log }}" target="_blank">View log</a>{% endif %}
       </div>
     </div>
     <form method="post" action="/application/{{ a.id }}/status" style="display:flex; align-items:center; gap:8px; margin:0">

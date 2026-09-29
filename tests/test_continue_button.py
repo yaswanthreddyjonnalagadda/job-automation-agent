@@ -59,7 +59,43 @@ def test_the_card_on_the_page_carries_a_continue_button(tmp_path, monkeypatch):
     monkeypatch.setattr(web_ui, "get_tracker", lambda: JobTracker(tmp_path / "a.db"))
     monkeypatch.setattr(web_ui, "waiting_runs", lambda data_dir: [{"signal": "_signal_Acme_Engineer.txt",
                                                                     "label": "Network Engineer at Acme"}])
+    monkeypatch.setattr(web_ui, "_running_url", lambda: "https://jobs.example.com/acme")
     web_ui.app.config["TESTING"] = True
     page = web_ui.app.test_client().get("/").data.decode()
     assert "Network Engineer at Acme" in page and 'action="/signal/_signal_Acme_Engineer.txt"' in page
     assert 'value="continue">Continue</button>' in page
+
+
+# --- Aristocrat, 29 September: the run was stopped while it waited; its note stayed, and the dashboard went on
+# --- showing "Paused in the browser" with a Continue no process would ever read.
+
+def _dashboard(tmp_path, monkeypatch, live=""):
+    import profile_setup
+    from job_tracker import JobTracker
+    monkeypatch.setattr(profile_setup, "needs_setup", lambda: False)
+    monkeypatch.setattr(web_ui, "get_tracker", lambda: JobTracker(tmp_path / "a.db"))
+    monkeypatch.setattr(web_ui, "_RUNS_FILE", tmp_path / "_runs.json")
+    monkeypatch.setattr(web_ui, "_running_url", lambda: live)
+    (tmp_path / "_waiting_Acme_Engineer.txt").write_text("2026-09-29T09:09:14")
+    (tmp_path / "_signal_Acme_Engineer.txt").write_text("reload_code")
+    web_ui.app.config["TESTING"] = True
+    return web_ui.app.test_client()
+
+
+def test_a_note_left_by_a_run_that_is_gone_shows_no_continue_and_is_cleared(tmp_path, monkeypatch):
+    page = _dashboard(tmp_path, monkeypatch, live="").get("/").data.decode()
+    assert "Paused in the browser" not in page and 'value="continue">Continue</button>' not in page
+    assert not list(tmp_path.glob("_waiting_*")) and not list(tmp_path.glob("_signal_*"))
+
+
+def test_a_live_run_keeps_its_continue(tmp_path, monkeypatch):
+    page = _dashboard(tmp_path, monkeypatch, live="https://jobs.example.com/acme").get("/").data.decode()
+    assert 'value="continue">Continue</button>' in page
+    assert (tmp_path / "_waiting_Acme_Engineer.txt").exists()
+
+
+def test_stopping_clears_the_waiting_note(tmp_path, monkeypatch):
+    client = _dashboard(tmp_path, monkeypatch)
+    monkeypatch.setattr(web_ui, "_end_any_run", lambda: 1)
+    client.post("/stop", data={"url": "https://jobs.example.com/acme"})
+    assert not list(tmp_path.glob("_waiting_*")) and not list(tmp_path.glob("_signal_*"))
