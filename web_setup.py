@@ -16,6 +16,7 @@ from flask import Blueprint, redirect, render_template_string, request, url_for
 
 import config
 import profile_setup
+import ui_shell
 
 logger = logging.getLogger(__name__)
 
@@ -23,11 +24,6 @@ setup_pages = Blueprint("setup_pages", __name__)
 
 RESUME_TYPES = (".pdf", ".docx")
 MAX_RESUME_BYTES = 10 * 1024 * 1024
-
-
-def _css() -> str:
-    import web_ui
-    return web_ui.BASE_CSS
 
 
 def _save_env(values: dict[str, str]) -> None:
@@ -60,7 +56,7 @@ def _drafting_ai():
 def setup():
     """Step 1: the resume. The draft it gives goes straight into the profile form."""
     if request.method == "GET":
-        return render_template_string(SETUP_HTML, css=_css(), error=request.args.get("error"),
+        return render_template_string(SETUP_HTML, error=request.args.get("error"),
                                       has_profile=not profile_setup.needs_setup())
     upload = request.files.get("resume")
     if upload is None or not upload.filename:
@@ -99,7 +95,7 @@ def _profile_page(values, note="", error="", drafted=(), saved=False):
         elif field and field.kind == "number":
             value = value or ""
         shown[name] = value
-    return render_template_string(PROFILE_HTML, css=_css(), sections=profile_setup.SECTIONS, values=shown,
+    return render_template_string(PROFILE_HTML, sections=profile_setup.SECTIONS, values=shown,
                                   note=note, error=error, drafted=set(drafted), saved=saved,
                                   first_time=profile_setup.needs_setup())
 
@@ -122,7 +118,7 @@ def profile():
 @setup_pages.route("/answers", methods=["GET", "POST"])
 def answers():
     if request.method == "GET":
-        return render_template_string(ANSWERS_HTML, css=_css(), saved_rows=profile_setup.saved_answers(),
+        return render_template_string(ANSWERS_HTML, saved_rows=profile_setup.saved_answers(),
                                       waiting=profile_setup.waiting_questions(),
                                       saved=request.args.get("saved") == "1",
                                       welcome=request.args.get("welcome") == "1")
@@ -138,61 +134,65 @@ def answers():
     return redirect(url_for("setup_pages.answers", saved="1"))
 
 
-SETUP_HTML = """
-<!doctype html><meta charset="utf-8"><title>Set up your profile</title>
-<style>{{ css|safe }}
-.setup { max-width:680px; } .steps { color:var(--muted); margin:0 0 18px; }
-.ok { background:#e3f5ea; color:#0f7b46; padding:11px 13px; border-radius:9px; margin-bottom:14px; }
+SETUP_HTML = ui_shell.page("Set up your profile", """
+<style>
+.setup { max-width:720px; }
+.steps { display:flex; gap:8px; flex-wrap:wrap; margin:0 0 18px; padding:0; list-style:none; }
+.steps li { padding:4px 12px; border-radius:99px; background:var(--grey-soft); color:var(--muted); font-size:13px; font-weight:500; }
+.steps li.now { background:var(--accent-soft); color:var(--accent); font-weight:600; }
+.drop { display:block; border:2px dashed var(--line); border-radius:var(--radius); padding:22px; text-align:center;
+        background:var(--surface-2); margin:0 0 10px; }
+.drop input { margin-top:10px; }
 </style>
-<div class="wrap setup">
-  {% if has_profile %}<p><a href="/">&larr; Back to applications</a></p>{% endif %}
-  <h1>Set up your profile</h1>
-  <p class="sub">The agent fills every application from your profile. Start with your resume: it is read on your
-    computer, and it is also the resume the agent attaches when none can be tailored for a job.</p>
-  <p class="steps">1. Resume &rarr; 2. Check your profile &rarr; 3. Your saved answers</p>
-  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+<main class="wrap setup">
+  <div class="page-head"><div>
+    <h1>Set up your profile</h1>
+    <p class="sub">The agent fills every application from your profile. Start with your resume: it is read on your
+      computer, and it is also the resume the agent attaches when none can be tailored for a job.</p>
+  </div></div>
+  <ol class="steps"><li class="now">1. Resume</li><li>2. Check your profile</li><li>3. Your saved answers</li></ol>
+  {% if error %}<div class="err" role="alert">{{ error }}</div>{% endif %}
   <div class="card">
     <form method="post" action="/setup" enctype="multipart/form-data">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label for="resume"><b>Your resume</b> (.pdf or .docx)</label><br>
-      <input id="resume" type="file" name="resume" accept=".pdf,.docx" required>
+      <label class="drop" for="resume"><b>Your resume</b> <span class="muted">(.pdf or .docx)</span><br>
+        <input id="resume" type="file" name="resume" accept=".pdf,.docx" required></label>
       <p class="hint">If an AI key is set in Settings, it is used once to copy your work history and education out
         of the resume. Nothing is guessed: whatever the resume does not say, you fill in next.</p>
-      <p><button type="submit">Read my resume</button></p>
+      <p style="margin-bottom:0"><button type="submit">Read my resume</button></p>
     </form>
   </div>
   {% if has_profile %}<p class="hint">Or <a href="/profile">edit your profile</a> without a new resume.</p>{% endif %}
-</div>
-"""
+</main>
+""")
 
-PROFILE_HTML = """
-<!doctype html><meta charset="utf-8"><title>Your profile</title>
-<style>{{ css|safe }}
-.profile { max-width:820px; }
-.profile fieldset { border:1px solid var(--line); border-radius:12px; padding:14px 18px 18px; margin:0 0 16px;
-  background:var(--card); }
-.profile legend { font-weight:700; padding:0 6px; }
+PROFILE_HTML = ui_shell.page("Your profile", """
+<style>
+.profile { max-width:860px; }
+.profile fieldset { border:1px solid var(--line); border-radius:var(--radius); padding:16px 20px 20px; margin:0 0 16px;
+  background:var(--surface); box-shadow:var(--shadow); }
+.profile legend { font-weight:700; padding:0 6px; font-size:15px; }
 .profile .about { color:var(--muted); font-size:13px; margin:0 0 6px; }
-.profile label { display:block; margin:12px 0 4px; font-weight:600; }
-.profile input[type=text], .profile input[type=email], .profile input[type=number], .profile select,
-.profile textarea { width:100%; box-sizing:border-box; }
+.profile label { display:block; margin:14px 0 6px; font-weight:600; }
 .profile .check label { display:inline; font-weight:600; margin-left:6px; }
-.profile .check { margin:12px 0 0; }
-.hint { color:var(--muted); font-size:13px; margin:3px 0 0; }
-.drafted { background:var(--accent-soft); }
-.req { color:#b42318; }
-.ok { background:#e3f5ea; color:#0f7b46; padding:11px 13px; border-radius:9px; margin-bottom:14px; }
-.bar { position:sticky; bottom:0; background:var(--bg); padding:12px 0; }
+.profile .check { margin:14px 0 0; }
+.drafted { background:var(--accent-soft) !important; }
+.req { color:var(--bad); }
+.bar { position:sticky; bottom:0; background:var(--bg); padding:12px 0; border-top:1px solid var(--line);
+       display:flex; gap:12px; align-items:center; }
 </style>
-<div class="wrap profile">
-  {% if not first_time %}<p><a href="/">&larr; Back to applications</a> &middot; <a href="/answers">Your saved
-    answers</a> &middot; <a href="/setup">Read a new resume</a></p>{% endif %}
-  <h1>{% if first_time %}Check your profile{% else %}Your profile{% endif %}</h1>
-  <p class="sub">Every application is filled from this, first. Leave a box blank and the agent asks the AI or you
-    instead of guessing. It is saved only on this computer, in <code>data/profile.json</code>.</p>
+<main class="wrap profile">
+  <div class="page-head">
+    <div>
+      <h1>{% if first_time %}Check your profile{% else %}Your profile{% endif %}</h1>
+      <p class="sub">Every application is filled from this, first. Leave a box blank and the agent asks the AI or you
+        instead of guessing. It is saved only on this computer, in <code>data/profile.json</code>.</p>
+    </div>
+    {% if not first_time %}<a href="/setup"><button class="ghost" type="button">Read a new resume</button></a>{% endif %}
+  </div>
   {% if note %}<div class="ok">{{ note }}{% if drafted %} Boxes filled from your resume are shaded.{% endif %}</div>{% endif %}
   {% if saved %}<div class="ok">Profile saved. The next application uses it.</div>{% endif %}
-  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  {% if error %}<div class="err" role="alert">{{ error }}</div>{% endif %}
   <form method="post" action="/profile">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   {% for title, about, fields in sections %}
@@ -221,37 +221,39 @@ PROFILE_HTML = """
       {% endfor %}
     </fieldset>
   {% endfor %}
-  <div class="bar"><button type="submit">Save my profile</button></div>
+  <div class="bar"><button type="submit">Save my profile</button><span class="hint">Saved on this computer only.</span></div>
   </form>
-</div>
-"""
+</main>
+""")
 
-ANSWERS_HTML = """
-<!doctype html><meta charset="utf-8"><title>Your saved answers</title>
-<style>{{ css|safe }}
-.answers { max-width:900px; }
-.answers table { width:100%; border-collapse:collapse; }
-.answers td, .answers th { border-bottom:1px solid var(--line); padding:8px 6px; vertical-align:top; text-align:left; }
-.answers input[type=text] { width:100%; box-sizing:border-box; }
-.hint { color:var(--muted); font-size:13px; margin:3px 0 0; }
-.ok { background:#e3f5ea; color:#0f7b46; padding:11px 13px; border-radius:9px; margin-bottom:14px; }
-.waiting { background:#fff7e6; }
+ANSWERS_HTML = ui_shell.page("Your saved answers", """
+<style>
+.answers { max-width:960px; }
+.answers td { vertical-align:top; }
+.answers td input[type=text] { padding:8px 10px; }
+.waiting td { background:var(--warn-soft); }
+.add { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.add label { font-weight:600; display:block; }
+.add label input { margin-top:6px; font-weight:400; }
+@media (max-width:760px) { .add { grid-template-columns:1fr; } }
 </style>
-<div class="wrap answers">
-  <p><a href="/">&larr; Back to applications</a> &middot; <a href="/profile">Your profile</a></p>
-  <h1>Your saved answers</h1>
-  <p class="sub">After your profile, the agent answers from these. Any question it had to leave for you shows up
-    here: answer it once and it is used on every form that asks it. Saved only on this computer, in
-    <code>data/profile_answers.json</code>.</p>
+<main class="wrap answers">
+  <div class="page-head"><div>
+    <h1>Your saved answers</h1>
+    <p class="sub">After your profile, the agent answers from these. Any question it had to leave for you shows up
+      here: answer it once and it is used on every form that asks it. Saved only on this computer, in
+      <code>data/profile_answers.json</code>.</p>
+  </div></div>
   {% if welcome %}<div class="ok">Your profile is saved. Add answers to questions you expect, or start applying:
     <a href="/">go to applications</a>.</div>{% endif %}
   {% if saved %}<div class="ok">Saved.</div>{% endif %}
   <form method="post" action="/answers">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   {% if waiting %}
-    <h2>Waiting for your answer</h2>
+    <h2>Waiting for your answer <span class="count">{{ waiting|length }}</span></h2>
+    <div class="card flush attention">
     <table>
-      <tr><th>Question</th><th>Your answer</th></tr>
+      <thead><tr><th style="width:55%">Question</th><th>Your answer</th></tr></thead>
       {% for q in waiting %}
       <tr class="waiting"><td>{{ q.question }}<p class="hint">Asked {{ q.times }} time(s){% if q.companies %} by
           {{ q.companies|join(", ") }}{% endif %}{% if q.options %}. Choices: {{ q.options|join(" / ") }}{% endif %}</p></td>
@@ -259,23 +261,30 @@ ANSWERS_HTML = """
             <input type="text" name="answer::{{ q.key }}" placeholder="Leave blank to be asked again"></td></tr>
       {% endfor %}
     </table>
+    </div>
   {% endif %}
-  <h2>Saved</h2>
+  <h2>Saved <span class="count">{{ saved_rows|length }}</span></h2>
+  <div class="card flush">
   {% if saved_rows %}
   <table>
-    <tr><th>Question</th><th>Answer</th><th>Remove</th></tr>
+    <thead><tr><th style="width:50%">Question</th><th>Answer</th><th class="num">Remove</th></tr></thead>
     {% for row in saved_rows %}
     <tr><td>{{ row.question }}</td>
         <td><input type="hidden" name="key" value="{{ row.key }}">
             <input type="text" name="answer::{{ row.key }}" value="{{ row.answer }}"></td>
-        <td><input type="checkbox" name="remove::{{ row.key }}" aria-label="Remove"></td></tr>
+        <td class="num"><input type="checkbox" name="remove::{{ row.key }}" aria-label="Remove"></td></tr>
     {% endfor %}
   </table>
-  {% else %}<p class="hint">None yet.</p>{% endif %}
+  {% else %}<div class="empty"><b>None yet</b>Questions you answer during a run are saved here.</div>{% endif %}
+  </div>
   <h2>Add one</h2>
-  <label>Question, as forms ask it <input type="text" name="new_question" placeholder="e.g. Have you worked for a government agency?"></label>
-  <label>Your answer <input type="text" name="new_answer"></label>
-  <p><button type="submit">Save answers</button></p>
+  <div class="card">
+    <div class="add">
+      <label>Question, as forms ask it <input type="text" name="new_question" placeholder="e.g. Have you worked for a government agency?"></label>
+      <label>Your answer <input type="text" name="new_answer"></label>
+    </div>
+    <p style="margin-bottom:0"><button type="submit">Save answers</button></p>
+  </div>
   </form>
-</div>
-"""
+</main>
+""")

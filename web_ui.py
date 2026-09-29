@@ -27,6 +27,7 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, redirect, render_template_string, request, send_file, url_for
 
+import ui_shell
 import visible_desktop
 from config import get_app_config
 from tracking import open_tracker as get_tracker
@@ -37,6 +38,7 @@ app = Flask(__name__)
 import web_guard  # noqa: E402
 
 web_guard.install(app)
+ui_shell.install(app)
 
 from web_setup import setup_pages  # noqa: E402  (the pages import web_ui back, lazily)
 
@@ -468,7 +470,7 @@ def index():
     return render_template_string(
         INDEX_HTML, apps=apps[:show], total=len(apps), shown=min(show, len(apps)),
         more=min(show + PAGE_SIZE, MAX_SHOWN), can_show_more=show < min(len(apps), MAX_SHOWN),
-        counts=counts, runs=latest_run(runs), signals=signals, error=request.args.get("error"),
+        counts=counts, groups=ui_shell.group_counts(apps), runs=latest_run(runs), signals=signals, error=request.args.get("error"),
     )
 
 
@@ -651,163 +653,58 @@ def log():
 # ----------------------------------------------------------------------
 # Templates
 # ----------------------------------------------------------------------
-BASE_CSS = """
-:root { --bg:#f4f6f9; --card:#fff; --ink:#151a23; --muted:#6b7280; --line:#e6e9ef;
-        --accent:#1a3d6d; --accent-soft:#eaf1fb; --ok:#0f7b46; --shadow:0 1px 2px rgba(16,24,40,.06),
-        0 1px 3px rgba(16,24,40,.04); }
-* { box-sizing:border-box; }
-body { margin:0; background:var(--bg); color:var(--ink);
-       font:14px/1.55 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-       -webkit-font-smoothing:antialiased; }
-.wrap { max-width:1060px; margin:0 auto; padding:28px 18px 72px; }
-h1 { font-size:22px; letter-spacing:-.01em; margin:0 0 4px; }
-h2 { font-size:12px; margin:26px 0 10px; color:var(--muted); font-weight:600;
-     text-transform:uppercase; letter-spacing:.06em; }
-.sub { color:var(--muted); margin:0 0 18px; max-width:70ch; }
-.card { background:var(--card); border:1px solid var(--line); border-radius:12px;
-        padding:16px; margin-bottom:14px; box-shadow:var(--shadow); }
-.card.flush { padding:4px 4px 0; }
-.card h3 { margin:0 0 4px; font-size:15px; }
-/* The counters across the top: what is done, what is waiting. */
-.stats { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:16px; }
-.stat { background:var(--card); border:1px solid var(--line); border-radius:12px;
-        padding:10px 14px; min-width:104px; box-shadow:var(--shadow); }
-.stat b { display:block; font-size:20px; line-height:1.2; }
-.stat span { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
-form.apply { display:flex; gap:8px; flex-wrap:wrap; }
-input[type=url] { flex:1; min-width:280px; padding:11px 13px; border:1px solid var(--line);
-                  border-radius:9px; font-size:14px; background:#fff; color:var(--ink); }
-input[type=url]:focus { outline:2px solid var(--accent-soft); border-color:var(--accent); }
-button { background:var(--accent); color:#fff; border:0; border-radius:9px;
-         padding:10px 16px; font-size:14px; font-weight:600; cursor:pointer; }
-button:hover { filter:brightness(1.08); }
-button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-button.ghost { background:#f1f4f8; color:var(--ink); border:1px solid var(--line);
-               padding:6px 12px; font-weight:500; line-height:1.4; }
-button.ghost:hover { background:#e6ebf3; }
-table { width:100%; border-collapse:collapse; }
-th,td { text-align:left; padding:11px 12px; border-bottom:1px solid var(--line);
-        vertical-align:top; }
-th { color:var(--muted); font-weight:600; font-size:11px; white-space:nowrap;
-     text-transform:uppercase; letter-spacing:.06em; background:#fbfcfe; }
-tbody tr:hover { background:#fafbfd; }
-tr:last-child td { border-bottom:0; }
-/* Dates broke across two lines in the middle of a row, so nothing lined up. */
-td.when, th.when { white-space:nowrap; width:1%; color:var(--muted); }
-td.status, th.status { width:1%; white-space:nowrap; }
-/* The row's buttons wrapped, leaving Delete on a line of its own. */
-td.actions, th.actions { width:1%; white-space:nowrap; text-align:right; }
-.row-actions { display:flex; gap:6px; align-items:center; justify-content:flex-end; }
-.row-actions form { margin:0; display:inline-flex; }
-.row-actions a { margin-right:2px; }
-/* The label column of a detail table wrapped "Applied via" onto two lines. */
-td.label, th.label { width:130px; white-space:nowrap; color:var(--muted);
-                     font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
-td.num, th.num { text-align:right; white-space:nowrap; width:1%; }
-/* The employer needs room: "Charles Schwab" was breaking across two lines. */
-td.company, th.company { width:210px; }
-td.company strong { display:block; }
-td.role, th.role { min-width:190px; }
-/* A note under a row spans the table instead of squeezing into the last column. */
-tr.note-row td { border-bottom:1px solid var(--line); padding:0 12px 11px; }
-tr.note-row + tr td { border-top:0; }
-td.logcell { width:1%; white-space:nowrap; }
-.run-url { word-break:break-all; color:var(--muted); font-size:13px; }
-.links a { white-space:nowrap; }
-.links a + a::before { content:" · "; color:var(--muted); }
-a { color:var(--accent); text-decoration:none; }
-a:hover { text-decoration:underline; }
-.pill { display:inline-block; padding:3px 10px; border-radius:99px; font-size:12px;
-        font-weight:600; white-space:nowrap; }
-.submitted { background:#e3f5ea; color:#0f7b46; }
-.ready_to_submit { background:#dff0ff; color:#0b5394; }
-.needs_user_review { background:#ffe9d6; color:#9a4a00; }
-.form_filled { background:#fff3d6; color:#8a5a00; }
-.skipped { background:#eceef1; color:#6b7280; }
-.prepared { background:#e7effa; color:#1a3d6d; }
-.err { background:#fde8e8; color:#9b1c1c; padding:11px 13px; border-radius:9px;
-       margin-bottom:14px; border:1px solid #f7cdcd; }
-.muted { color:var(--muted); }
-.note { color:var(--muted); max-width:460px; margin-top:4px; }
-code { background:#eef1f5; padding:1px 6px; border-radius:5px; font-size:12px; }
-.live { display:inline-flex; align-items:center; gap:6px; font-weight:600; color:var(--ok); }
-.live::before { content:""; width:8px; height:8px; border-radius:50%; background:var(--ok);
-                box-shadow:0 0 0 3px rgba(15,123,70,.15); }
-.more { display:flex; align-items:center; justify-content:space-between; gap:10px;
-        padding:12px 12px 14px; }
-@media (max-width:720px) {
-  th.when, td.when { display:none; }
-  .row-actions { flex-wrap:wrap; justify-content:flex-start; }
-  td.actions, th.actions { text-align:left; }
-}
-"""
+BASE_CSS = ui_shell.BASE_CSS     # the blueprints' pages share it
 
 
-SETTINGS_HTML = """
-<!doctype html><meta charset="utf-8"><title>Settings</title>
-<style>""" + BASE_CSS + """
-.settings { max-width:680px; }
-.settings label { display:block; margin:16px 0 4px; font-weight:600; }
-.settings input[type=password], .settings input[type=email] { width:100%; }
-.hint { color:var(--muted); font-size:13px; margin:3px 0 0; }
-.ok { background:#e3f5ea; color:#0f7b46; padding:11px 13px; border-radius:9px; margin-bottom:14px; }
-.provider-row { display:flex; align-items:center; gap:10px; margin:16px 0 4px; }
+SETTINGS_HTML = ui_shell.page("Settings", """
+<style>
+.settings { max-width:720px; }
+.settings label { display:block; margin:16px 0 6px; font-weight:600; }
+.provider-row { display:flex; align-items:center; gap:10px; margin:18px 0 6px; }
 .provider-row label { margin:0; }
-.badge { font-size:11px; font-weight:700; padding:2px 8px; border-radius:20px; letter-spacing:.4px; }
-.badge.active { background:#d1fae5; color:#065f46; }
-.badge.inactive { background:#f3f4f6; color:#9ca3af; }
-.section-title { font-size:13px; font-weight:700; text-transform:uppercase;
-  letter-spacing:.8px; color:var(--muted); margin:22px 0 2px; }
 </style>
-<div class="wrap settings">
-  <p><a href="/">&larr; Back to applications</a></p>
-  <h1>Settings</h1>
-  <p class="sub">Credentials are stored locally in <code>.env</code>. Existing secrets are never shown here.</p>
-  {% if saved %}<div class="ok">✅ Settings saved. Restart the dashboard before starting another application.</div>{% endif %}
+<main class="wrap settings">
+  <div class="page-head"><div>
+    <h1>Settings</h1>
+    <p class="sub">Keys and passwords are kept on this computer, in <code>.env</code>. A saved secret is never shown again.</p>
+  </div></div>
+  {% if saved %}<div class="ok">Settings saved. Restart the dashboard before starting another application.</div>{% endif %}
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
   <div class="card">
     <form method="post" action="/settings">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-      <p class="section-title">Resume Tailoring &mdash; AI Providers</p>
-      <p class="hint" style="margin:0 0 6px">The agent tries providers in order: Claude &rarr; Gemini &rarr; OpenAI.
-        If none are set, your local resume is attached as-is.</p>
+      <p class="section-title" style="margin-top:0">AI providers</p>
+      <p class="hint">Tried in order: Claude &rarr; Gemini &rarr; OpenAI. With none set, your own resume is attached as it is.</p>
 
       <div class="provider-row">
         <label for="anthropic_api_key">Claude (Anthropic)</label>
-        <span class="badge {% if has_claude %}active{% else %}inactive{% endif %}">
-          {% if has_claude %}Active{% else %}Not set{% endif %}
-        </span>
+        <span class="badge {% if has_claude %}active{% else %}inactive{% endif %}">{% if has_claude %}Active{% else %}Not set{% endif %}</span>
       </div>
       <input id="anthropic_api_key" type="password" name="anthropic_api_key"
              placeholder="{% if has_claude %}Saved &mdash; leave blank to keep{% else %}sk-ant-...{% endif %}"
              autocomplete="new-password">
-      <p class="hint">Get a key at <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a></p>
+      <p class="hint">Get a key at <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a></p>
 
       <div class="provider-row">
         <label for="gemini_api_key">Gemini (Google)</label>
-        <span class="badge {% if has_gemini %}active{% else %}inactive{% endif %}">
-          {% if has_gemini %}Active{% else %}Not set{% endif %}
-        </span>
+        <span class="badge {% if has_gemini %}active{% else %}inactive{% endif %}">{% if has_gemini %}Active{% else %}Not set{% endif %}</span>
       </div>
       <input id="gemini_api_key" type="password" name="gemini_api_key"
              placeholder="{% if has_gemini %}Saved &mdash; leave blank to keep{% else %}AQ. ... or AIza ...{% endif %}"
              autocomplete="new-password">
-      <p class="hint">Get a key at <a href="https://aistudio.google.com" target="_blank">aistudio.google.com</a> (free tier available)</p>
+      <p class="hint">Get a key at <a href="https://aistudio.google.com" target="_blank" rel="noopener">aistudio.google.com</a> (free tier available)</p>
 
       <div class="provider-row">
         <label for="openai_api_key">OpenAI (GPT-4o)</label>
-        <span class="badge {% if has_openai %}active{% else %}inactive{% endif %}">
-          {% if has_openai %}Active{% else %}Not set{% endif %}
-        </span>
+        <span class="badge {% if has_openai %}active{% else %}inactive{% endif %}">{% if has_openai %}Active{% else %}Not set{% endif %}</span>
       </div>
       <input id="openai_api_key" type="password" name="openai_api_key"
              placeholder="{% if has_openai %}Saved &mdash; leave blank to keep{% else %}sk-...{% endif %}"
              autocomplete="new-password">
-      <p class="hint">Get a key at <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com</a></p>
+      <p class="hint">Get a key at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a></p>
 
-      <p class="section-title" style="margin-top:26px">Account &amp; ATS Login</p>
-
+      <p class="section-title" style="margin-top:28px">Employer site sign-in</p>
       <label for="ats_email">Employer ATS email</label>
       <input id="ats_email" type="email" name="ats_email" value="{{ ats_email }}"
              placeholder="you@example.com" autocomplete="username">
@@ -815,186 +712,200 @@ SETTINGS_HTML = """
       <input id="ats_password" type="password" name="ats_password"
              placeholder="{% if has_password %}Saved &mdash; leave blank to keep{% else %}Enter password{% endif %}"
              autocomplete="new-password">
-      <p class="hint">For Workday, Greenhouse, Lever, or iCIMS. Do not use a LinkedIn, Indeed, Dice, or Google password.</p>
+      <p class="hint">For Workday, Greenhouse, Lever or iCIMS. Never a LinkedIn, Indeed, Dice or Google password.</p>
 
-      <button type="submit" style="margin-top:18px">Save settings</button>
+      <button type="submit" style="margin-top:20px">Save settings</button>
     </form>
   </div>
-</div>
-"""
+</main>
+""")
 
 
-INDEX_HTML = """
-<!doctype html><meta charset="utf-8"><title>Job Applications</title>
-<style>""" + BASE_CSS + """</style>
-<div class="wrap">
-  <p><a href="/progress">Progress</a> &middot; <a href="/profile">Your profile</a> &middot;
-     <a href="/answers">Your saved answers</a> &middot;
-     <a href="/settings">Settings</a></p>
-  <h1>Job Applications</h1>
-  <p class="sub">Paste an employer's job link and the agent applies: it reads each page and
-     answers from your profile, then your saved answers, then the AI, and asks you only
-     what none of them know. It attaches your tailored resume and stops at the Review page
-     for you to submit. Job boards and staffing agencies are refused.</p>
+INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
+<main class="wrap">
+  <div class="page-head"><div>
+    <h1>Applications</h1>
+    <p class="sub">Paste a job link. The agent fills the form from your profile and saved answers, asks you only what
+      it can't know, and stops at Review for you to submit.</p>
+  </div></div>
 
   <div class="stats">
-    <div class="stat"><b>{{ total }}</b><span>tracked</span></div>
-    <div class="stat"><b>{{ counts.get('submitted', 0) }}</b><span>submitted</span></div>
-    <div class="stat"><b>{{ counts.get('needs_user_review', 0) + counts.get('ready_to_submit', 0) }}</b><span>waiting for you</span></div>
-    <div class="stat"><b>{{ counts.get('skipped', 0) }}</b><span>skipped</span></div>
+    <div class="stat tone-info"><b>{{ total }}</b><span>Tracked</span></div>
+    <div class="stat tone-ok"><b>{{ groups.done }}</b><span>Submitted</span></div>
+    <div class="stat tone-warn{% if groups.needs %} hot{% endif %}"><b>{{ groups.needs }}</b><span>Waiting for you</span></div>
+    <div class="stat tone-violet"><b>{{ groups.talking }}</b><span>Interviews &amp; offers</span></div>
+    <div class="stat tone-grey"><b>{{ groups.skipped }}</b><span>Skipped</span></div>
   </div>
 
-  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  {% if error %}<div class="err" role="alert">{{ error }}</div>{% endif %}
 
-  {% set waiting = apps | selectattr('status', 'in', ['ready_to_submit', 'needs_user_review']) | list %}
-  {% if waiting %}
-    <div class="card" style="border-left:4px solid #0b5394">
-      <strong>Waiting for you</strong>
-      <p class="muted" style="margin:6px 0 0">The agent stopped on these and said why &mdash; a CAPTCHA,
-         a question your profile doesn't answer, or something the site refused. Deal with it in the
-         browser window and press <strong>Continue</strong>; the agent carries on from there.</p>
-      <ul style="margin:8px 0 0 18px; padding:0">
-        {% for a in waiting[:5] %}
-          <li style="margin-bottom:8px">
-            <a href="/application/{{ a.id }}"><strong>{{ a.title }}</strong></a> at {{ a.company }} &mdash;
-            <span class="pill {{ a.status }}">{{ a.status.replace('_', ' ') }}</span>
-            <a href="{{ a.last_page_url or a.url }}" target="_blank" style="margin-left:8px"><button class="ghost" type="button" style="color:#0b5394; font-weight:600; padding:2px 8px; font-size:12px">Open Form & Submit &rarr;</button></a>
-            <div class="muted" style="margin-top:2px">{{ (a.notes or '')[:140] }}</div>
-          </li>
-        {% endfor %}
-        {% if waiting|length > 5 %}
-          <li class="muted">and {{ waiting|length - 5 }} more below</li>
-        {% endif %}
-      </ul>
-    </div>
-  {% endif %}
-
-  <div class="card">
+  <div class="card apply-card">
     <form class="apply" method="post" action="/apply">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input type="url" name="url" required
-             placeholder="https://company.wd1.myworkdayjobs.com/... or jobs.lever.co/... or job-boards.greenhouse.io/...">
+      <input type="url" name="url" required aria-label="Job posting link"
+             placeholder="Paste a job link: Workday, Greenhouse, Lever, Ashby, iCIMS...">
       <button type="submit">Apply</button>
     </form>
+    <p class="hint">Only employers' own sites. Job boards and staffing agencies are refused.</p>
   </div>
 
   {% if runs.values()|selectattr('state', 'equalto', 'running')|list %}
     <script>
       // A run is active: reload every 5s so its state and the application's
-      // status stay current -- but never while a URL is being typed.
+      // status stay current -- but never while a URL is being typed or a menu is open.
       setInterval(() => {
         const box = document.querySelector("input[name=url]");
         if (box && (box.value || document.activeElement === box)) return;
+        if (document.querySelector("details.menu[open]")) return;
         location.reload();   // the address keeps ?show=, so the list stays where it was
       }, 5000);
     </script>
   {% endif %}
 
-  {% if runs %}
-    <h2>Current run</h2>
-    <div class="card">
-      <table>
-        <tr><th>Job</th><th>State</th><th class="label">Log & Screen</th><th class="actions">Controls</th></tr>
-        {% for url, r in runs.items() %}
-        <tr>
-          <td class="run-url">
-            {{ url[:90] }}{% if url|length > 90 %}&hellip;{% endif %}
-            {% if r.last_page_url and r.last_page_url != url %}
-              <div class="muted" style="font-size:11px">At: {{ r.last_page_url[:75] }}</div>
-            {% endif %}
-          </td>
-          <td>{% if r.state == 'running' %}<span class="live">running</span>{% else %}{{ r.state }}{% endif %}
-              {% if r.started %}<span class="muted"> &middot; started {{ r.started|local }}</span>{% endif %}</td>
-          <td class="logcell">
-            {% if r.log %}<a href="/log?path={{ r.log }}" target="_blank">view log</a>{% else %}<span class="muted">&mdash;</span>{% endif %}
-            {% if r.screenshot %}
-              &middot; <a href="/evidence?path={{ r.screenshot }}" target="_blank" style="color:#0b5394; font-weight:600">view screen</a>
-            {% endif %}
-          </td>
-          <td class="actions"><div class="row-actions">
-            {% if r.app_id %}<a href="/application/{{ r.app_id }}"><button class="ghost" type="button">Details</button></a>{% endif %}
-            {% if r.state == 'running' %}
-            <form method="post" action="/reload-agent">
+  {% set waiting = apps | selectattr('status', 'in', ['ready_to_submit', 'needs_user_review', 'BLOCKED_VALIDATION_LOOP']) | list %}
+  {% if signals or waiting %}
+    <h2>Needs you</h2>
+    <div class="card attention">
+      {% if signals %}
+        <p class="hint" style="margin:0 0 6px">The agent is waiting in its browser. Deal with what it stopped for,
+          then press <strong>Continue</strong> and it reads the page again.</p>
+        {% for s in signals %}
+          <div class="item">
+            <div><strong>{{ s.label }}</strong><div class="hint">Paused in the browser</div></div>
+            <form method="post" action="/signal/{{ s.signal }}" class="actions">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <button class="ghost" title="Load edited agent code into this run without restarting it">Reload agent code</button>
+              <button name="decision" value="continue">Continue</button>
+              <button class="ghost" name="decision" value="reload_code" title="Load edited agent code, then continue">Reload code</button>
+              <button class="ghost" name="decision" value="skip">Skip</button>
+              <button class="ghost" name="decision" value="close">Close browser</button>
             </form>
-            <form method="post" action="/stop"
-                  onsubmit="return confirm('Stop this application and close its browser? Nothing will be submitted, and you can start it again.')">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="url" value="{{ url }}">
-              <button class="ghost">Stop</button>
-            </form>
-            {% endif %}
-          </div></td>
-        </tr>
+          </div>
         {% endfor %}
-      </table>
-    </div>
-  {% endif %}
-
-  {% if signals %}
-    <h2>Waiting for a decision</h2>
-    <div class="card">
-      <p class="muted">The agent is waiting at a page. Press <strong>Continue</strong> and it reads
-         the page again and carries on &mdash; after you have dealt with whatever it stopped for.</p>
-      {% for s in signals %}
-        <div style="margin-top:8px">
-          <strong>{{ s.label }}</strong>
-          <form method="post" action="/signal/{{ s.signal }}" style="display:inline">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button name="decision" value="continue">Continue</button>
-            <button class="ghost" name="decision" value="reload_code">Reload agent code</button>
-            <button class="ghost" name="decision" value="skip">Skip</button>
-            <button class="ghost" name="decision" value="close">Close browser</button>
-          </form>
+      {% endif %}
+      {% for a in waiting[:5] %}
+        <div class="item">
+          <div style="min-width:0">
+            <a href="/application/{{ a.id }}"><strong>{{ a.title }}</strong></a>
+            <span class="muted">at {{ a.company }}</span>
+            <span class="pill {{ status_class(a.status) }}" style="margin-left:6px">{{ status_label(a.status) }}</span>
+            {% if a.notes %}<div class="hint clamp-2">{{ a.notes[:220] }}</div>{% endif %}
+          </div>
+          <div class="actions">
+            <a href="{{ a.last_page_url or a.url }}" target="_blank" rel="noopener"><button class="ghost" type="button">Open form &rarr;</button></a>
+          </div>
         </div>
       {% endfor %}
+      {% if waiting|length > 5 %}<p class="hint">and {{ waiting|length - 5 }} more in the list below</p>{% endif %}
     </div>
   {% endif %}
 
-  <h2>Applications</h2>
+  {% if runs %}
+    <h2>Current run</h2>
+    {% for url, r in runs.items() %}
+    <div class="card run">
+      <div class="where">
+        <div>
+          {% if r.state == 'running' %}<span class="live">Running</span>{% else %}<span class="pill">{{ r.state }}</span>{% endif %}
+          {% if r.title %}<strong style="margin-left:8px">{{ r.title }}</strong>{% endif %}
+          {% if r.company %}<span class="muted"> at {{ r.company }}</span>{% endif %}
+        </div>
+        <a class="url truncate" href="{{ url }}" target="_blank" rel="noopener" title="{{ url }}">{{ url }}</a>
+        {% if r.last_page_url and r.last_page_url != url %}
+          <span class="url truncate" title="{{ r.last_page_url }}">Now at: {{ r.last_page_url }}</span>
+        {% endif %}
+        <div class="links">
+          {% if r.started %}<span class="muted">Started {{ r.started|local }}</span>{% endif %}
+          {% if r.log %}<a href="/log?path={{ r.log }}" target="_blank">Log</a>{% endif %}
+          {% if r.screenshot %}<a href="/evidence?path={{ r.screenshot }}" target="_blank">Screen</a>{% endif %}
+        </div>
+      </div>
+      <div class="row-actions">
+        {% if r.app_id %}<a href="/application/{{ r.app_id }}"><button class="ghost" type="button">Details</button></a>{% endif %}
+        {% if r.state == 'running' %}
+        <form method="post" action="/reload-agent">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="ghost" title="Load edited agent code into this run without restarting it">Reload agent code</button>
+        </form>
+        <form method="post" action="/stop"
+              onsubmit="return confirm('Stop this application and close its browser? Nothing will be submitted, and you can start it again.')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="url" value="{{ url }}">
+          <button class="ghost danger">Stop</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  {% endif %}
+
+  <h2>All applications <span class="count">{{ total }}</span></h2>
   <div class="card flush">
-    <table>
-      <tr><th class="company">Company</th><th class="role">Role</th><th class="status">Status</th>
-          <th class="when">Updated</th><th class="actions">Controls</th></tr>
+    {% if apps %}
+    <div class="toolbar">
+      <div class="chips" role="group" aria-label="Filter by status">
+        <button type="button" class="chip" data-filter="all" aria-pressed="true">All</button>
+        <button type="button" class="chip" data-filter="needs" aria-pressed="false">Needs you<span class="n">{{ groups.needs }}</span></button>
+        <button type="button" class="chip" data-filter="working" aria-pressed="false">In progress<span class="n">{{ groups.working }}</span></button>
+        <button type="button" class="chip" data-filter="done" aria-pressed="false">Submitted<span class="n">{{ groups.done }}</span></button>
+        <button type="button" class="chip" data-filter="skipped" aria-pressed="false">Skipped<span class="n">{{ groups.skipped }}</span></button>
+      </div>
+      <input type="search" id="app-search" placeholder="Search company or role" aria-label="Search applications">
+    </div>
+    {% endif %}
+    <table class="fixed cards" id="apps">
+      <colgroup><col style="width:27%"><col><col style="width:160px"><col style="width:132px"><col style="width:168px"></colgroup>
+      <thead><tr class="head"><th class="company">Company</th><th>Role</th><th>Status</th><th class="when">Updated</th><th class="actions">Actions</th></tr></thead>
+      <tbody>
       {% for a in apps %}
-      <tr>
-        <td class="company"><strong>{{ a.company }}</strong><span class="muted">{{ a.location or '' }}</span></td>
-        <td class="role">{{ a.title }}</td>
-        <td class="status"><span class="pill {{ a.status }}">{{ a.status.replace('_',' ') }}</span></td>
+      <tr class="app" data-group="{{ status_group(a.status) }}" data-text="{{ (a.company ~ ' ' ~ a.title ~ ' ' ~ (a.location or ''))|lower }}">
+        <td class="company">
+          <strong class="truncate" title="{{ a.company }}">{{ a.company }}</strong>
+          {% if a.location %}<span class="loc truncate" title="{{ a.location }}">{{ a.location }}</span>{% endif %}
+        </td>
+        <td class="role"><a href="/application/{{ a.id }}" class="clamp-2" title="{{ a.title }}" style="color:var(--ink)">{{ a.title }}</a></td>
+        <td class="status"><span class="pill {{ status_class(a.status) }}" title="{{ a.status }}">{{ status_label(a.status) }}</span></td>
         <td class="when">{{ a.updated_at|local }}</td>
         <td class="actions"><div class="row-actions">
-          <a href="/application/{{ a.id }}">details</a>
           {% if a.status != 'submitted' %}
             <form method="post" action="/resume/{{ a.id }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <button class="ghost" title="{{ 'Reopen the part-filled form at ' + a.last_page_url[:80] if a.last_page_url else 'Start this application again from the posting' }} -- the resume and answers already stored are reused">Resume</button>
+              <button class="ghost small" title="{{ 'Reopen the part-filled form at ' + a.last_page_url[:80] if a.last_page_url else 'Start this application again from the posting' }} -- the resume and answers already stored are reused">Resume</button>
             </form>
-            <form method="post" action="/application/{{ a.id }}/status">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="status" value="submitted">
-              <input type="hidden" name="next" value="/">
-              <button class="ghost" style="color:#0f7b46" title="Mark this application as submitted">Mark Submitted</button>
-            </form>
-            <form method="post" action="/stop-application/{{ a.id }}">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <button class="ghost" title="Stop the run working on this application and close its browser. Nothing is submitted and the application is kept.">Stop</button>
-            </form>
+          {% else %}
+            <a href="/application/{{ a.id }}"><button class="ghost small" type="button">Details</button></a>
           {% endif %}
-          <form method="post" action="/delete/{{ a.id }}"
-                onsubmit="return confirm('Delete {{ a.company }} -- {{ a.title[:60] }}?\n\nThis removes the application, its documents, its answers and its history. It cannot be undone.');">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button class="ghost" title="Remove this application and everything filed under it">Delete</button>
-          </form>
+          <details class="menu">
+            <summary aria-label="More actions for {{ a.company }}" title="More actions">&#8943;</summary>
+            <div class="menu-items">
+              <a href="/application/{{ a.id }}"><button type="button">Details</button></a>
+              {% if a.status != 'submitted' %}
+                <form method="post" action="/application/{{ a.id }}/status">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="status" value="submitted">
+                  <input type="hidden" name="next" value="/">
+                  <button title="Mark this application as submitted">Mark submitted</button>
+                </form>
+                <form method="post" action="/stop-application/{{ a.id }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <button title="Stop the run working on this application and close its browser. Nothing is submitted and the application is kept.">Stop its run</button>
+                </form>
+              {% endif %}
+              <hr>
+              <form method="post" action="/delete/{{ a.id }}"
+                    onsubmit="return confirm('Delete {{ a.company }} -- {{ a.title[:60] }}?\\n\\nThis removes the application, its documents, its answers and its history. It cannot be undone.');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="danger" title="Remove this application and everything filed under it">Delete</button>
+              </form>
+            </div>
+          </details>
         </div></td>
       </tr>
-      {% if a.status in ('ready_to_submit', 'needs_user_review') and a.notes %}
-        <tr class="note-row"><td colspan="5" class="note">{{ a.notes[:220] }}</td></tr>
-      {% endif %}
       {% else %}
-      <tr><td colspan="5" class="muted">Nothing tracked yet.</td></tr>
+      <tr><td colspan="5"><div class="empty"><b>Nothing tracked yet</b>Paste a job link above to start your first application.</div></td></tr>
       {% endfor %}
+      </tbody>
     </table>
+    <div class="empty" id="no-match" hidden><b>No matches</b>Nothing shown here fits that filter.</div>
     <div class="more">
       <span class="muted">Showing {{ shown }} of {{ total }}</span>
       {% if can_show_more %}
@@ -1004,160 +915,174 @@ INDEX_HTML = """
       {% endif %}
     </div>
   </div>
-</div>
-"""
+</main>
+<script>
+(() => {
+  const rows = [...document.querySelectorAll("#apps tr.app")];
+  const chips = [...document.querySelectorAll(".chip[data-filter]")];
+  const search = document.getElementById("app-search");
+  const none = document.getElementById("no-match");
+  let group = "all";
+  try { group = sessionStorage.getItem("apps-filter") || "all"; } catch (e) {}
+  function apply() {
+    const q = (search && search.value || "").trim().toLowerCase();
+    let shown = 0;
+    rows.forEach(r => {
+      const ok = (group === "all" || r.dataset.group === group) && (!q || r.dataset.text.includes(q));
+      r.hidden = !ok; if (ok) shown++;
+    });
+    chips.forEach(c => c.setAttribute("aria-pressed", String(c.dataset.filter === group)));
+    if (none) none.hidden = shown > 0 || !rows.length;
+  }
+  chips.forEach(c => c.addEventListener("click", () => {
+    group = c.dataset.filter;
+    try { sessionStorage.setItem("apps-filter", group); } catch (e) {}
+    apply();
+  }));
+  if (search) search.addEventListener("input", apply);
+  // One row menu open at a time; a click elsewhere closes it.
+  document.addEventListener("click", e => {
+    document.querySelectorAll("details.menu[open]").forEach(d => { if (!d.contains(e.target)) d.open = false; });
+  });
+  apply();
+})();
+</script>
+""")
 
-DETAIL_HTML = """
-<!doctype html><meta charset="utf-8"><title>{{ a.company }} — {{ a.title }}</title>
-<style>""" + BASE_CSS + """</style>
-<div class="wrap">
-  <p><a href="/">&larr; All applications</a></p>
-  <h1>{{ a.title }}</h1>
-  <p class="sub">{{ a.company }}{% if a.location %} — {{ a.location }}{% endif %}</p>
-
-  {% if latest_screenshot %}
-  <h2>What the agent sees</h2>
-  <div class="card" style="padding:16px;">
-    <p class="muted" style="margin-bottom:10px">Latest page screenshot captured by the agent:</p>
-    <a href="/evidence?path={{ latest_screenshot }}" target="_blank" title="Click to view full image in a new tab">
-      <img src="/evidence?path={{ latest_screenshot }}" style="max-width:100%; height:auto; border:1px solid var(--line); border-radius:6px; box-shadow:0 2px 8px rgba(0,0,0,0.06);" alt="Latest Page Screenshot">
-    </a>
-  </div>
-  {% endif %}
-
-  <div class="card" style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; background:#fbfcfe;">
-    <div style="display:flex; align-items:center; gap:8px;">
-      <span style="font-weight:600; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em;">Current Status:</span>
-      <span class="pill {{ a.status }}" style="font-size:13px;">{{ a.status.replace('_',' ') }}</span>
+DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
+<main class="wrap">
+  <p class="crumbs"><a href="/">Applications</a> / {{ a.company }}</p>
+  <div class="page-head">
+    <div style="min-width:0">
+      <h1>{{ a.title }}</h1>
+      <div class="meta">
+        <strong style="color:var(--ink)">{{ a.company }}</strong>
+        {% if a.location %}<span>{{ a.location }}</span>{% endif %}
+        <span class="pill {{ status_class(a.status) }}">{{ status_label(a.status) }}</span>
+        <a href="{{ a.url }}" target="_blank" rel="noopener">Open posting &rarr;</a>
+      </div>
     </div>
-    <form method="post" action="/application/{{ a.id }}/status" style="display:inline-flex; align-items:center; gap:8px; margin:0;">
+    <form method="post" action="/application/{{ a.id }}/status" style="display:flex; align-items:center; gap:8px; margin:0">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label for="status-select" style="font-weight:600; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em;">Change status:</label>
-      <select id="status-select" name="status" style="padding:6px 10px; border-radius:8px; border:1px solid var(--line); font-size:13px; background:#fff; font-weight:500;">
-        <option value="needs_user_review" {% if a.status == 'needs_user_review' %}selected{% endif %}>Needs User Review</option>
+      <label for="status-select" class="muted" style="font-size:13px; white-space:nowrap">Change status</label>
+      <select id="status-select" name="status" style="width:auto; padding:7px 10px">
+        <option value="needs_user_review" {% if a.status == 'needs_user_review' %}selected{% endif %}>Needs you</option>
         <option value="submitted" {% if a.status == 'submitted' %}selected{% endif %}>Submitted</option>
-        <option value="ready_to_submit" {% if a.status == 'ready_to_submit' %}selected{% endif %}>Ready to Submit</option>
-        <option value="form_filled" {% if a.status == 'form_filled' %}selected{% endif %}>Form Filled</option>
+        <option value="ready_to_submit" {% if a.status == 'ready_to_submit' %}selected{% endif %}>Ready to submit</option>
+        <option value="form_filled" {% if a.status == 'form_filled' %}selected{% endif %}>Filling in</option>
         <option value="prepared" {% if a.status == 'prepared' %}selected{% endif %}>Prepared</option>
         <option value="skipped" {% if a.status == 'skipped' %}selected{% endif %}>Skipped</option>
         <option value="interviewing" {% if a.status == 'interviewing' %}selected{% endif %}>Interviewing</option>
         <option value="rejected" {% if a.status == 'rejected' %}selected{% endif %}>Rejected</option>
         <option value="offer" {% if a.status == 'offer' %}selected{% endif %}>Offer</option>
       </select>
-      <button type="submit" style="padding:6px 14px; font-size:13px;">Update</button>
+      <button type="submit" class="small">Update</button>
     </form>
   </div>
 
   <div class="card">
-    <table>
-      <tr><th class="label">Applied via</th><td><a href="{{ a.url }}" target="_blank">{{ a.url[:80] }}</a></td></tr>
-      <tr><th class="label">Created</th><td class="when">{{ a.created_at|local('%d %b %Y %I:%M %p') }}</td></tr>
-      <tr><th class="label">Updated</th><td class="when">{{ a.updated_at|local('%d %b %Y %I:%M %p') }}</td></tr>
-      {% if a.notes %}<tr><th class="label">Notes</th><td>{{ a.notes }}</td></tr>{% endif %}
-    </table>
-  </div>
-
-  <h2>Documents sent</h2>
-  <div class="card">
-    <table>
-      <tr><th class="label">Kind</th><th>File</th><th class="num">Size</th>
-          <th class="when">Stored</th></tr>
-      {% for d in docs %}
-      <tr>
-        <td class="label">{{ d.kind.replace('_',' ') }}</td>
-        <td><a href="/document/{{ d.id }}" target="_blank">{{ d.filename }}</a></td>
-        <td class="num muted">{{ '%.1f'|format(d.byte_size/1024) }} KB</td>
-        <td class="when">{{ d.created_at|local }}</td>
-      </tr>
-      {% else %}
-      <tr><td colspan="4" class="muted">No documents stored.</td></tr>
+    <ol class="stepper" aria-label="Progress">
+      {% for name in ['Prepared', 'Filling in', 'Ready to submit', 'Submitted'] %}
+        <li class="{{ 'done' if loop.index <= progress.step }}{{ ' blocked' if progress.blocked and loop.index == progress.step + 1 }}">{{ name }}</li>
       {% endfor %}
-    </table>
-  </div>
-
-  <h2>Progress</h2>
-  <div class="card">
-    <p><strong>{{ a.status.replace('_', ' ') }}</strong>
-       &mdash; step {{ progress.step }} of {{ progress.of }}
-       {% if progress.blocked %}<span class="pill needs_user_review">needs you</span>{% endif %}</p>
-    {% if a.notes %}<p class="muted">{{ a.notes }}</p>{% endif %}
+    </ol>
+    <p style="margin:0"><strong>Step {{ progress.step }} of {{ progress.of }}</strong>
+       {% if progress.blocked %}<span class="pill needs_user_review" style="margin-left:6px">Needs you</span>{% endif %}</p>
+    {% if a.notes %}<p class="muted" style="margin:6px 0 0">{{ a.notes }}</p>{% endif %}
     {% if progress.missing or progress.errors or progress.attestations or progress.captcha %}
-      <p><strong>Still to do</strong></p>
-      <ul style="margin:4px 0 0 18px">
-        {% for m in progress.missing %}<li>blank: {{ m }}</li>{% endfor %}
-        {% for e in progress.errors %}<li>error: {{ e }}</li>{% endfor %}
-        {% for s in progress.attestations %}<li>your signature/attestation: {{ s }}</li>{% endfor %}
-        {% if progress.captcha %}<li>a CAPTCHA is showing &mdash; only you can complete it</li>{% endif %}
+      <p class="section-title">Still to do</p>
+      <ul class="plain">
+        {% for m in progress.missing %}<li>Blank: {{ m }}</li>{% endfor %}
+        {% for e in progress.errors %}<li>Error: {{ e }}</li>{% endfor %}
+        {% for s in progress.attestations %}<li>Your signature or attestation: {{ s }}</li>{% endfor %}
+        {% if progress.captcha %}<li>A CAPTCHA is showing &mdash; only you can complete it</li>{% endif %}
       </ul>
     {% else %}
-      <p class="muted">Nothing outstanding on the last check.</p>
+      <p class="hint">Nothing outstanding on the last check.</p>
     {% endif %}
   </div>
 
-  <h2>Verified auto-submit</h2>
-  <div class="card">
-    <p class="muted">Setting: <strong>{{ 'on' if auto_submit_on else 'off' }}</strong>
-       (AUTO_SUBMIT_VERIFIED_ONLY). The agent submits only when every check below passes.</p>
-    {% if decision %}
-      <p><strong>{{ 'Eligible' if decision.eligible else 'Not eligible' }}</strong>
-         <span class="muted">decided {{ decision.decided_at }}</span></p>
-      {% if decision.reasons %}
-        <ul style="margin:4px 0 8px 18px">
-          {% for r in decision.reasons %}<li>{{ r }}</li>{% endfor %}
-        </ul>
+  <div class="grid-2">
+    <div>
+      {% if latest_screenshot %}
+      <h2 style="margin-top:8px">What the agent sees</h2>
+      <a class="shot" href="/evidence?path={{ latest_screenshot }}" target="_blank" title="Open the full image">
+        <img src="/evidence?path={{ latest_screenshot }}" alt="The latest page the agent captured">
+      </a>
       {% endif %}
-      {% if decision.field_comparisons %}
+      <h2{% if not latest_screenshot %} style="margin-top:8px"{% endif %}>About</h2>
+      <div class="card flush">
         <table>
-          <tr><th>Field</th><th>On the form</th><th>Approved value</th>
-          <th class="label">Source</th><th class="status">Match</th></tr>
-          {% for c in decision.field_comparisons %}
-            <tr>
-              <td>{{ c.label }}</td><td>{{ c.on_form }}</td><td>{{ c.approved }}</td>
-              <td class="muted">{{ c.source }}</td>
-              <td>{% if c.matches %}<span class="pill submitted">match</span>
-                  {% elif c.required %}<span class="pill needs_user_review">check</span>
-                  {% else %}<span class="muted">optional</span>{% endif %}</td>
-            </tr>
+          <tr><th class="label">Applied via</th><td><a class="truncate" style="display:block" href="{{ a.url }}" target="_blank" rel="noopener" title="{{ a.url }}">{{ a.url }}</a></td></tr>
+          <tr><th class="label">Created</th><td class="when">{{ a.created_at|local('%d %b %Y %I:%M %p') }}</td></tr>
+          <tr><th class="label">Updated</th><td class="when">{{ a.updated_at|local('%d %b %Y %I:%M %p') }}</td></tr>
+        </table>
+      </div>
+    </div>
+    <div>
+      <h2 style="margin-top:8px">Documents sent</h2>
+      <div class="card flush">
+        <table>
+          <thead><tr><th>File</th><th class="num">Size</th><th class="when">Stored</th></tr></thead>
+          {% for d in docs %}
+          <tr>
+            <td><a href="/document/{{ d.id }}" target="_blank">{{ d.filename }}</a>
+                <div class="hint">{{ d.kind.replace('_',' ') }}</div></td>
+            <td class="num muted">{{ '%.1f'|format(d.byte_size/1024) }} KB</td>
+            <td class="when">{{ d.created_at|local }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="3" class="muted">No documents stored.</td></tr>
           {% endfor %}
         </table>
-      {% endif %}
-      {% if decision.evidence_paths %}
-        <p class="muted" style="margin-top:8px">Evidence:
-          {% for name, path in decision.evidence_paths.items() %}
-            <a href="/evidence?path={{ path }}" target="_blank">{{ name }}</a>{{ ", " if not loop.last }}
-          {% endfor %}
-        </p>
-      {% endif %}
-    {% else %}
-      <p class="muted">No decision recorded for this application yet.</p>
-    {% endif %}
+      </div>
+
+      <h2>Verified auto-submit</h2>
+      <div class="card">
+        <p class="hint" style="margin-top:0">Setting: <strong>{{ 'on' if auto_submit_on else 'off' }}</strong>
+           (AUTO_SUBMIT_VERIFIED_ONLY). The agent submits only when every check passes.</p>
+        {% if decision %}
+          <p><span class="pill {{ 'submitted' if decision.eligible else 'needs_user_review' }}">{{ 'Eligible' if decision.eligible else 'Not eligible' }}</span>
+             <span class="muted">decided {{ decision.decided_at }}</span></p>
+          {% if decision.reasons %}
+            <ul class="plain">{% for r in decision.reasons %}<li>{{ r }}</li>{% endfor %}</ul>
+          {% endif %}
+          {% if decision.evidence_paths %}
+            <p class="hint">Evidence:
+              {% for name, path in decision.evidence_paths.items() %}
+                <a href="/evidence?path={{ path }}" target="_blank">{{ name }}</a>{{ ", " if not loop.last }}
+              {% endfor %}
+            </p>
+          {% endif %}
+        {% else %}
+          <p class="muted" style="margin:0">No decision recorded for this application yet.</p>
+        {% endif %}
+      </div>
+    </div>
   </div>
 
-  <h2>History</h2>
-  <div class="card">
+  {% if decision and decision.field_comparisons %}
+  <h2>Fields checked</h2>
+  <div class="card flush">
     <table>
-      <tr><th class="when">When</th><th class="label">Kind</th><th>What happened</th>
-          <th class="actions">Evidence</th></tr>
-      {% for e in events %}
+      <thead><tr><th>Field</th><th>On the form</th><th>Approved value</th><th class="label">Source</th><th>Match</th></tr></thead>
+      {% for c in decision.field_comparisons %}
         <tr>
-          <td class="when">{{ e.created_at|local }}</td>
-          <td class="muted">{{ e.kind }}</td>
-          <td>{{ (e.message or '')[:160] }}</td>
-          <td class="actions"><span class="links">
-            {%- if e.screenshot_path %}<a href="/evidence?path={{ e.screenshot_path }}" target="_blank">screenshot</a>{% endif -%}
-            {%- if e.html_path %}<a href="/evidence?path={{ e.html_path }}" target="_blank">html</a>{% endif -%}
-          </span></td>
+          <td>{{ c.label }}</td><td>{{ c.on_form }}</td><td>{{ c.approved }}</td>
+          <td class="muted">{{ c.source }}</td>
+          <td>{% if c.matches %}<span class="pill submitted">match</span>
+              {% elif c.required %}<span class="pill needs_user_review">check</span>
+              {% else %}<span class="muted">optional</span>{% endif %}</td>
         </tr>
-      {% else %}
-        <tr><td colspan="4" class="muted">No events recorded yet.</td></tr>
       {% endfor %}
     </table>
   </div>
+  {% endif %}
 
   <h2>Answers given</h2>
-  <div class="card">
+  <div class="card flush">
     <table>
-      <tr><th>Question</th><th>Answer</th><th class="label">By</th></tr>
+      <thead><tr><th style="width:45%">Question</th><th>Answer</th><th class="label">By</th></tr></thead>
       {% for q in answers %}
       <tr><td>{{ q.question }}</td><td>{{ q.answer }}</td><td class="label">{{ q.answered_by }}</td></tr>
       {% else %}
@@ -1165,8 +1090,29 @@ DETAIL_HTML = """
       {% endfor %}
     </table>
   </div>
-</div>
-"""
+
+  <h2>History</h2>
+  <div class="card flush">
+    <table>
+      <thead><tr><th class="when">When</th><th class="label">Kind</th><th>What happened</th><th class="actions">Evidence</th></tr></thead>
+      {% for e in events %}
+        <tr>
+          <td class="when">{{ e.created_at|local }}</td>
+          <td class="muted">{{ e.kind }}</td>
+          <td>{{ (e.message or '')[:160] }}</td>
+          <td class="actions">
+            {%- if e.screenshot_path %}<a href="/evidence?path={{ e.screenshot_path }}" target="_blank">screenshot</a>{% endif -%}
+            {%- if e.screenshot_path and e.html_path %} &middot; {% endif -%}
+            {%- if e.html_path %}<a href="/evidence?path={{ e.html_path }}" target="_blank">html</a>{% endif -%}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="muted">No events recorded yet.</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+</main>
+""")
 
 
 def serve() -> None:
