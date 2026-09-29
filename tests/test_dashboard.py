@@ -37,6 +37,7 @@ def client(monkeypatch):
                         lambda target, args=(), daemon=None: type("T", (), {"start": lambda s: target(*args)})())
     web_ui._RUNS.clear()
     web_ui.app.config["TESTING"] = True
+    web_ui.app.config["TESTING"] = True
     c = web_ui.app.test_client()
     c.started = started
     return c

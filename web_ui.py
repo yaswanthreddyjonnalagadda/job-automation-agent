@@ -34,6 +34,10 @@ from tracking import open_tracker as get_tracker
 BASE_DIR = Path(__file__).resolve().parent
 app = Flask(__name__)
 
+import web_guard  # noqa: E402
+
+web_guard.install(app)
+
 from web_setup import setup_pages  # noqa: E402  (the pages import web_ui back, lazily)
 
 app.register_blueprint(setup_pages)

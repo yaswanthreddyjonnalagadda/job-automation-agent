@@ -138,6 +138,7 @@ def test_the_dashboard_works_on_sqlite(monkeypatch, tmp_path):
     tracker.record_answer("k1", "acme.com", "Are you willing to travel?", "Yes")
     monkeypatch.setattr(web_ui, "get_tracker", lambda: tracker)
     monkeypatch.setattr(profile_setup, "needs_setup", lambda: False)
+    web_ui.app.config["TESTING"] = True
     client = web_ui.app.test_client()
     assert b"Network Engineer" in client.get("/").data
     detail = client.get(f"/application/{tracker.get('k1').id}")

@@ -63,6 +63,7 @@ def test_the_page_and_the_new_statuses_on_the_dashboard(tmp_path, monkeypatch):
     tracker.update_status("k", "submitted")
     monkeypatch.setattr(web_ui, "get_tracker", lambda: tracker)
     monkeypatch.setattr(profile_setup, "needs_setup", lambda: False)
+    web_ui.app.config["TESTING"] = True
     client = web_ui.app.test_client()
     client.post(f"/application/{tracker.get('k').id}/status", data={"status": "interviewing"})
     assert tracker.get("k").status == "interviewing"

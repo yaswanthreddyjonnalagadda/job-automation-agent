@@ -479,6 +479,14 @@ page, portal entry or confirmation email is found — clicking is not evidence.
 Every decision, eligible or not, is written to the audit trail and shown on the
 dashboard with its reasons.
 
+## Only you drive the dashboard
+
+The dashboard answers only requests addressed to this computer (127.0.0.1 or
+localhost), and a form is accepted only when it comes from the dashboard's own page
+with the token it was given -- a new one each time the dashboard starts. A website you
+happen to have open cannot start an application, change your saved answers or delete
+anything through it.
+
 ## Progress
 
 The dashboard's **Progress** page shows how far applications get: started, reached

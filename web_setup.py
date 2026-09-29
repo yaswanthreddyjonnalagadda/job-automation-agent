@@ -153,6 +153,7 @@ SETUP_HTML = """
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
   <div class="card">
     <form method="post" action="/setup" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label for="resume"><b>Your resume</b> (.pdf or .docx)</label><br>
       <input id="resume" type="file" name="resume" accept=".pdf,.docx" required>
       <p class="hint">If an AI key is set in Settings, it is used once to copy your work history and education out
@@ -193,6 +194,7 @@ PROFILE_HTML = """
   {% if saved %}<div class="ok">Profile saved. The next application uses it.</div>{% endif %}
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
   <form method="post" action="/profile">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   {% for title, about, fields in sections %}
     <fieldset><legend>{{ title }}</legend>
       <p class="about">{{ about }}</p>
@@ -245,6 +247,7 @@ ANSWERS_HTML = """
     <a href="/">go to applications</a>.</div>{% endif %}
   {% if saved %}<div class="ok">Saved.</div>{% endif %}
   <form method="post" action="/answers">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   {% if waiting %}
     <h2>Waiting for your answer</h2>
     <table>
