@@ -143,6 +143,18 @@ def make_agent(planner, resume_file, auto_submit=True, profile=None):
                                 resume_file=resume_file)
 
 
+def handed_over(outcome) -> bool:
+    """The run stopped at the last step for the owner to submit -- the agent never presses the last Submit
+    (29 September: the old AUTO_SUBMIT setting let it press Secunetics' 'Submit Application' itself)."""
+    return outcome.kind == "owner_needed" and any("ready for you to submit" in r for r in outcome.reasons)
+
+
+def owner_submits(page):
+    """What the owner does after the hand-over: sends the form as it stands."""
+    page.evaluate("document.querySelector('form').requestSubmit()")
+    page.wait_for_url("**/done", timeout=5_000)
+
+
 def stored(page, key):
     return page.evaluate(f"localStorage.{key} || ''")
 
@@ -284,7 +296,8 @@ def test_a_whole_application_is_read_answered_and_submitted(page, resume_file):
     serve(page)
     planner = Planner()
     outcome = make_agent(planner, resume_file).run(page)
-    assert outcome.kind == "submitted", outcome.reasons
+    assert handed_over(outcome), outcome.reasons
+    owner_submits(page)
     # The agent fills his name from the profile before anyone is asked, so it
     # is the name as he writes it, not the one the page was offered.
     assert stored(page, "first") == "Yaswanth Reddy"
@@ -302,7 +315,8 @@ def test_a_carried_over_no_to_sponsorship_is_corrected_from_the_profile(page, re
                                 '<option selected="selected">No</option>')
     agent = make_agent(Planner(), resume_file)
     outcome = agent.run(page)
-    assert outcome.kind == "submitted", outcome.reasons
+    assert handed_over(outcome), outcome.reasons
+    owner_submits(page)
     assert stored(page, "sponsor") == "Yes"
     assert any("corrected" in n and "sponsorship" in n for n in agent.notes)
 
@@ -362,7 +376,7 @@ def test_the_owner_allowed_signing_so_the_agent_signs_last_and_submits(page, res
     serve(page, certify=CERT)
     agent = make_agent(cert_planner(), resume_file)
     outcome = agent.run(page)
-    assert outcome.kind == "submitted", outcome.reasons
+    assert handed_over(outcome), outcome.reasons
     assert any(n.startswith("signed") for n in agent.notes)
 
 
@@ -489,7 +503,8 @@ def test_a_submit_button_on_a_step_before_the_last_just_moves_on(page, resume_fi
     held as if it sent the application, for want of a resume attached earlier."""
     serve(page, step1=STEP_1.replace('<button type="submit">Next</button>', '<button type="submit">Submit</button>'))
     outcome = make_agent(Planner(next_label="Submit"), resume_file).run(page)
-    assert outcome.kind == "submitted", outcome.reasons
+    assert handed_over(outcome), outcome.reasons          # it moved past step 1's "Submit" to the last step
+    owner_submits(page)
     assert stored(page, "sponsor") == "Yes"
 
 
@@ -582,13 +597,15 @@ def test_a_resume_attached_in_an_earlier_run_counts_at_the_last_step(page, resum
     agent = make_agent(SimpleNamespace(plan_page=no_upload), resume_file)
     agent.key = "k"
     agent.tracker = Tracker()
-    assert "resume is not attached" in agent.run(page).summary
+    agent.run(page)
+    assert agent._tailored_resume_missing(page)          # with no record of it, the resume counts as missing
 
     page.goto("https://jobs.example.com/apply/2")
     agent = make_agent(SimpleNamespace(plan_page=no_upload), resume_file)
     agent.key = "k"
     agent.tracker = Tracker([{"kind": "resume_attached", "message": resume_file.name}])
-    assert agent.run(page).kind == "submitted"
+    assert handed_over(agent.run(page))
+    assert not agent._tailored_resume_missing(page)      # the earlier run's record counts
 
 
 def test_an_already_attached_resume_is_not_uploaded_again(page, resume_file):
@@ -606,7 +623,7 @@ def test_an_upload_is_recorded_for_later_runs(page, resume_file):
     serve(page)
     agent = make_agent(Planner(), resume_file)
     agent.key, agent.tracker = "k", Tracker()
-    assert agent.run(page).kind == "submitted"
+    assert handed_over(agent.run(page))
     assert {"kind": "resume_attached", "message": resume_file.name} in agent.tracker._events
 
 
@@ -870,7 +887,8 @@ def test_the_cover_letter_is_attached_where_the_form_asks_for_one(page, resume_f
     agent = make_agent(planner, resume_file)
     agent.cover_letter = lambda: (letter.with_suffix(".txt"), letter)
     outcome = agent.run(page)
-    assert outcome.kind == "submitted", outcome.reasons
+    assert handed_over(outcome), outcome.reasons
+    owner_submits(page)
     assert stored(page, "resume") == resume_file.name
     assert stored(page, "cover") == letter.name          # attached without being told to
 
@@ -1548,6 +1566,22 @@ def test_a_form_that_asks_for_no_resume_is_still_ready_without_one(page, resume_
 
 
 def test_automatic_submission_still_needs_the_resume_whatever_the_form_shows(page, resume_file):
-    """The unattended path is not loosened: it never sends without the tailored resume."""
+    """The last Submit is never pressed from the page agent, whatever the settings say: the old AUTO_SUBMIT
+    let it press Secunetics' 'Submit Application' itself (29 September)."""
     _, gate = _gate_on(page, resume_file, _NO_RESUME_FIELD, auto_submit=True)
-    assert "resume is not attached" in gate
+    assert gate and "ready for you to submit" in gate
+
+
+
+def test_the_last_submit_is_never_pressed_from_here_whatever_the_settings(page, resume_file):
+    """Neither the old AUTO_SUBMIT nor verified auto-submit lets the page agent press the last Submit: sending
+    goes through the hand-over, where safety.evaluate_auto_submit decides (Secunetics, 29 September)."""
+    serve(page)
+    for settings in (dict(auto_submit=True), dict(auto_submit_verified_only=True)):
+        page.goto("https://jobs.example.com/apply/1")
+        agent = make_agent(Planner(), resume_file)
+        for name, value in settings.items():
+            setattr(agent.config, name, value)
+        outcome = agent.run(page)
+        assert handed_over(outcome), (settings, outcome.reasons)
+        assert not page.url.endswith("/done")

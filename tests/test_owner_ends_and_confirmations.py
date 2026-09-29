@@ -151,3 +151,27 @@ def test_the_agent_does_not_type_a_non_answer_but_may_choose_a_none_option(caplo
     except Exception:
         pass                                    # the choice itself needs a page; only the check is tested here
     assert "NOT TYPED" not in caplog.text       # a choice takes a list's own option: "N/A" can be the right one
+
+
+# --- the owner sent it while the run was busy ---------------------------------------------------------------------
+
+def test_a_confirmation_on_the_page_after_an_error_records_the_application_submitted(browser, tmp_path):
+    """Secunetics, 29 September: the owner submitted, the page said 'Your application was submitted
+    successfully', the run stopped on an error, and the application was recorded as needing the owner."""
+    import config
+    from page_agent import PageAgent
+    context = browser.new_context()
+    page = context.new_page()
+    page.set_content("<h2>Thank You</h2><p>Your application was submitted successfully</p>")
+    tracker = JobTracker(tmp_path / "t.db")
+    tracker.create(dedup_key="k", title="Network Firewall Engineer", company="Acme")
+    job = SimpleNamespace(title="Engineer", company="Acme", url="https://jobs.example.com/1")
+    agent = PageAgent(SimpleNamespace(values=None), SimpleNamespace(), SimpleNamespace(auto_submit=False, ats_email=""),
+                      config.UserProfile(email="jane@example.com"), SimpleNamespace(raw_text="x"), job,
+                      resume_file=None)
+    assert apply_flow.confirmed_after_all(agent, page, tracker, "k")
+    assert tracker.get("k").status == "submitted"
+    page.set_content("<h2>Apply</h2><label>Email <input></label>")
+    tracker.update_status("k", "needs_user_review", by_owner=True)
+    assert not apply_flow.confirmed_after_all(agent, page, tracker, "k")      # a form is not a confirmation
+    context.close()

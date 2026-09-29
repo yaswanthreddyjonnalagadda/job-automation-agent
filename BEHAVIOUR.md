@@ -546,6 +546,13 @@ that had not got past account creation.
 
 ## Verified auto-submit (opt in, off by default)
 
+The agent that works the pages never presses an application's last Submit, whatever
+`.env` says: the old `AUTO_SUBMIT` setting is ignored everywhere (on 29 September it
+still let the page agent press Secunetics' 'Submit Application' itself). At the last
+step it stops and hands the application to you; only the verified check below, run at
+that hand-over, may ever send it. If a run stops on an error while the page already
+says the application was received, it is recorded as submitted by you.
+
 Set `AUTO_SUBMIT_VERIFIED_ONLY=true` in `.env` to allow it. Even then, the
 agent submits only when `safety.evaluate_auto_submit()` returns an eligible
 `AutoSubmitDecision`, which requires **all** of:

@@ -4553,13 +4553,20 @@ class PageAgent:
         return "moved", page, ""
 
     def submit_gate(self, page, controls: list[Control], last_step: bool = True) -> str:
-        """Why the application must not be sent now, or "" when it may."""
-        auto_enabled = bool(getattr(self.config, "auto_submit_verified_only", False))
-        if not auto_enabled and not getattr(self.config, "auto_submit", False):
-            # The owner sends it, but not a form still without the resume it asks for.
-            if last_step and self._tailored_resume_missing(page) and self._form_asks_for_a_resume(page, controls):
+        """Why the application must not be sent now, or "" when it may.
+
+        The last Submit is never pressed from here. Only two paths may send an application: the owner, after
+        apply_flow.hand_over(), and the verified path (safety.evaluate_auto_submit) that the hand-over runs. This
+        gate used to press it itself whenever the old AUTO_SUBMIT setting was on -- a setting apply_flow no longer
+        honours -- and on 29 September it pressed Secunetics' 'Submit Application' four times, with State still
+        empty and past a CAPTCHA. Every last step now stops here with the words that send it to the hand-over."""
+        if last_step:
+            # Not a form still without the resume it asks for.
+            if self._tailored_resume_missing(page) and self._form_asks_for_a_resume(page, controls):
                 return "the tailored resume is not attached"
             return "automatic submission is off -- the application is ready for you to submit"
+        # A button that says Submit on a step with more to come: it saves the step, and gets every check but the
+        # finished-application ones. The old AUTO_SUBMIT setting plays no part.
         if safety.captcha_visible(page):
             return "a CAPTCHA is showing -- only you can complete it"
         conflicts = safety.legal_answer_conflicts(answered_fields(controls), self.profile)

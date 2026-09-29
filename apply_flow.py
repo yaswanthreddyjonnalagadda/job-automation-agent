@@ -888,6 +888,11 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             outcome = agent.run(page)
         except (Exception, TimeoutError) as exc:
             logger.exception("UNHANDLED ERROR / STALL in agent.run: %s", exc)
+            # What the page says now comes first: the owner may have sent it while the agent was busy (Secunetics,
+            # 29 September -- "Your application was submitted successfully" showed while the run crashed, and the
+            # application was recorded as needing the owner).
+            if confirmed_after_all(agent, page, tracker, key):
+                return
             try:
                 dump_path = dump_forensic_failure(page, reason=f"Unhandled agent error/stall: {exc}", console_logs=getattr(page, "_console_logs", []))
                 tracker.update_status(key, STATUS_NEEDS_USER_REVIEW, notes=f"Crashed/Stalled: {exc} (dump: {dump_path})")
@@ -1155,6 +1160,23 @@ def brain_for(config, job=None):
     logger.info("BRAIN: %s answers the application pages; the chosen writer writes the documents",
                 "OpenAI" if kind == "openai" else "Claude")
     return ai_choice.Brain(ai_choice.answer_client(config, "openai" if kind == "openai" else "claude"), documents)
+
+
+def confirmed_after_all(agent, page, tracker, key: str) -> bool:
+    """After a run stopped on an error: if the page now says the application was received, it is recorded as
+    submitted (by the owner -- the agent never presses the last Submit) and True is returned."""
+    try:
+        tab = agent.tab(page)
+        if not agent._site_confirms(tab):
+            return False
+        said = " ".join((tab.inner_text("body", timeout=5_000) or "").split())
+        status, note = safety.verification_status("the page confirmed it: " + said[:200])
+        tracker.update_status(key, status, notes=note)
+        logger.info("SUBMITTED_BY_USER: the page confirmed the application when the run stopped")
+        return True
+    except Exception as exc:
+        logger.debug("Could not check for a confirmation after the error: %s", exc)
+        return False
 
 
 def reload_browser_automation(assistant: JobApplicationAssistant) -> JobApplicationAssistant:

@@ -1,0 +1,17 @@
+{
+  "id": "f061",
+  "date": "2026-09-29",
+  "class": "A retired setting still honoured on a second path to the same irreversible action",
+  "symptom": "Secunetics (BambooHR), 29 September: the agent logged \"SUBMITTING: pressing 'Submit Application' -- every check passed\" four times -- first with State still empty, again after filling it, again after the owner solved the CAPTCHA. The form's own checks and the CAPTCHA stopped the first presses; the last one crashed because the owner had already sent it, and the application was then recorded as needing the owner although the page said 'Your application was submitted successfully'.",
+  "site": "Every site (the owner's .env held the old AUTO_SUBMIT=true)",
+  "root_cause": "apply_flow says there is no legacy AUTO_SUBMIT fallback and sends only through safety.evaluate_auto_submit at the hand-over, but PageAgent.submit_gate still returned 'may submit' when config.auto_submit (AUTO_SUBMIT) was on, and press_next then pressed the last Submit itself. Separately, the crash handler recorded 'needs you' without looking at what the page said.",
+  "why_tests_missed": "The page-agent tests built their agent with auto_submit=True and asserted outcome 'submitted' -- they encoded the forbidden behaviour as the expected one; nothing tested that no setting lets the page agent press the last Submit.",
+  "fix": "submit_gate never lets the last Submit be pressed from the page agent, whatever the settings: the last step always stops with 'ready for you to submit', which sends it to apply_flow.hand_over(), where only safety.evaluate_auto_submit may send it. A Submit on a step with more to come keeps its checks, without AUTO_SUBMIT. After an error, apply_flow.confirmed_after_all records the application as submitted when the page says it was received. The page-agent tests now expect the hand-over and submit as the owner does.",
+  "tests": [
+    "tests/test_page_agent.py::test_the_last_submit_is_never_pressed_from_here_whatever_the_settings",
+    "tests/test_page_agent.py::test_automatic_submission_still_needs_the_resume_whatever_the_form_shows",
+    "tests/test_page_agent.py::test_a_whole_application_is_read_answered_and_submitted",
+    "tests/test_owner_ends_and_confirmations.py::test_a_confirmation_on_the_page_after_an_error_records_the_application_submitted"
+  ],
+  "prevention": "An irreversible action has exactly one code path, guarded by one decision, and a test that no setting opens another; when a setting is retired, every reader of it is removed in the same change, and tests never assert the forbidden behaviour as the expected one."
+}
