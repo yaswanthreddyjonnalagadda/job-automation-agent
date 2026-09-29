@@ -860,7 +860,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
       <tr class="app" data-group="{{ status_group(a.status) }}" data-text="{{ (a.company ~ ' ' ~ a.title ~ ' ' ~ (a.location or ''))|lower }}">
         <td class="company">
           <strong class="truncate" title="{{ a.company }}">{{ a.company }}</strong>
-          {% if a.location %}<span class="loc truncate" title="{{ a.location }}">{{ a.location }}</span>{% endif %}
+          <span class="loc truncate" title="{{ a.location or '' }}">{{ a.location or '—' }}</span>{# kept when empty: rows stay one height #}
         </td>
         <td class="role"><a href="/application/{{ a.id }}" class="clamp-2" title="{{ a.title }}" style="color:var(--ink)">{{ a.title }}</a></td>
         <td class="status"><span class="pill {{ status_class(a.status) }}" title="{{ a.status }}">{{ status_label(a.status) }}</span></td>
