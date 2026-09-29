@@ -117,6 +117,25 @@ CONCEPTS: dict[str, dict[str, Any]] = {
         ],
         "negative": r"email|e-mail|web|employer|company|school|work|supervisor|line\s*2",
     },
+    # One box for where the owner lives, in several parts: "Where do you currently reside? (City, State)" was
+    # answered "Virginia" from the word "State" (Paylocity, 29 September). Asked with a list, the options still
+    # decide (confirm_concept).
+    "CITY_STATE": {
+        "patterns": [
+            r"\bcity\s*(?:,|\/|&|and)?\s*state\b",       # clean_text has already taken the comma out
+            r"\blocation\s*\(?\s*city\b",
+            r"^\W*where\s+do\s+you\s+(?:currently\s+)?(?:live|reside)\W*$",
+        ],
+        "negative": r"employer|company|school|university|previous|supervisor|willing|relocat",
+    },
+    # "Do you currently reside in the United States?": Yes or No by where the owner lives, whatever place is named.
+    "RESIDES_IN": {
+        "patterns": [
+            r"\b(?:do|are)\s+you\s+(?:currently\s+)?(?:reside|residing|live|living|located|based)\s+(?:in|within)\b",
+            r"\bare\s+you\s+(?:currently\s+)?(?:a\s+)?(?:legal\s+)?resident\s+of\b",
+        ],
+        "negative": r"willing|relocat|commut|miles|distance|near",
+    },
     "CITY": {
         "patterns": [
             r"^\W*(?:city|town|municipality|city\s*\/\s*town)\b",
@@ -371,7 +390,7 @@ CONCEPTS: dict[str, dict[str, Any]] = {
 
 
 # Concepts that name a place. Inside a longer question they say where it applies.
-PLACE_CONCEPTS = ("COUNTRY", "STATE_PROVINCE", "CITY", "POSTAL_CODE")
+PLACE_CONCEPTS = ("COUNTRY", "STATE_PROVINCE", "CITY", "CITY_STATE", "POSTAL_CODE", "RESIDES_IN")
 
 
 def match_concept(
@@ -440,7 +459,7 @@ def match_concept(
 
 # Questions about where the owner lives. The options on offer can correct the
 # label: "Region of Residence" over a list of countries asks for a country.
-RESIDENCE_CONCEPTS = ("COUNTRY", "STATE_PROVINCE")
+RESIDENCE_CONCEPTS = ("COUNTRY", "STATE_PROVINCE", "CITY_STATE")
 
 
 def confirm_concept(concept: Optional[str], options: Optional[list[str]]) -> Optional[str]:
@@ -564,6 +583,7 @@ def resolve_profile_value(
     concept: str,
     profile: Any,
     options: Optional[list[str]] = None,
+    question: str = "",
 ) -> tuple[str, str]:
     """Retrieve the value and source for a given concept from the user profile.
 
@@ -605,6 +625,27 @@ def resolve_profile_value(
     elif concept == "STATE_PROVINCE":
         val = str(getattr(profile, "state", "") or "").strip()
         src = "profile.state"
+    elif concept == "CITY_STATE":
+        city = str(getattr(profile, "city", "") or "").strip()
+        state = str(getattr(profile, "state", "") or "").strip()
+        if city and state:
+            val, src = f"{city}, {state}", "profile.city+state"
+    elif concept == "RESIDES_IN":
+        # The places the question names against where the profile says the owner lives: a country against the
+        # country, a US state against the state. Yes when any of them is home; No only when every one could be
+        # checked and none is; otherwise no answer.
+        country = str(getattr(profile, "country", "") or "").strip()
+        state = str(getattr(profile, "state", "") or "").strip()
+        verdicts = []
+        for place in geo_reference.places_named_in(question):
+            is_state = bool(geo_reference.us_state_code(place)) and not geo_reference.country_code(place)
+            home = state if is_state else country
+            verdicts.append(None if not home else
+                            (geo_reference.same_us_state if is_state else geo_reference.same_country)(place, home))
+        if any(verdicts):
+            val, src = "Yes", "profile.country/state"
+        elif verdicts and all(v is False for v in verdicts):
+            val, src = "No", "profile.country/state"
     elif concept == "POSTAL_CODE":
         val = str(getattr(profile, "postal_code", "") or "").strip()
         src = "profile.postal_code"

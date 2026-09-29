@@ -118,8 +118,10 @@ INVENTORY_JS = r"""
     const ids = (e.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean);
     return ids.length ? byId(root, ids[0]) : null;
   };
+  // "(required)" counts with or without a star (Paylocity writes "Do you currently reside ...? (required)").
   const required = (e, label) => e.required || e.getAttribute('aria-required') === 'true'
-      || /[*✱]\s*$|\*\s*\(?required\)?/i.test(label) || /\brequired\b/i.test(e.getAttribute('aria-label') || '')
+      || /[*✱]\s*$|\*\s*\(?required\)?|\(\s*required\s*\)/i.test(label)
+      || /\brequired\b/i.test(e.getAttribute('aria-label') || '')
       || !!(e.closest && e.closest('[class*="_required"], .required, [data-required=true]'))
       || /(^|[\s_-])required/i.test((labelEl(e) || {}).className || '');
   const TRAP = /leave (this|it) (field )?blank|honeypot|for robots only|^hp[_-]|if you are (a )?human/i;
@@ -185,7 +187,10 @@ INVENTORY_JS = r"""
       id, kind, tag, type, role,
       label: (label || '').slice(0, 300),
       question: (question || '').slice(0, 300),
-      required: kind === 'yes_no' ? required(e.parentElement, question) : required(e, label || question),
+      // A choice's own label is "Yes" or "3": whether its question must be answered is said by the question.
+      required: kind === 'yes_no' ? required(e.parentElement, question)
+          : (kind === 'radio' || kind === 'checkbox') ? required(e, label) || required(e, question)
+          : required(e, label || question),
       visible: isVisible,
       disabled: !!(e.disabled || e.getAttribute('aria-disabled') === 'true'),
       value: (value || '').slice(0, 200),

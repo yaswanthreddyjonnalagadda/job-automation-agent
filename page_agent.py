@@ -213,6 +213,15 @@ _LINE = re.compile(r'^(?P<indent>\s*)- (?P<role>[\w/-]+)(?: "(?P<name>(?:[^"\\]|
                    r'(?::\s?(?P<value>.*))?$')
 
 
+# Text that introduces a question of choices: it asks ('?'), leads in (':'), or is marked required. Between two runs
+# of radio buttons or tick boxes, such text starts the next question.
+_INTRODUCES_CHOICES = re.compile(r"\?|:\s*$|\(\s*required\s*\)|\*\s*$|\b(?:select|check|choose|tick|pick)\b|"
+                                 r"all that apply", re.IGNORECASE)
+# The note a site writes under a question left unanswered: it belongs to that question, it starts nothing.
+_REQUIRED_NOTE = re.compile(r"\s*(?:(?:this\s+)?(?:question|field|answer|selection)\s+(?:is\s+)?)?required\.?\s*",
+                            re.IGNORECASE)
+
+
 def _unquote(text: str) -> str:
     text = (text or "").strip()
     if len(text) >= 2 and text[0] == text[-1] == '"':
@@ -228,6 +237,15 @@ def parse_snapshot(snapshot: str) -> list[Control]:
     last_text = ""
     last_text_indent = -1
     radio_context = ""   # the question above a run of radio buttons with no group of their own
+    # Radio buttons and tick boxes with no group of their own belong to the question written above them. A run of
+    # them used to end only where something other than a choice came next, so questions drawn one straight after
+    # another became one: Paylocity's "Do you currently reside in the United States?" took the next question's
+    # Yes/No as well, and a "background check" answer made five more questions look answered (29 September).
+    # Question text that appears between two choices now starts the next question.
+    text_since_choice = ""      # question-like text seen since the last radio/tick box
+    last_choice_indent = -1
+    checkbox_context, checkbox_run = "", 0
+    checkbox_runs: dict[int, tuple[int, str]] = {}    # id(tick box) -> (its run, the text that introduced it)
     unclickable = None   # a tick box with no reference: (role, name, checked, lines left to find it)
     last_control_indent = -1
     entry_box: Optional[tuple[int, Control]] = None   # an empty-looking text box whose value may follow as a child line
@@ -310,6 +328,13 @@ def parse_snapshot(snapshot: str) -> list[Control]:
             if controls and not controls[-1].name and controls[-1].role in ("radio", "checkbox", "switch") \
                     and not controls[-1].value and role == "text":
                 controls[-1].name = candidate_text
+            # After a choice: the label drawn beside it and the site's "Question Required" note are not a new
+            # question; text that asks, or that sits outside the choice's own wrapper, is.
+            last_choice = controls[-1] if controls and controls[-1].role in ("radio", "checkbox") else None
+            if last_choice is not None and not _REQUIRED_NOTE.fullmatch(candidate_text) \
+                    and not _same_question(candidate_text, last_choice.name) \
+                    and (_INTRODUCES_CHOICES.search(candidate_text) or indent < last_choice_indent):
+                text_since_choice = candidate_text
             # Ant Design / React custom comboboxes render their selected value as a
             # trailing generic/text element right after the combobox input.
             if controls and controls[-1].role in ("combobox", "listbox") and not controls[-1].value \
@@ -376,8 +401,10 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         )
         if ref_m and (role in ANSWER_ROLES or role in PRESS_ROLES or role in OPTION_ROLES
                       or role in ("radiogroup", "group", "list", "region") or clickable_generic):
-            if role == "radio" and not (controls and controls[-1].role == "radio"):
-                radio_context = last_text
+            if role == "radio" and (not (controls and controls[-1].role == "radio") or text_since_choice):
+                radio_context = text_since_choice or last_text
+            if role == "checkbox" and (not (controls and controls[-1].role == "checkbox") or text_since_choice):
+                checkbox_context, checkbox_run = text_since_choice or last_text, checkbox_run + 1
             shown = value if value and not value.endswith(":") else ""
             # Some widgets put the chosen value in a box beside the control
             # rather than in it ("Yes." next to "Would you relocate to London?",
@@ -407,6 +434,11 @@ def parse_snapshot(snapshot: str) -> list[Control]:
                 continue
             controls.append(control)
             last_control_indent = indent
+            text_since_choice = ""
+            if control.role in ("radio", "checkbox"):
+                last_choice_indent = indent
+            if control.role == "checkbox":
+                checkbox_runs[id(control)] = (checkbox_run, checkbox_context)
             if control.role == "button" and not clickable_generic and (not toggle_row or indent == toggle_indent):
                 if not toggle_row:
                     toggle_indent, toggle_question = indent, preceding_text
@@ -417,7 +449,31 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         stack.append((indent, name if role in ("group", "radiogroup", "region") else "", control))
     if toggle_row:
         _settle_toggle_row(toggle_row, toggle_question)
+    _group_tick_boxes(controls, checkbox_runs)
     return [c for c in controls if not is_bot_trap(c)]
+
+
+def _group_tick_boxes(controls: list[Control], runs: dict[int, tuple[int, str]]) -> None:
+    """Two or more tick boxes under one question that asks for a choice ("Please select any certifications you may
+    have.", "Check all that apply") are that question's choices, as radio buttons are: before, each was read as a
+    question of its own named by its label, and a required group was never asked (Paylocity, 29 September).
+    A single tick box, or a run holding a declaration or signature, is left as it was."""
+    members: dict[int, list[Control]] = {}
+    for control in controls:
+        run = runs.get(id(control))
+        if run is not None and not control.group:
+            members.setdefault(run[0], []).append(control)
+    asked: dict[str, int] = {}
+    for run, boxes in members.items():
+        question = runs[id(boxes[0])][1]
+        if len(boxes) < 2 or not question or not _INTRODUCES_CHOICES.search(question) \
+                or any(safety.is_attestation(box.name) for box in boxes):
+            continue
+        # The same question twice (Paylocity's form asked for certifications in two lists) is two questions:
+        # one name for both made the second list look answered by the first.
+        asked[question] = asked.get(question, 0) + 1
+        for box in boxes:
+            box.group = question if asked[question] == 1 else f"{question} [{asked[question]}]"
 
 
 # A field a site hides from people to catch programs: "Enter website. This input is for robots only, do not
@@ -1903,6 +1959,7 @@ class PageAgent:
                 concept=concept,
                 profile=self.profile,
                 options=control.options,
+                question=question,
             )
             if val:
                 return val, src
@@ -3538,6 +3595,12 @@ class PageAgent:
                          if c.role == control.role and c.group and c.group == control.group] or [control]
             if control.toggle and answer.action == "check" and answer.value.strip().lower() in ("checked", "true", ""):
                 return self._press_toggle(page, control)
+            # A question's own choices were found: the answer is one of them or none. Looking further -- every
+            # radio on the page, the first label that contains the words -- ticked another question's "Yes".
+            real_group = len(group) >= 2
+            if control.role == "checkbox" and real_group \
+                    and answer.value.strip().lower() not in ("checked", "true", "unchecked", "false", ""):
+                return self._tick_several(page, group, answer.value)
             index = self.assistant._best_option([c.name for c in group], [answer.value])
             if control.toggle or any(c.toggle for c in group):
                 if index is None:
@@ -3545,14 +3608,14 @@ class PageAgent:
                                 [c.name for c in group][:8])
                     return False
                 return self._press_toggle(page, group[index])
-            if index is None:
+            if index is None and not real_group:
                 role_filter = control.role if control.role in ("radio", "checkbox", "switch") else "radio"
                 all_radios = [c for c in snapshot_controls if c.role == role_filter]
                 fallback_idx = self.assistant._best_option([c.name for c in all_radios], [answer.value])
                 if fallback_idx is not None:
                     group = all_radios
                     index = fallback_idx
-            if index is None:
+            if index is None and not real_group:
                 try:
                     candidates = [answer.value]
                     if re.search(r"\bnot\b.*\bveteran\b", answer.value, re.I):
@@ -3589,6 +3652,29 @@ class PageAgent:
         if answer.action == "choose":
             return self.choose(page, control, answer.value, self._page_controls(page))
         return False
+
+    def _tick_several(self, page, boxes: list[Control], value: str) -> bool:
+        """Ticks the boxes a "select any that apply" answer names: the whole answer when it is one of them, else each
+        part of it ("CCNP; NSE7", "English, Telugu"). Every part must be one of the boxes, or nothing is ticked and
+        the question stays open -- never a box that is only like the answer."""
+        names = [box.name for box in boxes]
+        whole = self.assistant._best_option(names, [value])
+        picks = [whole] if whole is not None else []
+        if not picks:
+            parts = [part for part in re.split(r"\s*(?:;|\n|\|)\s*|\s*,\s+", value) if part.strip()]
+            picks = [self.assistant._best_option(names, [part]) for part in parts]
+            if len(parts) < 2 or any(pick is None for pick in picks):
+                logger.info("No choices matching %r for %r among %s", value, boxes[0].question[:50], names[:8])
+                return False
+        for pick in dict.fromkeys(picks):
+            if boxes[pick].checked:
+                continue
+            target = self.locate(page, boxes[pick].ref)
+            try:
+                target.set_checked(True, timeout=5_000)
+            except Exception:
+                target.click(timeout=5_000)
+        return True
 
     def _press_toggle(self, page, choice: Control) -> bool:
         """Press a choice drawn as a toggle button once, and read it back.
@@ -4584,8 +4670,16 @@ class PageAgent:
             # A page that will not move on needs the owner, like every other
             # stop: the run hands the open browser over instead of ending
             # with the application abandoned. The evidence is kept either way.
+            # What is still blank is named from the page itself (the field inventory, which groups choices by the
+            # page's own names): Paylocity's stop said only "stuck" while eight required questions sat unanswered.
+            try:
+                blank = [f.question or f.label or f.name
+                         for f in form_fields.blank_required(form_fields.inventory(tab))]
+            except Exception:
+                blank = []
+            still = ("; still blank and required: " + " | ".join(q[:90] for q in blank[:10])) if blank else ""
             return "stop", page, (f"the page did not change after three tries -- stuck in a validation loop "
-                                  f"({state}); evidence in {dump_dir}")
+                                  f"({state}); evidence in {dump_dir}{still}")
 
         before = re.sub(r"\[ref=[\w-]+\]|\[active\]", "", self.snapshot(page))
         tabs_before = len(tab.context.pages)

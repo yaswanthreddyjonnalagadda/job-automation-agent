@@ -666,6 +666,22 @@ only by more after a comma or bracket ("No, I do not have a disability" for No).
 a row that merely contains it ('Virginia' is not 'West Virginia'), and when two rows
 fit equally well, neither is picked and the question is yours. A date goes in the
 way its box takes it: a date picker, "mm/dd/yyyy", or "MM/YYYY".
+
+Questions drawn one straight after another as Yes/No buttons, 1–5 ratings or tick
+boxes are each read as their own question, by the question written above them.
+Before, a run of them was read as one question, so answering the first (Paylocity's
+"background check") made the next five look answered, and the agent pressed Next
+until the loop guard stopped it (29 September). Tick boxes under one "select any
+that apply" question are that question's choices: every one your answer names is
+ticked, and a choice that only resembles your answer never is. The same question asked
+twice is kept as two. An answer is looked for only among its own question's choices,
+never in another question's. "(required)" written after a question counts as
+required, and when the page will not move on, the stop names each required question
+still blank.
+
+"Do you currently reside in the United States?" is answered from where your profile
+says you live, and a box asking for "City, State" gets both ("Springfield,
+Illinois"), not the state alone.
 Before the last press, every visible required field still empty is named to you,
 so a page is never called complete with something required left out. How each
 portal builds its fields is in `reference/ats_fields/`.
