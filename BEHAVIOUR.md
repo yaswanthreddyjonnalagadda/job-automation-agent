@@ -148,6 +148,13 @@ with no resume field is unaffected.
   2026, after the Anthropic account reached its usage limit). `AGENT_BRAIN` is
   not consulted.
 
+A job gets one tailored resume. It is saved in the database the moment it is
+written, before the browser opens, so a run that fails or is stopped anywhere
+afterwards does not lose it: Resume, a retry and a restart all attach that same
+resume without asking any AI again ("REUSED_RESUME" in the log). Only when
+tailoring failed and your generic resume went out is tailoring tried again on
+the next attempt.
+
 Claude writes the resume and the cover letter first. When Claude cannot (its
 usage limit is reached, or it is down), the next writer with a key in `.env` is
 tried, in this order: Gemini (`GEMINI_API_KEY`), then OpenAI (`OPENAI_API_KEY`,

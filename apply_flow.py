@@ -394,6 +394,10 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
         result = _tailor_with(client, resume, job, profile, job_dir, resume_txt, resume_pdf,
                               provider.capitalize())
         if result is not None:
+            # Filed now, not when the form is reached: a run that failed before the form (the browser, a
+            # sign-in, a stop) lost its resume, and every retry paid for a new one (Writer, 28 September:
+            # 14 tailoring attempts for one job).
+            store_materials(tracker, key, result, None)
             return result
 
     # All configured providers failed
