@@ -586,6 +586,18 @@ def _learnable_recipe_question(question: str) -> bool:
     ))
 
 
+def published_choices(question: str, published: list) -> list[str]:
+    """The choices the job site publishes for this question (Greenhouse's question list), or [].
+
+    A list that draws its choices only when clicked showed the agent nothing to match an answer to (f007, f021);
+    the published list gives the exact wording it takes, before it is opened."""
+    for entry in published or ():
+        if isinstance(entry, dict) and entry.get("options") and _same_question(str(entry.get("question") or ""),
+                                                                                question or ""):
+            return [str(o) for o in entry["options"]]
+    return []
+
+
 def _same_question(a: str, b: str) -> bool:
     """The same question, whatever asterisks, punctuation or truncation differ."""
     a, b = _plain(a), _plain(b)
@@ -1834,6 +1846,8 @@ class PageAgent:
                 handled_groups.add(group_key)
             if control.question in self.owner_answers:
                 continue
+            if not control.options and control.role in ("combobox", "listbox", "button"):
+                control.options = published_choices(control.question, self._published_questions())
             value, source = self.known_answer(control)
             if not value:
                 # Every box still empty is left open, not only the starred
@@ -1876,6 +1890,10 @@ class PageAgent:
         return filled, open_questions
 
 
+    def _published_questions(self) -> list:
+        analysis = getattr(self.job, "analysis", None)
+        return list((analysis or {}).get("published_questions") or []) if isinstance(analysis, dict) else []
+
     def facts(self, controls: list[Control]) -> dict:
         profile = asdict(self.profile) if hasattr(self.profile, "__dataclass_fields__") else dict(vars(self.profile))
         phone, code = profile.get("phone", ""), profile.get("phone_country_code", "")
@@ -1903,6 +1921,7 @@ class PageAgent:
             "phone_with_country_code": f"{code} {phone}".strip() if code and not phone.startswith("+") else phone,
             "resume_text": (getattr(self.resume, "raw_text", "") or "")[:12_000],
             "owner_earlier_answers": earlier[:40],
+            "questions_the_site_publishes": self._published_questions()[:60],
             "documents": {"resume": self.resume_file.name if self.resume_file else "",
                           "cover_letter": "can be written for this job" if self.cover_letter else ""},
         }

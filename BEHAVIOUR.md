@@ -380,6 +380,15 @@ with no AI wording.
   before you submit". It is in your name: read it, and change it if it is not how
   you would say it.
 
+## Questions the job site publishes
+
+Greenhouse publishes each application's questions -- the words, whether each is
+required, and every choice a list offers. The agent reads them with the job, before
+the form is opened. When a list on the form shows no choices until it is clicked,
+your answer (from your profile, then your saved answers) is matched to the exact
+choice Greenhouse published for that question, and the AI, when it is asked, is
+given the same list. Nothing is sent to Greenhouse: the list is public.
+
 ## When you press Continue
 
 Pressing Continue on the dashboard gives the agent its three tries at moving on

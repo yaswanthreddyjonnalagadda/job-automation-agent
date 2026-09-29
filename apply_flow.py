@@ -1271,6 +1271,8 @@ def main() -> None:
         title=job_input["title"], company=job_input["company"], location=job_input["location"],
         url=job_input["url"], raw_text=job_input["raw_text"],
     )
+    # The questions the job site publishes for this application (Greenhouse), with their exact choices.
+    job.analysis["published_questions"] = list(job_input.get("questions") or [])
 
     tracker = open_tracker(config)
     key = dedup_key_for_url(job.url)

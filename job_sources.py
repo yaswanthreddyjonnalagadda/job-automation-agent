@@ -114,7 +114,7 @@ def fetch_greenhouse_job(url: str) -> dict | None:
             candidates.insert(0, parts[0])
 
     for token in dict.fromkeys(candidates):
-        api = f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs/{job_id}?content=true"
+        api = f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs/{job_id}?content=true&questions=true"
         try:
             resp = requests.get(api, timeout=30)
             if resp.status_code != 200:
@@ -136,8 +136,31 @@ def fetch_greenhouse_job(url: str) -> dict | None:
             "location": (data.get("location") or {}).get("name", ""),
             "url": data.get("absolute_url") or url,
             "raw_text": text,
+            "questions": greenhouse_questions(data),
         }
     return None
+
+
+def greenhouse_questions(data: dict) -> list[dict]:
+    """The application's questions as Greenhouse publishes them: the words, whether required, the kind of box,
+    and every choice a list offers -- known before the form is opened, so a list that draws its choices only
+    when clicked is answered with the exact wording it takes."""
+    found = []
+    groups = list(data.get("questions") or [])
+    for block in data.get("compliance") or []:                 # the voluntary disclosures (EEO)
+        groups += list(block.get("questions") or [])
+    for question in groups:
+        label = " ".join(str(question.get("label") or "").split())
+        fields = question.get("fields") or []
+        if not label or not fields:
+            continue
+        kinds = [str(f.get("type") or "") for f in fields]
+        choices = [str(v.get("label") or "").strip() for f in fields for v in (f.get("values") or [])
+                   if str(v.get("label") or "").strip()]
+        found.append({"question": label, "required": bool(question.get("required")),
+                      "kind": next((k for k in kinds if k != "input_file"), kinds[0] if kinds else ""),
+                      "options": list(dict.fromkeys(choices))})
+    return found
 
 
 def fetch_lever_job(url: str) -> dict | None:
