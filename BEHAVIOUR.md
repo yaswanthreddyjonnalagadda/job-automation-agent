@@ -138,15 +138,38 @@ with no resume field is unaffected.
 
 ## Which model answers the form, and which writes the documents
 
-`FORM_ANSWER_MODE` decides who works out the answers on each application page:
+You make two separate choices on **Settings**, under "Which AI does what". They
+are separate because answering the forms takes many small requests on every
+application, while writing the resume takes a few large ones once per job; one
+never uses the other's models, so it cannot use up the other's allowance.
 
-* `profile` -- nobody: every answer comes from your saved profile and answer
-  library, and Claude only writes the documents;
-* `claude` -- Claude plans each page, through the Anthropic API or, with
-  `AGENT_BRAIN=session`, through the Claude Code session;
-* `gemini` -- Google's Gemini plans each page (your decision of 25 September
-  2026, after the Anthropic account reached its usage limit). `AGENT_BRAIN` is
-  not consulted.
+**1. Answering the forms** (`FORM_ANSWER_MODE`):
+
+* Profile only (`profile`) -- no AI: every answer comes from your saved profile
+  and saved answers;
+* Google Gemini (`gemini`), Anthropic Claude (`claude`) or OpenAI (`openai`) --
+  that provider reads each page and answers what your profile and saved answers
+  do not. With `claude`, `AGENT_BRAIN=session` still hands the pages to the
+  Claude Code session instead.
+
+For the provider you pick you choose its models, in order, in two lists: one
+for whole pages and written answers (stronger models do these better), one for
+quick choices and short questions (lighter models with bigger allowances are
+enough). The first in a list answers; when it runs out, the next takes over.
+The dropdowns list only models that write text (no embedding, voice, image or
+video models), as your key offers them -- the agent asks each provider, so a new
+model appears and a retired one disappears without a code change. Each shows
+whether it has been used today, is spent, or cannot be used with your key.
+
+**2. Writing the resume and cover letter** (`RESUME_WRITER`,
+`RESUME_WRITER_FALLBACK`): a first choice of provider and model, and one to use
+if the first cannot write it. With no choice, the providers with a key write it
+in the order Claude, Gemini, OpenAI. A choice whose key is missing is skipped
+and the log says so.
+
+Saved choices apply to the next application without restarting the dashboard:
+each run now starts from `.env` as it is, not as the dashboard read it when it
+started.
 
 A job gets one tailored resume. It is saved in the database the moment it is
 written, before the browser opens, so a run that fails or is stopped anywhere
@@ -155,49 +178,48 @@ resume without asking any AI again ("REUSED_RESUME" in the log). Only when
 tailoring failed and your generic resume went out is tailoring tried again on
 the next attempt.
 
-Claude writes the resume and the cover letter first. When Claude cannot (its
-usage limit is reached, or it is down), the next writer with a key in `.env` is
-tried, in this order: Gemini (`GEMINI_API_KEY`), then OpenAI (`OPENAI_API_KEY`,
-model `OPENAI_MODEL`). Only when all of them fail is your generic resume attached,
-and the run's log says which one wrote it ("Tailored resume written ... via
-Gemini"). So when Claude is out of credit, your resume text and the job posting
-go to Google, or to OpenAI if you have set that key. Leave a key out of `.env` and
-that company is never sent it. Everything that answers a question goes to Gemini
-in `gemini` mode: planning a page, reading a screenshot, matching a dropdown
-choice, screening answers.
+The run's log says who wrote the resume ("Tailored resume written ... via Gemini
+(gemini-3.8-flash)"). Only when every writer you chose fails is your generic
+resume attached. Whichever writes it, what your resume does not show is taken out
+before it is sent. Only the providers you chose, and have a key for, are sent your
+resume and the job posting. OpenAI is reached over its web API directly, so no
+extra package is needed.
 
 A page your profile answers completely is filled and moved on without asking the
-AI at all, which saves credits. The page still goes to the AI when there is no
+AI at all, which saves credits. A job posting whose way on is a plain "Apply" is
+opened without asking the AI, even when it also has a job search box or a
+language picker -- nothing on a posting is yours to answer. A field a site hides
+to catch programs ("This input is for robots only") is never filled and never
+sent to the AI. The page still goes to the AI when there is no
 plain Next/Continue to press (for example only "Add Experience"), or when a
 dropdown still shows "Choose an option" or "Select". The agent reads the page's
 step counter itself ("Step 1 of 2"), so a "Submit" button on a step with more
 to come only saves that step. It also finds a plain resume upload box by itself.
 
-What leaves your computer: in `gemini` mode every page the agent reads, together
-with the facts it answers from (your profile, the text of your resume and the job
-posting -- the first 5,000 characters), goes to Google; the documents go to Anthropic. Nothing else changes: the agent's own
-rules -- attestations, sponsorship, CAPTCHAs, submitting only when every check
-passes -- decide what is done with an answer, whoever proposed it. The key
-(`GEMINI_API_KEY`) travels in a request header, never in an address, and is never
-written to a log. If it is missing, the run says so before it starts; if it does
-not look like a Google key (`AIza` and 39 characters, or `AQ.` and longer) it says
-that too, without printing it.
+What leaves your computer: every page the agent reads, together with the facts it
+answers from (your profile, the text of your resume and the job posting -- the
+first 5,000 characters), goes to the provider you chose for answering; the resume
+and the job posting go to the writer you chose. Nothing else changes: the agent's
+own rules -- attestations, sponsorship, CAPTCHAs, submitting only when every check
+passes -- decide what is done with an answer, whoever proposed it. Keys travel in
+request headers, never in an address, and are never written to a log. If the
+Gemini key is missing the run says so before it starts; if it does not look like
+a Google key (`AIza` and 39 characters, or `AQ.` and longer) it says that too,
+without printing it.
 
-Gemini is several models, each with its own free daily allowance (on the free
-tier, about 20 requests a day for each Flash model and about 500 for each Flash
-Lite). The agent keeps two lists and tries each in order. A whole page or a
-written answer ("Why do you want to work here?") goes to the stronger Flash
-models first. A single dropdown choice, a short question or a screenshot goes to
-the Flash Lite models first. When a model says its day is spent, the next one
-answers, and the spent one is not asked again until midnight Pacific time, when
-Google resets the allowances. That holds for later applications too. A per-minute
-limit moves straight to the next model; the agent waits only when every model is
-paused for the minute. A model your key cannot use is skipped for a week, and
-the log says so. The same question asked twice in one run is sent once. Settings
-shows each model's calls today and whether it is resting. The lists can be
-changed with `GEMINI_PAGE_MODELS` and `GEMINI_QUICK_MODELS` in `.env`. Every
-model is Google's, so what leaves your computer is the same as above. When no
-model can answer, a page is handed to you as before.
+How a list of models is used, for every provider: when a model says its
+allowance is spent, the next one answers, and the spent one is not asked again
+until it can answer -- Google's free allowances reset at midnight Pacific time; an
+account out of credit (Anthropic or OpenAI) is looked at again after an hour.
+That holds for later applications too. A per-minute limit moves straight to the
+next model; the agent waits only when every model is paused for the minute. A
+model your key cannot use, or one with no free allowance on your key, is skipped
+for a week, and the log says so. The same question asked twice in one run is sent
+once. Settings shows each model's calls today and whether it is resting. On
+Google's free tier each Flash model allows about 20 requests a day and each Flash
+Lite about 500, so the defaults put Flash first for whole pages and Flash Lite
+first for quick choices. When no model can answer, a page is handed to you as
+before.
 
 The AI that answers a form is given the job posting as well as your profile and
 resume, so an answer fits what the employer is asking about. It is told the posting

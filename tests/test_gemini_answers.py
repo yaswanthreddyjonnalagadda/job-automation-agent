@@ -260,20 +260,27 @@ def test_gemini_mode_builds_the_split_brain_whatever_agent_brain_says(google):
         assert isinstance(brain, gemini.GeminiBrain)
 
 
-def test_the_other_modes_are_as_they_were(google):
+def test_the_other_modes_answer_with_their_own_provider_and_write_with_the_chosen_writers(google):
+    import ai_choice
     import apply_flow
     import session_planner
+    from claude_answers import ClaudeAnswerClient
+    from openai_integration import OpenAIClient
     job = SimpleNamespace(company="Praxis", title="Engineer")
-    assert isinstance(apply_flow.brain_for(make_config(google, form_answer_mode="profile"), job), ClaudeClient)
-    assert isinstance(apply_flow.brain_for(make_config(google, form_answer_mode="claude", agent_brain="api"), job),
-                      ClaudeClient)
+    profile = apply_flow.brain_for(make_config(google, form_answer_mode="profile"), job)
+    assert isinstance(profile, ai_choice.Brain) and isinstance(profile._answers, ClaudeClient)
+    claude = apply_flow.brain_for(make_config(google, form_answer_mode="claude", agent_brain="api"), job)
+    assert isinstance(claude, ai_choice.Brain) and isinstance(claude._answers, ClaudeAnswerClient)
+    openai = apply_flow.brain_for(make_config(google, form_answer_mode="openai", openai_api_key="sk-x"), job)
+    assert isinstance(openai, ai_choice.Brain) and isinstance(openai._answers, OpenAIClient)
     assert isinstance(apply_flow.brain_for(make_config(google, form_answer_mode="claude", agent_brain="session"), job),
                       session_planner.SessionPlanner)
+    assert isinstance(claude._documents, ai_choice.Writers)
 
 
 @pytest.mark.parametrize("mode, brain, kind", [
     ("profile", "session", "profile"), ("gemini", "session", "gemini"), ("gemini", "api", "gemini"),
-    ("claude", "session", "session"), ("claude", "api", "api"),
+    ("claude", "session", "session"), ("claude", "api", "api"), ("openai", "session", "openai"),
 ])
 def test_which_brain_a_configuration_means(mode, brain, kind):
     import apply_flow

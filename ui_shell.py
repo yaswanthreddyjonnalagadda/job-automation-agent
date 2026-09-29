@@ -46,7 +46,7 @@ code { background:var(--grey-soft); padding:1px 6px; border-radius:6px; font-siz
 .topbar { position:sticky; top:0; z-index:20; background:color-mix(in srgb, var(--surface) 88%, transparent);
           backdrop-filter:saturate(1.4) blur(10px); border-bottom:1px solid var(--line); }
 .topbar-inner { max-width:1200px; margin:0 auto; padding:0 24px; height:60px; display:flex; align-items:center; gap:28px; }
-.brand { display:flex; align-items:center; gap:10px; font-weight:700; font-size:15px; color:var(--ink); letter-spacing:-.01em; }
+.brand { display:flex; align-items:center; gap:10px; font-weight:700; font-size:15px; color:var(--ink); letter-spacing:-.01em; white-space:nowrap; flex-shrink:0; }
 .brand:hover { text-decoration:none; }
 .brand svg { width:28px; height:28px; }
 .brand small { display:block; font-weight:500; font-size:11px; color:var(--muted); letter-spacing:0; }

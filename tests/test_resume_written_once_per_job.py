@@ -29,8 +29,7 @@ def setting(tmp_path, monkeypatch):
     key = "acme-network-engineer"
     tracker.create(dedup_key=key, title=job.title, company=job.company)
     writer = Writer()
-    monkeypatch.setattr(apply_flow, "available_tailor_providers", lambda cfg: ["gemini"])
-    monkeypatch.setattr(apply_flow, "_make_tailor_client", lambda provider, cfg: writer)
+    monkeypatch.setattr(apply_flow.ai_choice, "writers", lambda cfg: [("Gemini", writer)])
     monkeypatch.setattr(apply_flow.safety, "unsupported_claims", lambda before, after: [])
     monkeypatch.setattr(apply_flow, "build_resume_pdf",
                         lambda txt, pdf: Path(pdf).write_bytes(b"%PDF-1.4 " + b"x" * 30_000))

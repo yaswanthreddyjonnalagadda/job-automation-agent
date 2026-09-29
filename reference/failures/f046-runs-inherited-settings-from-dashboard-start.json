@@ -1,0 +1,14 @@
+{
+  "id": "f046",
+  "date": "2026-09-29",
+  "class": "A child process inherits a parent's stale copy of settings the owner has since changed",
+  "symptom": "A setting changed in .env (on Settings or by hand) was not used by the next application until the dashboard was restarted; the owner had to be told to restart after every change.",
+  "site": "Dashboard (every run)",
+  "root_cause": "The dashboard read .env once, at start, into its environment; every run was started with that environment, and the run's own load_dotenv() does not override variables it already has.",
+  "why_tests_missed": "Tests set configuration directly; none started a run after changing .env.",
+  "fix": "web_ui.run_environment() starts each run with the server's environment and .env, as it is now, on top.",
+  "tests": [
+    "tests/test_settings_ai_choices.py::test_the_next_run_reads_env_as_it_is_now"
+  ],
+  "prevention": "A long-running parent that starts workers passes them the current settings, read at the moment it starts each one, not the copy it read when it began."
+}

@@ -49,10 +49,9 @@ import config as config_module
 from resume_pdf import build_letter_pdf, build_resume_pdf
 from browser_automation import BlockedLoginDomainError, JobApplicationAssistant
 from claude_integration import ClaudeClient, ClaudeIntegrationError
-from gemini_integration import GeminiDocumentClient
-from openai_integration import OpenAIDocumentClient
-from config import get_app_config, get_user_profile, available_tailor_providers
+from config import get_app_config, get_user_profile
 from jd_analyzer import build_job_description, dedup_key_for_url
+import ai_choice
 import safety
 from safety import STATUS_DISQUALIFIED_POLICY_MISMATCH
 from state_machine import (
@@ -271,14 +270,8 @@ def _is_out_of_credits(exc: Exception) -> bool:
 
 
 def _make_tailor_client(provider: str, cfg) -> ClaudeClient:
-    """Build the right client object for *provider*."""
-    if provider == "claude":
-        return ClaudeClient(cfg)
-    if provider == "gemini":
-        return GeminiDocumentClient(cfg)
-    if provider == "openai":
-        return OpenAIDocumentClient(cfg)
-    raise ValueError(f"Unknown tailor provider: {provider!r}")
+    """A client that writes documents with *provider* (its default model)."""
+    return ai_choice.writer_client(provider, "", cfg)
 
 
 def _tailor_with(client, resume, job, profile, job_dir: Path, resume_txt: Path, resume_pdf: Path,
@@ -374,25 +367,20 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
     resume_txt = job_dir / "tailored_resume.txt"
     resume_pdf = job_dir / f"{document_name(profile, 'Resume', job.company)}.pdf"
 
-    # Determine which providers are available (have an API key in settings/env)
+    # The writers the owner chose on Settings (RESUME_WRITER, then RESUME_WRITER_FALLBACK); with no choice,
+    # every provider that has a key, Claude first (ai_choice.writers).
     cfg = config_module.get_app_config()
-    providers = available_tailor_providers(cfg)
+    found = ai_choice.writers(cfg)
 
-    if not providers:
+    if not found:
         logger.info(
             "TAILORING_SKIPPED: no AI API keys configured -- attaching the local resume. "
             "Add a Claude, Gemini, or OpenAI key in Settings to enable tailoring."
         )
         return generic
 
-    for provider in providers:
-        try:
-            client = _make_tailor_client(provider, cfg)
-        except Exception as build_exc:
-            logger.warning("Could not build %s client (%s) -- skipping", provider, build_exc)
-            continue
-        result = _tailor_with(client, resume, job, profile, job_dir, resume_txt, resume_pdf,
-                              provider.capitalize())
+    for label, client in found:
+        result = _tailor_with(client, resume, job, profile, job_dir, resume_txt, resume_pdf, label)
         if result is not None:
             # Filed now, not when the form is reached: a run that failed before the form (the browser, a
             # sign-in, a stop) lost its resume, and every retry paid for a new one (Writer, 28 September:
@@ -400,10 +388,10 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
             store_materials(tracker, key, result, None)
             return result
 
-    # All configured providers failed
+    # All configured writers failed
     logger.error(
-        "TAILORING_FAILED: all configured AI providers (%s) failed -- attaching the local generic resume.",
-        ", ".join(providers),
+        "TAILORING_FAILED: every writer (%s) failed -- attaching the local generic resume.",
+        ", ".join(label for label, _ in found),
     )
     return generic
 
@@ -1123,38 +1111,39 @@ def submit_verified(assistant, page, tracker, key, job, job_dir: Path, decision)
 
 def brain_kind(config) -> str:
     """Who answers the application pages under this configuration: "profile" (nobody: the saved profile),
-    "gemini", "session" (the Claude Code session) or "api" (Anthropic). FORM_ANSWER_MODE=gemini decides it
-    whatever AGENT_BRAIN says; the documents are Claude's in every case."""
+    "gemini", "openai", "session" (the Claude Code session) or "api" (Claude). FORM_ANSWER_MODE=gemini or openai
+    decides it whatever AGENT_BRAIN says."""
     mode = getattr(config, "form_answer_mode", "profile")
-    if mode in ("profile", "gemini"):
+    if mode in ("profile", "gemini", "openai"):
         return mode
     return "session" if getattr(config, "agent_brain", "api") == "session" else "api"
 
 
 def brain_for(config, job=None):
-    """The document writer, and optionally the assisted page planner.
+    """The document writers, and the page planner the owner chose (ai_choice.py).
 
-    In profile mode Claude is document-only: it tailors the resume/CV, while
-    PageAgent reads the form and answers it from the saved profile without an
-    API or session call. In gemini mode Gemini answers the pages and Claude
-    still writes the documents (gemini_integration.GeminiBrain).
+    The documents always go to the owner's writers (Settings: RESUME_WRITER). The pages go to Gemini, OpenAI or
+    Claude as FORM_ANSWER_MODE says, each climbing the owner's ladder of models; in profile mode the pages are
+    answered from the saved profile, and in session mode the Claude Code session plans them.
     """
-    api = ClaudeClient(config)
+    documents = ai_choice.Writers(ai_choice.writers(config))
     kind = brain_kind(config)
     if kind == "profile":
-        logger.info("BRAIN: Claude is document-only; form answers use the local profile planner")
-        return api
+        logger.info("BRAIN: form answers use the local profile planner; the writers write the documents")
+        return ai_choice.Brain(ClaudeClient(config), documents)
+    if kind == "session":
+        import session_planner
+        brain = session_planner.SessionPlanner(config, folder=Path("data"), fallback=ClaudeClient(config))
+        brain.now_applying = f"{getattr(job, 'company', '')} -- {getattr(job, 'title', '')}".strip(" -")
+        logger.info("BRAIN: this run asks the Claude Code session about each page (no API credit used)")
+        return brain
     if kind == "gemini":
         from gemini_integration import GeminiBrain
-        logger.info("BRAIN: Gemini answers the application pages; Claude writes the resume and cover letter")
-        return GeminiBrain(config, documents=api)
-    if kind != "session":
-        return api
-    import session_planner
-    brain = session_planner.SessionPlanner(config, folder=Path("data"), fallback=api)
-    brain.now_applying = f"{getattr(job, 'company', '')} -- {getattr(job, 'title', '')}".strip(" -")
-    logger.info("BRAIN: this run asks the Claude Code session about each page (no API credit used)")
-    return brain
+        logger.info("BRAIN: Gemini answers the application pages; the chosen writer writes the documents")
+        return GeminiBrain(config, documents=documents)
+    logger.info("BRAIN: %s answers the application pages; the chosen writer writes the documents",
+                "OpenAI" if kind == "openai" else "Claude")
+    return ai_choice.Brain(ai_choice.answer_client(config, "openai" if kind == "openai" else "claude"), documents)
 
 
 def reload_browser_automation(assistant: JobApplicationAssistant) -> JobApplicationAssistant:

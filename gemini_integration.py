@@ -15,7 +15,7 @@ applications while the other models' allowances went unused. Now every call has 
 (config.DEFAULT_GEMINI_PAGE_MODELS / DEFAULT_GEMINI_QUICK_MODELS): a page plan or an open answer starts with the
 strongest models; a single dropdown choice or short question starts with the Flash Lite models, which allow about
 500 a day. A model that says its day is spent rests until Google's midnight reset, and that is written to
-data/_gemini_quota.json, so the next application does not ask it again. A model Google does not know rests for a
+data/_model_quota.json (model_ladder.py), so the next application does not ask it again. A model Google does not know rests for a
 week. A per-minute limit moves straight on to the next model; only when every model is paused for the minute is
 the wait made. The same question asked twice in one run is answered once.
 
@@ -25,21 +25,18 @@ same facts. BEHAVIOUR.md says so. The key travels in a header, never in an addre
 """
 from __future__ import annotations
 
-import functools
-import json
 import logging
 import re
 import time
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
 
 import requests
 
+import model_ladder
 from claude_integration import ClaudeClient, ClaudeIntegrationError
-from config import (DEFAULT_GEMINI_BASE_URL, DEFAULT_GEMINI_MODEL, GEMINI_QUOTA_RESET_TZ,
-                    GEMINI_QUOTA_RESET_UTC_OFFSET_HOURS)
+from config import DEFAULT_GEMINI_BASE_URL, DEFAULT_GEMINI_MODEL
+from model_ladder import Failed, Missing, NoFreeTier, Paused, Spent
 
 logger = logging.getLogger(__name__)
 
@@ -48,18 +45,9 @@ logger = logging.getLogger(__name__)
 ANSWERS = frozenset({"plan_page", "read_page", "choose_option", "answer_screening_questions", "answer_single_question"})
 DOCUMENTS = frozenset({"tailor_resume", "generate_cover_letter"})
 
-# Which ladder each call climbs, and which calls are remembered for the rest of the run.
-TIERS = {"plan_page": "page", "answer_screening_questions": "page", "_open_answer": "page",
-         "read_page": "quick", "choose_option": "quick", "answer_single_question": "quick"}
-REMEMBERED = frozenset({"choose_option", "answer_single_question"})
-
 MIN_OUTPUT_TOKENS = 4_096       # Gemini counts its thinking in the limit: a 400-token answer would be cut off
 GEMMA_MAX_OUTPUT_TOKENS = 8_192
 MAX_RATE_LIMIT_WAIT = 65.0      # the longest wait for a per-minute limit that is worth making
-MISSING_MODEL_REST = 7 * 24 * 3600.0
-
-# Which models are resting and how many calls each answered today. Shared by every run on this computer.
-QUOTA_FILE = Path("data/_gemini_quota.json")
 
 
 class GeminiError(Exception):
@@ -95,101 +83,36 @@ class GeminiTimeout(GeminiConnectionError):
 _KEY_CHARACTERS = re.compile(r"[A-Za-z0-9._-]+")
 
 
-# --- the quota book ----------------------------------------------------------------------------------------
+# --- which models ------------------------------------------------------------------------------------------
 
-def _pacific(now: float) -> datetime:
-    try:
-        from zoneinfo import ZoneInfo
-        zone = ZoneInfo(GEMINI_QUOTA_RESET_TZ)
-    except Exception:
-        zone = timezone(timedelta(hours=GEMINI_QUOTA_RESET_UTC_OFFSET_HOURS))
-    return datetime.fromtimestamp(now, zone)
-
-
-def next_reset(now: Optional[float] = None) -> float:
-    """When the free allowances start again: the next midnight in Google's Pacific time."""
-    here = _pacific(time.time() if now is None else now)
-    midnight = (here + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    return midnight.timestamp()
-
-
-def _today(now: Optional[float] = None) -> str:
-    return _pacific(time.time() if now is None else now).date().isoformat()
-
-
-def _book() -> dict:
-    try:
-        data = json.loads(QUOTA_FILE.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
-def _write(book: dict) -> None:
-    try:
-        QUOTA_FILE.parent.mkdir(parents=True, exist_ok=True)
-        QUOTA_FILE.write_text(json.dumps(book, indent=1, sort_keys=True), encoding="utf-8")
-    except OSError as exc:
-        logger.debug("Could not save the Gemini quota book: %s", exc)
-
-
-def _rest(model: str, until: float, why: str) -> None:
-    book = _book()
-    book.setdefault(model, {}).update(rest_until=until, why=why)
-    _write(book)
-
-
-def _wake(model: str) -> None:
-    book = _book()
-    if model in book:
-        book[model].pop("rest_until", None)
-        book[model].pop("why", None)
-        _write(book)
-
-
-def _resting(model: str, now: Optional[float] = None) -> tuple[str, float]:
-    """(why, until) while the model rests, else ("", 0)."""
-    entry = _book().get(model) or {}
-    until = float(entry.get("rest_until") or 0)
-    if until > (time.time() if now is None else now):
-        return str(entry.get("why") or "resting"), until
-    return "", 0.0
-
-
-def _count(model: str) -> None:
-    book = _book()
-    entry = book.setdefault(model, {})
-    today = _today()
-    if entry.get("day") != today:
-        entry["day"], entry["calls"] = today, 0
-    entry["calls"] = int(entry.get("calls") or 0) + 1
-    _write(book)
+_resting = model_ladder.resting
+_pacific = model_ladder._pacific
+next_reset = model_ladder.next_reset
 
 
 def models_for(config: Any, tier: str) -> list[str]:
-    """The ladder for one kind of call. A config without ladders (older settings) has one model."""
-    chosen = str(getattr(config, "gemini_model", "") or DEFAULT_GEMINI_MODEL)
-    listed = getattr(config, f"gemini_{tier}_models", None)
-    if not listed:
-        return [chosen]
-    ladder = ([chosen] if tier == "page" else []) + list(listed)
-    return list(dict.fromkeys(m for m in ladder if m))
+    """The owner's Gemini ladder for one kind of call. A config without ladders (older settings) has one model."""
+    return model_ladder.ladder_for(config, "gemini", tier) or [DEFAULT_GEMINI_MODEL]
 
 
 def usage_today(config: Any) -> list[dict]:
-    """Each model the agent may use, with today's calls and whether it is resting -- for the dashboard."""
-    book, now, today = _book(), time.time(), _today()
-    rows = []
-    for model in dict.fromkeys(models_for(config, "page") + models_for(config, "quick")):
-        entry = book.get(model) or {}
-        why, until = _resting(model, now)
-        rows.append({"model": model, "calls": int(entry.get("calls") or 0) if entry.get("day") == today else 0,
-                     "why": why, "until": datetime.fromtimestamp(until).strftime("%d %b %I:%M %p") if why else "",
-                     "page": model in models_for(config, "page"), "quick": model in models_for(config, "quick")})
+    """Each Gemini model the agent may use, with today's calls and whether it is resting -- for the dashboard."""
+    page, quick = models_for(config, "page"), models_for(config, "quick")
+    rows = model_ladder.usage(page + quick)
+    for row in rows:
+        row["page"], row["quick"] = row["model"] in page, row["model"] in quick
     return rows
 
 
 # --- reading Google's replies --------------------------------------------------------------------------------
+
+def _no_free_tier(reply) -> bool:
+    """A 429 saying the limit itself is 0: the model is not on this key's free tier at all."""
+    try:
+        return bool(re.search(r"limit:\s*0\b", reply.text or ""))
+    except Exception:
+        return False
+
 
 def _daily_quota(reply) -> bool:
     """A 429 whose quota is counted per day (Google's QuotaFailure names it, e.g. '...PerDay...')."""
@@ -288,8 +211,8 @@ def _payload(model: str, system: str, messages: list[dict], max_tokens: int, jso
 class _Messages:
     """`client.messages.create(...)` as ClaudeClient calls it, answered by the first Gemini model able to.
 
-    `model` is ignored: the ladder for the current tier decides. json_reply=False is for the documents, which
-    come back as prose."""
+    `model` is ignored: the owner's ladder for the current tier decides. json_reply=False is for the
+    documents, which come back as prose."""
 
     def __init__(self, config: Any, json_reply: bool = True):
         self._config = config
@@ -300,73 +223,45 @@ class _Messages:
                timeout: Optional[float] = None, **_ignored: Any) -> SimpleNamespace:
         key = str(getattr(self._config, "gemini_api_key", "") or "")
         base = str(getattr(self._config, "gemini_base_url", "") or DEFAULT_GEMINI_BASE_URL).rstrip("/")
-        ladder = models_for(self._config, self.tier)
-        paused: dict[str, float] = {}           # model -> seconds to wait, for a per-minute limit
-        spent, failure = [], None
-        for name in ladder:
-            why, until = _resting(name)
-            if why == "minute":
-                paused[name] = max(until - time.time(), 0.0)
-                continue
-            if why:
-                if why == "daily":
-                    spent.append(name)
-                continue
+
+        def send(name: str) -> SimpleNamespace:
             try:
                 reply = requests.post(f"{base}/models/{name}:generateContent",
                                       json=_payload(name, system, messages, max_tokens, self._json_reply),
                                       headers={"x-goog-api-key": key, "Content-Type": "application/json"},
                                       timeout=timeout)
             except requests.exceptions.Timeout:
-                failure = GeminiTimeout("Gemini did not answer in time")
-                continue
+                raise Failed(GeminiTimeout("Gemini did not answer in time")) from None
             except requests.exceptions.RequestException as exc:
-                failure = GeminiConnectionError(f"could not reach Gemini ({type(exc).__name__})")
-                continue
+                raise Failed(GeminiConnectionError(f"could not reach Gemini ({type(exc).__name__})")) from None
             if reply.status_code == 429:
+                if _no_free_tier(reply):
+                    raise NoFreeTier(GeminiStatusError(f"{name} has no free allowance on this key", 429))
                 if _daily_quota(reply):
-                    _rest(name, next_reset(), "daily")
-                    spent.append(name)
-                    logger.info("GEMINI: %s has used its free allowance for today -- trying the next model", name)
-                else:
-                    wait = _retry_delay(reply)
-                    _rest(name, time.time() + wait, "minute")
-                    paused[name] = wait
-                continue
+                    raise Spent(GeminiDailyLimit("the daily allowance is used up", 429))
+                raise Paused(GeminiRateLimited("per-minute limit reached", 429), wait=_retry_delay(reply))
             if reply.status_code >= 500:
-                failure = GeminiConnectionError(f"Gemini is busy or down ({reply.status_code})")
-                continue
+                raise Failed(GeminiConnectionError(f"Gemini is busy or down ({reply.status_code})"))
             if reply.status_code >= 400:
                 message = _scrub(_google_message(reply), key)
                 if reply.status_code == 404:        # a model Google has retired, or never gave this key
-                    _rest(name, time.time() + MISSING_MODEL_REST, "missing")
-                    message += (f" -- {name} is not available to this key; the next model is used "
-                                "(change the lists with GEMINI_MODEL / GEMINI_PAGE_MODELS in .env)")
-                failure = GeminiStatusError(message, reply.status_code)
-                continue
+                    raise Missing(GeminiStatusError(
+                        message + f" -- {name} is not available to this key; the next model is used "
+                        "(choose the models on Settings, or GEMINI_MODEL / GEMINI_PAGE_MODELS in .env)", 404))
+                raise Failed(GeminiStatusError(message, reply.status_code))
             try:
                 data = reply.json()
             except ValueError:
-                failure = GeminiConnectionError("Gemini sent an answer that could not be read")
-                continue
-            answer = _as_reply(data)
-            _count(name)
-            if name != ladder[0]:
-                logger.info("GEMINI: answered by %s (%s call)", name, self.tier)
-            return answer
+                raise Failed(GeminiConnectionError("Gemini sent an answer that could not be read")) from None
+            return _as_reply(data)
 
-        if paused:
-            # Every model still able to answer is paused for the minute: make the shortest wait, once.
-            time.sleep(min(min(paused.values()), MAX_RATE_LIMIT_WAIT))
-            for name in paused:
-                _wake(name)
-            raise GeminiRateLimited("every model is at its per-minute limit (waited, asking again)", 429)
-        if failure is not None:
-            raise failure
-        if spent:
-            raise GeminiDailyLimit("every model's daily allowance is used up -- they come back at "
-                                   "midnight Pacific time (or add billing at aistudio.google.com)", 429)
-        raise GeminiStatusError("no Gemini model is available to this key just now (see Settings)", 404)
+        return model_ladder.climb(
+            models_for(self._config, self.tier), send, label="GEMINI", tier=self.tier,
+            all_spent=lambda: GeminiDailyLimit(
+                "every model's daily allowance is used up -- they come back at midnight Pacific time "
+                "(or add billing at aistudio.google.com)", 429),
+            all_paused=lambda: GeminiRateLimited(
+                "every model is at its per-minute limit (waited, asking again)", 429))
 
 
 class GeminiClient(ClaudeClient):
@@ -388,32 +283,7 @@ class GeminiClient(ClaudeClient):
         return str(getattr(self._config, "gemini_model", "") or DEFAULT_GEMINI_MODEL)
 
 
-def _on_ladder(name: str, tier: str, remember: bool):
-    original = getattr(ClaudeClient, name)
-
-    @functools.wraps(original)
-    def run(self, *args: Any, **kwargs: Any):
-        memo = getattr(self, "_remembered", None)
-        key = None
-        if remember and memo is not None:
-            key = (name, json.dumps([args, kwargs], default=str, sort_keys=True))
-            if key in memo:
-                return memo[key]
-        messages = self._client.messages
-        before = getattr(messages, "tier", "page")
-        messages.tier = tier
-        try:
-            result = original(self, *args, **kwargs)
-        finally:
-            messages.tier = before
-        if key is not None and (result.get("choice") if isinstance(result, dict) else result):
-            memo[key] = result
-        return result
-    return run
-
-
-for _name, _tier in TIERS.items():
-    setattr(GeminiClient, _name, _on_ladder(_name, _tier, _name in REMEMBERED))
+model_ladder.put_on_ladders(GeminiClient, ClaudeClient)
 
 
 def _refuse(name: str):

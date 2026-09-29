@@ -1,0 +1,18 @@
+{
+  "id": "f049",
+  "date": "2026-09-29",
+  "class": "A fallback that depended on a package never installed, and choices the owner could not make",
+  "symptom": "OpenAI was listed as the last resume writer but could never write one (the openai package was not installed); OpenAI could not answer forms at all; and who answered and who wrote was a fixed order the owner could not change from the dashboard.",
+  "site": "Every site",
+  "root_cause": "OpenAIDocumentClient imported the openai SDK at call time and failed quietly into the next provider; answering was wired to Gemini or Claude only; the writer order was hard-coded in config.available_tailor_providers.",
+  "why_tests_missed": "No test exercised the OpenAI path end to end; the provider order was only ever tested as Claude-first.",
+  "fix": "openai_integration speaks the Chat Completions API over plain HTTPS and can answer forms (OpenAIClient) or write (OpenAIDocumentClient). ai_choice.py holds both of the owner's choices -- FORM_ANSWER_MODE with each provider's model ladders, and RESUME_WRITER / RESUME_WRITER_FALLBACK -- set on Settings from model lists each provider gives for the key (ai_models.py). Claude's answers climb a ladder too (claude_answers.py), and every provider shares model_ladder.py.",
+  "tests": [
+    "tests/test_answer_and_writer_choice.py::test_openai_plans_a_page_with_json_and_the_key_in_a_header",
+    "tests/test_answer_and_writer_choice.py::test_claude_answers_climb_the_owners_ladder",
+    "tests/test_answer_and_writer_choice.py::test_the_chosen_writer_and_model_come_first_then_the_second_choice",
+    "tests/test_settings_ai_choices.py::test_saving_writes_both_choices_and_keeps_everything_else",
+    "tests/test_settings_ai_choices.py::test_only_models_that_write_text_are_listed"
+  ],
+  "prevention": "Every provider path has a test that sends a request through it, dependencies are declared and checked at start, and choices that cost the owner money are made by the owner, in the interface."
+}

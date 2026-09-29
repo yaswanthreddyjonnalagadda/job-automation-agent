@@ -200,6 +200,18 @@ class AppConfig:
         default_factory=lambda: _models_from_env("GEMINI_PAGE_MODELS", DEFAULT_GEMINI_PAGE_MODELS))
     gemini_quick_models: tuple = field(
         default_factory=lambda: _models_from_env("GEMINI_QUICK_MODELS", DEFAULT_GEMINI_QUICK_MODELS))
+    # The same two ladders when Claude or OpenAI answers the forms (FORM_ANSWER_MODE=claude / openai), chosen
+    # on Settings. Empty means the provider's one model (ANTHROPIC_MODEL / OPENAI_MODEL).
+    claude_page_models: tuple = field(default_factory=lambda: _models_from_env("CLAUDE_PAGE_MODELS", ()))
+    claude_quick_models: tuple = field(default_factory=lambda: _models_from_env("CLAUDE_QUICK_MODELS", ()))
+    openai_page_models: tuple = field(default_factory=lambda: _models_from_env("OPENAI_PAGE_MODELS", ()))
+    openai_quick_models: tuple = field(default_factory=lambda: _models_from_env("OPENAI_QUICK_MODELS", ()))
+    openai_base_url: str = field(
+        default_factory=lambda: os.getenv("OPENAI_BASE_URL", "").strip() or "https://api.openai.com/v1")
+    # Who writes the resume and the cover letter, chosen on Settings, as "provider:model" (e.g.
+    # "gemini:gemini-3.5-flash"), and who writes them if that fails. Unset: Claude, then Gemini, then OpenAI.
+    resume_writer: str = field(default_factory=lambda: os.getenv("RESUME_WRITER", "").strip())
+    resume_writer_fallback: str = field(default_factory=lambda: os.getenv("RESUME_WRITER_FALLBACK", "").strip())
     # OpenAI API key for resume tailoring fallback (optional).
     openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", "").strip())
     openai_model: str = field(

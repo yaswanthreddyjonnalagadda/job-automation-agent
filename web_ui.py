@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import os
 import signal
 import subprocess
@@ -104,6 +105,20 @@ _load_runs()
 # ----------------------------------------------------------------------
 # Launching an application
 # ----------------------------------------------------------------------
+def run_environment() -> dict[str, str]:
+    """The environment a run starts with: this server's, with .env as it is now on top.
+
+    The server read .env once, when it started, and every run inherited that copy; the run's own load_dotenv
+    does not override what it inherits. So a choice saved on Settings (which AI answers, which writes the
+    resume) went unused until the dashboard was restarted."""
+    from dotenv import dotenv_values
+    env = dict(os.environ)
+    path = BASE_DIR / ".env"
+    if path.is_file():
+        env.update({k: v for k, v in dotenv_values(path).items() if v is not None})
+    return env
+
+
 def _run_apply(url: str, open_url: str = "") -> None:
     """Runs apply.py for one URL, capturing output for the UI to display.
 
@@ -127,7 +142,7 @@ def _run_apply(url: str, open_url: str = "") -> None:
             proc = subprocess.Popen(
                 command,
                 cwd=str(BASE_DIR), stdout=fh, stderr=subprocess.STDOUT, text=True,
-                start_new_session=(os.name != "nt"),
+                start_new_session=(os.name != "nt"), env=run_environment(),
             )
             with _RUNS_LOCK:
                 _RUNS[url]["proc"] = proc
@@ -308,17 +323,87 @@ def settings():
         has_gemini=bool(current.get("GEMINI_API_KEY")),
         has_openai=bool(current.get("OPENAI_API_KEY")),
         has_password=bool(current.get("ATS_PASSWORD")),
-        ai_usage=_ai_usage(),
+        ai=_ai_settings(current, refresh=request.args.get("refresh") == "1"),
     )
 
 
-def _ai_usage() -> list[dict]:
-    """Each Gemini model the agent may use, with today's calls and whether it is resting."""
+AI_PROVIDERS = ("gemini", "claude", "openai")
+AI_TIERS = ("page", "quick")
+AI_MAX_ROWS = 60      # the most models one list can hold
+_MODEL_NAME = re.compile(r"[A-Za-z0-9._:-]{0,120}")
+
+
+def _ai_settings(current: dict, refresh: bool = False) -> dict:
+    """What the two AI choices on Settings show: the models each key can use, the owner's picks as .env has
+    them now (not as this server read it at start), and how each model is doing today."""
+    import ai_choice
+    import ai_models
+    import model_ladder
+    from types import SimpleNamespace
+    base = get_app_config()
+    view = SimpleNamespace(**{**vars(base), **{
+        "anthropic_api_key": current.get("ANTHROPIC_API_KEY") or "",
+        "gemini_api_key": current.get("GEMINI_API_KEY") or "",
+        "openai_api_key": current.get("OPENAI_API_KEY") or ""}})
     try:
-        import gemini_integration
-        return gemini_integration.usage_today(get_app_config())
-    except Exception:
-        return []
+        offered = ai_models.catalogue(view, refresh=refresh)
+    except Exception as exc:
+        offered = {p: {"models": [], "error": str(exc)[:120], "has_key": False} for p in AI_PROVIDERS}
+    ladders = {}
+    for provider in AI_PROVIDERS:
+        for tier in AI_TIERS:
+            name = f"{provider.upper()}_{tier.upper()}_MODELS"
+            saved = current.get(name)
+            if saved is None:
+                chosen = model_ladder.ladder_for(base, provider, tier)
+            else:
+                chosen = [m.strip() for m in saved.split(",") if m.strip()]
+            # The chosen models first, in their order and ticked; then the rest the key offers, unticked.
+            rest = [m for m in offered[provider]["models"] if m not in chosen]
+            ladders[f"{provider}_{tier}"] = ([{"model": m, "on": True} for m in chosen]
+                                             + [{"model": m, "on": False} for m in rest])[:AI_MAX_ROWS]
+    every = [m for p in AI_PROVIDERS for m in offered[p]["models"]] + [r["model"] for v in ladders.values() for r in v]
+    state = {row["model"]: row for row in model_ladder.usage(list(dict.fromkeys(every)))}
+    return {"providers": ai_choice.PROVIDERS, "offered": offered, "ladders": ladders, "state": state,
+            "mode": (current.get("FORM_ANSWER_MODE") or base.form_answer_mode or "profile").lower(),
+            "writer": current.get("RESUME_WRITER") or "", "writer_fallback": current.get("RESUME_WRITER_FALLBACK") or "",
+            "tiers": AI_TIERS}
+
+
+@app.post("/settings/ai")
+def settings_ai():
+    """Saves the owner's two choices: who answers the forms (and with which models), who writes the resume."""
+    import ai_choice
+    values = {}
+    mode = (request.form.get("form_answer_mode") or "").strip().lower()
+    if mode in ("profile", "gemini", "claude", "openai"):
+        values["FORM_ANSWER_MODE"] = mode
+    for provider in AI_PROVIDERS:
+        for tier in AI_TIERS:
+            # The page marks each list it sends, so a list with every model unticked is seen, and refused.
+            if f"{provider}_{tier}_sent" not in request.form:
+                continue
+            fields = [f"{provider}_{tier}_{i}" for i in range(1, AI_MAX_ROWS + 1)]
+            picked = [(request.form.get(f) or "").strip() for f in fields]
+            if not all(_MODEL_NAME.fullmatch(m) for m in picked):
+                return redirect(url_for("settings", error="A model name had characters a model name cannot have."))
+            listed = ",".join(dict.fromkeys(m for m in picked if m))
+            if not listed:
+                return redirect(url_for("settings", error="Tick at least one model in each list, so a question "
+                                                          "always has a model to go to.") + "#ai")
+            values[f"{provider.upper()}_{tier.upper()}_MODELS"] = listed
+    for field_name, env_key in (("resume_writer", "RESUME_WRITER"), ("resume_writer_fallback", "RESUME_WRITER_FALLBACK")):
+        if field_name not in request.form:
+            continue
+        chosen = (request.form.get(field_name) or "").strip()
+        if chosen and not (ai_choice.parse_writer(chosen)[0] and _MODEL_NAME.fullmatch(chosen)):
+            return redirect(url_for("settings", error="That writer is not one the page offered."))
+        values[env_key] = chosen
+    try:
+        _save_env_values(values)
+    except (OSError, ValueError) as exc:
+        return redirect(url_for("settings", error=f"Could not save: {exc}"))
+    return redirect(url_for("settings", saved="1") + "#ai")
 
 
 @app.post("/resume/<int:app_id>")
@@ -747,25 +832,177 @@ SETTINGS_HTML = ui_shell.page("Settings", """
     </form>
   </div>
 
-  {% if ai_usage %}
-  <h2>Gemini models today</h2>
-  <p class="hint" style="margin:-4px 0 10px">Each model has its own free daily allowance. Whole pages and written
-    answers go to the <b>page</b> models first; a single choice or short question to the <b>quick</b> ones.
-    A model whose allowance is spent rests until midnight Pacific time and the next one answers.</p>
-  <div class="card flush">
-    <table>
-      <thead><tr><th>Model</th><th>Used for</th><th class="num">Calls today</th><th>State</th></tr></thead>
-      {% for m in ai_usage %}
-      <tr><td><code>{{ m.model }}</code></td>
-          <td class="muted">{{ 'page' if m.page }}{{ ' · ' if m.page and m.quick }}{{ 'quick' if m.quick }}</td>
-          <td class="num">{{ m.calls }}</td>
-          <td>{% if m.why == 'daily' %}<span class="pill needs_user_review">Spent until {{ m.until }}</span>
-              {% elif m.why == 'missing' %}<span class="pill skipped">Not available to this key</span>
-              {% elif m.why %}<span class="pill form_filled">Paused until {{ m.until }}</span>
-              {% else %}<span class="pill submitted">Ready</span>{% endif %}</td></tr>
+  {% if ai %}
+  {% macro model_label(m) -%}
+    {%- set s = ai.state.get(m) -%}
+    {{ m }}{% if s and s.why == 'daily' %} — spent until {{ s.until }}{% elif s and s.why in ('no free tier', 'missing') %} — cannot be used with this key{% elif s and s.why == 'no credit' %} — account out of credit{% elif s and s.calls %} — {{ s.calls }} today{% endif %}
+  {%- endmacro %}
+  {% macro model_options(provider, current) -%}
+    <option value="">—</option>
+    {%- set listed = ai.offered[provider].models -%}
+    {%- if current and current not in listed %}<option value="{{ current }}" selected>{{ model_label(current) }} (not in the list)</option>{% endif -%}
+    {%- for m in listed %}<option value="{{ m }}" {% if m == current %}selected{% endif %}>{{ model_label(m) }}</option>{% endfor -%}
+  {%- endmacro %}
+  {% macro writer_options(current, empty_label) -%}
+    <option value="">{{ empty_label }}</option>
+    {%- for p, name in ai.providers.items() %}
+      <optgroup label="{{ name }}{% if not ai.offered[p].has_key %} (no key yet){% endif %}">
+        {%- set listed = ai.offered[p].models -%}
+        {%- if current and current.startswith(p ~ ':') and current[p|length + 1:] not in listed %}
+          <option value="{{ current }}" selected>{{ name.split()[-1] }} · {{ current[p|length + 1:] }}</option>{% endif -%}
+        {%- for m in listed %}<option value="{{ p }}:{{ m }}" {% if current == p ~ ':' ~ m %}selected{% endif %}>{{ name.split()[-1] }} · {{ model_label(m) }}</option>{% endfor -%}
+      </optgroup>
+    {%- endfor %}
+  {%- endmacro %}
+
+  <h2 id="ai">Which AI does what</h2>
+  <p class="hint" style="margin:-4px 0 10px">Two separate choices. Answering the forms takes many small requests on
+    every application; writing the resume takes a few large ones, once per job. Neither uses the other's models,
+    so one cannot use up the other's allowance. Only models that write text are listed, as your keys offer them.
+    <a href="/settings?refresh=1#ai">Ask the providers again</a></p>
+  <form method="post" action="/settings/ai" class="ai-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <div class="card">
+      <h3>1. Answering the forms</h3>
+      <p class="hint">Who reads each page and answers what your profile and saved answers do not.</p>
+      <div class="choice-row" role="radiogroup" aria-label="Who answers the forms">
+        {% for value, name in [('profile', 'Profile only (no AI)'), ('gemini', 'Google Gemini'), ('claude', 'Anthropic Claude'), ('openai', 'OpenAI')] %}
+          <label class="choice"><input type="radio" name="form_answer_mode" value="{{ value }}" {% if ai.mode == value or (value == 'claude' and ai.mode not in ('profile', 'gemini', 'openai')) %}checked{% endif %}>
+            {{ name }}{% if value != 'profile' and not ai.offered[value].has_key %} <span class="muted">(no key yet)</span>{% endif %}</label>
+        {% endfor %}
+      </div>
+      {% for p, name in ai.providers.items() %}
+      <fieldset class="ladders" data-provider="{{ p }}">
+        <legend>{{ name }} models, in order</legend>
+        {% if ai.offered[p].error %}<p class="err" style="margin:6px 0">{{ ai.offered[p].error }}</p>{% endif %}
+        {% if not ai.offered[p].has_key %}<p class="hint">Add a {{ name }} key above to choose its models.</p>{% endif %}
+        <div class="grid-2">
+          {% for tier in ai.tiers %}
+          <div>
+            <p class="section-title" style="margin-top:8px">{{ 'Whole pages and written answers' if tier == 'page' else 'Quick choices and short questions' }}</p>
+            <p class="hint" style="margin-bottom:6px">{{ 'Stronger models do these better.' if tier == 'page' else 'Lighter models with bigger allowances are enough.' }}
+              Tick the ones to use. The first answers; when it runs out, the next takes over.</p>
+            <input type="hidden" name="{{ p }}_{{ tier }}_sent" value="1">
+            <ol class="picklist" aria-label="{{ name }} models for {{ 'pages' if tier == 'page' else 'quick choices' }}">
+            {% for row in ai.ladders[p ~ '_' ~ tier] %}
+              {%- set st = ai.state.get(row.model) -%}
+              <li class="pick{% if not row.on %} off{% endif %}">
+                <label class="pick-main">
+                  <input type="checkbox" name="{{ p }}_{{ tier }}_{{ loop.index }}" value="{{ row.model }}" {% if row.on %}checked{% endif %}>
+                  <span class="rank"></span>
+                  <code>{{ row.model }}</code>
+                </label>
+                <span class="pick-state">
+                  {%- if st and st.why == 'daily' %}<span class="pill needs_user_review">Spent until {{ st.until }}</span>
+                  {%- elif st and st.why == 'no free tier' %}<span class="pill skipped">No free allowance</span>
+                  {%- elif st and st.why == 'missing' %}<span class="pill skipped">Not on your key</span>
+                  {%- elif st and st.why == 'no credit' %}<span class="pill rejected">Out of credit</span>
+                  {%- elif st and st.why == 'minute' %}<span class="pill form_filled">Paused a moment</span>
+                  {%- else %}<span class="pill submitted">Ready{% if st and st.calls %} · {{ st.calls }} today{% endif %}</span>{% endif -%}
+                </span>
+                <span class="pick-move">
+                  <button type="button" class="ghost small" data-move="-1" aria-label="Move {{ row.model }} up">&uarr;</button>
+                  <button type="button" class="ghost small" data-move="1" aria-label="Move {{ row.model }} down">&darr;</button>
+                </span>
+              </li>
+            {% else %}
+              <li class="hint" style="padding:8px 10px">No models listed yet.</li>
+            {% endfor %}
+            </ol>
+          </div>
+          {% endfor %}
+        </div>
+      </fieldset>
       {% endfor %}
-    </table>
-  </div>
+    </div>
+
+    <div class="card">
+      <h3>2. Writing the resume and cover letter</h3>
+      <p class="hint">Written once per job and kept: a retry, Resume or a restart uses the same resume.</p>
+      <label class="stack">First choice
+        <select name="resume_writer">{{ writer_options(ai.writer, 'Automatic: Claude, then Gemini, then OpenAI (whichever has a key)') }}</select></label>
+      <label class="stack">If the first cannot write it
+        <select name="resume_writer_fallback">{{ writer_options(ai.writer_fallback, 'No second choice (attach your own resume)') }}</select></label>
+      <p class="hint">Whichever writes it, anything your resume does not show is taken out before it is sent.</p>
+    </div>
+
+    <button type="submit">Save AI choices</button>
+    <p class="hint">Saved choices apply to the next application; no restart needed.</p>
+  </form>
+  <style>
+    .choice-row { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 4px; }
+    .choice { display:flex !important; align-items:center; gap:8px; margin:0 !important; padding:8px 12px; font-weight:500 !important;
+              border:1px solid var(--line); border-radius:var(--radius-sm); cursor:pointer; background:var(--surface); }
+    .choice:has(input:checked) { border-color:var(--accent); background:var(--accent-soft); }
+    .ladders { border:0; padding:0; margin:14px 0 0; }
+    .ladders legend { font-weight:650; padding:0; }
+    .picklist { list-style:none; margin:4px 0 0; padding:0; border:1px solid var(--line); border-radius:var(--radius-sm);
+                counter-reset:rank; }
+    .pick { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; padding:7px 10px; border-top:1px solid var(--line-2); }
+    .pick:first-child { border-top:0; }
+    .pick.off { opacity:.55; }
+    .pick.off .pick-move { visibility:hidden; }
+    .pick-main { display:flex !important; align-items:center; gap:10px; margin:0 !important; flex:1 1 190px; min-width:0;
+                 font-weight:500 !important; cursor:pointer; }
+    .pick-main code { background:none; padding:0; font-size:13px; overflow-wrap:anywhere; }
+    .pick-state { margin-left:auto; }
+    .ai-form .grid-2 { grid-template-columns:repeat(auto-fit, minmax(min(100%, 340px), 1fr)); }
+    .pick:not(.off) { counter-increment:rank; }
+    .pick:not(.off) .rank::before { content:counter(rank); }
+    .rank { width:16px; color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; text-align:right; }
+    .pick-state .pill { font-size:11px; padding:2px 8px; }
+    .pick-move { display:flex; gap:4px; }
+    .pick-move button { padding:2px 8px; }
+    .stack { display:block; margin:14px 0 6px; }
+    .stack select { margin-top:6px; }
+    .settings { max-width:980px; }
+  </style>
+  <script>
+    (() => {
+      const radios = [...document.querySelectorAll('input[name=form_answer_mode]')];
+      const sets = [...document.querySelectorAll('fieldset.ladders')];
+      function show() {
+        const mode = (radios.find(r => r.checked) || {}).value;
+        // Only the chosen provider's lists are shown -- and only they are sent, so the others keep their saved order.
+        sets.forEach(f => { const on = f.dataset.provider === mode; f.hidden = !on; f.disabled = !on; });
+      }
+      radios.forEach(r => r.addEventListener('change', show));
+      show();
+      // A ticked model is tried in the order shown; the arrows move it, and unticked ones sit below.
+      function renumber(list) {
+        const prefix = list.previousElementSibling.name.replace(/_sent$/, '');
+        [...list.querySelectorAll('li.pick')].forEach((li, i) => {
+          const box = li.querySelector('input[type=checkbox]');
+          box.name = prefix + '_' + (i + 1);
+          li.classList.toggle('off', !box.checked);
+        });
+      }
+      document.querySelectorAll('.picklist').forEach(list => {
+        list.addEventListener('click', e => {
+          const button = e.target.closest('button[data-move]');
+          if (!button) return;
+          const li = button.closest('li');
+          const step = Number(button.dataset.move);
+          const other = step < 0 ? li.previousElementSibling : li.nextElementSibling;
+          if (other && other.matches('li.pick:not(.off)')) {
+            if (step < 0) list.insertBefore(li, other); else list.insertBefore(other, li);
+            renumber(list);
+            button.focus();
+          }
+        });
+        list.addEventListener('change', e => {
+          const li = e.target.closest('li.pick');
+          if (!li) return;
+          // Ticking puts a model at the end of the ticked ones; unticking moves it below them.
+          const ticked = [...list.querySelectorAll('li.pick')].filter(x => x !== li && x.querySelector('input').checked);
+          const last = ticked[ticked.length - 1];
+          if (last) last.after(li); else list.prepend(li);
+          renumber(list);
+        });
+      });
+    })();
+  </script>
   {% endif %}
 </main>
 """)
