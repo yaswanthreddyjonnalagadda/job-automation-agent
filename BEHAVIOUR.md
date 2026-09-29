@@ -167,8 +167,8 @@ step counter itself ("Step 1 of 2"), so a "Submit" button on a step with more
 to come only saves that step. It also finds a plain resume upload box by itself.
 
 What leaves your computer: in `gemini` mode every page the agent reads, together
-with the facts it answers from (your profile and the text of your resume), goes
-to Google; the documents go to Anthropic. Nothing else changes: the agent's own
+with the facts it answers from (your profile, the text of your resume and the job
+posting -- the first 5,000 characters), goes to Google; the documents go to Anthropic. Nothing else changes: the agent's own
 rules -- attestations, sponsorship, CAPTCHAs, submitting only when every check
 passes -- decide what is done with an answer, whoever proposed it. The key
 (`GEMINI_API_KEY`) travels in a request header, never in an address, and is never
@@ -178,6 +178,13 @@ that too, without printing it. If Google has retired the model (`GEMINI_MODEL`),
 the message says so and where to change it. When Google refuses or is busy the agent waits and asks
 again (it waits as long as Google asks for a per-minute limit), and a page it
 still cannot get an answer for is handed to you as before.
+
+The AI that answers a form is given the job posting as well as your profile and
+resume, so an answer fits what the employer is asking about. It is told the posting
+describes the job, never you: a skill, tool or number of years counts only if your
+resume or profile shows it. Legal and visa questions are still never sent to it. On
+Google's free tier, what is sent may be used by Google to improve its products; a
+project with billing turned on is not.
 
 ## An account that already exists
 

@@ -35,6 +35,10 @@ class ClaudeIntegrationError(RuntimeError):
     pass
 
 
+# How much of a job posting goes with each question and page: enough for the requirements, not every benefit.
+JOB_POSTING_CHARS = 5_000
+
+
 class ClaudeClient:
     # What the model behind this client is called and what it raises, by kind. gemini_integration.GeminiClient
     # is this class with Gemini's own in their place, so the prompts, the retry loops and the checks on what
@@ -354,6 +358,9 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
         system = (
             "You answer application questions for a real candidate. "
             "Answer ONLY using truthful facts from their profile and resume. "
+            "The JOB POSTING says what the employer is asking about -- use it to understand the question and the "
+            "role, never as a fact about the candidate: a skill, tool or years of experience counts only if the "
+            "resume or profile shows it. "
             "If options are provided, the answer MUST be an exact string from the options list. "
             "If it is a text/essay question (e.g. 'Why are you interested in this role?'), provide a "
             "concise, professional 1-3 sentence response grounded in their background. "
@@ -379,7 +386,8 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
             f"FACTS:\n{chr(10).join(facts_lines)}\n\n"
             f"RESUME EXCERPT:\n{snippet}\n\n"
             f"TARGET JOB: {job_title or 'Engineer'} at {company or 'Company'}\n\n"
-            f"QUESTION: {question}\n"
+            + (f"JOB POSTING:\n{job_text.strip()[:JOB_POSTING_CHARS]}\n\n" if (job_text or "").strip() else "")
+            + f"QUESTION: {question}\n"
         )
         if options:
             user_message += f"\nAVAILABLE OPTIONS (choose exactly one):\n{json.dumps(options, indent=2)}"
@@ -451,7 +459,9 @@ Respond with ONLY JSON:
 }
 
 Rules -- follow every one:
-1. Answer ONLY from FACTS: the profile, the resume text, the owner's earlier answers, the job. Never invent,
+1. Answer ONLY from FACTS: the profile, the resume text, the owner's earlier answers, the job. FACTS.job.description
+   is the posting: it tells you what the employer is asking about, never a fact about the applicant -- a skill,
+   tool or number of years counts only if the resume or profile shows it. Never invent,
    never guess. The profile comes first: where it has a field for something (name, address, city, postal code,
    phone, email, work authorization...), use the profile, never an earlier answer -- those can be old.
    owner_earlier_answers are for questions the profile does not cover. If FACTS don't answer a question, put it in leave_for_owner (required = whether the page

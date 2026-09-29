@@ -44,6 +44,7 @@ import concept_matcher
 import emailed_codes
 import geo_reference
 import account_state
+from claude_integration import JOB_POSTING_CHARS
 import employment_history
 import login_guard
 import open_answers
@@ -1991,7 +1992,10 @@ class PageAgent:
                     continue
         return {
             "today": date.today().isoformat(),
-            "job": {"title": getattr(self.job, "title", ""), "company": getattr(self.job, "company", "")},
+            "job": {"title": getattr(self.job, "title", ""), "company": getattr(self.job, "company", ""),
+                    # The posting itself, so an answer fits what the employer asks for (the owner's request,
+                    # 29 September); the planner is told it describes the job, not the applicant.
+                    "description": (getattr(self.job, "raw_text", "") or "")[:JOB_POSTING_CHARS]},
             "profile": profile,
             "phone_with_country_code": f"{code} {phone}".strip() if code and not phone.startswith("+") else phone,
             "resume_text": (getattr(self.resume, "raw_text", "") or "")[:12_000],
