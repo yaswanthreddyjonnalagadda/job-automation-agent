@@ -62,10 +62,17 @@
   password to that same `ATS_PASSWORD` using a one-time code emailed to the
   owner and read from the owner's signed-in Gmail tab. Only on employer ATS
   domains (`safety.password_allowed`), once per site per run, never a
-  generated or different password. Any other broken login is surfaced to the
-  user.
+  generated or different password. A second owner-approved exception (30
+  September 2026): when a site says the account it made for the owner's email
+  must be verified, the agent opens the verification link that site emailed,
+  read from the owner's signed-in Gmail -- only a https link back to that same
+  site (and that employer's own tenant on a shared ATS host), never a
+  password-reset link, once per site per run
+  (`emailed_codes.verification_link_ok`). Any other broken login is surfaced
+  to the user.
 - **One rule for reading an emailed code.** Whether the agent may read a
-  one-time code from the owner's mail is decided in `emailed_codes.why_not()`
+  one-time code -- or the account-verification link above -- from the owner's
+  mail is decided in `emailed_codes.why_not()`
   and nowhere else: the owner has allowed mail reads
   (`check_gmail_for_confirmation`), the site is an employer's, no CAPTCHA is on
   the page (a code the site words as "to confirm you're a human" is still just

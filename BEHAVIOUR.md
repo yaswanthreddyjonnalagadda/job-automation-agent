@@ -376,7 +376,7 @@ written to the logs.
 ## When a one-time code may be read from your mail
 
 One rule, in `emailed_codes.py`, decides every case where the agent reads a
-one-time code from your mail -- the code step of a form, the code step of
+one-time code (or an account-verification link) from your mail -- the code step of a form, the code step of
 sign-in or account setup, and the password reset of an existing account -- and
 `passcode_from_gmail` asks it before it opens your mail, so no step can go
 around it. The agent reads a code only when **all** of these hold:
@@ -422,9 +422,16 @@ counts before what the form looks like. Then one table decides:
 - **Reset a refused password** of an account the site knows, to the same password,
   with the code emailed to you -- once per site per run (see "An account that already
   exists").
-- **Stop and tell you** when only you can act: open the verification email and click
-  its link (also when the site says so on its sign-in form, as Workday does: "Verify your
-  account before you sign in"), a refused password the reset did not cure (or on an account the site has
+- **Open the verification link** when the site says the new account must be verified
+  (also when it says so on its sign-in form, as Workday does: "Verify your account before
+  you sign in"). Your decision of 30 September 2026: the agent reads the email the site
+  sent from your Gmail, under the same rule as a one-time code (you allowed mail reads, an
+  employer site, no CAPTCHA, the day's limit), and opens its link in a tab of its own
+  browser -- only a https link back to that same site, and on a shared host such as
+  Workday only that employer's own. Never a password-reset link, and never a link through
+  a tracking address (those are left to you). Once per site per run; then it signs in.
+- **Stop and tell you** when only you can act: a verification link it could not find or
+  that did not work (the dashboard says which), a refused password the reset did not cure (or on an account the site has
   not shown it knows), a locked account, or sign-in held back to protect the
   account. The run says exactly what to do; press Continue when it is done. It no
   longer treats a sign-in page it could not get past as a form to fill in.

@@ -196,6 +196,7 @@ CREATE = "create"
 SIGN_IN = "sign_in"
 GIVE_EMAIL = "give_email"
 ENTER_CODE = "enter_code"
+VERIFY_BY_LINK = "verify_by_link"    # open the site's account-verification link from the owner's Gmail
 RESET_PASSWORD = "reset_password"    # a known account refused its password: the owner's rule resets it
 OPEN_SIGN_IN = "open_sign_in"        # a create form, but this email already has an account here
 WAIT = "wait"                        # read the page again: it is still drawing
@@ -214,6 +215,7 @@ class Memory:
     account_exists: bool = False
     reset_tried: bool = False        # a reset to the ATS password was already asked for on this site
     refused_before: bool = False     # login_guard: this account's last sign-in here was refused (kept across runs)
+    verify_tried: bool = False       # the verification link was already looked for on this site in this run
     held: str = ""                   # login_guard's reason for holding back, if any
 
 
@@ -238,6 +240,10 @@ def next_step(state: AccountState, memory: Memory) -> Step:
     if kind == LOCKED:
         return Step(FOR_OWNER, f"the site says: {state.why}. Unlock or reset it on the site, then press Continue")
     if kind == VERIFY_EMAIL:
+        # The owner's decision of 30 September 2026: the agent opens the verification link the site emailed, from the
+        # owner's Gmail, once per site per run (emailed_codes decides whether the mail may be read and which link).
+        if not memory.verify_tried:
+            return Step(VERIFY_BY_LINK, "the site sent a verification email: opening its link from your Gmail")
         return Step(FOR_OWNER, "the site sent a verification email: open it, click its link, then press Continue")
     if kind == CODE_ENTRY:
         return Step(ENTER_CODE, "a code was emailed")

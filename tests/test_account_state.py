@@ -105,7 +105,7 @@ def step(kind, google=False, **memory):
 
 @pytest.mark.parametrize("kind, action", [
     (A.SIGNED_IN, A.NOTHING), (A.NONE, A.NOTHING), (A.LOADING, A.WAIT),
-    (A.LOCKED, A.FOR_OWNER), (A.VERIFY_EMAIL, A.FOR_OWNER), (A.WRONG_PASSWORD, A.FOR_OWNER),
+    (A.LOCKED, A.FOR_OWNER), (A.VERIFY_EMAIL, A.VERIFY_BY_LINK), (A.WRONG_PASSWORD, A.FOR_OWNER),
     (A.CODE_ENTRY, A.ENTER_CODE), (A.CREATE_FORM, A.CREATE), (A.SIGN_IN_FORM, A.SIGN_IN),
     (A.EMAIL_FIRST, A.GIVE_EMAIL), (A.ACCOUNT_EXISTS, A.OPEN_SIGN_IN), (A.CHOOSER, A.NOTHING),
 ])
@@ -141,8 +141,31 @@ def test_a_held_account_is_left_for_the_owner_with_the_reason():
     assert result.action == A.FOR_OWNER and "2 times" in result.why
 
 
-def test_the_verification_link_is_always_the_owners():
-    assert "click its link" in step(A.VERIFY_EMAIL).why
+def test_the_verification_link_is_opened_once_from_the_mail_then_it_is_the_owners():
+    """The owner's decision of 30 September 2026: the agent opens the link the site emailed; once per site per run."""
+    assert step(A.VERIFY_EMAIL).action == A.VERIFY_BY_LINK
+    assert "click its link" in step(A.VERIFY_EMAIL, verify_tried=True).why
+
+
+def test_a_verify_your_account_alert_on_a_sign_in_form_is_a_verification_step():
+    """Ciena on Workday, 30 September: the alert sits on the Sign In form, above an email and a password box."""
+    snapshot = "\n".join([
+        '- heading "Sign In" [level=3] [ref=e1]',
+        '- alert [ref=e2]:',
+        '  - paragraph [ref=e3]: Verify your account before you sign in or request a verification email.',
+        '- textbox "Email Address" [ref=e4]',
+        '- textbox "Password" [ref=e5]',
+        '- button "Sign In" [ref=e6]',
+    ])
+    state = A.read_state(snapshot)
+    assert state.kind == A.VERIFY_EMAIL
+    assert A.next_step(state, A.Memory(refused_before=True)).action == A.VERIFY_BY_LINK
+
+
+@pytest.mark.parametrize("wording", ["Login with Google", "Log in with Google", "Sign-in using Google",
+                                     "Sign up with Google", "Continue with Google", "Google Sign-In"])
+def test_google_sign_in_is_seen_however_the_site_words_it(wording):
+    assert A.GOOGLE_SIGN_IN.search(wording)
 
 
 def test_password_boxes_the_snapshot_does_not_name_are_counted_from_the_page():

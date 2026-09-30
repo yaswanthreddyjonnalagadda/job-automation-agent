@@ -6268,6 +6268,109 @@ class JobApplicationAssistant:
             except Exception:
                 pass
 
+    def verification_link_from_gmail(self, page: Page, wait_seconds: int = 150) -> str:
+        """The newest account-verification link (last hour) the site at `page` emailed the owner, read from the Gmail
+        this browser is signed in to, in a separate tab; "" when there is none or the owner's rule does not allow it.
+
+        Asked through emailed_codes.why_not (the owner's permission to read mail, an employer site, no CAPTCHA, the
+        account's limit) and verification_link_ok (a link back to the same site that verifies an account, never a
+        password reset). The link is never written to the log: it is the account's key."""
+        why = self.why_not_read_a_code(page)
+        if why:
+            logger.info("VERIFY_LINK: %s -- leaving it to the user", why)
+            return ""
+        site_url = page.url
+        tab = page.context.new_page()
+        try:
+            deadline = time.time() + wait_seconds
+            while time.time() < deadline:
+                query = quote("newer_than:1h (verify OR verification OR activate OR confirm)")
+                tab.goto(f"https://mail.google.com/mail/u/0/#search/{query}", wait_until="domcontentloaded",
+                         timeout=45_000)
+                try:
+                    tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)
+                except Exception:
+                    pass
+                tab.wait_for_timeout(2_000)
+                if "mail.google.com" not in tab.url:
+                    logger.warning("VERIFY_LINK: this browser isn't signed in to Gmail")
+                    return ""
+                rows = tab.locator("tr.zA")
+                for i in range(min(rows.count(), 5)):          # newest first
+                    rows.nth(i).click()
+                    tab.wait_for_timeout(3_000)
+                    anchors = tab.locator("div.a3s a[href]")
+                    for j in range(min(anchors.count(), 60)):
+                        anchor = anchors.nth(j)
+                        href = anchor.get_attribute("href") or ""
+                        text = " ".join((anchor.inner_text() or "").split())
+                        if emailed_codes.verification_link_ok(href, text, site_url):
+                            logger.info("VERIFY_LINK: found the account-verification link from %s in Gmail",
+                                        urlparse(emailed_codes.unwrap(href)).netloc)
+                            login_guard.record_code_read(
+                                urlparse(site_url).netloc.lower(),
+                                (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
+                                or getattr(self._owner_profile(), "email", ""))
+                            return emailed_codes.unwrap(href)
+                    tab.go_back(wait_until="domcontentloaded", timeout=30_000)
+                    tab.wait_for_timeout(1_500)
+                    rows = tab.locator("tr.zA")
+                logger.info("VERIFY_LINK: no verification email from this site yet -- checking again in 15s")
+                tab.wait_for_timeout(15_000)
+            logger.warning("VERIFY_LINK: no verification email arrived within %ds", wait_seconds)
+            return ""
+        except Exception as exc:
+            logger.warning("VERIFY_LINK: Gmail read failed: %s", str(exc).splitlines()[0][:160])
+            return ""
+        finally:
+            try:
+                tab.close()
+                page.bring_to_front()
+            except Exception:
+                pass
+
+    _VERIFIED = re.compile(r"verified|activated|confirmed|success|thank you|you can now (sign|log) ?in|welcome",
+                           re.IGNORECASE)
+    _LINK_FAILED = re.compile(r"expired|invalid|no longer valid|already been used|could not (be )?verif|error",
+                              re.IGNORECASE)
+
+    def verify_account_by_email_link(self, page: Page) -> bool:
+        """The site has sent the owner a link to verify the account it just made: open that link from Gmail in a tab
+        of this browser, and say whether the site then shows the account verified (the owner's decision of 30
+        September 2026). On success the sign-in refused for the unverified account no longer holds it back."""
+        link = self.verification_link_from_gmail(page)
+        if not link:
+            return False
+        host = urlparse(page.url).netloc.lower()
+        tab = page.context.new_page()
+        try:
+            tab.goto(link, wait_until="domcontentloaded", timeout=45_000)
+            try:
+                tab.wait_for_load_state("networkidle", timeout=10_000)
+            except Exception:
+                tab.wait_for_timeout(3_000)
+            said = " ".join((tab.locator("body").inner_text(timeout=10_000) or "").split())[:2000]
+            if self._LINK_FAILED.search(said) and not self._VERIFIED.search(said):
+                self._login_paused = (f"the verification link {host} emailed you did not work (it may have expired): "
+                                      f"use 'Resend Account Verification' on the site, open the new email's link, then "
+                                      f"press Continue")
+                logger.warning("VERIFY_LINK: the site did not take the link")
+                return False
+            logger.info("VERIFY_LINK_OK: opened the verification link -- the account on %s is verified", host)
+            email = (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip() \
+                or getattr(self._owner_profile(), "email", "")
+            login_guard.clear_hold(host, email)        # the refusal was for an unverified account
+            return True
+        except Exception as exc:
+            logger.warning("VERIFY_LINK: could not open the link: %s", str(exc).splitlines()[0][:120])
+            return False
+        finally:
+            try:
+                tab.close()
+                page.bring_to_front()
+            except Exception:
+                pass
+
     def complete_emailed_passcode(self, page: Page) -> bool:
         """On a 'we've sent a one-time password to your email' step of account
         setup or sign-in: read the code from Gmail, enter it, continue. The

@@ -16,14 +16,18 @@ The rule, in one place (the owner's decisions of 15 and 24 September 2026, and o
     short of done);
   * no more than MAX_CODE_READS reads for one account in 24 hours (login_guard);
   * never a code in a log line (passcode_from_gmail logs only that one was found).
-Every reader of the mail goes through why_not(): passcode_from_gmail itself asks it before opening the mail,
-so no caller can go around it. Callers pass `captcha` and `email` by name: a run that is reloaded while this
+The same rule covers the one link the agent may open from the owner's mail (the owner's decision of 30 September
+2026): the link a site emails to verify an account it has just made for the owner's email -- and only a link that
+leads back to that same site (verification_link_ok). A password-reset link is still the owner's.
+Every reader of the mail goes through why_not(): passcode_from_gmail and verification_link_from_gmail ask it before
+opening the mail, so no caller can go around it. Callers pass `captcha` and `email` by name: a run that is reloaded while this
 module is already loaded keeps the earlier copy of it.
 """
 from __future__ import annotations
 
+import re
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import login_guard
 import safety
@@ -44,3 +48,40 @@ def why_not(profile, url: str, captcha: bool = False, email: str = "") -> Option
     if held:
         return held
     return None
+
+
+_VERIFY_WORDS = re.compile(r"verif|activat|confirm|validat", re.IGNORECASE)
+_RESET_WORDS = re.compile(r"reset|forgot|password", re.IGNORECASE)
+
+
+def _site_of(host: str) -> str:
+    """The site a host belongs to: its last two labels (ciena.wd5.myworkdayjobs.com -> myworkdayjobs.com)."""
+    return ".".join((host or "").lower().split(".")[-2:])
+
+
+def unwrap(link: str) -> str:
+    """Gmail may hand a link through google.com/url?q=...: the address it leads to."""
+    parsed = urlparse(link or "")
+    if parsed.netloc.endswith("google.com") and parsed.path == "/url":
+        return (parse_qs(parsed.query).get("q") or parse_qs(parsed.query).get("url") or [""])[0]
+    return link or ""
+
+
+def verification_link_ok(link: str, text: str, site_url: str) -> bool:
+    """Whether an emailed link is one the agent may open: https, on the same site as the account it verifies (never a
+    tracking redirect or anyone else's address), and saying it verifies or activates the account -- never a
+    password reset."""
+    link = unwrap(link)
+    parsed = urlparse(link)
+    if parsed.scheme != "https" or not parsed.netloc:
+        return False
+    site_host = urlparse(site_url or "").netloc.lower()
+    if _site_of(parsed.netloc) != _site_of(site_host):
+        return False
+    # A vendor that hosts many employers (ciena.wd5.myworkdayjobs.com): the link must be this employer's -- the same
+    # host, or one naming the same tenant -- not another employer's verification on the same vendor.
+    import job_sources
+    if parsed.netloc.lower() != site_host and any(v in site_host for v in job_sources.ATS_VENDORS)             and site_host.split(".")[0] not in link.lower():
+        return False
+    words = f"{text or ''} {parsed.path} {parsed.query}"
+    return bool(_VERIFY_WORDS.search(words)) and not _RESET_WORDS.search(f"{text or ''} {parsed.path}")

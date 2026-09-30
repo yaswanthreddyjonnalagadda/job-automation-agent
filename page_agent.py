@@ -1248,6 +1248,7 @@ class PageAgent:
         # the choices, instead of the same answer failing on every pass (Lucid, 29 September: three passes).
         self._misfit: set[tuple[str, str]] = set()   # (question, the answer its list refused)
         self._reset_asked: set[str] = set()     # sites where a reset to the ATS password was asked for this run
+        self._verify_asked: set[str] = set()    # sites whose emailed verification link was looked for this run
         self.account_blocker = ""               # what only the owner can do at the account step, or ""
         self._account_seen: dict[str, tuple] = {}   # the last account state logged, per site
         self._account_waits: dict[str, int] = {}    # reads of an account step still drawing its form
@@ -1341,7 +1342,7 @@ class PageAgent:
                               ("_entries", dict), ("_entry_blank", set), ("history", dict), ("_attached_here", set),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
                               ("_google_reloads", dict), ("_peeked", dict),
-                              ("_emailed_in", set), ("_created_at", set), ("_account_known", set), ("_reset_asked", set), ("_misfit", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set), ("_list_retries", int), ("_shapes", dict),
+                              ("_emailed_in", set), ("_created_at", set), ("_account_known", set), ("_reset_asked", set), ("_verify_asked", set), ("_misfit", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set), ("_list_retries", int), ("_shapes", dict),
                               ("_refreshed", bool),
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict),
                               ("_profile_answer_library", lambda: None),
@@ -1450,6 +1451,7 @@ class PageAgent:
             created=host in self._created_at, signed_in_tried=host in self._signed_in_at,
             email_given=host in self._emailed_in, account_exists=exists or host in self._account_known,
             reset_tried=host in self._reset_asked,
+            verify_tried=host in self._verify_asked,
             refused_before=bool(email) and login_guard.refused_before(host, email),
             held=str(getattr(self.assistant, "_login_paused", "") or ""))
         step = account_state.next_step(state, memory)
@@ -1463,6 +1465,26 @@ class PageAgent:
             return False
         if step.action == account_state.FOR_OWNER:
             self.account_blocker = step.why
+            return False
+        if step.action == account_state.VERIFY_BY_LINK:
+            self._verify_asked.add(host)
+            verify = getattr(self.assistant, "verify_account_by_email_link", None)
+            try:
+                verified = bool(verify and verify(tab))
+            except Exception as exc:
+                logger.warning("VERIFY_LINK: %s", str(exc).splitlines()[0][:120])
+                verified = False
+            if verified:
+                # A fresh sign-in is due: the one refused was for an account not yet verified.
+                self._signed_in_at.discard(host)
+                try:
+                    tab.reload(wait_until="domcontentloaded", timeout=30_000)
+                except Exception:
+                    pass
+                self.settle(page, 2_000)
+                return True
+            self.account_blocker = str(getattr(self.assistant, "_login_paused", "") or "") \
+                or account_state.next_step(state, replace(memory, verify_tried=True)).why
             return False
         if step.action == account_state.RESET_PASSWORD:
             if email and self._reset_refused_password(tab, host, email):
