@@ -598,11 +598,15 @@ def index():
     apps = tracker.list_all()
     runs = _current_runs()
     # Only a live run can read a Continue; notes left by a run that died or was stopped are cleared.
-    if _running_url():
+    live = _running_url()
+    if live:
         signals = waiting_runs(_RUNS_FILE.parent)
     else:
         clear_waiting_files(_RUNS_FILE.parent)
         signals = []
+    # A run still working is not waiting for the owner, whatever its application's status says from an earlier
+    # run: it was listed under "Needs you" while the agent was busy on its page (UKG, 30 September).
+    working_url = live if (live and not signals) else ""
     try:
         show = int(request.args.get("show", PAGE_SIZE))
     except ValueError:
@@ -615,6 +619,7 @@ def index():
         INDEX_HTML, apps=apps[:show], total=len(apps), shown=min(show, len(apps)),
         more=min(show + PAGE_SIZE, MAX_SHOWN), can_show_more=show < min(len(apps), MAX_SHOWN),
         counts=counts, groups=ui_shell.group_counts(apps), runs=latest_run(runs), signals=signals, error=request.args.get("error"),
+        working_url=working_url,
     )
 
 
@@ -1096,7 +1101,13 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
     </script>
   {% endif %}
 
-  {% set waiting = apps | selectattr('status', 'in', ['ready_to_submit', 'needs_user_review', 'BLOCKED_VALIDATION_LOOP']) | list %}
+  {% set waiting = apps | selectattr('status', 'in', ['ready_to_submit', 'needs_user_review', 'BLOCKED_VALIDATION_LOOP']) | rejectattr('url', 'equalto', working_url or '-') | list %}
+  {% if working_url %}
+    <div class="card" style="margin-bottom:12px"><strong>The agent is working</strong>
+      <div class="hint">It is filling the form in its browser. When it stops for you, <em>Needs you</em> shows
+        <strong>Continue</strong>, <strong>Resume</strong>, <strong>Skip</strong>, <strong>Close browser</strong>
+        and <strong>Reload</strong>.</div></div>
+  {% endif %}
   {% if signals or waiting %}
     <h2>Needs you</h2>
     <div class="card attention">

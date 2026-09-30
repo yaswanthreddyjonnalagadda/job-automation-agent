@@ -120,14 +120,28 @@ def _same(a: str, b: str) -> bool:
     return bool(a and b) and (a == b or a in b or b in a)
 
 
-def _shown(values: dict, section: str) -> str:
-    keys = ("company", "employer", "organization") if section == "work" else ("degree", "area of study", "field",
-                                                                               "major")
-    return next((v for k, v in values.items() if any(word in k for word in keys) and v), "")
+def _shown(values: dict, section: str) -> list[str]:
+    """What an entry already shows that says which record it is: a job's company; a degree's school, degree or
+    field. A degree is known by its school first -- "Master of Science (MS)" alone did not match the record's
+    "Master's", the entry looked unclaimed, and a new entry took the same master's (UKG, 30 September)."""
+    keys = ("company", "employer", "organization") if section == "work" else (
+        "school", "institution", "university", "college", "degree", "area of study", "field", "major")
+    return [v for k, v in values.items() if v and any(word in k for word in keys)]
 
 
 def _names(record: dict, section: str) -> tuple[str, ...]:
-    return (record.get("company", ""),) if section == "work" else (record.get("degree", ""), record.get("field", ""))
+    return (record.get("company", ""),) if section == "work" else (
+        record.get("school", ""), record.get("degree", ""), record.get("field", ""))
+
+
+def _identifies(shown: str, name: str) -> bool:
+    """The same company, school or degree, in the words of either -- "Master of Science (MS)" is "Master's"."""
+    if not shown or not name:
+        return False
+    if _same(shown, name):
+        return True
+    import option_match
+    return option_match.best_option([name], shown) is not None or option_match.best_option([shown], name) is not None
 
 
 def record_for(entry: Entry, history: dict) -> Optional[dict]:
@@ -144,7 +158,8 @@ def record_for(entry: Entry, history: dict) -> Optional[dict]:
         if not shown:
             continue
         for number, record in enumerate(records):
-            if number not in claimed.values() and any(_same(shown, name) for name in _names(record, entry.section)):
+            if number not in claimed.values() and any(_identifies(s, name) for s in shown
+                                                      for name in _names(record, entry.section)):
                 claimed[position] = number
                 break
     left = [n for n in range(len(records)) if n not in claimed.values()]
@@ -209,6 +224,13 @@ def answer(entry: Entry, history: dict) -> tuple[str, str, bool]:
         if key == "end" and entry.section == "work" and record.get("current"):
             return "", source, True
         if key in ("start", "end"):
-            return _month_year(str(record.get(key) or "")), source, False
+            value = _month_year(str(record.get(key) or ""))
+            # A box for one part of the date ("From month", "To year"): that part. UKG's "From month" list took
+            # "February 2025", matched none of its rows, and was answered "Choose..." by the AI (30 September).
+            part = re.search(r"\b(month|year|day)\s*$", label, re.IGNORECASE)
+            if part and value:
+                import concept_matcher
+                value = concept_matcher._date_part(value, part.group(1).lower()) or value
+            return value, source, False
         return str(record.get(key) or "").strip(), source, False
     return "", "", False

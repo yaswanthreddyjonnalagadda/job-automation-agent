@@ -75,6 +75,24 @@ rules: a general one joins **Your saved answers**, one about that employer is ke
 that employer, and legal, visa and signed answers are not kept. It then leaves the
 dashboard's "Waiting for your answer" list.
 
+### Addresses, jobs and degrees (30 September, UKG)
+
+- Your country is chosen first, then your state, then your city, and only then the
+  street and ZIP: a form that redraws its address block when the state is chosen
+  cleared the ZIP and street typed before it.
+- A job's or degree's "From month" / "To year" box gets just that part of its date, and
+  a month list takes it in its own words ("Feb", "02"): the whole "February 2025" matched
+  no month and the box was left on "Choose...".
+- A degree already on the page is recognised by its school as well as its degree
+  ("Master of Science (MS)" at your school is your master's), and "Add Education" /
+  "Add Experience" is pressed only while you have more degrees or jobs than the page
+  shows -- it had added an empty entry and filled it with the same master's again.
+- An optional box in a job or degree entry that your records do not fill (an
+  education "Description") is left empty rather than written up by the AI.
+- While the agent is working, the dashboard says so; an application appears under
+  "Needs you", with Continue, Resume, Skip, Close browser and Reload, only once the
+  agent has stopped for you.
+
 ### Tick boxes
 
 Your decision of 30 September: agreement and acknowledgement boxes are ticked ("I have

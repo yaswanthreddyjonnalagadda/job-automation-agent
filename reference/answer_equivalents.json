@@ -18,6 +18,12 @@
     ["Now attending", "Currently Attending", "In Progress", "Attending"],
     ["Incomplete", "Did Not Complete", "Not Completed", "Withdrawn"]
   ],
+  "months": [
+    ["January", "Jan", "01", "1"], ["February", "Feb", "02", "2"], ["March", "Mar", "03", "3"],
+    ["April", "Apr", "04", "4"], ["May", "05", "5"], ["June", "Jun", "06", "6"], ["July", "Jul", "07", "7"],
+    ["August", "Aug", "08", "8"], ["September", "Sep", "Sept", "09", "9"], ["October", "Oct", "10"],
+    ["November", "Nov", "11"], ["December", "Dec", "12"]
+  ],
   "gender": [
     ["Male", "Man"],
     ["Female", "Woman"]

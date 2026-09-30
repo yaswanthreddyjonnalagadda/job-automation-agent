@@ -662,6 +662,8 @@ FORWARD_LABEL = re.compile(r"^(apply|apply now|start application|begin applicati
                            r"save and proceed|begin)$", re.IGNORECASE)
 
 
+_ADD_ENTRY = re.compile(r"^\s*\+?\s*add\s+(?:another\s+|a\s+|new\s+|more\s+)?(education|degree|school|experience|"
+                        r"work(?:\s+experience)?|employment|job|position)\b", re.IGNORECASE)
 _TEXT_MESSAGES = re.compile(r"\bsms\b|text\s+messag|\btexts?\b.{0,40}\b(?:phone|mobile|cell)|mobile\s+messag|"
                             r"whatsapp|\btexting\b", re.IGNORECASE)
 _AGREEMENT = re.compile(r"\bi\s+(?:have\s+read|acknowledge|agree|understand|accept|consent|certify|confirm|attest)\b|"
@@ -2199,14 +2201,15 @@ class PageAgent:
 
         # Topological sorting: Country -> State -> City -> Others
         def _ctrl_prio(ctrl):
-            q_txt = (ctrl.question or "").lower()
-            if re.search(r"^\s*country(/region)?( of residence)?\s*:?\s*\*?\s*$", q_txt):
-                return 0
-            if re.search(r"^\s*\*?\s*(state|province)(/province)?(/region)?\s*:?\s*\*?\s*$", q_txt):
-                return 1
-            if re.search(r"^\s*\*?\s*(city|town)\s*:?\s*\*?\s*$", q_txt):
-                return 2
-            return 3
+            # Country, then state, then city, then the rest: a form redraws what depends on them, and a ZIP or
+            # street typed before the state is cleared when it is chosen (UKG, 30 September). Which box is which
+            # comes from the one reading of questions, whatever the label's stars and spacing ("*State /
+            # Province") -- hand-written patterns here missed UKG's and filled the state last.
+            if getattr(self, "_entries", {}).get(ctrl.ref) is not None:
+                return 3                     # a job's or a degree's place belongs to that entry, in page order
+            concept = concept_matcher.match_concept(question=ctrl.question or "", container=ctrl.container,
+                                                    context=ctrl.context, name=ctrl.name)
+            return _RESIDENCE_ORDER.get(concept_matcher.confirm_concept(concept, ctrl.options), 3)
 
         sorted_controls = sorted(controls, key=_ctrl_prio)
 
@@ -2563,6 +2566,8 @@ class PageAgent:
                             if concept_matcher.is_self_identification(
                                     f"{ctrl.question} {ctrl.container} {ctrl.context}"):
                                 continue            # who the owner is: never the AI's to answer
+                            if self._optional_entry_box(ctrl, still_open):
+                                continue            # an optional box of a job or degree: left blank, not written up
                             if self._profile_says_none(self.known_answer(ctrl)[1]):
                                 continue            # the profile says there is none: never the AI's to fill
                             if is_secret_box(ctrl.question) or is_honeypot(ctrl.question):
@@ -3213,6 +3218,11 @@ class PageAgent:
         if action == "fill" and answer.value.strip() and not str(answer.source or "").startswith("profile.") \
                 and self._profile_says_none(self.known_answer(control)[1]):
             return "your profile says there is none, so the box stays empty"
+        # An optional box inside a job or degree entry that the owner's record does not fill is left blank: UKG's
+        # education "Description" got the AI's "I have six years of experience ..." (30 September).
+        if action == "fill" and not str(answer.source or "").startswith(("profile.", "owner", "work history")) \
+                and self._optional_entry_box(control, ()):
+            return "an optional box of a job or degree entry -- left blank rather than written up"
         # Who the owner is (gender identity, orientation, race, disability, veteran status): only their own answer.
         if concept_matcher.is_self_identification(f"{question} {control.container} {control.context}") \
                 and not str(answer.source or "").startswith(("profile.", "owner", "answer_bank.you")):
@@ -3754,6 +3764,14 @@ class PageAgent:
         if answer.action == "choose":
             return self.choose(page, control, answer.value, self._page_controls(page))
         return False
+
+    def _optional_entry_box(self, control: Control, still_open) -> bool:
+        """A box inside a job or degree entry that the form does not mark required."""
+        if getattr(self, "_entries", {}).get(control.ref) is None:
+            return False
+        if _REQUIRED_STAR.search(control.question or "") or _REQUIRED_STAR.search(control.name or ""):
+            return False
+        return not any(q.endswith("*") and _same_question(q.rstrip("*"), control.question) for q in still_open or ())
 
     def _profile_says_none(self, source: str) -> bool:
         """Whether a blank answer is the profile's own word: its field exists and is empty on purpose (no middle
@@ -4718,6 +4736,22 @@ class PageAgent:
             self.settle(page, 3_000)
             return "retry", page, "no way forward was found on this page"
         label = " ".join((control.name or plan.next_label).split())
+        # "Add Education", "Add Experience" add an empty entry -- a way forward only while the owner has more
+        # degrees or jobs than the page shows. UKG, 30 September: the plan pressed "Add Education" as its next step
+        # on a page already showing both degrees, and the new entry was filled with the master's a second time.
+        adding = _ADD_ENTRY.match(label)
+        if adding:
+            section = "education" if re.search(r"educat|degree|school", adding.group(1), re.IGNORECASE) else "work"
+            shown = len({e.index for e in getattr(self, "_entries", {}).values() if e.section == section})
+            owned = len((getattr(self, "history", {}) or {}).get("education" if section == "education"
+                                                                  else "experience") or [])
+            if shown >= owned:
+                onward = self.profile_forward([c for c in controls if not _ADD_ENTRY.match(" ".join((c.name or "").split()))])
+                logger.info("NOT PRESSING %r: the page already shows %d of your %d -- %s", label, shown, owned,
+                            f"pressing {onward.name!r} instead" if onward else "looking for the way forward")
+                if onward is None:
+                    return "retry", page, f"{label!r} only adds an empty entry -- it is not the way forward"
+                control, label = onward, " ".join((onward.name or "").split())
         if control.disabled:
             return "retry", page, f"{label!r} is not enabled yet"
         if self.GOOGLE_SIGN_IN.search(label) and host_of(tab.url) in self._google_failed:
