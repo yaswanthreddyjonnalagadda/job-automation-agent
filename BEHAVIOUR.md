@@ -75,6 +75,38 @@ rules: a general one joins **Your saved answers**, one about that employer is ke
 that employer, and legal, visa and signed answers are not kept. It then leaves the
 dashboard's "Waiting for your answer" list.
 
+### The answer bank: answered once, answered on every portal
+
+Before, an answer the agent (or the AI) gave was never used again, and one of yours
+only on the same site in nearly the same words -- so a question answered on a Workday
+form was a new question on Greenhouse. Now every question that was answered on an
+application **you sent** -- by the AI, or by the agent and read back on the page --
+and every answer **you** gave, anywhere, is kept in one answer bank
+(`data/_answer_bank.json`, on your computer only) and reused on every portal. It is
+rebuilt when a run starts and after each time you press Continue.
+
+It is asked **last**: your profile, your saved answers and your own earlier answers on
+that site always come first, so changing your profile is never hidden behind an old
+copy. It keeps only questions your profile cannot answer, and never: a declaration or
+signature, a legal, visa or sponsorship question, an essay, a question that names the
+employer, a box of one job or one degree ("Company", "School"), a date (a start date
+goes stale), a two-word label ("Month", "Location"), or what older runs recorded that
+was not an answer (a press such as "open it"). When a question has several answers,
+yours wins over the agent's and the newest over older ones. To stop an answer being
+reused, put its question under `forgotten` in that file.
+
+The answer keeps its meaning, not one portal's words: a Yes or No stays Yes or No
+("No, I do not have a disability" is kept as No), a choice as chosen, several ticks as
+a list. It goes into whatever the next form draws -- a text box, a list, a
+type-to-search list, Yes/No buttons, tick boxes -- through the same matcher as every
+other answer, so "Masters Degree" still finds "Master's".
+
+**Dates** go into every date box one way: in the format the box shows (a date picker,
+a month picker, "MM/DD/YYYY", "dd.mm.yyyy", "YYYY-MM-DD", "MM/YYYY"), whatever form the
+answer is in ("December 2022", "12/15/2022", "2022-12-15"). "Immediately", "2 weeks" or
+"30 days notice" are counted from today. An answer that is not a date is no longer
+written into a date box as today's date: the box is left for the AI or you.
+
 Fixed facts live in `config.py` (`UserProfile`) and are filled on every
 application without asking: citizenship, clearance, years of experience,
 salary range, education, EEO answers. A pay-band dropdown is answered with the

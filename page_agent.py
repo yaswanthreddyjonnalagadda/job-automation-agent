@@ -44,6 +44,7 @@ import concept_matcher
 import emailed_codes
 import geo_reference
 import account_state
+import answer_bank
 from claude_integration import JOB_POSTING_CHARS, is_non_answer
 import employment_history
 import form_fields
@@ -2120,6 +2121,12 @@ class PageAgent:
                         return said, "owner_earlier_answer"
             except Exception:
                 pass
+        # The answer bank: this question answered on any earlier application -- by the owner, or by the agent on one
+        # the owner then sent -- on any portal (answer_bank.py). Last, so the profile and the owner's own answers
+        # always come first; its answer goes into whatever this form draws through the same matcher as any other.
+        banked = answer_bank.lookup(question, getattr(self.job, "company", "") or "")
+        if banked and banked.get("value"):
+            return str(banked["value"]), f"answer_bank.{banked.get('source', 'confirmed')}"
         return "", ""
 
     def answer_what_is_known(self, page, controls: list[Control],
@@ -3432,11 +3439,9 @@ class PageAgent:
             # what was asked for.
             return self.put_in_a_spinbutton(page, loc, answer.value)
         if answer.action == "fill":
-            # Detect <input type="date"> before calling fill(): Playwright's
-            # fill() raises "Malformed value" when given a non-ISO string (e.g.
-            # the profile's "Immediately") on a date widget.  Convert to a
-            # YYYY-MM-DD string; if the profile value is already date-like use
-            # it, otherwise fall back to today so the field is not left blank.
+            # A date box is found before fill(): Playwright's fill() raises
+            # "Malformed value" for a non-ISO string on a date widget, and a
+            # text box that shows its format takes only that format.
             fill_value = answer.value
             try:
                 if loc.is_disabled(timeout=1_000) or not loc.is_visible(timeout=1_000):
@@ -3445,59 +3450,21 @@ class PageAgent:
             except Exception:
                 pass
             try:
-                is_date_input = loc.evaluate(
-                    "el => el.tagName === 'INPUT' && (el.type === 'date' || el.type === 'month')",
-                    timeout=2_000
-                )
+                input_type, placeholder = loc.evaluate(
+                    "el => [el.tagName === 'INPUT' ? (el.type || '') : '', el.getAttribute('placeholder') || '']",
+                    timeout=2_000)
             except Exception:
-                is_date_input = False
-
-            _MONTHS = {
-                "january": "01", "february": "02", "march": "03", "april": "04",
-                "may": "05", "june": "06", "july": "07", "august": "08",
-                "september": "09", "october": "10", "november": "11", "december": "12",
-                "jan": "01", "feb": "02", "mar": "03", "apr": "04",
-                "jun": "06", "jul": "07", "aug": "08", "sep": "09", "sept": "09",
-                "oct": "10", "nov": "11", "dec": "12",
-            }
-            import re as _re
-            _iso = _re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", fill_value.strip())
-            _mdy = _re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", fill_value.strip())
-            _my = _re.fullmatch(r"([A-Za-z]+)\s+(\d{4})", fill_value.strip())
-            _my_num = _re.fullmatch(r"(\d{1,2})/(\d{4})", fill_value.strip())
-            _bare_year = _re.fullmatch(r"(\d{4})", fill_value.strip())
-
-            if is_date_input:
-                if _iso:
-                    pass  # already correct ISO
-                elif _mdy:
-                    fill_value = f"{_mdy.group(3)}-{_mdy.group(1).zfill(2)}-{_mdy.group(2).zfill(2)}"
-                elif _my and _my.group(1).lower() in _MONTHS:
-                    m = _MONTHS[_my.group(1).lower()]
-                    fill_value = f"{_my.group(2)}-{m}-01"
-                elif _my_num:
-                    fill_value = f"{_my_num.group(2)}-{_my_num.group(1).zfill(2)}-01"
-                elif _bare_year:
-                    fill_value = f"{_bare_year.group(1)}-01-01"
-                else:
-                    from datetime import date as _date
-                    fill_value = _date.today().isoformat()
-                    logger.info(
-                        "DATE FIELD: profile says %r for %r, which is not a date -- "
-                        "substituting today (%s) so the field is not left blank",
-                        answer.value, control.question[:50], fill_value
-                    )
-            elif _my and _my.group(1).lower() in _MONTHS and re.search(r"date|month|graduat", control.question, re.IGNORECASE):
-                try:
-                    placeholder = (loc.get_attribute("placeholder", timeout=1_000) or "").lower()
-                except Exception:
-                    placeholder = ""
-                m = _MONTHS[_my.group(1).lower()]
-                if "yyyy" in placeholder or "mm" in placeholder or "/" in placeholder:
-                    if "dd" in placeholder:
-                        fill_value = f"{m}/01/{_my.group(2)}"
-                    else:
-                        fill_value = f"{m}/{_my.group(2)}"
+                input_type, placeholder = "", ""
+            # A date goes into a date box the one way every date is written (form_fields.date_text): in the box's own
+            # format, whatever the answer's ("December 2022", "2 weeks", "12/15/2022"). An answer that is not a date
+            # is not written into a date box: before, today's date went in its place.
+            if form_fields.is_date_box(input_type, placeholder):
+                written = form_fields.date_text(fill_value, input_type, placeholder)
+                if written is None:
+                    logger.info("DATE FIELD: %r is not a date, for %r -- left open", fill_value[:40],
+                                control.question[:50])
+                    return False
+                fill_value = written
             try:
                 fill_and_dispatch(loc, fill_value, timeout=2_500)
             except Exception:

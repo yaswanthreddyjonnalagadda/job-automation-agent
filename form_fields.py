@@ -627,28 +627,77 @@ def parse_date(text: str) -> Optional[tuple[int, int, int]]:
     return None
 
 
-def fill_date(page, f: Field, value: str) -> bool:
-    """Types a date the way this box takes it: a native date input takes yyyy-mm-dd; a text box takes what its
-    placeholder shows (mm/dd/yyyy, mm/yyyy, dd/mm/yyyy); a box that says nothing takes mm/dd/yyyy. True when the
-    box then holds it."""
-    parts = parse_date(value)
+_RELATIVE_DATE = re.compile(
+    r"^\s*(?:(immediately|now|asap|right away|as soon as possible)|(?:in\s+|within\s+)?(\d{1,3}|a|an|one|two|three|"
+    r"four|six)\s*(day|week|month)s?\b)", re.IGNORECASE)
+_COUNT_WORDS = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "six": 6}
+# A box that shows how it wants a date: "MM/DD/YYYY", "dd.mm.yyyy", "YYYY-MM-DD", "MM/YYYY".
+DATE_PLACEHOLDER = re.compile(r"(?:mm|dd|yyyy|yy)\s*[/.\-]\s*(?:mm|dd|yyyy|yy)|^\s*yyyy\s*$", re.IGNORECASE)
+
+
+def resolve_date(text: str, today=None) -> Optional[tuple[int, int, int]]:
+    """A date as the profile or an answer says it (parse_date), or counted from today: "Immediately", "2 weeks",
+    "30 days notice", "one month". None when it is not a date at all -- never today in its place."""
+    parts = parse_date(text)
+    if parts is not None:
+        return parts
+    m = _RELATIVE_DATE.match(text or "")
+    if not m:
+        return None
+    import datetime as _dt
+    today = today or _dt.date.today()
+    if m.group(1):
+        when = today
+    else:
+        count = int(m.group(2)) if m.group(2).isdigit() else _COUNT_WORDS[m.group(2).lower()]
+        unit = m.group(3).lower()
+        if unit == "day":
+            when = today + _dt.timedelta(days=count)
+        elif unit == "week":
+            when = today + _dt.timedelta(weeks=count)
+        else:
+            month0 = today.month - 1 + count
+            year, month = today.year + month0 // 12, month0 % 12 + 1
+            when = _dt.date(year, month, min(today.day, 28))
+    return when.year, when.month, when.day
+
+
+def date_text(value: str, input_type: str = "", placeholder: str = "") -> Optional[str]:
+    """The one way a date answer is written into a box, whatever the portal: a date picker takes yyyy-mm-dd, a month
+    picker yyyy-mm, a box that shows its format ("MM/DD/YYYY", "dd.mm.yyyy", "YYYY-MM-DD", "MM/YYYY") takes that
+    format, and a box that shows none takes mm/dd/yyyy. None when the answer is not a date."""
+    parts = resolve_date(value)
     if parts is None:
-        logger.info("Not a date the agent can read: %r for %r", value, f.question)
-        return False
+        return None
     year, month, day = parts
+    kind, shown = (input_type or "").lower(), (placeholder or "").lower()
+    if kind == "date":
+        return f"{year:04d}-{month:02d}-{day:02d}"
+    if kind == "month":
+        return f"{year:04d}-{month:02d}"
+    tokens = re.findall(r"yyyy|yy|mm|dd", shown)
+    if tokens and DATE_PLACEHOLDER.search(shown):
+        between = re.search(r"(?:yyyy|yy|mm|dd)\s*([/.\-])\s*(?:yyyy|yy|mm|dd)", shown)
+        written = {"yyyy": f"{year:04d}", "yy": f"{year % 100:02d}", "mm": f"{month:02d}", "dd": f"{day:02d}"}
+        return (between.group(1) if between else "/").join(written[t] for t in tokens)
+    return f"{month:02d}/{day:02d}/{year:04d}"
+
+
+def is_date_box(input_type: str = "", placeholder: str = "") -> bool:
+    return (input_type or "").lower() in ("date", "month") or bool(DATE_PLACEHOLDER.search(placeholder or ""))
+
+
+def fill_date(page, f: Field, value: str) -> bool:
+    """Types a date the way this box takes it (date_text). True when the box then holds it."""
     placeholder = ""
     try:
         placeholder = (f.locator().get_attribute("placeholder") or "").lower()
     except Exception:
         pass
-    if f.type == "date":
-        text = f"{year:04d}-{month:02d}-{day:02d}"
-    elif re.search(r"dd\s*/\s*mm", placeholder):
-        text = f"{day:02d}/{month:02d}/{year:04d}"
-    elif re.fullmatch(r"\s*mm\s*/\s*yyyy\s*", placeholder):
-        text = f"{month:02d}/{year:04d}"
-    else:
-        text = f"{month:02d}/{day:02d}/{year:04d}"
+    text = date_text(value, f.type, placeholder)
+    if text is None:
+        logger.info("Not a date the agent can read: %r for %r", value, f.question)
+        return False
     box = f.locator()
     try:
         box.fill(text, timeout=5_000)

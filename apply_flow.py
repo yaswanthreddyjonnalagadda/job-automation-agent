@@ -53,6 +53,7 @@ from claude_integration import ClaudeClient, ClaudeIntegrationError
 from config import get_app_config, get_user_profile
 from jd_analyzer import build_job_description, dedup_key_for_url
 import ai_choice
+import answer_bank
 import safety
 from safety import STATUS_DISQUALIFIED_POLICY_MISMATCH
 from state_machine import (
@@ -106,6 +107,18 @@ class JsonLogHandler(logging.Handler):
                 fh.write(json.dumps(entry) + "\n")
         except Exception:
             pass
+
+
+def refresh_answer_bank(tracker) -> None:
+    """Rebuilds the answer bank from the tracker (answer_bank.py): when a run starts, and after each wait for the owner,
+    so what they answered or sent meanwhile is reused at once. Never stops a run."""
+    if tracker is None:
+        return
+    try:
+        held = answer_bank.rebuild(tracker)
+        logger.info("ANSWER_BANK: %d question(s) answered before can be answered on any portal", held)
+    except Exception as exc:
+        logger.warning("ANSWER_BANK: not rebuilt (%s)", str(exc).splitlines()[0][:120] if str(exc) else type(exc).__name__)
 
 
 def open_tracker(config):
@@ -1007,6 +1020,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             return
         if not page.is_closed():
             agent.note_owner_changes(page)
+        refresh_answer_bank(tracker)
         agent._ensure_state()
         # Only the owner's Continue lifts a hold on a sign-in (login_guard): a code reload, a refresh
         # or a re-upload says nothing about whether the account was looked at.
@@ -1330,6 +1344,7 @@ def main() -> None:
     job.analysis["published_questions"] = list(job_input.get("questions") or [])
 
     tracker = open_tracker(config)
+    refresh_answer_bank(tracker)
     key = dedup_key_for_url(job.url)
     # Postgres upserts, so a re-run corrects a title/company that an earlier,
     # worse read of the posting recorded (status is never changed there). The
