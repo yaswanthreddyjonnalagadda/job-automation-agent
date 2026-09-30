@@ -2751,7 +2751,9 @@ class PageAgent:
                     # required field (30 September).
                     marked_required = bool(_REQUIRED_STAR.search(question or "")) \
                         or any(_same_question(question, item) for item in required)
-                    if not question or not marked_required:
+                    # A "question" with no words is layout, not a question: UKG drew a row of required stars
+                    # ("* * * * *") and the run stopped for it as a blank required field (30 September).
+                    if not question or not marked_required or not re.search(r"[A-Za-z]{2}", question):
                         continue
                     answered = bool(control.answer)
                     if control.role in ("radio", "checkbox", "switch") and control.group:
@@ -2775,7 +2777,8 @@ class PageAgent:
                 try:
                     for blank in form_fields.blank_required(form_fields.inventory(self.tab(page))):
                         question = re.sub(r"[\s*✱:]+$", "", blank.question or blank.label)
-                        if question and not any(_same_question(question, m) for m in missing_required) \
+                        if question and re.search(r"[A-Za-z]{2}", question) \
+                                and not any(_same_question(question, m) for m in missing_required) \
                                 and not any(_same_question(question, g) for g in given_questions):
                             missing_required.append(question)
                 except Exception as exc:
