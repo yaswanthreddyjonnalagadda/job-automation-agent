@@ -508,6 +508,18 @@ is not typed again. A phone box that holds only its country's dial code ("+1")
 is still empty, and is filled. That dial-code picker is never "corrected" to your
 country: a "+1" is the prefix your number takes, not where you live.
 
+## Job boards are not the employer's site
+
+A link to a job board (Adzuna, ZipRecruiter, Glassdoor, Monster and the like, as well
+as LinkedIn, Indeed and Dice) is refused with a note to use the employer's own careers
+page, and the agent never signs in to or makes an account on a job board -- with Google
+or a password -- even if a run lands on one. Before, an Adzuna link was accepted and the
+run tried to sign in to Adzuna (30 September).
+
+A Google sign-in is recognised however the site words it: "Login with Google",
+"Sign-in using Google", "Sign up with Google", "Continue with Google" -- as a button or a
+link. Before, Adzuna's "Login with Google" was missed.
+
 ## Where you live is not where you were born
 
 Your address answers only questions about where you live now. A question about

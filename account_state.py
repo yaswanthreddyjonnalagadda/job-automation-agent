@@ -54,13 +54,20 @@ _VERIFY = re.compile(
     re.IGNORECASE)
 _CREATE = re.compile(r"\bcreate (an |your )?account\b|\bregister\b|\bsign ?up\b", re.IGNORECASE)
 _SIGN_IN = re.compile(r"\bsign ?in\b|\blog ?in\b", re.IGNORECASE)
-_WAYS_IN = re.compile(r"sign in with (google|email|linkedin|apple|microsoft|facebook)|continue with (google|email)|"
+_WAYS_IN = re.compile(r"(?:sign|log)[\s-]?(?:in|on|up) (?:with|using|via) (google|email|linkedin|apple|microsoft|"
+                      r"facebook)|continue with (google|email)|"
                       r"apply manually|use my last application|autofill with resume", re.IGNORECASE)
 # The form was sent and the site pointed at a box: the form is still to be finished, whatever else is known.
 _FORM_ERROR = re.compile(
     r"passwords? (do not|don't|must) match|please check (the )?box|field is required|is a required field|"
     r"(email|password).{0,30}(invalid|required|must contain|too short)", re.IGNORECASE)
-_GOOGLE = re.compile(r"(sign in|continue|log in) with google", re.IGNORECASE)
+# Every way a site words its Google sign-in: "Sign in with Google", "Login with Google" (Adzuna, 30 September: the
+# one-word "Login" was not read as a Google sign-in, and the run tried the site's own password form instead),
+# "Sign-in using Google", "Sign up with Google", "Continue with Google", "Google sign-in". The page agent finds the
+# button with the same words.
+GOOGLE_SIGN_IN = re.compile(r"\b(?:sign|log)[\s-]?(?:in|on|up)\s+(?:with|using|via|through)\s+google\b|"
+                            r"\bcontinue\s+(?:with|using)\s+google\b|\bgoogle\s+sign[\s-]?(?:in|on)\b", re.IGNORECASE)
+_GOOGLE = GOOGLE_SIGN_IN
 _ACCOUNT_STEP = re.compile(r"create account\s*/\s*sign in|sign in\s*/\s*create account", re.IGNORECASE)
 
 

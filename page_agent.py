@@ -44,6 +44,7 @@ import concept_matcher
 import emailed_codes
 import geo_reference
 import account_state
+import job_sources
 import answer_bank
 from claude_integration import JOB_POSTING_CHARS, is_non_answer
 import employment_history
@@ -1393,7 +1394,7 @@ class PageAgent:
         return tab
 
     # -- signing in ------------------------------------------------------------------
-    GOOGLE_SIGN_IN = re.compile(r"(sign|log) ?in with google|continue with google|google sign[- ]?in", re.IGNORECASE)
+    GOOGLE_SIGN_IN = account_state.GOOGLE_SIGN_IN     # one wording, the account step's
     # ADP's Google button is sometimes dead for a whole page load (its script throws
     # "Cannot read properties of undefined (reading 'googlePlusSocialURL')" and every
     # press is ignored); a fresh load of the page brings it back. This many fresh loads,
@@ -1454,6 +1455,12 @@ class PageAgent:
         step = account_state.next_step(state, memory)
         self._note_account_state(page, host, state, step)
 
+        # Never an account on a job board, with Google or a password: the owner applies on the employer's own site
+        # (job_sources.job_board). Adzuna, 30 September: its easy-apply sat behind an Adzuna login.
+        board = job_sources.job_board(tab.url) if step.action not in (account_state.NOTHING, account_state.WAIT) else ""
+        if board:
+            self.account_blocker = board
+            return False
         if step.action == account_state.FOR_OWNER:
             self.account_blocker = step.why
             return False
@@ -1578,7 +1585,10 @@ class PageAgent:
             if google is not None:
                 button = self.locate(page, google.ref).element_handle(timeout=5_000)
             else:
-                button = tab.get_by_role("button", name=self.GOOGLE_SIGN_IN).first.element_handle(timeout=5_000)
+                # A button, or a link (Adzuna's "Login with Google" is a link).
+                found = tab.get_by_role("button", name=self.GOOGLE_SIGN_IN).or_(
+                    tab.get_by_role("link", name=self.GOOGLE_SIGN_IN))
+                button = found.first.element_handle(timeout=5_000)
             if self.assistant._sign_in_with_google(tab, button, email, host, lambda: self._google_still_offered(page)):
                 logger.info("LOGIN: signed in with Google")
             elif getattr(self.assistant, "google_press_ignored", False) \

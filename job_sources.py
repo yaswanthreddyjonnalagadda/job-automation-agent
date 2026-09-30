@@ -23,7 +23,9 @@ import requests
 logger = logging.getLogger("job_sources")
 
 
-BLOCKED_SOURCES = ("linkedin.com", "indeed.com", "dice.com")
+BLOCKED_SOURCES = ("linkedin.com", "indeed.com", "dice.com", "adzuna.", "ziprecruiter.com", "glassdoor.",
+                   "monster.com", "careerbuilder.com", "simplyhired.com", "talent.com", "jooble.org", "jobrapido.com",
+                   "lensa.com", "jobgether.com", "snagajob.com", "joblist.com", "ladders.com")
 
 # Aggregator "apply with AI" sites and staffing/recruiting agencies are both
 # excluded by the user's own sourcing rule -- apply on the EMPLOYER's own
@@ -665,20 +667,24 @@ def fetch_generic_job(url: str) -> dict | None:
     }
 
 
-def resolve_job(url: str) -> dict | None:
-    host = urlparse(url).netloc.lower()
+def job_board(url: str) -> str:
+    """Why this address is not an employer's own site (a job board, or an auto-apply aggregator), or "".
 
+    The owner's rule: apply on the employer's own page. Adzuna, 30 September: its "Apply for this job" is Adzuna's own
+    easy-apply behind an Adzuna login, and the run tried to sign in there."""
+    host = urlparse(url or "").netloc.lower()
     if any(b in host for b in BLOCKED_SOURCES):
-        logger.error(
-            "%s is a job board, not an employer site. Open the posting there, "
-            "follow its link to the company's own careers page, and use that URL.", host,
-        )
-        return None
+        return (f"{host} is a job board, not the employer's site: open the posting there, follow its link to the "
+                f"company's own careers page, and use that link")
     if any(a in host for a in AGGREGATORS):
-        logger.error(
-            "%s is a third-party auto-apply aggregator. Use the employer's own "
-            "careers page instead.", host,
-        )
+        return f"{host} is a third-party auto-apply site: use the employer's own careers page instead"
+    return ""
+
+
+def resolve_job(url: str) -> dict | None:
+    why = job_board(url)
+    if why:
+        logger.error("%s", why)
         return None
 
     return (
