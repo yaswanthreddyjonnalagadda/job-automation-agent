@@ -6141,13 +6141,23 @@ class JobApplicationAssistant:
         With a length, only a code of exactly that length counts: the page says
         how long it is ("digit 1 of six"), and a number from elsewhere in the
         message was typed in and refused.
+
+        A code of that length may hold letters: Greenhouse's is 8 characters
+        ("EvPGU6Qy"), and looking only for 8 digits never found it (Lucid, 30
+        September). A run of letters counts only when it looks like a code -- a
+        digit in it, or a capital after its first letter -- never a word such as
+        "Security" or "password".
         """
         if length:
             near = re.search(r"(?:passcode|password|code|pin)\D{0,20}\b(\d{%d})\b" % length, text, re.IGNORECASE)
             if near:
                 return near.group(1)
             anywhere = re.findall(r"\b(\d{%d})\b" % length, text)
-            return anywhere[0] if anywhere else ""
+            if anywhere:
+                return anywhere[0]
+            coded = [token for token in re.findall(r"(?<![\w@.])([A-Za-z0-9]{%d})(?![\w@.])" % length, text)
+                     if re.search(r"\d", token) or re.search(r"[A-Z]", token[1:])]
+            return coded[0] if coded else ""
         m = re.search(r"(?:passcode|password|code|pin)\W{0,3}(?:is|:)?\W{0,3}\b([A-Za-z0-9]{4,10})\b", text, re.IGNORECASE)
         if m and re.search(r"\d", m.group(1)):
             return m.group(1)
