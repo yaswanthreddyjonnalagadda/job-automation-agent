@@ -896,7 +896,9 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
     store_materials(tracker, key, resume_file, None)
     agent = page_agent.PageAgent(assistant, claude, config, profile, resume, job, tracker, key,
                                  job_dir, resume_file, cover_letter)
-    agent.history = experience_data   # each job and degree, for boxes that repeat per entry
+    import repeated_entries
+    # each job and degree, for boxes that repeat per entry; a degree's dates completed from the profile
+    agent.history = repeated_entries.with_profile(experience_data, profile)
     while True:
         try:
             outcome = agent.run(page)
@@ -1056,6 +1058,8 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 agent.config = config_module.get_app_config()
                 agent.profile = config_module.get_user_profile()
                 assistant._profile = agent.profile
+                import repeated_entries
+                agent.history = repeated_entries.with_profile(experience_data, agent.profile)
             except Exception as exc:
                 logger.warning("Could not reload the profile or settings: %s", exc)
             try:

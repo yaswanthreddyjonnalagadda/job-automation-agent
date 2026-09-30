@@ -1309,6 +1309,10 @@ class PageAgent:
                               ("_run_stamp", lambda: time.strftime("%Y%m%d_%H%M%S")), ("required_left", list)):
             if not hasattr(self, name):
                 setattr(self, name, default())
+        # A degree's dates the resume reader did not keep come from the profile (repeated_entries.with_profile);
+        # here as well as where the run starts, so a run that is already going gets them on Resume.
+        if self.history and getattr(self, "profile", None) is not None:
+            self.history = repeated_entries.with_profile(self.history, self.profile)
 
     # -- the page --------------------------------------------------------------
     @staticmethod
@@ -3410,7 +3414,75 @@ class PageAgent:
                 note = f"corrected {control.question[:70]!r} from {was[:40]!r} to {value[:40]!r} (from your {source})"
                 self.notes.append(note)
                 logger.info("CORRECTED: %s", note)
+        return given + self._correct_entries(page, controls, policy)
+
+    def _correct_entries(self, page, controls: list[Control], policy: str) -> list[tuple[Answer, Control]]:
+        """A box in a job or degree entry that holds what that entry's record says it should not.
+
+        UKG, 30 September: the site's resume import put "Sep 2026" as the end of the current job and of a job that
+        ended in July 2021, and the agent's own AI text sat in a degree's optional Description. The agent only
+        told the owner to fix them. Each box is put right from its own entry's record -- or emptied, when the right
+        answer is nothing (the job the owner still has; a box the agent filled that should have stayed empty) --
+        under the one rule for who may be overruled (safety.may_overrule): never a value the owner set."""
+        given: list[tuple[Answer, Control]] = []
+        entries = getattr(self, "_entries", {}) or {}
+        for control in controls:
+            entry = entries.get(control.ref)
+            shown = (control.answer or "").strip().strip('"')
+            if entry is None or control.disabled or not shown or option_match.is_placeholder(shown):
+                continue
+            value, source, blank = repeated_entries.answer(entry, getattr(self, "history", {}) or {})
+            # Only a date is put right from the record: a school's or degree's name has many right spellings
+            # ("Jawaharlal Nehru Technological University" is "JNTU"), and a label like "Role Description" is not
+            # the job's title -- replayed on every saved page, those would have overwritten right answers.
+            if value and not repeated_entries.is_date(value):
+                continue
+            written = str((self.written or {}).get(control.question) or "").strip()
+            if value:
+                if _same_answer(shown, value) or option_match.best_option([shown], value) is not None:
+                    continue
+            elif not (blank or (written and written == shown and self._optional_entry_box(control, ()))):
+                continue
+            who = provenance.origin(self.locate(page, control.ref), value=shown, agent_wrote=written == shown)
+            if not safety.may_overrule(who, policy):
+                if who != provenance.OWNER:
+                    self.notes.append(f"left {entry.label!r} in {repeated_entries.describe(entry, self.history)!r} "
+                                      f"as {shown[:40]!r}; it should be {value or 'empty'!r}")
+                continue
+            try:
+                if value:
+                    action = "choose" if control.role in ("combobox", "listbox") else "fill"
+                    answer = Answer(control.ref, control.question, action, value, source)
+                    done = self.do(page, answer, control)
+                else:
+                    answer = Answer(control.ref, control.question, "fill", "", source or "work history")
+                    done = self._empty_box(page, control)
+            except Exception as exc:
+                done = False
+                logger.info("Could not correct %r: %s", control.question[:60], str(exc).splitlines()[0][:100])
+            if done:
+                given.append((answer, control))
+                self.written[control.question] = value
+                self.corrected.add(control.question)
+                where = repeated_entries.describe(entry, self.history) or f"entry {entry.index + 1}"
+                note = f"corrected {entry.label!r} in {where!r} from {shown[:40]!r} to {value[:40] or 'empty'!r}"
+                self.notes.append(note)
+                logger.info("CORRECTED: %s", note)
         return given
+
+    def _empty_box(self, page, control: Control) -> bool:
+        """Empties a text box, or sets a list back to its own "Choose..." row; True when it then shows nothing."""
+        loc = self.locate(page, control.ref)
+        if control.role in ("combobox", "listbox"):
+            blank = next((o for o in control.options or () if option_match.is_placeholder(o)), None)
+            if blank is None:
+                return False
+            loc.select_option(label=blank, timeout=5_000)
+            loc.dispatch_event("change")
+        else:
+            fill_and_dispatch(loc, "", timeout=5_000)
+        shown = loc.evaluate("e => e.tagName === 'SELECT' ? (e.options[e.selectedIndex] || {}).text || '' : e.value")
+        return not str(shown or "").strip() or option_match.is_placeholder(str(shown))
 
     def _control_for(self, question: str, value: str, controls: list[Control]) -> Optional[Control]:
         matches = [c for c in controls if c.role in ANSWER_ROLES and _same_question(c.question, question)]

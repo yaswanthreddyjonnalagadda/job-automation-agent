@@ -148,6 +148,29 @@ def _identifies(shown: str, name: str) -> bool:
     return option_match.best_option([name], shown) is not None or option_match.best_option([shown], name) is not None
 
 
+def with_profile(history: dict, profile) -> dict:
+    """The work history, with each degree's dates completed from the profile's education dates.
+
+    The resume reader keeps only a degree's end; the owner's profile holds both ends ("JNTU Hyderabad, August
+    2015, April 2019"). UKG's degree entries asked From and To, the history had no start, and the run stopped for
+    the owner to type dates the profile already held (30 September). A date the history has is kept."""
+    history = dict(history or {})
+    dated = [tuple(d) for d in (getattr(profile, "education_dates", ()) or ()) if d and len(d) >= 3]
+    if not dated:
+        return history
+    degrees = []
+    for record in history.get("education") or []:
+        record = dict(record)
+        for school, start, end in (d[:3] for d in dated):
+            if _identifies(str(school or ""), str(record.get("school") or "")):
+                record["start"] = record.get("start") or start
+                record["end"] = record.get("end") or end
+                break
+        degrees.append(record)
+    history["education"] = degrees
+    return history
+
+
 def record_for(entry: Entry, history: dict) -> Optional[dict]:
     """The owner's record for this entry.
 
@@ -204,6 +227,7 @@ _EDUCATION_FIELDS = (
     (r"\b(institution|school|university|college)\b", "school"),
     (r"\b(area of study|field|major|subject|specializ|discipline)\b", "field"),
     (r"\b(degree|qualification|level)\b", "degree"),
+    (r"\b(start|from|began|begin|enrol)", "start"),
     (r"\b(end|graduat|complet|finish|to)\b", "end"),
 )
 
@@ -238,3 +262,13 @@ def answer(entry: Entry, history: dict) -> tuple[str, str, bool]:
             return value, source, False
         return str(record.get(key) or "").strip(), source, False
     return "", "", False
+
+
+_DATE = re.compile(r"(?:(?:%s)[a-z]*\.?\s*)?(?:\d{4})?|\d{1,2}[/-]\d{4}" % "|".join(m[:3] for m in MONTHS),
+                   re.IGNORECASE)
+
+
+def is_date(value: str) -> bool:
+    """A month, a year, or both ("July", "2021", "July 2021", "07/2021")."""
+    value = (value or "").strip()
+    return bool(value) and bool(_DATE.fullmatch(value))
