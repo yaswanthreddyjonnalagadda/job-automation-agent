@@ -22,7 +22,7 @@ _SECTION_WORK = re.compile(r"^(?:work|employment|professional|job)\s+(?:experien
 _SECTION_EDU = re.compile(r"^education(?:al)?(?:\s+(?:history|background|details))?(?:\s+(\d+))?$", re.IGNORECASE)
 _LINE = re.compile(r'^(\s*)- (\w+)(?: "((?:[^"\\]|\\.)*)")?([^:]*?)(?::\s*(.*))?$')
 _FIELD_ROLES = {"textbox", "combobox", "listbox", "searchbox", "spinbutton", "checkbox", "radio", "button"}
-_TITLE_ROLES = {"heading", "generic", "group", "region", "paragraph", "text", "legend"}
+_TITLE_ROLES = {"heading", "generic", "group", "region", "paragraph", "text", "legend", "form"}   # UKG names each entry's form "Work Experience 2"
 
 MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
           "November", "December")
@@ -51,6 +51,7 @@ def entry_map(snapshot: str) -> dict[str, Entry]:
     """{ref: Entry} for every box inside a repeated work or education entry on the page."""
     found: dict[str, Entry] = {}
     section, index, first_label = None, -1, None
+    section_indent = -1                              # where the entry's own title is drawn
     current: dict = {}
     peers: dict[str, list] = {"work": [], "education": []}
     last_box: Optional[tuple[int, str]] = None      # (indent, label) of the last box, whose value may follow
@@ -76,11 +77,14 @@ def entry_map(snapshot: str) -> dict[str, Entry]:
                     if kind != section or numbered is not None:
                         index = numbered if numbered is not None else -1
                         first_label, current = None, {}
-                    section = kind
+                    section, section_indent = kind, indent
                     if numbered is not None:
                         first_label, current = "", {}
                     continue
-                if role in ("heading", "legend") or (name and role in ("group", "region") and section
+                # A heading or named group drawn inside the entry (UKG's "From" / "To" date groups) is part of
+                # it; only one at the entry's own level or above starts another section (Languages ...).
+                inside = section is not None and indent > section_indent
+                if not inside and role in ("heading", "legend") or (not inside and name and role in ("group", "region") and section
                                                      and not re.search(r"remove|add", title, re.IGNORECASE)):
                     section = None                     # another section starts: Languages, Attachments ...
                     continue
