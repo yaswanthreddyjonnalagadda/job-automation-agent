@@ -224,3 +224,17 @@ def test_a_password_refused_before_is_never_retyped():
 
 def test_google_still_comes_first_on_a_sign_in_page_after_a_refusal():
     assert step(A.SIGN_IN_FORM, google=True, refused_before=True, email_given=True).action == A.GOOGLE
+
+
+
+def test_a_box_for_the_code_makes_it_a_code_step_whatever_the_page_says():
+    """Code or link is read from the page: a box for the emailed code means the code, even beside 'not verified'."""
+    snapshot = "\n".join([
+        '- heading "Sign In" [ref=e1]',
+        '- alert: Your account is not verified. Enter the verification code we sent to your email.',
+        '- textbox "Email" [ref=e2]',
+        '- textbox "Password" [ref=e3]',
+        '- textbox "Verification code" [ref=e4]',
+        '- button "Sign In" [ref=e5]',
+    ])
+    assert A.read_state(snapshot).kind == A.CODE_ENTRY

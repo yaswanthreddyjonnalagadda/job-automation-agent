@@ -430,6 +430,9 @@ counts before what the form looks like. Then one table decides:
   browser -- only a https link back to that same site, and on a shared host such as
   Workday only that employer's own. Never a password-reset link, and never a link through
   a tracking address (those are left to you). Once per site per run; then it signs in.
+  Code or link is read from the page: a box for the emailed code means the code is read
+  and typed (the one-time-code rule, unchanged); no such box, and the site says the
+  account must be verified, means the link.
 - **Stop and tell you** when only you can act: a verification link it could not find or
   that did not work (the dashboard says which), a refused password the reset did not cure (or on an account the site has
   not shown it knows), a locked account, or sign-in held back to protect the

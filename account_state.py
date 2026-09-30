@@ -129,13 +129,18 @@ def read_state(snapshot: str, password_boxes: Optional[int] = None) -> AccountSt
         # Google's own account picker: part of a Google sign-in already under way, not the employer's page.
         return AccountState(NONE, "Google's account picker")
 
+    # A box for an emailed code makes it a code step, whatever else the page says: "Your account is not verified.
+    # Enter the verification code we sent" is verified with the code, not with a link.
+    code_box = re.search(r'- textbox "[^"]*(code|passcode|otp)[^"]*"', snapshot or "", re.IGNORECASE)
+    wants_code = bool(code_box and _first(_CODE, texts))
     for kind, pattern in ((LOCKED, _LOCKED), (VERIFY_EMAIL, _UNVERIFIED), (WRONG_PASSWORD, _WRONG_PASSWORD),
                           (ACCOUNT_EXISTS, _EXISTS)):
+        if kind == VERIFY_EMAIL and wants_code:
+            continue
         said = _first(pattern, texts)
         if said and (passwords or on_account_step or _first(_SIGN_IN, texts) or _first(_CREATE, texts)):
             return state(kind, said)
-    code_box = re.search(r'- textbox "[^"]*(code|passcode|otp)[^"]*"', snapshot or "", re.IGNORECASE)
-    if code_box and _first(_CODE, texts):
+    if wants_code:
         return state(CODE_ENTRY, _first(_CODE, texts))
     said = _first(_VERIFY, texts)
     if said and not passwords:
