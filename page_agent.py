@@ -2182,6 +2182,8 @@ class PageAgent:
             value, source = self.known_answer(control)
             if not value and control.ref in getattr(self, "_entry_blank", ()):
                 continue                     # the end date of the job the owner still has: blank is the answer
+            if not value and self._profile_says_none(source):
+                continue                     # the profile says there is none (no middle name): blank is the answer
             if not value:
                 # Every box still empty is left open, not only the starred
                 # ones: a form that marks nothing as required still has
@@ -2498,6 +2500,8 @@ class PageAgent:
                             if concept_matcher.is_self_identification(
                                     f"{ctrl.question} {ctrl.container} {ctrl.context}"):
                                 continue            # who the owner is: never the AI's to answer
+                            if self._profile_says_none(self.known_answer(ctrl)[1]):
+                                continue            # the profile says there is none: never the AI's to fill
                             if is_secret_box(ctrl.question) or is_honeypot(ctrl.question):
                                 continue            # a password or a robots' decoy is never the AI's to answer
                             try:
@@ -3133,6 +3137,12 @@ class PageAgent:
                     getattr(self.profile, "full_name", ""))))
             if not (privacy_ok or signing_ok):
                 return "a declaration or signature -- you haven't allowed the agent to give it"
+        # A blank the profile states on purpose (no middle name) is the answer: the AI's is refused. SK AX USA (ADP),
+        # 30 September: the site's resume reader put "Reddy" in Middle Name, the agent cleared it as the profile says,
+        # the AI was asked about the now-empty box and wrote "Reddy" back, and the run stopped on the tug of war.
+        if action == "fill" and answer.value.strip() and not str(answer.source or "").startswith("profile.") \
+                and self._profile_says_none(self.known_answer(control)[1]):
+            return "your profile says there is none, so the box stays empty"
         # Who the owner is (gender identity, orientation, race, disability, veteran status): only their own answer.
         if concept_matcher.is_self_identification(f"{question} {control.container} {control.context}") \
                 and not str(answer.source or "").startswith(("profile.", "owner", "answer_bank.you")):
@@ -3658,6 +3668,13 @@ class PageAgent:
         if answer.action == "choose":
             return self.choose(page, control, answer.value, self._page_controls(page))
         return False
+
+    def _profile_says_none(self, source: str) -> bool:
+        """Whether a blank answer is the profile's own word: its field exists and is empty on purpose (no middle
+        name), as against a question the profile knows nothing about."""
+        field = str(source or "").split(".", 1)[1] if str(source or "").startswith("profile.") else ""
+        return bool(field) and "." not in field and hasattr(self.profile, field) \
+            and not str(getattr(self.profile, field) or "").strip()
 
     def _inventory_field(self, page, control: Control):
         """The field inventory's entry for this list, found by its question -- or None when there is not exactly
