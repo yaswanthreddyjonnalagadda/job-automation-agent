@@ -60,6 +60,7 @@ class UserProfile:
     target_titles: tuple[str, ...] = ()
     prefix: str = ""
     address_line1: str = ""
+    address_line2: str = ""       # apartment, suite, unit -- empty when there is none
     city: str = ""
     state: str = ""
     county: str = ""  # some ATS forms require county separately
@@ -308,7 +309,7 @@ class AppConfig:
 # Profile fields where an empty value is itself the answer -- there is none -- rather than "not stated yet".
 # A form's box for one of these is left blank; any other empty field is a question for the owner.
 BLANK_MEANS_NONE = frozenset({"middle_name", "preferred_name", "prefix", "security_clearance_level",
-                              "phone_home", "phone_work", "portfolio_url"})
+                              "phone_home", "phone_work", "portfolio_url", "address_line2"})
 
 
 def get_user_profile() -> UserProfile:

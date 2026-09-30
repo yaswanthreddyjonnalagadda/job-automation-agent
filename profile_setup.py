@@ -58,6 +58,7 @@ SECTIONS: tuple[tuple[str, str, tuple[Field, ...]], ...] = (
     )),
     ("Where you live", "Used for address boxes and 'where are you located' questions.", (
         Field("address_line1", "Street address"),
+        Field("address_line2", "Apartment / suite / unit (leave empty if none)"),
         Field("city", "City"),
         Field("state", "State or province"),
         Field("county", "County", hint="Some forms ask for it separately."),
