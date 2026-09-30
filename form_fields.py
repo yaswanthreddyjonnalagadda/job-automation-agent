@@ -36,12 +36,19 @@ TAGS_BESIDE_JS = r"""
   // box stays empty. UKG's Skills held six tags and read as a required blank, so the run stopped and waited for
   // the owner (30 September). Looked for only as far out as this is the one box in the block.
   const text = n => (n ? (n.innerText || n.textContent || '').replace(/\s+/g, ' ').trim() : '');
-  for (let n = e.parentElement, d = 0; n && d < 4; n = n.parentElement, d++) {
+  // A button's name as a screen reader hears it: UKG's chip button shows only "×" and is named "Remove Bgp" by
+  // another element or by text only a screen reader reads.
+  const nameOf = b => {
+    const by = (b.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)
+        .map(id => { const el = b.ownerDocument.getElementById(id); return el ? (el.textContent || '') : ''; }).join(' ');
+    return (b.getAttribute('aria-label') || by || b.getAttribute('title') || b.textContent || '').trim();
+  };
+  for (let n = e.parentElement, d = 0; n && d < 6; n = n.parentElement, d++) {
     // Another box to type in means the block is wider than this box; a list inside a chip (UKG's "Skill level"
     // under each skill) is part of the tag, not another box.
     if (n.querySelectorAll('input:not([type=hidden]):not([type=checkbox]):not([type=radio]), textarea').length > 1) break;
     const tags = [...n.querySelectorAll('button, [role=button]')]
-        .map(b => (b.getAttribute('aria-label') || b.getAttribute('title') || text(b) || '')
+        .map(b => nameOf(b).replace(/[×✕✖]/g, ' ').replace(/\s+/g, ' ')
             .match(/^\s*(?:remove|delete|clear)\s+(.+?)\s*$/i))
         .filter(Boolean).map(m => m[1])
         // "Remove Website" beside a single link box removes the box itself, not a tag in it

@@ -1203,7 +1203,7 @@ class PageAgent:
         self._account_known: set[str] = set()
         # Questions whose answer from the profile is not among their choices: they go to the AI (or the owner) with
         # the choices, instead of the same answer failing on every pass (Lucid, 29 September: three passes).
-        self._misfit: set[str] = set()
+        self._misfit: set[tuple[str, str]] = set()   # (question, the answer its list refused)
         self._reset_asked: set[str] = set()     # sites where a reset to the ATS password was asked for this run
         self.account_blocker = ""               # what only the owner can do at the account step, or ""
         self._account_seen: dict[str, tuple] = {}   # the last account state logged, per site
@@ -2236,13 +2236,16 @@ class PageAgent:
                 handled_groups.add(group_key)
             if control.question in self.owner_answers:
                 continue
-            if control.question in self._misfit:
-                star = "*" if any(_same_question(control.question, q) for q in required) else ""
-                open_questions.append(control.question + star)
-                continue
             if not control.options and control.role in ("combobox", "listbox", "button"):
                 control.options = published_choices(control.question, self._published_questions())
             value, source = self.known_answer(control)
+            # A list that refused this very answer is not offered it again; a different answer -- after a fix or a
+            # profile change -- is tried. Remembered by question alone, UKG's OPT question kept the "Graduated" that
+            # failed at 13:48 and never took the "No" its reloaded code knew (30 September).
+            if (control.question, value) in self._misfit:
+                star = "*" if any(_same_question(control.question, q) for q in required) else ""
+                open_questions.append(control.question + star)
+                continue
             if not value and control.ref in getattr(self, "_entry_blank", ()):
                 continue                     # the end date of the job the owner still has: blank is the answer
             if not value and self._profile_says_none(source):
@@ -2290,7 +2293,7 @@ class PageAgent:
                     open_questions.append(control.question + star)
                     self.failed.append(f"{control.question[:60]} = {value[:40]!r}")
                     if action == "choose":
-                        self._misfit.add(control.question)
+                        self._misfit.add((control.question, value))
             except Exception as exc:
                 star = "*" if any(_same_question(control.question, q) for q in required) else ""
                 open_questions.append(control.question + star)
