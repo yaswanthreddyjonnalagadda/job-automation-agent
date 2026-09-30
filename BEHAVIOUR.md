@@ -519,6 +519,18 @@ is not typed again. A phone box that holds only its country's dial code ("+1")
 is still empty, and is filled. That dial-code picker is never "corrected" to your
 country: a "+1" is the prefix your number takes, not where you live.
 
+## Your jobs and degrees on Workday
+
+When Workday's My Experience shows an empty Work Experience or Education section, the
+agent adds each of your jobs and degrees from your record the way Workday takes them
+(titles, companies, dates, degree and field-of-study lists). It only adds to an empty
+section -- anything Workday already filled in is left as it is. Before, only the older
+flow did this, and a new Workday application reached My Experience with nothing added
+(Ciena, 30 September).
+
+An AI that says it cannot answer ("I am unable to answer...", "... does not have a
+Twitter account") is never typed into a form; the box is left empty.
+
 ## Job boards are not the employer's site
 
 A link to a job board (Adzuna, ZipRecruiter, Glassdoor, Monster and the like, as well

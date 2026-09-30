@@ -42,7 +42,9 @@ _NON_ANSWER = re.compile(
     r"(?:not|no)\s+(?:provided|specified|mentioned|stated|given|available|listed|found|known|included)"
     r"(?:\s+(?:in|on|by|from)\s+(?:the\s+)?(?:resume|cv|profile|candidate'?s? (?:resume|profile)|facts|information))?|"
     r"(?:the\s+)?(?:resume|profile|candidate)\s+does\s+not\s+(?:say|mention|specify|provide|list|include)\b.*|"
-    r"(?:i\s+)?(?:do not|don't|cannot|can't)\s+(?:know|determine|tell|find)\b.*|"
+    r"[^.]{0,80}?\bdoes\s+not\s+(?:have|hold|possess|say|mention|specify|provide|list|include)\b.*|"
+    r"(?:i\s+am|i'm)\s+(?:unable|not able)\s+to\b.*|"
+    r"(?:i\s+)?(?:do not|don't|cannot|can't)\s+(?:know|determine|tell|find|answer|provide)\b.*|"
     r"information\s+(?:not|un)\s*available)[.!]?", re.IGNORECASE)
 
 

@@ -1661,6 +1661,50 @@ class PageAgent:
         r"(verification|security|confirmation|one[- ]?time|access)\s*code|passcode|\botp\b|"
         r"code (was )?(sent|emailed) to", re.IGNORECASE)
 
+    # A section for the owner's jobs or degrees, the record that fills it, the site filler's name, and the box every
+    # entry of it has (its id ends so on Workday).
+    _ENTRY_SECTIONS = (("Work Experience", "experience", "fill_experience_section", "--jobTitle"),
+                       ("Education", "education", "fill_education_section", "--schoolName"))
+
+    def add_entries_the_site_way(self, page, snapshot: str) -> bool:
+        """A section for the owner's jobs or degrees that is still empty -- its heading and its own Add button, no
+        entry yet -- is filled by the site's own entry filler from the owner's record (Workday: sites/workday.py
+        enters each job's and degree's boxes, dates and lists the way Workday takes them).
+
+        Ciena on Workday, 30 September: the page agent had no such step -- only the older flow and the dashboard's
+        'fill experience' signal called the filler -- so My Experience was left with no jobs and no degrees, and the
+        run went round the page until the loop guard stopped it. Once per section per run; a site without a filler
+        is left to the page as before."""
+        tab = self.tab(page)
+        host = host_of(tab.url)
+        history = getattr(self, "history", {}) or {}
+        done = self.__dict__.setdefault("_entries_added", set())
+        try:
+            adapter = self.assistant.adapter(tab)
+        except Exception:
+            return False
+        added = False
+        for heading, record, filler, box in self._ENTRY_SECTIONS:
+            entries = [e for e in (history.get(record) or []) if isinstance(e, dict)]
+            if not entries or (host, heading) in done or not hasattr(adapter, filler):
+                continue
+            if not re.search(rf'- heading "{re.escape(heading)}"', snapshot or "", re.IGNORECASE):
+                continue
+            try:
+                if tab.locator(f"input[id$='{box}']").count():
+                    continue            # entries are already there (the site's own resume reader, or earlier)
+            except Exception:
+                continue
+            done.add((host, heading))
+            logger.info("ENTRIES: %s is empty -- adding your %d %s the site's way", heading, len(entries),
+                        "jobs" if record == "experience" else "degrees")
+            try:
+                getattr(self.assistant, filler)(tab, entries)
+                added = True
+            except Exception as exc:
+                logger.warning("ENTRIES: could not add the %s entries: %s", heading, str(exc).splitlines()[0][:120])
+        return added
+
     def open_entry_for_missing_field(self, page, snapshot: str, controls: list[Control]) -> bool:
         """Opens a collapsed entry the page is complaining about.
 
@@ -2565,6 +2609,9 @@ class PageAgent:
                 self.settle(page)
                 continue
             if self.open_entry_for_missing_field(page, snapshot, controls):
+                self.settle(page, 1_500)
+                continue
+            if self.add_entries_the_site_way(page, snapshot):
                 self.settle(page, 1_500)
                 continue
             if self.wake_loading_control(page, snapshot):
