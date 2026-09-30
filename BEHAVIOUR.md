@@ -561,6 +561,16 @@ into a drop zone's own file box when its "Select files" button opens no file win
 
 ## When you press Continue
 
+A run waiting for you has, beside **Continue**, two more ways on:
+
+- **Resume** -- carries on from the page it is on with the agent's latest logic: new code
+  is loaded into the waiting run and the page is read again; the browser and everything
+  already filled stay as they are.
+- **Reload** -- starts the application fresh: after you confirm, the waiting run and its
+  browser close (nothing is submitted, and what the site itself saved stays saved) and
+  the application starts again from its posting with the latest logic. The tailored
+  resume already made is reused.
+
 Pressing Continue on the dashboard gives the agent its three tries at moving on
 afresh. Before, a page that had tripped the loop guard tripped it again on the
 first press after your Continue, whatever you had put right in between. The guard

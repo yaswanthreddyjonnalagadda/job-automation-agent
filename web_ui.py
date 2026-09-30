@@ -23,6 +23,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -212,6 +213,31 @@ def stop_apply():
     submitted, and the application's tracked status is left as it was (NOT
     marked skipped), so it can simply be started again."""
     url = (request.form.get("url") or "").strip()
+    if not _stop_run(url):
+        return redirect(url_for("index", error="Nothing was running."))
+    return redirect(url_for("index"))
+
+
+@app.post("/restart")
+def restart_apply():
+    """Reload: ends the run that is going -- nothing is submitted -- and starts the same application again from its
+    posting, with the agent's latest code. A fresh start, where Resume carries on from the page it is on."""
+    url = _running_url()
+    if not url:
+        return redirect(url_for("index", error="Nothing is running to reload."))
+    _stop_run(url)
+
+    def start_again() -> None:
+        time.sleep(3)                      # the closed browser lets go of its profile before the next one opens it
+        _run_apply(url)
+
+    threading.Thread(target=start_again, daemon=True).start()
+    return redirect(url_for("index"))
+
+
+def _stop_run(url: str) -> bool:
+    """Ends the run for this posting (or whatever application process is going) and its browser. True when
+    something was running."""
     with _RUNS_LOCK:
         run = _RUNS.get(url)
         if run:
@@ -232,9 +258,9 @@ def stop_apply():
             run["proc"] = run["pid"] = None
             _save_runs()
     if proc is None and not pid and not ended:
-        return redirect(url_for("index", error="Nothing was running."))
+        return False
     clear_waiting_files(_RUNS_FILE.parent)
-    return redirect(url_for("index"))
+    return True
 
 
 def clear_waiting_files(data_dir: Path) -> None:
@@ -1076,17 +1102,25 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
     <div class="card attention">
       {% if signals %}
         <p class="hint" style="margin:0 0 6px">The agent is waiting in its browser. Deal with what it stopped for,
-          then press <strong>Continue</strong> and it reads the page again.</p>
+          then press <strong>Continue</strong> and it reads the page again. <strong>Resume</strong> does the same
+          with the agent's latest logic; <strong>Reload</strong> starts the application again from the posting.</p>
         {% for s in signals %}
           <div class="item">
             <div><strong>{{ s.label }}</strong><div class="hint">Paused in the browser</div></div>
-            <form method="post" action="/signal/{{ s.signal }}" class="actions">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <button name="decision" value="continue">Continue</button>
-              <button class="ghost" name="decision" value="reload_code" title="Load edited agent code, then continue">Reload code</button>
-              <button class="ghost" name="decision" value="skip">Skip</button>
-              <button class="ghost" name="decision" value="close">Close browser</button>
-            </form>
+            <div class="actions">
+              <form method="post" action="/signal/{{ s.signal }}" class="actions">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button name="decision" value="continue" title="You dealt with it: the agent reads the page again and carries on">Continue</button>
+                <button class="ghost" name="decision" value="reload_code" title="Carry on from this page with the agent's latest logic -- the form stays as it is">Resume</button>
+                <button class="ghost" name="decision" value="skip">Skip</button>
+                <button class="ghost" name="decision" value="close">Close browser</button>
+              </form>
+              <form method="post" action="/restart" class="actions"
+                    onsubmit="return confirm('Start this application again from the posting, with the latest logic? This browser closes; nothing is submitted, and what the site saved stays saved.')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="ghost" title="Close this run and start the application again from its posting, with the agent's latest logic">Reload</button>
+              </form>
+            </div>
           </div>
         {% endfor %}
       {% endif %}
