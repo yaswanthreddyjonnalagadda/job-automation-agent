@@ -34,6 +34,7 @@ import geo_reference
 import emailed_codes
 import login_guard
 import provenance
+import account_state
 import form_fields
 import option_match
 import safety
@@ -4567,20 +4568,38 @@ class JobApplicationAssistant:
             if not self._click_resiliently(control, timeout_ms=5_000):
                 logger.warning("ACCOUNT_CREATE_FAILED: couldn't click the Create an account link")
                 return False
-        try:
-            page.wait_for_function(
-                "() => [...document.querySelectorAll('input[type=password]')].filter(e => e.getClientRects().length).length >= 2",
-                timeout=20_000,
-            )
-        except Exception:
-            logger.warning("ACCOUNT_CREATE_FAILED: the Create Account form didn't appear (page: %s)", page.url[:100])
-            return False
+        # The form is there when it shows a password and its retype -- or one password box under a heading that
+        # says it creates an account (UKG, 30 September: waiting for two boxes, the agent gave up on a form it
+        # was looking at).
+        shown = "() => [...document.querySelectorAll('input[type=password]')].filter(e => e.getClientRects().length).length"
+        deadline = time.time() + 20
+        while True:
+            try:
+                boxes = int(page.evaluate(shown) or 0)
+            except Exception:
+                boxes = 0
+            if boxes >= 2 or (boxes == 1 and self._heading_says_create(page)):
+                break
+            if time.time() > deadline:
+                logger.warning("ACCOUNT_CREATE_FAILED: the Create Account form didn't appear (page: %s)", page.url[:100])
+                return False
+            page.wait_for_timeout(500)
         return self.fill_create_account_form(page, email)
+
+    @staticmethod
+    def _heading_says_create(page) -> bool:
+        """The page's headings say it makes a new account (account_state.says_create)."""
+        try:
+            headings = page.locator("h1, h2, h3, [role=heading]").all_inner_texts()[:12]
+        except Exception:
+            return False
+        return account_state.says_create(headings)
 
 
     @staticmethod
     def _password_pair_matches(values, password: str) -> bool:
-        return len(values) >= 2 and all(value == password for value in values[:2])
+        """The password (and its retype, where the form has one) holds what was typed."""
+        return bool(values) and all(value == password for value in values[:2])
 
     @staticmethod
     def _has_account_form_validation_error(error_texts) -> bool:
@@ -4705,7 +4724,7 @@ class JobApplicationAssistant:
             return False
         visible = lambda loc: [loc.nth(i) for i in range(loc.count()) if loc.nth(i).is_visible()]
         pw_fields = visible(page.locator("input[type='password']"))
-        if len(pw_fields) < 2:
+        if len(pw_fields) < 2 and not (len(pw_fields) == 1 and self._heading_says_create(page)):
             return False  # not a Create Account form
         self._create_form_attempted = True
         site = urlparse(page.url).netloc.lower()

@@ -127,6 +127,10 @@ def read_state(snapshot: str, password_boxes: Optional[int] = None) -> AccountSt
         return state(SIGNED_IN, step.group(0))
     if passwords >= 2:
         return state(CREATE_FORM, _first(_CREATE, texts))
+    headings = [_unescape(h) for h in re.findall(r'- heading "((?:[^"\\]|\\.)*)"', snapshot or "")]
+    if passwords == 1 and says_create(headings):
+        # One password box, no retype -- UKG's "Create your account" (30 September): the heading says what it is.
+        return state(CREATE_FORM, next(h for h in headings if _CREATE.search(h)))
     if passwords == 1:
         return state(SIGN_IN_FORM, _first(_SIGN_IN, texts))
     ways = [t for t in texts if _WAYS_IN.search(t)]
@@ -147,6 +151,18 @@ def on_account_step_is_current(snapshot: str) -> bool:
         if _ACCOUNT_STEP.search(nearby):
             return True
     return False
+
+
+def _unescape(text: str) -> str:
+    return text.replace('\\"', '"').replace("\\\\", "\\")
+
+
+def says_create(headings) -> bool:
+    """Whether a page's headings say it makes a new account ("Create your account", "Sign up", "Register") -- the
+    heading, not a link: a sign-in page also links to "Sign up". One rule for the snapshot and for the live page."""
+    headings = [" ".join(str(h or "").split()) for h in headings or ()]
+    return any(_CREATE.search(h) for h in headings) \
+        and not any(_SIGN_IN.search(h) and not _CREATE.search(h) for h in headings)
 
 
 def _application_fields(snapshot: str) -> bool:
