@@ -217,6 +217,9 @@ _LINE = re.compile(r'^(?P<indent>\s*)- (?P<role>[\w/-]+)(?: "(?P<name>(?:[^"\\]|
 # of radio buttons or tick boxes, such text starts the next question.
 _INTRODUCES_CHOICES = re.compile(r"\?|:\s*$|\(\s*required\s*\)|\*\s*$|\b(?:select|check|choose|tick|pick)\b|"
                                  r"all that apply", re.IGNORECASE)
+# A tick box whose label is a statement of the owner's, not a choice among others.
+_STATEMENT = re.compile(r"\s*i\s+(?:agree|consent|acknowledge|understand|have\s+read|certify|authori[sz]e|accept|"
+                        r"confirm|attest|would\s+like|wish\s+to\s+receive|opt\s+in|allow)\b", re.IGNORECASE)
 # The note a site writes under a question left unanswered: it belongs to that question, it starts nothing.
 _REQUIRED_NOTE = re.compile(r"\s*(?:(?:this\s+)?(?:question|field|answer|selection)\s+(?:is\s+)?)?required\.?\s*",
                             re.IGNORECASE)
@@ -328,12 +331,14 @@ def parse_snapshot(snapshot: str) -> list[Control]:
             if controls and not controls[-1].name and controls[-1].role in ("radio", "checkbox", "switch") \
                     and not controls[-1].value and role == "text":
                 controls[-1].name = candidate_text
-            # After a choice: the label drawn beside it and the site's "Question Required" note are not a new
-            # question; text that asks, or that sits outside the choice's own wrapper, is.
+            # After a choice: text that reads as a question starts the next one. Not the choice's own label -- the
+            # same words as its name, or any text right after a choice that has no name of its own (Federal
+            # Recovery Service draws "Facebook", "Indeed" ... beside unnamed radios) -- and not the site's
+            # "Question Required" note.
             last_choice = controls[-1] if controls and controls[-1].role in ("radio", "checkbox") else None
-            if last_choice is not None and not _REQUIRED_NOTE.fullmatch(candidate_text) \
+            if last_choice is not None and last_choice.name and not _REQUIRED_NOTE.fullmatch(candidate_text) \
                     and not _same_question(candidate_text, last_choice.name) \
-                    and (_INTRODUCES_CHOICES.search(candidate_text) or indent < last_choice_indent):
+                    and _INTRODUCES_CHOICES.search(candidate_text):
                 text_since_choice = candidate_text
             # Ant Design / React custom comboboxes render their selected value as a
             # trailing generic/text element right after the combobox input.
@@ -466,8 +471,13 @@ def _group_tick_boxes(controls: list[Control], runs: dict[int, tuple[int, str]])
     asked: dict[str, int] = {}
     for run, boxes in members.items():
         question = runs[id(boxes[0])][1]
+        # Boxes that each say something the owner agrees to ("I agree to ...", "I consent to ...") are separate
+        # questions even under one heading: grouped, only the first would be ticked.
+        # And a box named by the same words is labelled by them, so they are not a question over the others
+        # (Chobani's "Notification:" opt-in).
         if len(boxes) < 2 or not question or not _INTRODUCES_CHOICES.search(question) \
-                or any(safety.is_attestation(box.name) for box in boxes):
+                or any(safety.is_attestation(box.name) or safety.is_privacy_consent(box.name)
+                       or _STATEMENT.match(box.name or "") or _same_question(box.name, question) for box in boxes):
             continue
         # The same question twice (Paylocity's form asked for certifications in two lists) is two questions:
         # one name for both made the second list look answered by the first.
@@ -2172,8 +2182,11 @@ class PageAgent:
             # A radio group has one correct option.  ``choose`` selects that
             # option by its label; ``check`` would blindly tick whichever
             # radio happened to be visited first.
-            if control.role in ("checkbox", "switch") and not control.group:
-                action = "check" if value.strip().lower() not in ("no", "false", "0") else "uncheck"
+            # A tick box answered for itself ("checked": a consent the profile allows) is ticked itself, grouped or
+            # not; a group's answer names its choices.
+            if control.role in ("checkbox", "switch") and (
+                    not control.group or value.strip().lower() in ("checked", "true", "unchecked", "false")):
+                action = "check" if value.strip().lower() not in ("no", "false", "0", "unchecked") else "uncheck"
             try:
                 answer = Answer(control.ref, control.question, action, value, source)
                 if self.do(page, answer, control):
@@ -3797,15 +3810,13 @@ class PageAgent:
         # A list whose choices exist only once it is opened -- Greenhouse's type-to-search lists, a server's
         # suggestions -- is filled by the field inventory's filler, which opens it the way its portal builds it,
         # reads the rows, clicks the one that is the answer and confirms it (form_fields.choose). Lucid's gender
-        # and disability lists were left empty on three passes (29 September). Not among the rows: nothing else is
-        # tried, and the question goes on with its choices.
+        # and disability lists were left empty on three passes (29 September). When it does not take, the ways
+        # below that other portals rely on (Workday's prompt lists, Ant lists) are tried as before.
         if not control.options and control.role == "combobox":
             field = self._inventory_field(page, control)
-            if field is not None:
-                if form_fields.choose(tab, field, value):
-                    self._choice_methods[control.ref] = "inventory_filler"
-                    return True
-                return False
+            if field is not None and form_fields.choose(tab, field, value):
+                self._choice_methods[control.ref] = "inventory_filler"
+                return True
 
         # An Ant Design list (Dayforce): read whole, chosen by label, and
         # confirmed by what the select then shows (interaction.resolve_ant_dropdown).

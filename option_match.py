@@ -113,8 +113,13 @@ def best_option(options: list[str], answer: str) -> Optional[int]:
     #    employee" among "Currently a contractor", "Previously an employee" ... -- Lucid, 29 September). Two such
     #    choices, or none, and there is no answer. A Yes is never read this way: several choices can mean yes.
     if want in ("no", "none", "never"):
-        return _only_one([i for i, o in real if _SAYS_NO.match(plain(o))])
+        return _only_one([i for i, o in real if _SAYS_NO.match(plain(o)) and not _DECLINES.search(plain(o))])
     return None
+
+
+# "I don't wish to answer" opens like a no, and is not one.
+_DECLINES = re.compile(r"\b(?:wish|want|prefer|choose|like)\s+(?:not\s+)?to\s+(?:answer|disclose|say|respond|"
+                       r"self|identify|provide|share)|\bdecline|\brather\s+not")
 
 
 _SAYS_NO = re.compile(r"^(?:no|not|never|none|neither|i\s+(?:have|had|do|did|am|was|will)\s+not|"

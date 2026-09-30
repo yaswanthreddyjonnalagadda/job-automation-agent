@@ -302,6 +302,8 @@ CONCEPTS: dict[str, dict[str, Any]] = {
         "patterns": [
             r"\b(?:linked\s*in(?:\s*profile|\s*url)?)\b",
         ],
+        # "How did you hear about us? LinkedIn" names LinkedIn as where the owner heard, not for a profile link.
+        "negative": r"\bhear\b|learn(?:ed)?\s+about|find\s+out\s+about|\bsource\b|\breferr",
     },
     "CURRENT_JOB": {
         "patterns": [
@@ -441,7 +443,8 @@ def match_concept(
                 # (e.g., name="Title" in container="Work Experience")
                 if container_boost and re.search(container_boost, clean_c, re.IGNORECASE):
                     score += 20
-                candidates.append((score, concept_name, bool(match_q), match_q.start() if match_q else 10_000))
+                candidates.append((score, concept_name, bool(match_q),
+                                   (match_q.end() - match_q.start(), -match_q.start()) if match_q else (0, -10_000)))
 
     # A place named inside a question that asks something else is where the
     # question applies, not what it asks: "Are you legally authorized to work
@@ -457,12 +460,10 @@ def match_concept(
     if _YES_NO_QUESTION.match(clean_q) and not _REQUEST.match(clean_q):
         candidates = [c for c in candidates if c[1] not in VALUE_CONCEPTS]
 
-    # The best score wins; between equals, what the question names first is what it asks ("disability" before
-    # "major life activities"); the table's order settles the rest, as before.
-    best_concept, best_key = None, (0, 0)
-    for score, concept_name, _in_q, where in candidates:
-        if (score, -where) > best_key:
-            best_key, best_concept = (score, -where), concept_name
+    best_concept, best_score = None, 0
+    for score, concept_name, _in_q, _span in candidates:     # table order breaks a tie, as before
+        if score > best_score:
+            best_score, best_concept = score, concept_name
     return best_concept
 
 
