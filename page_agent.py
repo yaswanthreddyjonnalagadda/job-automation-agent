@@ -2782,6 +2782,9 @@ class PageAgent:
                         continue
                     if not answered and any(_same_question(question, item) for item in given_questions):
                         answered = True
+                    if not answered and control.role in ("textbox", "searchbox") \
+                            and form_fields.tags_beside(self.locate(page, control.ref)):
+                        answered = True         # a tag box holding tags (UKG's Skills): its text box stays empty
                     if not answered and question not in missing_required:
                         missing_required.append(question)
                 # Whatever the page draws it as: a required field a person can see, still empty, is named -- the
