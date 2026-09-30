@@ -3233,6 +3233,11 @@ class PageAgent:
         if action == "fill" and not str(answer.source or "").startswith(("profile.", "owner", "work history")) \
                 and self._optional_entry_box(control, ()):
             return "an optional box of a job or degree entry -- left blank rather than written up"
+        # A tag box that already holds tags is answered: its text box stays empty beside the chips, and the page
+        # plan kept asking to type into UKG's Skills (a fill timeout each time, 30 September).
+        if action in ("fill", "choose") and control.role in ("textbox", "searchbox", "combobox") \
+                and form_fields.tags_beside(self.locate(page, control.ref)):
+            return "a tag box that already holds tags -- left as it is"
         # Who the owner is (gender identity, orientation, race, disability, veteran status): only their own answer.
         if concept_matcher.is_self_identification(f"{question} {control.container} {control.context}") \
                 and not str(answer.source or "").startswith(("profile.", "owner", "answer_bank.you")):
