@@ -75,6 +75,21 @@ rules: a general one joins **Your saved answers**, one about that employer is ke
 that employer, and legal, visa and signed answers are not kept. It then leaves the
 dashboard's "Waiting for your answer" list.
 
+### Questions are recognised from data, and answered only from you
+
+Which fact a question asks for is recognised from `reference/concepts.json` as well
+as the built-in table, so a new wording of a known question is a line of data, not a
+change to the agent. The Profile page has fields for what forms ask and only you can
+say: preferred first name, gender identity, sexual orientation, transgender,
+pronouns, GPA, certifications, languages, and skill levels (1-5, for "rate your skill
+with ..."). A question about who you are is answered only from these, never by the AI;
+while a field is empty the question comes to you once, and your answer is kept. An
+empty middle or preferred name means you have none, and the box is left blank. A
+question for one part of a date ("Date available to start work: Month") gets that
+part. Nothing about you is written into the agent's code as a default any more
+(a job start of "February 2025", a graduation of "December 2022", "LinkedIn",
+"Email"): what your profile does not say is asked.
+
 ### The answer bank: answered once, answered on every portal
 
 Before, an answer the agent (or the AI) gave was never used again, and one of yours

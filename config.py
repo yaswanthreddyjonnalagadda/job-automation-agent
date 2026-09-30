@@ -124,6 +124,18 @@ class UserProfile:
     preferred_language: str = ""
     people_managed: str = ""
     outside_business_interests_with_competitors: str = ""
+    # Asked by many forms, and only yours to answer (30 September: with none of these in the profile the AI
+    # guessed them). Empty = the question comes to you once, and your answer is kept.
+    preferred_name: str = ""           # empty = you have none: the box is left blank
+    gender_identity: str = ""          # empty = your `gender` answers "gender identity" too
+    sexual_orientation: str = ""
+    transgender: str = ""
+    pronouns: str = ""
+    gpa: str = ""
+    certifications: tuple[str, ...] = ()
+    languages: tuple[str, ...] = ()
+    # "Skill: level" on a 1-5 scale, for "rate your skill with ..." questions: ("Cisco: 5", "Palo Alto: 4").
+    skill_levels: tuple[str, ...] = ()
     # Degrees from the resume, newest first: (degree level, field, school, year).
     education: tuple[tuple[str, str, str, str], ...] = ()
     # The same degrees with the dates forms ask for: (school, started, finished).
@@ -291,6 +303,12 @@ class AppConfig:
     # correction at hand-over; "leave" leaves it for the owner. A value the
     # owner entered is never changed either way. See site_prefill_policy().
     site_prefill_policy: str = field(default_factory=lambda: site_prefill_policy())
+
+
+# Profile fields where an empty value is itself the answer -- there is none -- rather than "not stated yet".
+# A form's box for one of these is left blank; any other empty field is a question for the owner.
+BLANK_MEANS_NONE = frozenset({"middle_name", "preferred_name", "prefix", "security_clearance_level",
+                              "phone_home", "phone_work", "portfolio_url"})
 
 
 def get_user_profile() -> UserProfile:

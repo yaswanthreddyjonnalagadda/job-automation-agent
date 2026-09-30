@@ -52,7 +52,7 @@ import option_match
 import repeated_entries
 import login_guard
 import open_answers
-from config import resume_to_attach, site_prefill_policy
+from config import BLANK_MEANS_NONE, resume_to_attach, site_prefill_policy
 from interaction import (
     click_resiliently,
     commit_draft_cards,
@@ -3698,7 +3698,7 @@ class PageAgent:
         """Whether a blank answer is the profile's own word: its field exists and is empty on purpose (no middle
         name), as against a question the profile knows nothing about."""
         field = str(source or "").split(".", 1)[1] if str(source or "").startswith("profile.") else ""
-        return bool(field) and "." not in field and hasattr(self.profile, field) \
+        return field in BLANK_MEANS_NONE and hasattr(self.profile, field) \
             and not str(getattr(self.profile, field) or "").strip()
 
     def _inventory_field(self, page, control: Control):

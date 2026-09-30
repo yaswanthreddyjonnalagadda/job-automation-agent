@@ -7,8 +7,11 @@ Greenhouse, Lever, Taleo, iCIMS, SuccessFactors, SmartRecruiters, Jobvite, etc.)
 
 from __future__ import annotations
 
+import calendar
+import json
 import re
 from datetime import date
+from pathlib import Path
 from typing import Any, Optional
 
 import geo_reference
@@ -296,7 +299,9 @@ CONCEPTS: dict[str, dict[str, Any]] = {
         "patterns": [
             r"\b(?:available\s+to\s+start|when\s+can\s+you\s+start|notice\s+period|earliest\s+start\s+date|availability\s+to\s+start|available\s+start\s+date|target\s+start\s+date)\b",
         ],
-        "negative": r"employer|company|school|university|education|work|employment|job|experience|from\s+date",
+        # A past job's or school's dates, not when the owner can start ("Date Available to Start Work" is the latter).
+        "negative": r"employer|company|school|university|education|work\s+(?:history|experience)|employment\s+"
+                    r"(?:history|dates?)|job\s+(?:history|title)|experience|from\s+date",
     },
     "LINKEDIN_URL": {
         "patterns": [
@@ -392,6 +397,30 @@ CONCEPTS: dict[str, dict[str, Any]] = {
 
 
 # Concepts that name a place. Inside a longer question they say where it applies.
+# ---------------------------------------------------------------------------------------------------------------
+# The same table as data (reference/concepts.json): a new wording of a known question, or a new question a profile
+# field answers, is a line there -- not a change to this file. Its concepts come first, so between two equal
+# matches the data's more specific one ("gender identity") wins over the table's general one ("gender").
+# ---------------------------------------------------------------------------------------------------------------
+CONCEPTS_FILE = Path(__file__).resolve().parent / "reference" / "concepts.json"
+
+
+def _concept_data() -> dict:
+    try:
+        data = json.loads(CONCEPTS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+_DATA = _concept_data()
+DATA_CONCEPTS: dict[str, dict[str, Any]] = {name: spec for name, spec in (_DATA.get("concepts") or {}).items()
+                                            if isinstance(spec, dict) and spec.get("patterns")}
+for _name, _wordings in (_DATA.get("more_wordings") or {}).items():
+    if _name in CONCEPTS and isinstance(_wordings, list):
+        CONCEPTS[_name] = {**CONCEPTS[_name], "patterns": list(CONCEPTS[_name].get("patterns", [])) + _wordings}
+CONCEPTS = {**DATA_CONCEPTS, **{name: spec for name, spec in CONCEPTS.items() if name not in DATA_CONCEPTS}}
+
 PLACE_CONCEPTS = ("COUNTRY", "STATE_PROVINCE", "CITY", "CITY_STATE", "POSTAL_CODE", "RESIDES_IN")
 
 
@@ -493,7 +522,7 @@ VALUE_CONCEPTS = frozenset({
     "CURRENT_EMPLOYER", "SCHOOL_UNIVERSITY", "DEGREE_LEVEL", "MAJOR_FIELD_OF_STUDY", "GRADUATION_YEAR",
     "LINKEDIN_URL", "WORK_START_DATE", "EDUCATION_END_DATE", "TODAYS_DATE", "DESIRED_SALARY", "NOTICE_PERIOD",
     "HOW_DID_YOU_HEAR",
-})
+}) | frozenset(name for name, spec in DATA_CONCEPTS.items() if spec.get("value"))
 
 
 # Questions about where the owner lives. The options on offer can correct the
@@ -788,7 +817,7 @@ def resolve_profile_value(
             val = str(minimum)
         src = "profile.salary"
     elif concept == "HOW_DID_YOU_HEAR":
-        val = str(getattr(profile, "how_did_you_hear", "") or "LinkedIn").strip()
+        val = str(getattr(profile, "how_did_you_hear", "") or "").strip()
         src = "profile.how_did_you_hear"
     elif concept == "APPLIED_BEFORE":
         val = "Yes" if _is_yes(getattr(profile, "applied_here_before", False), default=False) else "No"
@@ -806,7 +835,7 @@ def resolve_profile_value(
         val = "Yes" if _is_yes(getattr(profile, "bound_by_non_compete", False), default=False) else "No"
         src = "profile.bound_by_non_compete"
     elif concept == "PREFERRED_CONTACT":
-        val = str(getattr(profile, "preferred_contact_method", "Email") or "Email").strip()
+        val = str(getattr(profile, "preferred_contact_method", "") or "").strip()
         src = "profile.preferred_contact_method"
     elif concept == "LINKEDIN_URL":
         val = str(getattr(profile, "linkedin_url", "") or "").strip()
@@ -816,10 +845,10 @@ def resolve_profile_value(
         src = "profile.current_job"
     elif concept == "WORK_START_DATE":
         dates = str(getattr(profile, "current_employment_dates", "") or "").strip()
-        val = dates.split("-")[0].strip() if "-" in dates else (dates or "February 2025")
+        val = dates.split("-")[0].strip() if "-" in dates else dates
         src = "profile.current_employment_dates"
     elif concept == "WORK_REASON_FOR_LEAVING":
-        val = str(getattr(profile, "reason_for_leaving", "") or "Contract ending").strip()
+        val = str(getattr(profile, "reason_for_leaving", "") or "").strip()
         src = "profile.reason_for_leaving"
     elif concept == "EDUCATION_END_DATE":
         ed_dates = getattr(profile, "education_dates", ()) or ()
@@ -827,11 +856,30 @@ def resolve_profile_value(
             val = ed_dates[0][2]
             src = "profile.education_dates"
         else:
-            val = "December 2022"
-            src = "profile.education.end_date"
+            src = "profile.education_dates"
     elif concept == "TODAYS_DATE":
         val = date.today().isoformat()
         src = "profile.application_date"
+
+    if concept in DATA_CONCEPTS:
+        spec = DATA_CONCEPTS[concept]
+        field_name = str(spec.get("profile_field") or "")
+        raw = getattr(profile, field_name, "") if field_name else ""
+        if spec.get("resolver") == "skill_level":
+            val = _skill_level(raw, question)
+        else:
+            if isinstance(raw, (list, tuple)):
+                raw = "; ".join(str(item).strip() for item in raw if str(item).strip())
+            val = "" if raw in (None, 0) else str(raw).strip()
+            if not val and spec.get("fallback_field"):
+                field_name = str(spec["fallback_field"])
+                val = str(getattr(profile, field_name, "") or "").strip()
+        src = f"profile.{field_name}"
+
+    # One part of a date ("Date available to start work - Month", "End date year"): that part, not the whole date.
+    part = _DATE_PART.search(clean_text(question)) if (val and question and concept in _DATE_CONCEPTS) else None
+    if part:
+        val = _date_part(val, part.group(1), options) or val
 
     if val and options:
         matched_opt = best_option_match(val, options)
@@ -839,3 +887,40 @@ def resolve_profile_value(
             return matched_opt, src
 
     return val, src
+
+
+_DATE_CONCEPTS = frozenset({"NOTICE_PERIOD", "WORK_START_DATE", "EDUCATION_END_DATE", "TODAYS_DATE"})
+_DATE_PART = re.compile(r"\b(month|day|year)\s*$")
+
+
+def _date_part(value: str, part: str, options: Optional[list[str]] = None) -> str:
+    """The year, day or month of a date answer ("December 2022", "2 weeks", "2026-10-15"); the month as the list
+    writes it (December, Dec, 12) when a list is given, else its name."""
+    import form_fields
+    when = form_fields.resolve_date(value)
+    if not when:
+        return ""
+    year, month, day = when
+    if part == "year":
+        return str(year)
+    if part == "day":
+        return str(day)
+    spellings = {calendar.month_name[month].lower(), calendar.month_abbr[month].lower(), str(month), f"{month:02d}"}
+    for option in options or []:
+        if option.strip().lower().rstrip(".") in spellings:
+            return option
+    return calendar.month_name[month]
+
+
+def _skill_level(entries, question: str) -> str:
+    """"Rate your skill with Cisco/Meraki (1-5)" from the profile's "Cisco: 5": the level of the skill the question
+    names (the longest name found in it), or nothing."""
+    words = f" {clean_text(question)} "
+    best, level = "", ""
+    for entry in entries or ():
+        name, _sep, rated = str(entry).partition(":")
+        name = clean_text(name)
+        digit = re.search(r"\d", rated)
+        if name and digit and f" {name} " in words and len(name) > len(best):
+            best, level = name, digit.group(0)
+    return level
