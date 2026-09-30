@@ -100,7 +100,7 @@ INVENTORY_JS = r"""
     for (let depth = 0; node && depth < 4; depth++) node = node.parentElement || node;
     return text(node).slice(0, 300);
   };
-  const shownValue = e => {
+  const shownValue = (e, label) => {
     // react-select, Ant, Workday: the picked value is drawn beside the input, not in it
     for (let n = e, d = 0; n && d < 6; n = n.parentElement, d++) {
       const v = n.querySelector && n.querySelector('.select__single-value, [class*="singleValue"], .ant-select-selection-item, [data-automation-id=selectedItem]');
@@ -108,7 +108,22 @@ INVENTORY_JS = r"""
       const chips = n.querySelector && n.querySelector('[role=listbox][aria-label="items selected"] [role=option], .select__multi-value__label');
       if (chips && text(chips)) return text(chips).replace(/, press delete to clear value\.?$/i, '');
     }
-    return e.value || '';
+    if (e.value) return e.value;
+    // A tag box: what it holds is drawn beside it as chips, each with its own "Remove <tag>" button, and the
+    // text box stays empty. UKG's Skills held six tags and read as a required blank, so the run stopped and
+    // waited for the owner (30 September). Looked for only as far out as this is the one box in the block.
+    for (let n = e.parentElement, d = 0; n && d < 4; n = n.parentElement, d++) {
+      if (n.querySelectorAll('input:not([type=hidden]), select, textarea').length > 1) break;
+      const tags = [...n.querySelectorAll('button, [role=button]')]
+          .map(b => (b.getAttribute('aria-label') || b.getAttribute('title') || text(b) || '')
+              .match(/^\s*(?:remove|delete|clear)\s+(.+?)\s*$/i))
+          .filter(Boolean).map(m => m[1])
+          // "Remove Website" beside a single link box removes the box itself, not a tag in it
+          .filter(t => !/^(this|item|entry|row|field|answer|file|attachment)$/i.test(t)
+              && t.toLowerCase() !== String(label || '').replace(/[\s*✱:]+$/, '').toLowerCase());
+      if (tags.length) return tags.join(', ');
+    }
+    return '';
   };
   // Required: the box says so, its label ends in a star, or the label element carries a 'required' class
   // (Ashby marks the question's label, not the box).
@@ -181,7 +196,7 @@ INVENTORY_JS = r"""
     else if (kind === 'button_list') value = text(e);
     else if (kind === 'yes_no') { const on = e.parentElement.querySelector('[aria-pressed=true]'); value = on ? text(on) : ''; }
     else if (kind === 'combobox' && tag !== 'input') value = text(e);
-    else value = shownValue(e);
+    else value = shownValue(e, label);
 
     out.push({
       id, kind, tag, type, role,
