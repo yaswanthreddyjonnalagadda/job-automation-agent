@@ -3480,8 +3480,7 @@ class PageAgent:
             blank = next((o for o in control.options or () if option_match.is_placeholder(o)), None)
             if blank is None:
                 return False
-            loc.select_option(label=blank, timeout=5_000)
-            loc.dispatch_event("change")
+            loc.select_option(label=blank, timeout=5_000)     # fires input and change itself
         else:
             fill_and_dispatch(loc, "", timeout=5_000)
         shown = loc.evaluate("e => e.tagName === 'SELECT' ? (e.options[e.selectedIndex] || {}).text || '' : e.value")
