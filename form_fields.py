@@ -37,7 +37,9 @@ TAGS_BESIDE_JS = r"""
   // the owner (30 September). Looked for only as far out as this is the one box in the block.
   const text = n => (n ? (n.innerText || n.textContent || '').replace(/\s+/g, ' ').trim() : '');
   for (let n = e.parentElement, d = 0; n && d < 4; n = n.parentElement, d++) {
-    if (n.querySelectorAll('input:not([type=hidden]), select, textarea').length > 1) break;
+    // Another box to type in means the block is wider than this box; a list inside a chip (UKG's "Skill level"
+    // under each skill) is part of the tag, not another box.
+    if (n.querySelectorAll('input:not([type=hidden]):not([type=checkbox]):not([type=radio]), textarea').length > 1) break;
     const tags = [...n.querySelectorAll('button, [role=button]')]
         .map(b => (b.getAttribute('aria-label') || b.getAttribute('title') || text(b) || '')
             .match(/^\s*(?:remove|delete|clear)\s+(.+?)\s*$/i))
@@ -769,6 +771,8 @@ def fill_date(page, f: Field, value: str) -> bool:
 def tags_beside(locator) -> list[str]:
     """The tags a tag box holds (see TAGS_BESIDE_JS); [] when it holds none or cannot be read."""
     try:
-        return list(locator.evaluate("(e) => (" + TAGS_BESIDE_JS.strip() + ")(e, '')", timeout=2_000) or [])
+        return list(locator.evaluate(
+            "(e) => (" + TAGS_BESIDE_JS.strip() + ")(e, e.getAttribute('aria-label')"
+            " || (e.labels && e.labels[0] ? (e.labels[0].innerText || '') : ''))", timeout=2_000) or [])
     except Exception:
         return []
