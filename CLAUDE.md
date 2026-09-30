@@ -123,6 +123,13 @@ of them hold.
   call it; if the same decision exists in two modules, consolidate it
   rather than patching each copy. `safety.py` changes only with the
   owner's explicit approval on the pull request.
+- **Nothing that worked breaks unseen.** The pre-commit hook runs
+  `replay_guard.py`: every page saved from a real application is read with
+  the last commit and with the staged code (about 20 seconds, no browser).
+  A difference in how any question is read, grouped or answered blocks the
+  commit. Commit it (`REPLAY_OK=1 git commit ...`) only when every
+  difference is a correction, and list them in the commit message. A fix for
+  one portal that changes another portal's answers is not a fix.
 - **Tests first, all green.** A new behaviour or fix comes with a test that
   failed before it. `python -m pytest -q` passes locally and in CI, with no
   test weakened to make it pass.
