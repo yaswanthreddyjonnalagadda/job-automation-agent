@@ -92,6 +92,24 @@ dashboard's "Waiting for your answer" list.
 - While the agent is working, the dashboard says so; an application appears under
   "Needs you", with Continue, Resume, Skip, Close browser and Reload, only once the
   agent has stopped for you.
+- A degree's From and To come from your profile's education dates when your work
+  history holds only its end; you are not asked for dates your profile already has.
+- A date in a job or degree entry that contradicts that entry's own record (the site's
+  resume import put "Sep 2026" as a finished job's end) is put right by the agent, and
+  the end of the job you still have is emptied. Only dates: a school or degree name the
+  site spells another way is left as it is. A value you set yourself is never changed.
+- A box your profile says has no answer (no apartment or suite: Profile page, "Apartment
+  / suite / unit") stays empty, and is emptied if the AI wrote into it before.
+- A skills box that already holds tags (each with its own remove "x") counts as filled:
+  the agent does not type into it and does not stop for it.
+- "Are you currently in OPT / STEM OPT status?" is answered from the work authorization
+  your profile states (H-1B: No); with none stated, it is left for you.
+- A major the list does not offer is taken as its broader field ("Electrical and
+  Electronics Engineering" as "Electrical Engineering"), never the other way.
+- Once an application is under way, the agent never presses the site's own menu (its
+  header, navigation or footer: "Find Opportunities", "My Presence"). If the page falls
+  back to the job board, it returns to the job's own page and resumes the application
+  from there, instead of searching the board.
 
 ### Tick boxes
 

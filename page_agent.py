@@ -4828,6 +4828,15 @@ class PageAgent:
         return reasons
 
     # -- moving on ----------------------------------------------------------------------
+    def _in_site_menu(self, page, control: Control) -> bool:
+        """Whether a button sits in the site's header, navigation or footer rather than in the page's content."""
+        try:
+            return bool(self.locate(page, control.ref).evaluate(
+                "e => !!e.closest('header, nav, footer, [role=banner], [role=navigation], [role=contentinfo]')",
+                timeout=2_000))
+        except Exception:
+            return False
+
     def press_next(self, page, plan: PagePlan, controls: list[Control]) -> tuple[str, object, str]:
         """("moved" | "submitted" | "retry" | "stop", page, what happened)."""
         tab = self.tab(page)
@@ -4853,6 +4862,21 @@ class PageAgent:
             self.settle(page, 3_000)
             return "retry", page, "no way forward was found on this page"
         label = " ".join((control.name or plan.next_label).split())
+        if plan.page_kind == "application_form":
+            self._seen_form = True
+        # The site's own menu (its header, navigation or footer) is never a step of an application already under
+        # way. UKG, 30 September: the page fell back to the job board's home mid-application, the plan pressed the
+        # header's "Find Opportunities", searched the board and opened another job's link. Once the form has been
+        # seen, a page that offers only the menu is left for the job's own page, where the application is resumed.
+        if getattr(self, "_seen_form", False) and plan.next_kind != "open_application" \
+                and not re.search(r"\bapply\b", label, re.IGNORECASE) and self._in_site_menu(page, control):
+            back = str(getattr(self.job, "url", "") or "")
+            if not back:
+                return "stop", page, f"{label!r} is the site's own menu -- the page has left the application"
+            logger.info("NOT PRESSING %r: the site's own menu, not a step of the application -- back to the job", label)
+            tab.goto(back, wait_until="domcontentloaded", timeout=45_000)
+            self.settle(page, 2_000)
+            return "moved", page, "back to the job's own page"
         # "Add Education", "Add Experience" add an empty entry -- a way forward only while the owner has more
         # degrees or jobs than the page shows. UKG, 30 September: the plan pressed "Add Education" as its next step
         # on a page already showing both degrees, and the new entry was filled with the master's a second time.
