@@ -1,0 +1,12 @@
+{
+  "id": "f076",
+  "date": "2026-09-30",
+  "class": "An answer typed into a box whose shape it does not fit",
+  "symptom": "Ciena on Workday, 30 September: under Social Network URLs, the AI read 'Facebook' as 'have you worked at Facebook?' and 'I do not have work authorization or citizenship for Facebook...' was typed into the Facebook box (after f074 caught one wording, the next came in another).",
+  "site": "Every portal with LinkedIn / Facebook / Twitter / GitHub / Website boxes",
+  "root_cause": "Only refusal wordings were checked before typing; nothing checked that the answer had the shape the box asks for, so each new wording of a misread question got through.",
+  "why_tests_missed": "URL boxes were filled from the profile in tests; none met an AI answer for them.",
+  "fix": "PageAgent.do: a box whose label is a web-address box (LinkedIn, Facebook, Twitter, GitHub, Instagram, Portfolio, Website, Blog, URL, '... Profile URL') takes only a web address; anything else is not typed and the box is left for the owner.",
+  "tests": ["replay_guard.py"],
+  "prevention": "Check an answer against the box's shape (a URL box, a date box, a number box), not against a list of wrong answers."
+}

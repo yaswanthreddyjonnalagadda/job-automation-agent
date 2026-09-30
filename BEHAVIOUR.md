@@ -529,7 +529,10 @@ flow did this, and a new Workday application reached My Experience with nothing 
 (Ciena, 30 September).
 
 An AI that says it cannot answer ("I am unable to answer...", "... does not have a
-Twitter account") is never typed into a form; the box is left empty.
+Twitter account") is never typed into a form; the box is left empty. A box for a web address
+(LinkedIn, Facebook, Twitter, GitHub, Website, Portfolio, a "URL") takes only a web
+address, whatever the AI says. And an open list's own entries (Workday's Field of Study
+list, left open) are never read as questions of their own.
 
 ## Job boards are not the employer's site
 

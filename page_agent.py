@@ -83,6 +83,13 @@ ANSWER_ROLES = {"textbox", "searchbox", "combobox", "listbox", "radio", "checkbo
 PRESS_ROLES = {"button", "link", "menuitem", "tab"}
 OPTION_ROLES = {"option", "menuitemradio", "menuitem", "treeitem", "listitem", "gridcell"}
 
+# A box that asks for a web address (its label is the site or the word itself, not a question about it), and what a
+# web address looks like.
+_WEB_ADDRESS_BOX = re.compile(r"^\W*(?:your\s+)?(?:linked\s?in|facebook|twitter|x\s*\(twitter\)|git\s?hub|instagram|"
+                              r"portfolio|personal\s+website|website|web\s*site|blog|url)(?:\s+(?:url|link|profile|"
+                              r"profile\s+url|address|page))?\W*$", re.IGNORECASE)
+_WEB_ADDRESS = re.compile(r"(?:https?://|www\.)\S+|[\w-]+(?:\.[\w-]+)+(?:/\S*)?", re.IGNORECASE)
+
 # Never pressed, whatever the page or Claude says.
 NEVER_PRESS = re.compile(
     r"finish later|save (and|&) (exit|finish later|close)|save for later|withdraw|log ?out|sign ?out|\bcancel\b|"
@@ -256,6 +263,7 @@ def parse_snapshot(snapshot: str) -> list[Control]:
     entry_box: Optional[tuple[int, Control]] = None   # an empty-looking text box whose value may follow as a child line
     toggle_row: list[tuple[Control, bool]] = []       # buttons side by side that may be one question's choices
     toggle_indent, toggle_question = -1, ""
+    inside_choice: list[int] = []   # indents of the list options (and open lists) the current line sits inside
     for raw in (snapshot or "").splitlines():
         # A line whose text holds a colon comes wrapped in quotes:
         #   - 'heading "Apply: Network Engineer" [level=1] [ref=e2]'
@@ -281,6 +289,14 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         preceding_text = last_text
         while stack and stack[-1][0] >= indent:
             stack.pop()
+        while inside_choice and inside_choice[-1] >= indent:
+            inside_choice.pop()
+        if role in ("radio", "checkbox") and inside_choice:
+            # A tick or radio drawn inside a list's own option is that choice's picture, not a question: Workday's
+            # Field of Study list, left open on the page, was read as a question per subject -- "Accounting",
+            # "Advertising", "African Languages" ... -- and answered one by one for three minutes (Ciena, 30 Sept).
+            stack.append((indent, "", None))
+            continue
         parent_group = next((label for _i, label, _ctl in reversed(stack) if label), "")
         owner = next((ctl for _i, _l, ctl in reversed(stack) if ctl is not None), None)
 
@@ -454,6 +470,8 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         # A named group is both a question for what is inside it and, when it
         # has a reference, a control the agent can act on.
         stack.append((indent, name if role in ("group", "radiogroup", "region") else "", control))
+        if role in ("option", "menuitem", "menuitemradio", "treeitem", "listbox"):
+            inside_choice.append(indent)
     if toggle_row:
         _settle_toggle_row(toggle_row, toggle_question)
     _group_tick_boxes(controls, checkbox_runs)
@@ -3732,6 +3750,13 @@ class PageAgent:
         tab = self.tab(page)
         # Only typed text: a choice can only ever take one of the list's own options, and "N/A" or "None" is
         # often the right one -- even when the list shows its options only once it is opened.
+        if answer.action == "fill" and (answer.value or "").strip() and _WEB_ADDRESS_BOX.search(control.question or "") \
+                and not _WEB_ADDRESS.fullmatch((answer.value or "").strip()):
+            # Ciena on Workday, 30 September: the AI read "Facebook" under Social Network URLs as "have you worked at
+            # Facebook?" and its sentence was typed into the box. A box for a web address takes only a web address.
+            logger.info("NOT TYPED: %r for %r -- a box for a web address takes only a web address",
+                        answer.value[:60], control.question[:60])
+            return False
         if answer.action == "fill" and is_non_answer(answer.value):
             # Whoever proposed it -- the page plan or a single question -- "Not provided in the resume" is not the
             # owner's answer and is never typed (Steelcase's Work Phone, 29 September).
