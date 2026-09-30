@@ -34,6 +34,7 @@ import geo_reference
 import emailed_codes
 import login_guard
 import provenance
+import form_fields
 import option_match
 import safety
 import visible_desktop
@@ -1180,8 +1181,7 @@ class JobApplicationAssistant:
                 typed = (box.input_value() or "").strip()
                 if typed and box.get_attribute("aria-expanded") == "true":
                     if not self._click_visible_suggestion(page, box, typed):
-                        box.press("ArrowDown")
-                        box.press("Enter")
+                        form_fields.pick_open_row(page, typed)      # never ArrowDown + Enter
                     page.wait_for_timeout(600)
 
             blanks = [b for b in self.find_required_blanks(page)["required_still_blank"]]
@@ -2841,8 +2841,7 @@ class JobApplicationAssistant:
         field.type(value, delay=40)
         page.wait_for_timeout(1_500)
         if not self._click_visible_suggestion(page, field, value):
-            field.press("ArrowDown")
-            field.press("Enter")
+            form_fields.pick_open_row(page, value)                  # never ArrowDown + Enter
         page.wait_for_timeout(800)
         committed = (field.input_value() or "").strip()
         logger.info("Type-ahead %r now holds %r", label_fragment, committed)
@@ -6261,6 +6260,10 @@ class JobApplicationAssistant:
                 button = page.locator("input[type=submit][value*='Continue' i], input[type=submit][value*='Verify' i]").first
             if button is not None and button.count():
                 self._click_resiliently(button, timeout_ms=8_000)
+            elif self.find_submit_button(page) is not None:
+                # The code sits on the application itself (Greenhouse's security code): the next press is the
+                # application's Submit, and that is the owner's. Enter would be that press.
+                logger.info("CODE: entered -- the next press on this page is the application's Submit, which is yours")
             else:
                 field.press("Enter")
             page.wait_for_timeout(5_000)

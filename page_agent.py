@@ -4013,8 +4013,8 @@ class PageAgent:
                         tab.wait_for_timeout(400)
                         if _check_portal(typed) or _check_portal(value):
                             return True
-                        tab.keyboard.press("ArrowDown")
-                        tab.keyboard.press("Enter")
+                        # The row that is the answer is clicked; never ArrowDown + Enter (form_fields.pick_open_row).
+                        form_fields.pick_open_row(tab, value)
                         tab.wait_for_timeout(500)
                         current = next((c for c in parse_snapshot(self.snapshot(page))
                                         if c.ref == control.ref or _same_question(c.question, control.question)), None)
@@ -4139,9 +4139,9 @@ class PageAgent:
                 box.fill("", timeout=3_000)
                 tab.keyboard.type(typed, delay=60)
                 tab.wait_for_timeout(1_500)          # the list is fetched as you type
-                tab.keyboard.press("ArrowDown")
-                tab.wait_for_timeout(400)
-                tab.keyboard.press("Enter")
+                # The row that is the answer is clicked; never ArrowDown + Enter, which took the first row and, with
+                # no list open, sent the whole form (form_fields.pick_open_row).
+                form_fields.pick_open_row(tab, value)
                 tab.wait_for_timeout(1_200)
                 # Leave the box before judging it: text that was typed but never
                 # chosen stays in the box until then, and was read as the answer.
@@ -4156,7 +4156,7 @@ class PageAgent:
                           if _same_question(c.question, control.question)), None)
             took = shown is not None and shown.answer and _same_answer(shown.answer, value)
             if took and not complaint.search(snapshot):
-                logger.info("CHOSE %r for %r by typing and pressing Enter", value[:30], control.question[:40])
+                logger.info("CHOSE %r for %r by typing and clicking its row", value[:30], control.question[:40])
                 return True
             if shown is not None and shown.answer and not took:
                 # Enter took whichever row was showing, and it is not what was asked

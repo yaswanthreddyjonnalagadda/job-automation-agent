@@ -550,6 +550,33 @@ def choose(page, f: Field, answer: str, timeout_ms: int = 5_000) -> bool:
     return _kept(f, chosen)
 
 
+def pick_open_row(scope, answer: str, timeout_ms: int = 3_000) -> Optional[str]:
+    """After typing into a search box: clicks the row of the list now showing that IS the answer (option_match), and
+    returns its text -- or None, closing the list, when no row is. Never ArrowDown + Enter: that takes whichever row
+    is first ("United States" became "Afghanistan"), and in a box with no list open it sends the whole form -- Lucid,
+    30 September: Greenhouse took it as Submit, showed its errors and mailed its security code."""
+    rows = scope.locator(", ".join(f"{s}:visible" for s in _OPTION_SELECTOR.split(", ")) + ", [role=listbox] li:visible")
+    texts = []
+    try:
+        for i in range(min(rows.count(), 80)):
+            texts.append(" ".join((rows.nth(i).inner_text(timeout=1_000) or "").split()))
+    except Exception:
+        return None
+    index = option_match.best_option(texts, answer) if texts else None
+    if index is None:
+        try:
+            scope.keyboard.press("Escape")
+        except Exception:
+            pass
+        return None
+    try:
+        rows.nth(index).click(timeout=timeout_ms)
+    except Exception as exc:
+        logger.debug("Could not click the row %r: %s", texts[index], str(exc).splitlines()[0][:100])
+        return None
+    return texts[index]
+
+
 def read_choices(f: Field, timeout_ms: int = 4_000) -> list[str]:
     """What a list offers, read by opening it and closed again without choosing. A list that draws its rows only
     when opened (Greenhouse's type-to-search) shows no choices until then: asked without them, the AI took Lucid's
