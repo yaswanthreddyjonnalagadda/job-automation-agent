@@ -3731,6 +3731,13 @@ class PageAgent:
                 logger.info("No choice matching %r for %r among %s", answer.value, control.question[:50],
                             [c.name for c in group][:8])
                 return False
+            if index is None:
+                # The question's own choices do not hold the answer: it is left for the owner, not looked for
+                # elsewhere on the page -- and never clicked as choice number None, which crashed UKG's OPT/STEM
+                # question three times (30 September).
+                logger.info("No choice matching %r for %r among %s", answer.value, control.question[:50],
+                            [c.name for c in group][:8])
+                return False
             target = self.locate(page, group[index].ref)
             try:
                 target.set_checked(True, timeout=5_000)
