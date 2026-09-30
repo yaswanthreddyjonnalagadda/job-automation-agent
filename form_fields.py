@@ -30,9 +30,31 @@ logger = logging.getLogger(__name__)
 
 STAMP = "data-jaa-field"
 
+TAGS_BESIDE_JS = r"""
+(e, label) => {
+  // A tag box: what it holds is drawn beside it as chips, each with its own "Remove <tag>" button, and the text
+  // box stays empty. UKG's Skills held six tags and read as a required blank, so the run stopped and waited for
+  // the owner (30 September). Looked for only as far out as this is the one box in the block.
+  const text = n => (n ? (n.innerText || n.textContent || '').replace(/\s+/g, ' ').trim() : '');
+  for (let n = e.parentElement, d = 0; n && d < 4; n = n.parentElement, d++) {
+    if (n.querySelectorAll('input:not([type=hidden]), select, textarea').length > 1) break;
+    const tags = [...n.querySelectorAll('button, [role=button]')]
+        .map(b => (b.getAttribute('aria-label') || b.getAttribute('title') || text(b) || '')
+            .match(/^\s*(?:remove|delete|clear)\s+(.+?)\s*$/i))
+        .filter(Boolean).map(m => m[1])
+        // "Remove Website" beside a single link box removes the box itself, not a tag in it
+        .filter(t => !/^(this|item|entry|row|field|answer|file|attachment)$/i.test(t)
+            && t.toLowerCase() !== String(label || '').replace(/[\s*✱:]+$/, '').toLowerCase());
+    if (tags.length) return tags;
+  }
+  return [];
+}
+"""
+
 INVENTORY_JS = r"""
 (stampPrefix) => {
   const STAMP = 'data-jaa-field';
+  const tagsBeside = __TAGS_BESIDE__;
   const text = e => (e ? (e.innerText || e.textContent || '').replace(/\s+/g, ' ').trim() : '');
   const visible = e => {
     if (!e || !e.getClientRects().length) return false;
@@ -109,20 +131,9 @@ INVENTORY_JS = r"""
       if (chips && text(chips)) return text(chips).replace(/, press delete to clear value\.?$/i, '');
     }
     if (e.value) return e.value;
-    // A tag box: what it holds is drawn beside it as chips, each with its own "Remove <tag>" button, and the
-    // text box stays empty. UKG's Skills held six tags and read as a required blank, so the run stopped and
-    // waited for the owner (30 September). Looked for only as far out as this is the one box in the block.
-    for (let n = e.parentElement, d = 0; n && d < 4; n = n.parentElement, d++) {
-      if (n.querySelectorAll('input:not([type=hidden]), select, textarea').length > 1) break;
-      const tags = [...n.querySelectorAll('button, [role=button]')]
-          .map(b => (b.getAttribute('aria-label') || b.getAttribute('title') || text(b) || '')
-              .match(/^\s*(?:remove|delete|clear)\s+(.+?)\s*$/i))
-          .filter(Boolean).map(m => m[1])
-          // "Remove Website" beside a single link box removes the box itself, not a tag in it
-          .filter(t => !/^(this|item|entry|row|field|answer|file|attachment)$/i.test(t)
-              && t.toLowerCase() !== String(label || '').replace(/[\s*✱:]+$/, '').toLowerCase());
-      if (tags.length) return tags.join(', ');
-    }
+    // A tag box: what it holds is drawn beside it as chips (TAGS_BESIDE_JS).
+    const tags = tagsBeside(e, label);
+    if (tags.length) return tags.join(', ');
     return '';
   };
   // Required: the box says so, its label ends in a star, or the label element carries a 'required' class
@@ -224,6 +235,7 @@ INVENTORY_JS = r"""
   return out;
 }
 """
+INVENTORY_JS = INVENTORY_JS.replace("__TAGS_BESIDE__", TAGS_BESIDE_JS.strip())
 
 
 @dataclass
@@ -752,3 +764,11 @@ def fill_date(page, f: Field, value: str) -> bool:
         return (box.input_value(timeout=2_000) or "") == text
     except Exception:
         return False
+
+
+def tags_beside(locator) -> list[str]:
+    """The tags a tag box holds (see TAGS_BESIDE_JS); [] when it holds none or cannot be read."""
+    try:
+        return list(locator.evaluate("(e) => (" + TAGS_BESIDE_JS.strip() + ")(e, '')", timeout=2_000) or [])
+    except Exception:
+        return []

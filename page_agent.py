@@ -2576,6 +2576,9 @@ class PageAgent:
                                 continue            # the profile says there is none: never the AI's to fill
                             if is_secret_box(ctrl.question) or is_honeypot(ctrl.question):
                                 continue            # a password or a robots' decoy is never the AI's to answer
+                            if ctrl.role in ("textbox", "searchbox") \
+                                    and form_fields.tags_beside(self.locate(page, ctrl.ref)):
+                                continue            # a tag box that already holds tags (UKG's Skills) is answered
                             try:
                                 # A text box tells how long an answer it takes and what it
                                 # asks beside the label ("max 150 words", "0/500").
