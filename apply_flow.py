@@ -1005,6 +1005,9 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
         if outcome.kind == "captcha":
             logger.info("Solve it in the browser window: the agent notices when it is gone and carries on by "
                         "itself (Continue on the dashboard works too).")
+        elif any("still blank" in r for r in outcome.reasons):
+            logger.info("Fill it in the browser window: once nothing required is blank and you stop typing, the "
+                        "agent carries on by itself (Continue on the dashboard works too).")
         else:
             logger.info("Deal with it in the browser window, then press Continue on the dashboard: "
                         "the agent reads the page again and carries on.")
@@ -1014,7 +1017,8 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
         agent.remember_page_state(page)
         try:
             decision = assistant.wait_for_signal(signal_path, timeout_seconds=args.timeout, page=page,
-                                                 for_captcha=outcome.kind == "captcha")
+                                                 for_captcha=outcome.kind == "captcha",
+                                                 for_blanks=any("still blank" in r for r in outcome.reasons))
         except TimeoutError:
             logger.info("No instruction received; the application is left as it is, unsubmitted.")
             return

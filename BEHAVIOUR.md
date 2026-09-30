@@ -592,6 +592,10 @@ into a drop zone's own file box when its "Select files" button opens no file win
 
 ## When you press Continue
 
+When it stops for required boxes only you can fill, you do not need to press Continue: it watches
+the form, and once nothing required is blank and nothing has changed for about 15 seconds (you have
+stopped typing), it carries on by itself -- as it already did after a CAPTCHA or a signature.
+
 A run waiting for you has, beside **Continue**, two more ways on:
 
 - **Resume** -- carries on from the page it is on with the agent's latest logic: new code

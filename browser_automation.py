@@ -7052,6 +7052,7 @@ class JobApplicationAssistant:
     def wait_for_signal(
         self, signal_path: Path, poll_seconds: float = 2.0, timeout_seconds: float = 1800.0,
         page: Optional[Page] = None, left_form_seconds: float = 600.0, for_captcha: bool = False,
+        for_blanks: bool = False,
     ) -> str:
         """Waits for the owner (see _wait_for_signal), with the page marked as
         the owner's turn, so every control they change is recorded as theirs."""
@@ -7067,7 +7068,7 @@ class JobApplicationAssistant:
             pass
         try:
             return self._wait_for_signal(signal_path, poll_seconds, timeout_seconds, page, left_form_seconds,
-                                         for_captcha=for_captcha)
+                                         for_captcha=for_captcha, for_blanks=for_blanks)
         finally:
             try:
                 waiting.unlink(missing_ok=True)
@@ -7082,6 +7083,7 @@ class JobApplicationAssistant:
     def _wait_for_signal(
         self, signal_path: Path, poll_seconds: float = 2.0, timeout_seconds: float = 1800.0,
         page: Optional[Page] = None, left_form_seconds: float = 600.0, for_captcha: bool = False,
+        for_blanks: bool = False,
     ) -> str:
         """Blocks (polling, not input()) until a signal file is written
         externally -- e.g. by a separate command once a human has reviewed
@@ -7122,6 +7124,10 @@ class JobApplicationAssistant:
         captcha_seen = False
         captcha_gone_polls = 0
         waiting_on_signature = False
+        # for_blanks: the run stopped for required boxes only the owner can fill. Once none is blank and the page
+        # has stayed the same for a while (the owner has stopped typing), it carries on by itself -- the owner asked
+        # why they had to press Continue as well (30 September). Continue still works at any time.
+        blanks_checked_at, filled_since, last_look = 0.0, None, None
         if page is not None:
             try:
                 captcha_seen = bool(safety.captcha_visible(page))
@@ -7174,6 +7180,25 @@ class JobApplicationAssistant:
                     if captcha_seen:
                         continue
                     # Not seen yet: the usual checks below still run, so nothing is carried on on a guess.
+                if for_blanks and waited - blanks_checked_at >= 5:
+                    blanks_checked_at = waited
+                    try:
+                        blank = [f for f in form_fields.blank_required(form_fields.inventory(page))
+                                 if re.search(r"[A-Za-z]{2}", f.question or f.label or "")]
+                        look = page.evaluate("() => [...document.querySelectorAll('input,select,textarea')]"
+                                             ".map(e => e.type === 'checkbox' || e.type === 'radio' ? e.checked"
+                                             " : e.value).join('|')")
+                    except Exception:
+                        blank, look = None, None
+                    if blank == [] and look is not None:
+                        if look != last_look:
+                            filled_since = waited      # still changing: the owner may be typing
+                        elif filled_since is not None and waited - filled_since >= 15:
+                            logger.info("Everything required is filled in -- carrying on with the application")
+                            return "refresh"
+                    else:
+                        filled_since = None
+                    last_look = look
                 try:
                     on_form = self.find_submit_button(page) is not None
                     if on_form:
