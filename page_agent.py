@@ -3425,7 +3425,39 @@ class PageAgent:
                 note = f"corrected {control.question[:70]!r} from {was[:40]!r} to {value[:40]!r} (from your {source})"
                 self.notes.append(note)
                 logger.info("CORRECTED: %s", note)
-        return given + self._correct_entries(page, controls, policy)
+        return given + self._correct_entries(page, controls, policy) + self._clear_none_boxes(page, controls, policy)
+
+    def _clear_none_boxes(self, page, controls: list[Control], policy: str) -> list[tuple[Answer, Control]]:
+        """A box the profile says has no answer (BLANK_MEANS_NONE) that holds one anyway is emptied.
+
+        UKG, 30 September: before the profile knew "Address 2", the AI wrote "Fairfax, VA" into it; the new rule
+        stopped it being written again but left it there. Emptied under safety.may_overrule -- never the owner's."""
+        given: list[tuple[Answer, Control]] = []
+        for control in controls:
+            shown = (control.answer or "").strip()
+            if control.role not in ("textbox", "searchbox") or control.disabled or not shown \
+                    or control.ref in (getattr(self, "_entries", {}) or {}):
+                continue
+            value, source = self.known_answer(control)
+            if value or not self._profile_says_none(source):
+                continue
+            written = str((self.written or {}).get(control.question) or "").strip()
+            who = provenance.origin(self.locate(page, control.ref), value=shown, agent_wrote=written == shown)
+            if not safety.may_overrule(who, policy):
+                continue
+            try:
+                done = self._empty_box(page, control)
+            except Exception as exc:
+                done = False
+                logger.info("Could not empty %r: %s", control.question[:60], str(exc).splitlines()[0][:100])
+            if done:
+                given.append((Answer(control.ref, control.question, "fill", "", source), control))
+                self.written[control.question] = ""
+                self.corrected.add(control.question)
+                note = f"emptied {control.question[:70]!r} ({shown[:40]!r}): your {source} says there is none"
+                self.notes.append(note)
+                logger.info("CORRECTED: %s", note)
+        return given
 
     def _correct_entries(self, page, controls: list[Control], policy: str) -> list[tuple[Answer, Control]]:
         """A box in a job or degree entry that holds what that entry's record says it should not.

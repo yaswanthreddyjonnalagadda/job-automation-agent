@@ -1,6 +1,13 @@
 {
   "_about": "What a form question asks, as data (concept_matcher.py reads this beside its own table). A new wording of a known question is a line under more_wordings, not a code change; a new question the profile answers is an entry under concepts with the profile field that answers it. Patterns match the question after clean_text: lower case, punctuation and '(required)' removed. value=true: answered with a fact, so never used for a question put as Yes/No. These come first when two concepts match a question equally. Wordings added 30 September 2026 from the questions no concept matched on the pages saved from real applications.",
   "concepts": {
+    "OPT_STATUS": {
+      "patterns": ["^\\W*(?:are|is)\\s+(?:you|your)\\b.*\\b(?:stem\\s+)?opt\\b", "^\\W*(?:are|is)\\s+(?:you|your)\\b.*\\boptional\\s+practical\\s+training\\b"],
+      "negative": "\\b(?:date|expir|when|end|start|how\\s+long|until)\\b",
+      "profile_field": "work_authorization",
+      "resolver": "yes_if_matches",
+      "pattern": "\\bopt\\b|optional\\s+practical\\s+training"
+    },
     "ADDRESS_LINE_2": {
       "patterns": ["^\\W*(?:street\\s+|home\\s+|mailing\\s+)?address\\s*(?:line\\s*)?2\\b", "\\baddress\\s+line\\s+two\\b", "^\\W*(?:apartment|apt|suite)\\b(?:\\s*(?:number|no|#))?\\W*$", "^\\W*(?:apartment|apt|suite)\\s*(?:or\\s+|/\\s*)?(?:unit|suite|apt)\\b", "^\\W*unit\\s*(?:number|no|#)\\W*$"],
       "profile_field": "address_line2",

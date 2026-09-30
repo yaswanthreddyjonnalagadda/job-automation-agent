@@ -871,6 +871,11 @@ def resolve_profile_value(
         raw = getattr(profile, field_name, "") if field_name else ""
         if spec.get("resolver") == "skill_level":
             val = _skill_level(raw, question)
+        elif spec.get("resolver") == "yes_if_matches":
+            # A Yes/No question about one kind of a stated fact: "Are you in OPT status?" is answered by the
+            # work authorization the profile states (H-1B -> No), never guessed.
+            raw = str(raw or "").strip()
+            val = ("Yes" if re.search(str(spec.get("pattern") or "$^"), raw, re.IGNORECASE) else "No") if raw else ""
         else:
             if isinstance(raw, (list, tuple)):
                 raw = "; ".join(str(item).strip() for item in raw if str(item).strip())
