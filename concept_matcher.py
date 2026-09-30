@@ -467,6 +467,19 @@ def match_concept(
     return best_concept
 
 
+# Voluntary self-identification: who the owner is. Only the owner's own answer (the profile, their saved or earlier
+# answers) is ever given; the AI never answers it. Lucid (Greenhouse), 30 September: with nothing in the profile, the
+# AI chose "I prefer to self-describe" for gender identity and typed the owner's name into "Please specify", and
+# "Heterosexual" for sexual orientation.
+_SELF_IDENTIFICATION = re.compile(r"\bgender\b|sexual orientation|transgender|\bpronouns?\b|\bsex\b|\blgbt|\brace\b|"
+                                  r"racial|ethnic|hispanic|latin[oax]\b|disabilit|veteran|armed forces|"
+                                  r"military status", re.IGNORECASE)
+
+
+def is_self_identification(text: str) -> bool:
+    return bool(_SELF_IDENTIFICATION.search(text or ""))
+
+
 # How a Yes/No question opens -- and the requests that open the same way but want a value ("Can you provide your
 # phone number?").
 _YES_NO_QUESTION = re.compile(r"^(?:do|does|did|are|is|was|were|have|has|had|will|would|can|could|should|may|"

@@ -124,6 +124,7 @@ def _stamp(app) -> str:
 
 def rebuild(tracker, path: Path = BANK_FILE) -> int:
     """Reads every application's answers from the tracker and writes the bank. Returns how many questions it holds."""
+    import concept_matcher
     old = _read(path)
     forgotten = set(old.get("forgotten") or [])
     entries: dict[str, dict] = {}
@@ -140,6 +141,8 @@ def rebuild(tracker, path: Path = BANK_FILE) -> int:
             question, answer = row.get("question") or "", row.get("answer") or ""
             if not source or not portable(question, answer, getattr(app, "company", "") or ""):
                 continue
+            if source != "you" and concept_matcher.is_self_identification(question):
+                continue                     # who the owner is: only their own answer is ever kept
             k = key(question)
             if not k or k in forgotten:
                 continue

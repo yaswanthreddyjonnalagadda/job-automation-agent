@@ -1027,15 +1027,19 @@ def closest_choice(choices: list[str], wanted: str) -> Optional[int]:
     if not want:
         return None
     negative = bool(re.search(r"\b(not|no|never|none)\b", _plain(wanted)))
-    best, best_score = None, 0.0
+    best, best_score, tied = None, 0.0, False
     for i, choice in enumerate(choices):
         words = set(_plain(choice).split())
         if not words or negative != bool(re.search(r"\b(not|no|never|none)\b", _plain(choice))):
             continue
         score = len(want & words) / len(want)
         if score > best_score:
-            best, best_score = i, score
-    return best if best_score >= 0.6 else None
+            best, best_score, tied = i, score, False
+        elif score == best_score and best is not None:
+            tied = True
+    # Two choices as close as each other is no answer: "Asian" is equally "East Asian", "South Asian" and "Southeast
+    # Asian", and the first was ticked (Lucid, 30 September).
+    return best if best_score >= 0.6 and not tied else None
 
 
 _PROSE = re.compile(r"^\s*- (paragraph|heading|text|strong|emphasis)\b")
@@ -2491,6 +2495,9 @@ class PageAgent:
                                 continue
                             if safety.is_attestation(ctrl.question) or safety.is_legal_status_question(ctrl.question):
                                 continue
+                            if concept_matcher.is_self_identification(
+                                    f"{ctrl.question} {ctrl.container} {ctrl.context}"):
+                                continue            # who the owner is: never the AI's to answer
                             if is_secret_box(ctrl.question) or is_honeypot(ctrl.question):
                                 continue            # a password or a robots' decoy is never the AI's to answer
                             try:
@@ -3126,6 +3133,10 @@ class PageAgent:
                     getattr(self.profile, "full_name", ""))))
             if not (privacy_ok or signing_ok):
                 return "a declaration or signature -- you haven't allowed the agent to give it"
+        # Who the owner is (gender identity, orientation, race, disability, veteran status): only their own answer.
+        if concept_matcher.is_self_identification(f"{question} {control.container} {control.context}") \
+                and not str(answer.source or "").startswith(("profile.", "owner", "answer_bank.you")):
+            return "a question about who you are -- only your own answer is given, never the AI's guess"
         try:
             if (self.locate(page, control.ref).get_attribute("type", timeout=2_000) or "").lower() == "password":
                 return "a password -- the agent never types those here"
