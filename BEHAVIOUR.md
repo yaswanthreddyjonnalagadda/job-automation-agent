@@ -519,6 +519,14 @@ is not typed again. A phone box that holds only its country's dial code ("+1")
 is still empty, and is filled. That dial-code picker is never "corrected" to your
 country: a "+1" is the prefix your number takes, not where you live.
 
+## An upload button that opens a menu
+
+Some sites' upload buttons open a menu of sources instead of a file window (Jobvite:
+Dropbox / File / Type or Paste Resume / Apply With LinkedIn). The agent picks the item for
+a file on this computer ("File", "Upload file", "From device") and gives it your tailored
+resume -- never Dropbox, Google Drive or LinkedIn -- and closes the menu again if that
+fails, so it never leaves one open over the form (Altamira, 30 September).
+
 ## Your jobs and degrees on Workday
 
 When Workday's My Experience shows an empty Work Experience or Education section, the

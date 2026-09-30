@@ -576,9 +576,32 @@ def _employer_named_in(text: str) -> str:
     return name[:40]
 
 
+# The part of a page title that names the careers site rather than the job ("Altamira Technologies Corp. Careers",
+# "Jobs at Acme").
+_SITE_NAME_PART = re.compile(r"\bcareers?\b|\bjobs\b|\bjob\s+board\b|\bjob\s+openings\b|\bhiring\b", re.IGNORECASE)
+
+
+def _title_parts(title: str) -> tuple[str, str]:
+    """(job part, site part) of a page title. Split at ' | ' or a long dash; at ' - ' only when exactly one side names
+    the careers site -- a job title may hold a hyphen ('CNO - System Administrator - Network')."""
+    title = " ".join((title or "").split())
+    parts = [p for p in re.split(r"\s+[|\u2013\u2014]\s+", title) if p]
+    if len(parts) == 1:
+        dashed = [p for p in re.split(r"\s+-\s+", title) if p]
+        if len(dashed) == 2 and sum(bool(_SITE_NAME_PART.search(p)) for p in dashed) == 1:
+            parts = dashed
+    if len(parts) < 2:
+        return title, ""
+    site = next((p for p in parts if _SITE_NAME_PART.search(p)), parts[-1])
+    job = next((p for p in parts if p is not site), parts[0])
+    return job, site
+
+
 def _clean_page_title(title: str) -> str:
-    """A job title, not a page title: no site name, no job id."""
-    title = re.split(r"\s+[|\u2013\u2014]\s+", title)[0]
+    """A job title, not a page title: no site name, no job id, no 'Apply for' (Jobvite, 30 September: "Altamira
+    Technologies Corp. Careers - Apply for Network Engineer" was taken whole as the job's title)."""
+    title = _title_parts(title)[0]
+    title = re.sub(r"^\s*(?:job\s+)?(?:application\s+for|apply\s+(?:now\s+)?for)\s+", "", title, flags=re.IGNORECASE)
     return re.sub(r"\s*[-\u2013]\s*Job ID:?\s*\d+\s*$", "", title).strip()
 
 
@@ -633,8 +656,7 @@ def page_identity(page_html: str, text: str, url: str) -> tuple[str, str]:
     titles = [t for t in (_meta(page_html, "og:title"),
                           html.unescape(" ".join(tag.group(1).split())) if tag else "") if t]
     title = next((_clean_page_title(t) for t in titles if _clean_page_title(t)), "")
-    site = _meta(page_html, "og:site_name") or next(
-        (re.split(r"\s+[|\u2013\u2014]\s+", t)[-1] for t in titles if re.search(r"\s[|\u2013\u2014]\s", t)), "")
+    site = _meta(page_html, "og:site_name") or next((_title_parts(t)[1] for t in titles if _title_parts(t)[1]), "")
     company = _company_from_site_name(site) or _employer_named_in(text) or _company_from_url(url)
     return title, company
 

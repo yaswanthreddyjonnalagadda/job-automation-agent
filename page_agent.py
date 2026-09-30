@@ -83,6 +83,11 @@ ANSWER_ROLES = {"textbox", "searchbox", "combobox", "listbox", "radio", "checkbo
 PRESS_ROLES = {"button", "link", "menuitem", "tab"}
 OPTION_ROLES = {"option", "menuitemradio", "menuitem", "treeitem", "listitem", "gridcell"}
 
+# An upload menu's item for a file on this computer -- never Dropbox, Google Drive, OneDrive or a LinkedIn profile.
+_FILE_ON_THIS_COMPUTER = re.compile(r"^\s*(?:file|upload(?:\s+a)?\s+file|upload\s+from\s+(?:this\s+)?(?:device|computer)|"
+                                    r"from\s+(?:this\s+|my\s+)?(?:device|computer)|my\s+(?:device|computer)|"
+                                    r"local\s+file|browse(?:\s+files?)?|attach\s+file)\s*$", re.IGNORECASE)
+
 # A box that asks for a web address (its label is the site or the word itself, not a question about it), and what a
 # web address looks like.
 _WEB_ADDRESS_BOX = re.compile(r"^\W*(?:your\s+)?(?:linked\s?in|facebook|twitter|x\s*\(twitter\)|git\s?hub|instagram|"
@@ -3176,6 +3181,34 @@ class PageAgent:
             logger.info("SIGNED: %s", note)
         return given
 
+    def _attach_resume_to_its_input(self, tab, fields=None) -> bool:
+        """The resume put straight into the page's own file input, found by the section it sits in -- no button, no
+        file window. Jobvite (Altamira, 30 September): its 'Select' button opens a Dropbox / File / LinkedIn menu, the
+        agent waited for a file window that never came, and the menu left open over the page stopped the run -- the
+        page's hidden file input takes the file directly."""
+        if not self.resume_file or self.resume_uploaded:
+            return False
+        try:
+            fields = fields if fields is not None else form_fields.inventory(tab)
+        except Exception as exc:
+            logger.debug("Field inventory failed: %s", exc)
+            return False
+        target = form_fields.resume_input(fields)
+        here = (urlparse(getattr(tab, "url", "")).path, target.name or target.label) if target else None
+        if target is None or target.value or here in self._attached_here:
+            return False
+        if not form_fields.attach_resume(tab, self.resume_file, fields):
+            return False
+        self._attached_here.add(here)
+        self._resume_went_on(self.resume_file)
+        self.resume_seen = True
+        for asked in {target.question, target.label, target.section} - {""}:
+            self.written[asked] = Path(self.resume_file).name   # the page's own words for it: answered
+        where = target.section or target.question or target.label or target.name
+        logger.info("ATTACHED: the resume (%s) -- its input found by where it sits: %r",
+                    Path(self.resume_file).name, where[:60])
+        return True
+
     def inventory_pass(self, page) -> list[str]:
         """What the field inventory finds that the snapshot does not: the resume's file input (told apart by the
         section it sits in -- 'Attach', 'Choose File*', 'From Device' say nothing), and lists a page draws as a
@@ -3187,20 +3220,8 @@ class PageAgent:
             logger.debug("Field inventory failed: %s", exc)
             return []
         done: list[str] = []
-        if self.resume_file and not self.resume_uploaded:
-            target = form_fields.resume_input(fields)
-            here = (urlparse(getattr(tab, "url", "")).path, target.name or target.label) if target else None
-            if target is not None and not target.value and here not in self._attached_here:
-                if form_fields.attach_resume(tab, self.resume_file, fields):
-                    self._attached_here.add(here)
-                    self._resume_went_on(self.resume_file)
-                    self.resume_seen = True
-                    for asked in {target.question, target.label, target.section} - {""}:
-                        self.written[asked] = Path(self.resume_file).name   # the page's own words for it: answered
-                    where = target.section or target.question or target.label or target.name
-                    logger.info("ATTACHED: the resume (%s) -- its input found by where it sits: %r",
-                                Path(self.resume_file).name, where[:60])
-                    done.append("resume")
+        if self._attach_resume_to_its_input(tab, fields):
+            done.append("resume")
         try:
             controls = parse_snapshot(self.snapshot(page))
         except Exception:
@@ -3265,6 +3286,10 @@ class PageAgent:
         for what, matches, action in wanted:
             if action == "upload_resume" and (self.resume_uploaded or not self.resume_file):
                 continue
+            if action == "upload_resume" and self._attach_resume_to_its_input(self.tab(page)):
+                given.append((Answer("", "resume", action, Path(self.resume_file).name, "document"),
+                              Control(ref="", role="button", name="resume")))
+                continue
             if action == "upload_cover_letter":
                 # Task 4.3: Ensure cover letter generation is strictly lazy-loaded:
                 # only trigger if an explicit, required cover letter target or text area is actively detected
@@ -3305,6 +3330,10 @@ class PageAgent:
             except Exception as exc:
                 done = False
                 logger.info("Could not attach the %s: %s", what, str(exc).splitlines()[0][:100])
+                try:
+                    self.tab(page).keyboard.press("Escape")   # a menu it opened instead is not left over the page
+                except Exception:
+                    pass
             if done:
                 given.append((answer, control))
                 if action == "upload_cover_letter":
@@ -3967,9 +3996,24 @@ class PageAgent:
             try:
                 loc.set_input_files(str(path), timeout=8_000)
             except Exception:
-                with tab.expect_file_chooser(timeout=8_000) as chooser:
-                    loc.click(timeout=5_000)
-                chooser.value.set_files(str(path))
+                try:
+                    with tab.expect_file_chooser(timeout=4_000) as chooser:
+                        loc.click(timeout=5_000)
+                    chooser.value.set_files(str(path))
+                except Exception:
+                    # The button opened a menu of sources, not a file window (Jobvite: Dropbox / File / Type or Paste
+                    # Resume / Apply With LinkedIn -- Altamira, 30 September): its item for a file on this computer is
+                    # chosen, never a cloud drive or a sign-in, and the file goes to the window that item opens.
+                    item = next((el for el in (tab.get_by_text(_FILE_ON_THIS_COMPUTER).nth(i) for i in range(
+                        min(tab.get_by_text(_FILE_ON_THIS_COMPUTER).count(), 6))) if el.is_visible()), None)
+                    if item is None:
+                        raise
+                    with tab.expect_file_chooser(timeout=8_000) as chooser:
+                        item.click(timeout=5_000)
+                    chooser.value.set_files(str(path))
+                    logger.info("ATTACHED: the %s, through the upload menu's %r",
+                                "resume" if answer.action == "upload_resume" else "cover letter",
+                                (item.inner_text() or "").strip()[:30])
             if answer.action == "upload_resume":
                 self._resume_went_on(path)
             self.settle(page, 1_500)

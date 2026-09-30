@@ -1,0 +1,12 @@
+{
+  "id": "f081",
+  "date": "2026-09-30",
+  "class": "A page title's site part and 'Apply for' prefix taken as the job's title",
+  "symptom": "Altamira on Jobvite, 30 September: the job was recorded as 'Altamira Technologies Corp. Careers - Apply for Network Engineer' at 'Altamiracorps'.",
+  "site": "Jobvite; any careers site titled '<Company> Careers - Apply for <Job>'",
+  "root_cause": "_clean_page_title split only at ' | ' and long dashes, never at ' - ' (a job title may contain one), and kept 'Apply for'; page_identity then had no site part to name the employer and fell back to the address.",
+  "why_tests_missed": "Page titles met before used '|' or a long dash between the job and the site.",
+  "fix": "_title_parts splits at ' - ' too when exactly one side names the careers site ('... Careers', 'Jobs at ...'), so a hyphen inside a job title is kept; _clean_page_title drops 'Apply for' / 'Job application for'; page_identity takes the employer from the site part.",
+  "tests": ["replay_guard.py"],
+  "prevention": "Split a page title by meaning (which part names the site), not by one separator character."
+}
