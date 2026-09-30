@@ -18,6 +18,18 @@
     ["Now attending", "Currently Attending", "In Progress", "Attending"],
     ["Incomplete", "Did Not Complete", "Not Completed", "Withdrawn"]
   ],
+  "gender": [
+    ["Male", "Man"],
+    ["Female", "Woman"]
+  ],
+  "_broader_about": "An answer a list does not offer is looked for as its broader term: 'South Asian' is taken as 'Asian' on a form that offers only 'Asian'. Never the other way: 'Asian' never picks one of East, South or Southeast Asian.",
+  "broader": {
+    "South Asian": "Asian",
+    "East Asian": "Asian",
+    "Southeast Asian": "Asian",
+    "Central Asian": "Asian",
+    "Asian Indian": "Asian"
+  },
   "decline_to_answer": [
     ["I prefer not to answer", "Prefer not to answer", "I prefer not to answer this question", "I prefer not to say", "Prefer not to say", "I don't wish to answer", "I do not wish to answer", "I don't want to answer", "Decline to answer", "I decline to answer", "Decline to self-identify", "I decline to self-identify", "Decline to self identify", "Decline to state", "I choose not to disclose", "Choose not to disclose", "I choose not to answer", "Not specified", "I'd rather not say", "Rather not say"]
   ]

@@ -50,11 +50,20 @@ def _groups() -> tuple[tuple[str, ...], ...]:
         return ()
     groups = []
     for name, members in data.items():
-        if name.startswith("_"):
+        if name.startswith("_") or not isinstance(members, list):
             continue
         for group in members:
             groups.append(tuple(plain(m) for m in group))
     return tuple(groups)
+
+
+@functools.lru_cache(maxsize=1)
+def _broader() -> dict[str, str]:
+    try:
+        data = json.loads(EQUIVALENTS_FILE.read_text(encoding="utf-8")).get("broader") or {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return {plain(k): v for k, v in data.items() if isinstance(v, str)}
 
 
 def _group_of(answer: str) -> Optional[tuple[str, ...]]:
@@ -72,7 +81,17 @@ def _only_one(hits: list[int]) -> Optional[int]:
 
 
 def best_option(options: list[str], answer: str) -> Optional[int]:
-    """The index of the option that is the answer, or None when none is -- or when two are equally good."""
+    """The index of the option that is the answer, or None when none is -- or when two are equally good. An answer the
+    list does not offer is looked for once more as its broader term ("South Asian" as "Asian"), never narrower."""
+    hit = _best_option(options, answer)
+    if hit is None:
+        broader = _broader().get(plain(answer))
+        if broader:
+            hit = _best_option(options, broader)
+    return hit
+
+
+def _best_option(options: list[str], answer: str) -> Optional[int]:
     want = plain(answer)
     if not want:
         return None
