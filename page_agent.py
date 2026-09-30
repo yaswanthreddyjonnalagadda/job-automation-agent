@@ -3628,7 +3628,10 @@ class PageAgent:
             if value:
                 if _same_answer(shown, value) or option_match.best_option([shown], value) is not None:
                     continue
-            elif not (blank or (written and written == shown and self._optional_entry_box(control, ()))):
+            elif not (blank or (written and written == shown and self._optional_entry_box(control, ())
+                                and repeated_entries.understands(entry))):
+                # Unknown is not empty: a bare "Year" the record cannot place (From or To?) keeps what was written.
+                # Ciena, 30 September: the JNTU "To" year, filled from the profile, was emptied as "should be empty".
                 continue
             who = provenance.origin(self.locate(page, control.ref), value=shown, agent_wrote=written == shown)
             if not safety.may_overrule(who, policy):

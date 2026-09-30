@@ -526,7 +526,10 @@ agent adds each of your jobs and degrees from your record the way Workday takes 
 (titles, companies, dates, degree and field-of-study lists). It only adds to an empty
 section -- anything Workday already filled in is left as it is. Before, only the older
 flow did this, and a new Workday application reached My Experience with nothing added
-(Ciena, 30 September).
+(Ciena, 30 September). Where the employer's Workday draws School as a list, your
+school is picked from that list by its name -- never the first row -- and a school the
+list does not offer is left for you; no extra, empty entry is added. A date box the agent
+cannot place (a bare "Year" under From or To) keeps what was written.
 
 An AI that says it cannot answer ("I am unable to answer...", "... does not have a
 Twitter account") is never typed into a form; the box is left empty. A box for a web address

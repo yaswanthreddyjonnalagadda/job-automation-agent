@@ -1,0 +1,12 @@
+{
+  "id": "f078",
+  "date": "2026-09-30",
+  "class": "'Cannot tell' treated as 'should be empty'",
+  "symptom": "Ciena on Workday, 30 September: the agent filled a degree's From 2015 and To 2019 from the profile, then logged \"corrected 'Year' in 'Bachelor of Science ..., JNTU' from '2019' to 'empty'\" -- the right To year was wiped, and the page was refused again.",
+  "site": "Workday (date parts labelled only 'Month' / 'Year'); any entry box whose label does not name its field",
+  "root_cause": "_correct_entries emptied any optional entry box the agent had written when repeated_entries.answer returned no value; but answer returns no value both when the record says the box is empty and when the label ('Year') names no field it knows -- so an unknown was corrected to empty.",
+  "why_tests_missed": "The correction tests used labels that name their field ('Start date', 'To year').",
+  "fix": "repeated_entries.understands(entry) says whether the record can tell what a box holds; _correct_entries empties an agent-written optional box only when it can, and otherwise keeps what was written.",
+  "tests": ["replay_guard.py"],
+  "prevention": "Every 'no value' result distinguishes 'known to be empty' from 'unknown'; a correction that removes an answer requires the former."
+}

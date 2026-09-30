@@ -272,3 +272,10 @@ def is_date(value: str) -> bool:
     """A month, a year, or both ("July", "2021", "July 2021", "07/2021")."""
     value = (value or "").strip()
     return bool(value) and bool(_DATE.fullmatch(value))
+
+
+def understands(entry: Entry) -> bool:
+    """Whether the record can say what this box of an entry holds: its label names one of the entry's fields. A bare
+    "Year" or "Month" (Workday's date parts, one under "From" and one under "To") does not say which date it is."""
+    fields = _WORK_FIELDS if entry.section == "work" else _EDUCATION_FIELDS
+    return any(re.search(pattern, entry.label or "", re.IGNORECASE) for pattern, _key in fields)

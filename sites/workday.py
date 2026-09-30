@@ -230,9 +230,19 @@ class WorkdayAdapter(SiteAdapter):
         has_completion_year = page.locator(
             "input[data-automation-id='dateSectionYear-input'][id*='education']"
         ).count() > 0
+        # The School box is a text box on some tenants (--schoolName) and a search-and-pick list on others (--school,
+        # Ciena, 30 September). Counted only by the text box, every entry looked missing and "Add Another" was
+        # pressed again and again (an extra, empty entry whose Degree was then "required"), and typed into, the
+        # list never took the school. Entries are counted by whichever the tenant draws; a list is picked from.
+        school_probe = "input[id$='--schoolName'], [data-automation-id='formField-school']"
         for i, edu in enumerate(education):
-            self._ensure_entry_slot(assistant, page, "Education", "input[id$='--schoolName']", i)
-            self.fill_by_id_suffix(assistant, page, "--schoolName", i, edu.get("school", ""))
+            self._ensure_entry_slot(assistant, page, "Education", school_probe, i)
+            school = edu.get("school", "")
+            if page.locator("input[id$='--schoolName']").count() > i:
+                self.fill_by_id_suffix(assistant, page, "--schoolName", i, school)
+            elif school and not self.select_from_searchable_input(assistant, page, "--school", [school], i,
+                                                                  keyboard=False):
+                logger.info("School %r is not in this employer's list as written -- left for you", school)
             degree = edu.get("degree", "")
             if degree:
                 self.select_from_button_dropdown(assistant, page, "--degree", i, _degree_candidates(degree))
@@ -255,7 +265,8 @@ class WorkdayAdapter(SiteAdapter):
         for wait_ms in (3_000, 4_000, 5_000):
             page.wait_for_timeout(wait_ms)
             for i, edu in enumerate(education):
-                self.fill_by_id_suffix(assistant, page, "--schoolName", i, edu.get("school", ""))
+                if page.locator("input[id$='--schoolName']").count() > i:
+                    self.fill_by_id_suffix(assistant, page, "--schoolName", i, edu.get("school", ""))
                 field = edu.get("field", "")
                 if field and not self._multiselect_selection(page, "--fieldOfStudy", index=i):
                     self.select_from_searchable_input(assistant, page, "--fieldOfStudy", [field], i)
@@ -491,7 +502,8 @@ class WorkdayAdapter(SiteAdapter):
             return False
 
     def select_from_searchable_input(
-        self, assistant, page: Page, id_suffix: str, candidates: list[str], index: int = 0
+        self, assistant, page: Page, id_suffix: str, candidates: list[str], index: int = 0,
+        keyboard: bool = True,
     ) -> bool:
         """Picks a value from a type-ahead combobox (an <input> that filters
         a list as you type, e.g. 'How Did You Hear About Us?'). Types the
@@ -518,7 +530,11 @@ class WorkdayAdapter(SiteAdapter):
                 # match highlighted, so ArrowDown+Enter commits it. Clicking
                 # the option needs the list to still be open, and reopening it
                 # first closed the very list that had just been populated.
-                for strategy in ("suggestion_text", "keyboard", "prompt_option"):
+                # keyboard=False: only a row whose text matches is clicked -- ArrowDown+Enter takes whichever row
+                # comes first, which for a school list could be another university.
+                strategies = ("suggestion_text", "keyboard", "prompt_option") if keyboard \
+                    else ("suggestion_text", "prompt_option")
+                for strategy in strategies:
                     if strategy == "prompt_option":
                         page.keyboard.press("Escape")
                         page.wait_for_timeout(200)
