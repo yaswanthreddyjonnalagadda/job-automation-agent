@@ -662,6 +662,15 @@ FORWARD_LABEL = re.compile(r"^(apply|apply now|start application|begin applicati
                            r"save and proceed|begin)$", re.IGNORECASE)
 
 
+_TEXT_MESSAGES = re.compile(r"\bsms\b|text\s+messag|\btexts?\b.{0,40}\b(?:phone|mobile|cell)|mobile\s+messag|"
+                            r"whatsapp|\btexting\b", re.IGNORECASE)
+_AGREEMENT = re.compile(r"\bi\s+(?:have\s+read|acknowledge|agree|understand|accept|consent|certify|confirm|attest)\b|"
+                        r"\bby\s+(?:checking|ticking|selecting)\s+this\s+box\b|\bterms\s+(?:and|&)\s+conditions\b|"
+                        r"\bprivacy\s+(?:policy|notice|statement)\b|\backnowledg", re.IGNORECASE)
+_TICK_WORDS = frozenset({"yes", "no", "true", "false", "checked", "unchecked", "1", "0", "y", "n"})
+# The owner's identity and contact facts: the profile says them, over any saved answer.
+_PROFILE_OWNS = frozenset({"FIRST_NAME", "LAST_NAME", "MIDDLE_NAME", "FULL_NAME", "EMAIL", "PHONE_MOBILE",
+                           "STREET_ADDRESS", "CITY", "STATE_PROVINCE", "POSTAL_CODE", "COUNTRY"})
 _REQUIRED_STAR = re.compile(r"^\s*[*✱]|[*✱]\s*:?\s*$")
 
 
@@ -1947,6 +1956,23 @@ class PageAgent:
         supervisor is answered this way: those belong to one entry, not to him.
         """
         question = control.question
+        # Tick boxes of the owner's standing decision (30 September): agreements and acknowledgements are ticked
+        # ("I have read and agree", "I acknowledge", "By checking this box", terms, privacy) -- a declaration only
+        # with sign_attestations, the rest with accept_application_privacy_prompts; a text-message consent never,
+        # unless the owner's preferred contact is text. Text messages are looked at first: "I agree to receive
+        # text messages" is not an agreement to tick.
+        if control.role in ("checkbox", "switch"):
+            said = f"{control.question} {control.name} {control.container} {control.context}"
+            if _TEXT_MESSAGES.search(said):
+                prefers = str(getattr(self.profile, "preferred_contact_method", "") or "").strip().lower()
+                return ("checked" if prefers in ("sms", "text", "text message") else "unchecked"), \
+                    "profile.preferred_contact_method"
+            if _AGREEMENT.search(said):
+                if safety.is_attestation(said):
+                    if getattr(self.profile, "sign_attestations", False):
+                        return "checked", "profile.sign_attestations"
+                elif getattr(self.profile, "accept_application_privacy_prompts", False):
+                    return "checked", "profile.accept_application_privacy_prompts"
         if not question or safety.is_attestation(question):
             return "", ""
 
@@ -1980,6 +2006,15 @@ class PageAgent:
         # 1. Saved exact answer library (e.g. from data/profile_answers.json) takes priority
         explicit = self.library_answer(question, exact_only=True)
         if explicit:
+            # Who the owner is -- name, email, phone, address -- is the profile's to say, whatever a saved answer
+            # holds: a saved "Last Name": "c" was typed into UKG's Last name (30 September).
+            owned = concept_matcher.match_concept(question=question, container=control.container,
+                                                  context=control.context, name=control.name)
+            if owned in _PROFILE_OWNS:
+                val, src = concept_matcher.resolve_profile_value(concept=owned, profile=self.profile,
+                                                                 options=control.options, question=question)
+                if val:
+                    return val, src
             return explicit, "profile.answer_library"
 
         # 2. Universal Concept & Synonym Engine (zero-cost, zero-heavy-RAM, cross-ATS)
@@ -2003,6 +2038,8 @@ class PageAgent:
             if concept == "MIDDLE_NAME":
                 replacement = "N/A" if "*" in question or "required" in question.lower() else ""
                 return replacement, "profile.middle_name"
+            if str(src).startswith("profile.") and str(src).split(".", 1)[1] in BLANK_MEANS_NONE:
+                return "", src               # the profile's word that there is none (no preferred name)
 
         # 3. Regex patterns from data/profile_answers.json
         regex_explicit = self.library_answer(question)
@@ -2216,6 +2253,13 @@ class PageAgent:
             # radio happened to be visited first.
             # A tick box answered for itself ("checked": a consent the profile allows) is ticked itself, grouped or
             # not; a group's answer names its choices.
+            # A tick box is ticked by a yes or no, or by its own words -- never by the fact of the question beside
+            # it: UKG's "I decline to say" boxes took "Male", "Asian" and "I am not a veteran" and were ticked, and
+            # a consent box took the phone number (30 September).
+            if control.role in ("checkbox", "switch") and not control.group \
+                    and value.strip().lower() not in _TICK_WORDS \
+                    and option_match.best_option([control.name], value) is None:
+                continue
             if control.role in ("checkbox", "switch") and (
                     not control.group or value.strip().lower() in ("checked", "true", "unchecked", "false")):
                 action = "check" if value.strip().lower() not in ("no", "false", "0", "unchecked") else "uncheck"

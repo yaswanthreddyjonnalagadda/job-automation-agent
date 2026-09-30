@@ -75,6 +75,19 @@ rules: a general one joins **Your saved answers**, one about that employer is ke
 that employer, and legal, visa and signed answers are not kept. It then leaves the
 dashboard's "Waiting for your answer" list.
 
+### Tick boxes
+
+Your decision of 30 September: agreement and acknowledgement boxes are ticked ("I have
+read and agree", "I acknowledge", "By checking this box", terms and conditions, privacy
+notices, "I agree to sign electronically") -- a declaration only while "Sign 'I certify
+this is true' declarations for me" is on, the rest while "Accept privacy notices" is on.
+A box about text messages (SMS, text messages, WhatsApp) is never ticked, and one already
+ticked is cleared, unless your preferred contact is text. Any other tick box is ticked only
+by a yes or no, or by an answer that is its own words: the answer of the question beside
+it ("Male", a phone number) never ticks it -- UKG's "I decline to say" boxes were ticked
+that way. Your name, email, phone and address always come from your profile, over any
+saved answer, and are never kept as saved answers from a form.
+
 ### Questions are recognised from data, and answered only from you
 
 Which fact a question asks for is recognised from `reference/concepts.json` as well

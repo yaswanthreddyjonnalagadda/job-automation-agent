@@ -539,6 +539,10 @@ def confirm_concept(concept: Optional[str], options: Optional[list[str]]) -> Opt
     concepts are ever redirected -- a country list under "Country of
     Citizenship" is a citizenship question, and it is left as the label said.
     """
+    real = [o for o in (options or []) if o and not re.match(r"^\s*(choose|select|--)", o, re.IGNORECASE)]
+    if concept == "ETHNICITY_RACE" and real and all(re.search(r"hispanic|latin", o, re.IGNORECASE) for o in real):
+        # "Ethnic Origin" offering only Hispanic/Latino and Not Hispanic/Latino (UKG, 30 September).
+        return "HISPANIC_OR_LATINO"
     if concept not in RESIDENCE_CONCEPTS or not options:
         return concept
     domain = geo_reference.option_domain(options)

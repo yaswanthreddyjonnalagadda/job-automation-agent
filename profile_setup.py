@@ -454,6 +454,12 @@ def worth_keeping(question: str, answer: str, company: str = "") -> bool:
     import concept_matcher
     if concept_matcher.match_concept(question) in ("WORK_AUTHORIZATION", "VISA_SPONSORSHIP", "CITIZENSHIP"):
         return False            # answered from the profile only, every time -- never from a saved answer
+    # Who the person is -- name, email, phone, address -- lives in the profile: what was in a Last Name box ("c",
+    # 30 September) is never kept as their answer for every form.
+    if concept_matcher.match_concept(question) in ("FIRST_NAME", "LAST_NAME", "MIDDLE_NAME", "FULL_NAME", "EMAIL",
+                                                   "PHONE_MOBILE", "STREET_ADDRESS", "CITY", "STATE_PROVINCE",
+                                                   "POSTAL_CODE", "COUNTRY", "CITY_STATE"):
+        return False
     if _ABOUT_THIS_EMPLOYER.search(question):
         return False
     words = [w for w in re.findall(r"[A-Za-z]{4,}", company or "")
