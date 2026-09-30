@@ -1679,10 +1679,15 @@ class PageAgent:
         r"(verification|security|confirmation|one[- ]?time|access)\s*code|passcode|\botp\b|"
         r"code (was )?(sent|emailed) to", re.IGNORECASE)
 
-    # A section for the owner's jobs or degrees, the record that fills it, the site filler's name, and the box every
-    # entry of it has (its id ends so on Workday).
-    _ENTRY_SECTIONS = (("Work Experience", "experience", "fill_experience_section", "--jobTitle"),
-                       ("Education", "education", "fill_education_section", "--schoolName"))
+    # A section for the owner's jobs or degrees, the record that fills it, the site filler's name, and the labels the
+    # site's error list names for a box of it.
+    _ENTRY_SECTIONS = (
+        ("Work Experience", "experience", "fill_experience_section",
+         ("job title", "company", "location", "from", "to", "role description")),
+        ("Education", "education", "fill_education_section",
+         ("school or university", "school", "degree", "field of study", "from", "to (actual or expected)",
+          "overall result (gpa)")),
+    )
 
     def add_entries_the_site_way(self, page, snapshot: str) -> bool:
         """A section for the owner's jobs or degrees that is still empty -- its heading and its own Add button, no
@@ -1697,25 +1702,41 @@ class PageAgent:
         host = host_of(tab.url)
         history = getattr(self, "history", {}) or {}
         done = self.__dict__.setdefault("_entries_added", set())
+        redone = self.__dict__.setdefault("_entries_redone", set())
         try:
             adapter = self.assistant.adapter(tab)
         except Exception:
             return False
+        # The fields the site's own error list names ("Error - School or University"), lower case.
+        refused = {m.strip().lower() for m in re.findall(r"Error\s*[-\u2013]\s*([A-Za-z][A-Za-z /()]{1,40}?)(?=[\"\n:]|\s+The\b)",
+                                                         snapshot or "")}
         added = False
-        for heading, record, filler, box in self._ENTRY_SECTIONS:
+        for heading, record, filler, labels in self._ENTRY_SECTIONS:
             entries = [e for e in (history.get(record) or []) if isinstance(e, dict)]
-            if not entries or (host, heading) in done or not hasattr(adapter, filler):
+            if not entries or not hasattr(adapter, filler) or not hasattr(adapter, "entry_count"):
                 continue
             if not re.search(rf'- heading "{re.escape(heading)}"', snapshot or "", re.IGNORECASE):
                 continue
-            try:
-                if tab.locator(f"input[id$='{box}']").count():
-                    continue            # entries are already there (the site's own resume reader, or earlier)
-            except Exception:
+            shown = adapter.entry_count(tab, heading)
+            if shown is None:
                 continue
-            done.add((host, heading))
-            logger.info("ENTRIES: %s is empty -- adding your %d %s the site's way", heading, len(entries),
-                        "jobs" if record == "experience" else "degrees")
+            if shown == 0:
+                if (host, heading) in done:
+                    continue
+                done.add((host, heading))
+                logger.info("ENTRIES: %s is empty -- adding your %d %s the site's way", heading, len(entries),
+                            "jobs" if record == "experience" else "degrees")
+            else:
+                # Entries the site refused, or more or fewer than the record holds (an extra, empty one): the site's
+                # filler clears the section and enters the record again -- once per section per run. Ciena, 30
+                # September: an extra empty degree and a job's start month kept Save and Continue refused.
+                wrong = shown != len(entries) or bool(refused & set(labels))
+                if not wrong or (host, heading) in redone:
+                    continue
+                redone.add((host, heading))
+                logger.info("ENTRIES: %s shows %d of your %d %s%s -- entering them again the site's way", heading,
+                            shown, len(entries), "jobs" if record == "experience" else "degrees",
+                            " and the site refused some" if refused & set(labels) else "")
             try:
                 getattr(self.assistant, filler)(tab, entries)
                 added = True

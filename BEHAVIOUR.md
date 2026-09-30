@@ -529,7 +529,12 @@ flow did this, and a new Workday application reached My Experience with nothing 
 (Ciena, 30 September). Where the employer's Workday draws School as a list, your
 school is picked from that list by its name -- never the first row -- and a school the
 list does not offer is left for you; no extra, empty entry is added. A date box the agent
-cannot place (a bare "Year" under From or To) keeps what was written.
+cannot place (a bare "Year" under From or To) keeps what was written. When Workday refuses a jobs or
+degrees section -- an extra, empty entry, or boxes its error list names -- the agent has
+Workday's filler clear that section and enter your record again, once per section. A
+school is picked by the row that is one of your names for it (your record, your profile,
+and the substitutes you listed, such as "JNTU Hyderabad" -> "Jawaharlal Nehru
+Technological University Hyderabad") -- never a row that only starts the same way.
 
 An AI that says it cannot answer ("I am unable to answer...", "... does not have a
 Twitter account") is never typed into a form; the box is left empty. A box for a web address
