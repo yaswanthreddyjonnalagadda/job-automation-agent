@@ -662,6 +662,9 @@ FORWARD_LABEL = re.compile(r"^(apply|apply now|start application|begin applicati
                            r"save and proceed|begin)$", re.IGNORECASE)
 
 
+_REQUIRED_STAR = re.compile(r"^\s*[*✱]|[*✱]\s*:?\s*$")
+
+
 def required_questions(snapshot: str) -> set[str]:
     """The questions a form marks with a star."""
     marked = set(re.findall(r'- generic "([^"]{2,120})" \[ref=[\w-]+\]: "\*"', snapshot or ""))
@@ -2699,7 +2702,11 @@ class PageAgent:
                 missing_required = []
                 for control in after:
                     question = control.question
-                    marked_required = "*" in question or any(_same_question(question, item) for item in required)
+                    # A star that marks a question stands at its start or end ("Email address *", "* Company"),
+                    # not inside it: UKG's password rule "Special characters (e.g. !@#$%^&*)" was named a blank
+                    # required field (30 September).
+                    marked_required = bool(_REQUIRED_STAR.search(question or "")) \
+                        or any(_same_question(question, item) for item in required)
                     if not question or not marked_required:
                         continue
                     answered = bool(control.answer)

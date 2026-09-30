@@ -4881,6 +4881,12 @@ class JobApplicationAssistant:
                 "button", name=re.compile(r"^\s*(create (my )?account|register|sign up|submit)\s*$", re.IGNORECASE)
             )
             button = next((submit.nth(i) for i in range(submit.count()) if submit.nth(i).is_visible()), None)
+            if button is None and self._heading_says_create(page):
+                # A form whose heading says it creates the account names its button for the step, not the act:
+                # UKG's "Create your account" goes on with "Continue" (30 September).
+                onward = page.get_by_role("button", name=re.compile(r"^\s*(continue|next|get started|join)\s*$",
+                                                                    re.IGNORECASE))
+                button = next((onward.nth(i) for i in range(onward.count()) if onward.nth(i).is_visible()), None)
             if button is None:
                 button = page.locator("input[type='submit'][value*='Create' i]").first
                 if not button.count():
