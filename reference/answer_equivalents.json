@@ -34,7 +34,9 @@
     "East Asian": "Asian",
     "Southeast Asian": "Asian",
     "Central Asian": "Asian",
-    "Asian Indian": "Asian"
+    "Asian Indian": "Asian",
+    "Electrical and Electronics Engineering": "Electrical Engineering",
+    "Electrical & Electronics Engineering": "Electrical Engineering"
   },
   "decline_to_answer": [
     ["I prefer not to answer", "Prefer not to answer", "I prefer not to answer this question", "I prefer not to say", "Prefer not to say", "I don't wish to answer", "I do not wish to answer", "I don't want to answer", "Decline to answer", "I decline to answer", "Decline to self-identify", "I decline to self-identify", "Decline to self identify", "Decline to state", "I choose not to disclose", "Choose not to disclose", "I choose not to answer", "Not specified", "I'd rather not say", "Rather not say"]
