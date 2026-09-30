@@ -31,6 +31,14 @@ BLOCKED_SOURCES = ("linkedin.com", "indeed.com", "dice.com")
 # and similar) often doesn't even name the actual employer in the posting.
 AGGREGATORS = ("remotehunter.com", "jobright.ai", "simplify.jobs", "randstadusa.com")
 
+# Application-tracking vendors that host many employers: on their addresses the host is the vendor and the path
+# names the employer (ats.rippling.com/forterra/..., jobs.lever.co/<company>/...). Their names are never the employer.
+ATS_VENDORS = ("dayforcehcm", "myworkdayjobs", "icims", "greenhouse", "lever", "ashbyhq", "smartrecruiters",
+               "successfactors", "taleo", "paylocity", "adp.com", "bamboohr", "rippling", "workable", "jobvite",
+               "ultipro", "ukg", "breezy", "recruitee", "applytojob", "avature", "eightfold", "phenom")
+# A first label that names the kind of site, not the employer (jobs.acme.com, ats.rippling.com).
+_GENERIC_HOST_LABEL = r"^(www|jobs|careers|apply|recruiting|ats|boards|job-boards|hire)\."
+
 
 def fetch_workday_job(url: str) -> dict | None:
     """Pulls a Workday posting through its CXS JSON API.
@@ -529,7 +537,8 @@ def fetch_rendered_job(url: str) -> dict | None:
     if not title or len(body) < 400:
         return None
 
-    company = data.get("company") or _employer_named_in(body) or _company_from_url(url)
+    company = data.get("company") or _company_from_site_name(data.get("site") or "") or _employer_named_in(body) \
+        or _company_from_url(url)
     logger.info("Read the posting by rendering the page (%s)", urlparse(url).netloc)
     return {"title": title, "company": company, "location": data.get("location") or "",
             "url": url, "raw_text": body[:20000]}
@@ -579,17 +588,53 @@ def _company_from_url(url: str) -> str:
     the software vendor and the path is the employer.
     """
     parsed = urlparse(url)
-    host = re.sub(r"^(www|jobs|careers|apply|recruiting)\.", "", parsed.netloc)
-    vendors = ("dayforcehcm", "myworkdayjobs", "icims", "greenhouse", "lever",
-               "ashbyhq", "smartrecruiters", "successfactors", "taleo", "paylocity",
-               "adp.com", "bamboohr")
-    if any(v in host for v in vendors):
+    host = re.sub(_GENERIC_HOST_LABEL, "", parsed.netloc.lower())
+    if any(v in host for v in ATS_VENDORS):
         for part in parsed.path.strip("/").split("/"):
             token = part.strip().lower()
             if token in ("en-us", "en", "candidateportal", "jobs", "job", "careers") or token.isdigit():
                 continue
             return part.replace("-", " ").replace("_", " ").title()
     return host.split(".")[0].replace("-", " ").title()
+
+
+def _meta(page_html: str, name: str) -> str:
+    """A <meta property|name=...> tag's content, attributes in either order."""
+    for pattern in (rf'<meta[^>]+(?:property|name)=["\']{re.escape(name)}["\'][^>]*content=["\']([^"\']*)',
+                    rf'<meta[^>]+content=["\']([^"\']*)["\'][^>]*(?:property|name)=["\']{re.escape(name)}["\']'):
+        found = re.search(pattern, page_html or "", re.IGNORECASE)
+        if found:
+            return html.unescape(" ".join(found.group(1).split()))
+    return ""
+
+
+def _company_from_site_name(name: str) -> str:
+    """The employer from the name a careers site gives itself: 'Forterra Careers' -> 'Forterra', 'Careers at Acme'
+    -> 'Acme'. Empty for a vendor's own name ('Rippling ATS')."""
+    name = re.sub(r"^\s*(?:careers|jobs)\s+(?:at|with)\s+", "", name or "", flags=re.IGNORECASE)
+    name = re.sub(r"[\s\-\u2013\u2014|:]*\b(?:careers?(?:\s+(?:page|site|portal|home))?|jobs?(?:\s+board)?|"
+                  r"job\s+openings|open\s+positions|hiring)\s*$", "", name, flags=re.IGNORECASE).strip(" -|:")
+    if not name or any(v.split(".")[0] in name.lower().replace(" ", "") for v in ATS_VENDORS):
+        return ""
+    return name[:60]
+
+
+def page_identity(page_html: str, text: str, url: str) -> tuple[str, str]:
+    """(job title, employer) from what the page publishes about itself -- one reading for every reader.
+
+    The title: the page's og:title or <title> (with any attributes: Rippling writes <title data-rh="true">), cleaned
+    of the site's name. The employer: the site's own name (og:site_name, or the part of the title after ' | '),
+    then the employer's equal-opportunity sentence, then the address. Forterra on Rippling, 30 September: a
+    '<title>' that allowed no attributes gave 'Unknown Role', and the host's first label gave the company 'Ats'.
+    """
+    tag = re.search(r"<title[^>]*>(.*?)</title>", page_html or "", re.S | re.IGNORECASE)
+    titles = [t for t in (_meta(page_html, "og:title"),
+                          html.unescape(" ".join(tag.group(1).split())) if tag else "") if t]
+    title = next((_clean_page_title(t) for t in titles if _clean_page_title(t)), "")
+    site = _meta(page_html, "og:site_name") or next(
+        (re.split(r"\s+[|\u2013\u2014]\s+", t)[-1] for t in titles if re.search(r"\s[|\u2013\u2014]\s", t)), "")
+    company = _company_from_site_name(site) or _employer_named_in(text) or _company_from_url(url)
+    return title, company
 
 
 def fetch_generic_job(url: str) -> dict | None:
@@ -610,19 +655,10 @@ def fetch_generic_job(url: str) -> dict | None:
     if len(text) < 400:
         return None
 
-    title = ""
-    m = re.search(r"<title>(.*?)</title>", resp.text, re.S | re.I)
-    if m:
-        title = re.sub(r"\s+", " ", m.group(1)).strip()
-
-    # "Support Engineer ... - Job ID: 10539098 | Amazon.jobs" is a page title,
-    # not a job title; and the company is the site, not its "www" label.
-    title = re.split(r"\s+[|–—]\s+", title)[0]
-    title = re.sub(r"\s*[-–]\s*Job ID:?\s*\d+\s*$", "", title).strip()
-    host = re.sub(r"^(www|jobs|careers|apply)\.", "", urlparse(url).netloc)
+    title, company = page_identity(resp.text, text, url)
     return {
         "title": title or "Unknown Role",
-        "company": host.split(".")[0].replace("-", " ").title(),
+        "company": company,
         "location": "",
         "url": url,
         "raw_text": text[:20000],

@@ -28,6 +28,9 @@
     ["Male", "Man"],
     ["Female", "Woman"]
   ],
+  "veteran_status": [
+    ["I am not a veteran", "I am not a protected veteran", "Not a veteran", "Not a protected veteran", "I am not a veteran or protected veteran"]
+  ],
   "_broader_about": "An answer a list does not offer is looked for as its broader term: 'South Asian' is taken as 'Asian' on a form that offers only 'Asian'. Never the other way: 'Asian' never picks one of East, South or Southeast Asian.",
   "broader": {
     "South Asian": "Asian",

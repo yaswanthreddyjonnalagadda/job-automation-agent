@@ -54,6 +54,11 @@ def _is_yes(val: Any, default: bool = False) -> bool:
 
 
 # Concepts and their matching patterns, negative guards, and container boosts
+# A place question qualified by anything but where the owner lives now: the country (state, city) of birth or origin,
+# of a passport's or licence's issuance, of a visa. The owner's address never answers these (Forterra on Rippling,
+# 30 September: "What is the Country of your birth?" was answered with the country of residence).
+NOT_WHERE_YOU_LIVE = r"\bbirth|\bborn\b|\borigin\b|passport|issu(?:ed|ance|ing)|\bvisa\b"
+
 CONCEPTS: dict[str, dict[str, Any]] = {
     "FIRST_NAME": {
         "patterns": [
@@ -129,7 +134,7 @@ CONCEPTS: dict[str, dict[str, Any]] = {
             r"\blocation\s*\(?\s*city\b",
             r"^\W*where\s+do\s+you\s+(?:currently\s+)?(?:live|reside)\W*$",
         ],
-        "negative": r"employer|company|school|university|previous|supervisor|willing|relocat",
+        "negative": r"employer|company|school|university|previous|supervisor|willing|relocat|" + NOT_WHERE_YOU_LIVE,
     },
     # "Do you currently reside in the United States?": Yes or No by where the owner lives, whatever place is named.
     "RESIDES_IN": {
@@ -144,20 +149,20 @@ CONCEPTS: dict[str, dict[str, Any]] = {
             r"^\W*(?:city|town|municipality|city\s*\/\s*town)\b",
             r"\bcity\s*of\s*residence\b",
         ],
-        "negative": r"employer|company|school|university|previous|supervisor",
+        "negative": r"employer|company|school|university|previous|supervisor|" + NOT_WHERE_YOU_LIVE,
     },
     "COUNTRY": {
         "patterns": [
             r"\b(?:country\s*(?:\/|\s+or\s+)?region(?:\s*of\s*residence)?|country\s*of\s*residence|residence\s*country|country|nation|domicile)\b",
         ],
-        "negative": r"citizenship|nationality|employer|school",
+        "negative": r"citizenship|nationality|employer|school|" + NOT_WHERE_YOU_LIVE,
     },
     "STATE_PROVINCE": {
         "patterns": [
             r"\b(?:state\s*\/\s*province|state\s+or\s+province|province\s*\/\s*territory|state|province|region|territory)\b",
             r"\bstate\s*of\s*residence\b",
         ],
-        "negative": r"employer|company|school|university|previous|statement|united\s*states|country",
+        "negative": r"employer|company|school|university|previous|statement|united\s*states|country|" + NOT_WHERE_YOU_LIVE,
     },
     "POSTAL_CODE": {
         "patterns": [

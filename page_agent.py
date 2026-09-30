@@ -607,6 +607,9 @@ def _detail_field(question: str) -> str:
     if not question or re.search(r"employer|company|school|university|reference|referr|emergency|previous|"
                                  r"supervisor|manager|work address", question, re.IGNORECASE):
         return ""
+    # A place of birth, origin, issuance or a visa is not where the owner lives ("Country of Birth").
+    if re.search(concept_matcher.NOT_WHERE_YOU_LIVE, question, re.IGNORECASE):
+        return ""
     # "Country Phone Code" asks for a dial code, not where the owner lives: read as the country, Rackspace's
     # "United States of America (+1)" was "corrected" to "United States" and the run stopped (29 September).
     if re.search(r"phone|dial|calling|mobile|telephone|\bcode\b", question, re.IGNORECASE) \
@@ -2125,7 +2128,9 @@ class PageAgent:
             value = str(held or "").strip()
             if value:
                 return value, f"profile.{standing}"
-        if re.search(r"\b(country|nation)\b", question, re.IGNORECASE):
+        # Where the owner lives, only when the question asks that: the concept matcher decides (a third, looser copy
+        # here answered "What is the Country of your birth?" with the country of residence -- Forterra, 30 September).
+        if concept_matcher.match_concept(question) == "COUNTRY":
             value = str(getattr(self.profile, "country", "") or "").strip()
             if value:
                 return value, "profile.country"

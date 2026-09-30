@@ -508,6 +508,18 @@ is not typed again. A phone box that holds only its country's dial code ("+1")
 is still empty, and is filled. That dial-code picker is never "corrected" to your
 country: a "+1" is the prefix your number takes, not where you live.
 
+## Where you live is not where you were born
+
+Your address answers only questions about where you live now. A question about
+the country, state or city of your birth or origin, where a passport or licence was
+issued, or a visa is never answered from your address: it is left for you (or your
+profile, where it says). Before, "What is the Country of your birth?" was answered with
+your country of residence (Forterra, 30 September).
+
+A job read from its link is named by what the page says about itself -- its title,
+and the employer's own site name -- not by the job site's address: a Rippling
+posting was recorded as "Unknown Role at Ats", and its resume file was named for "Ats".
+
 ## A town the form spells another way
 
 Your profile says "Springfield, IL"; a form's own search may offer "Springfield, Illinois,
