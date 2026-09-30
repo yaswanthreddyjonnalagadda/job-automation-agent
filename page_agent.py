@@ -1086,11 +1086,50 @@ def _shorten(line: str) -> str:
 def compact_snapshot(snapshot: str, limit: int = 60_000) -> str:
     """The snapshot without its empty containers and link addresses, which
     carry no meaning for answering a form and cost most of the space."""
-    kept = [_shorten(line) for line in (snapshot or "").splitlines()
+    kept = [_shorten(line) for line in _answered_lists_shown_short((snapshot or "").splitlines())
             if not re.match(r"^\s*- generic( \[active\])? \[ref=[\w-]+\]:?$", line)
             and not re.match(r"^\s*- /url:", line)]
     text = "\n".join(kept)
     return text if len(text) <= limit else text[:limit] + "\n... (page continues)"
+
+
+def _answered_lists_shown_short(lines: list[str]) -> list[str]:
+    """A list that already shows a real choice is sent with that choice alone; an open list keeps its choices.
+
+    UKG, 30 September: most of the page sent to the AI was list choices -- 257 majors twice, every country and
+    state, twelve months per date box -- and each page call took one to five minutes. The AI needs a list's
+    choices only while it is still to be answered."""
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        head = re.match(r"^(\s*)- (?:combobox|listbox)\b", line)
+        i += 1
+        if not head:
+            continue
+        indent = len(head.group(1))
+        options = []
+        while i < len(lines) and len(lines[i]) - len(lines[i].lstrip()) > indent:
+            options.append(lines[i])
+            i += 1
+        chosen = [o for o in options if "[selected]" in o and not option_match.is_placeholder(
+            (re.search(r'option "([^"]*)"', o) or [None, ""])[1])]
+        # A list drawn as a box shows its choice on its own line ('combobox "Degree": Master of Science (MS)').
+        shown = line.rsplit("]:", 1)[1].strip() if "]:" in line else ""
+        pad = re.match(r"^\s*", options[0]).group(0) if options else ""
+        if (chosen or (shown and not option_match.is_placeholder(shown))) and len(options) > len(chosen) + 1:
+            out += chosen + [f"{pad}- text: ({len(options) - len(chosen)} other choices)"]
+        elif len(options) > _OPEN_LIST_SHOWN:
+            # Still to be answered: enough choices to show what kind they are; the answer is matched against the
+            # whole list when it is chosen (option_match), so it need not be copied from here.
+            out += options[:_OPEN_LIST_SHOWN] + [f"{pad}- text: ({len(options) - _OPEN_LIST_SHOWN} more choices)"]
+        else:
+            out += options
+    return out
+
+
+_OPEN_LIST_SHOWN = 80
 
 
 def answered_fields(controls: list[Control]) -> list[dict]:
