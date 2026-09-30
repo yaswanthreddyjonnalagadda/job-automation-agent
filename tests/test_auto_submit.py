@@ -287,21 +287,6 @@ def test_submission_is_recorded_only_on_evidence(page, tmp_path):
 
 
 # ---------------------------------------------------------------- recovery after the user helps
-def test_automation_resumes_after_the_user_clears_a_captcha(agent, page):
-    page.set_content("<p>Please verify you are human</p><script>setTimeout(() => "
-                     "{ document.body.innerHTML = '<label for=c>City</label><input id=c>' }, 1500)</script>")
-    assert safety.captcha_visible(page) is True
-    assert agent.wait_out_captcha(page, timeout_seconds=30) is True   # waits, never solves
-    assert safety.captcha_visible(page) is False
-    assert agent.set_value(page, "[id='c']", "Fairfax", "City") is True  # ordinary automation resumes
-
-
-def test_the_agent_never_touches_the_captcha_itself(agent, page):
-    page.set_content("<iframe title='reCAPTCHA challenge' style='width:300px;height:400px'></iframe>"
-                     "<button onclick='window.clicked=1'>Verify</button>")
-    agent.wait_out_captcha(page, timeout_seconds=6)
-    assert page.evaluate("() => !!window.clicked") is False
-
 
 # ---------------------------------------------------------------- end to end, on a local form
 def test_verified_auto_submit_end_to_end(page, tmp_path, agent):

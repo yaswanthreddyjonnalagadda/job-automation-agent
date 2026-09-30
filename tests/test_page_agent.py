@@ -158,10 +158,21 @@ def test_the_page_is_read_as_questions_answers_and_choices(page):
     assert by_name["Next"].role == "button" and by_name["First name *"].role == "textbox"
 
 
+def _recorded_page(*parts: str) -> str:
+    """A page recorded during a real run.
+
+    Recordings live in output/, which is gitignored because they carry
+    personal answers. Where one is missing -- on CI or a fresh clone -- the
+    test is skipped instead of failing with FileNotFoundError.
+    """
+    path = Path(__file__).parents[1].joinpath("output", *parts)
+    if not path.is_file():
+        pytest.skip("needs the local recording output/" + "/".join(parts))
+    return path.read_text(encoding="utf-8")
+
+
 def test_workday_answer_buttons_use_their_question_text():
-    snapshot = (Path(__file__).parents[1] / "output" /
-                "The_Options_Clearing_Corporation_Associate_Principal,_Cloud_Engineering" /
-                "pages" / "page_53.txt").read_text(encoding="utf-8")
+    snapshot = _recorded_page("The_Options_Clearing_Corporation_Associate_Principal,_Cloud_Engineering", "pages", "page_53.txt")
     controls = page_agent.parse_snapshot(snapshot)
     questions = {control.question for control in controls if control.role == "button"}
     assert "Have you ever worked for OCC as an intern or employee?*" in questions
@@ -170,16 +181,12 @@ def test_workday_answer_buttons_use_their_question_text():
 
 
 def test_workday_empty_application_shell_is_treated_as_loading():
-    snapshot = (Path(__file__).parents[1] / "output" /
-                "The_Options_Clearing_Corporation_Associate_Principal,_Cloud_Engineering" /
-                "pages" / "page_02.txt").read_text(encoding="utf-8")
+    snapshot = _recorded_page("The_Options_Clearing_Corporation_Associate_Principal,_Cloud_Engineering", "pages", "page_02.txt")
     assert page_agent.workday_form_loading(snapshot)
 
 
 def test_occ_disclosures_have_profile_answers_and_consent_action(resume_file):
-    snapshot = (Path(__file__).parents[1] / "output" /
-                "The_Options_Clearing_Corporation_Associate_Principal,_Cloud_Engineering" /
-                "pages" / "page_08.txt").read_text(encoding="utf-8")
+    snapshot = _recorded_page("The_Options_Clearing_Corporation_Associate_Principal,_Cloud_Engineering", "pages", "page_08.txt")
     agent = make_agent(Planner(), resume_file)
     controls = page_agent.parse_snapshot(snapshot)
     gender = next(c for c in controls if "gender" in c.question.lower())
@@ -204,12 +211,61 @@ def test_empty_middle_name_overrides_historical_answer():
 
 
 def test_paylocity_labels_survive_required_markers():
-    snapshot = (Path(__file__).parents[1] / "output" / "WinChoice_Senior_DevOps_Engineer" /
-                "pages" / "page_09.txt").read_text(encoding="utf-8")
+    snapshot = _recorded_page("WinChoice_Senior_DevOps_Engineer", "pages", "page_09.txt")
     controls = page_agent.parse_snapshot(snapshot)
     questions = {control.question for control in controls}
     assert "First Name" in questions and "Last Name" in questions
     assert any("SMS" in question and "permission" in question for question in questions)
+
+
+def test_a_label_styled_as_a_button_is_still_found_for_its_own_section():
+    """Greenhouse's resume upload is a <label> wired to a hidden file input,
+    not a real button -- Chromium's accessibility tree gives it role
+    "generic", never a press role, so before this it never became a Control
+    at all (24 September: Rubrik/Greenhouse, "Resume/CV *" -> "Attach
+    file"). Playwright's own snapshot already flags such an element
+    [cursor=pointer]. Two of them can carry the identical name (a form with
+    both a resume and a cover letter upload), so they must still be told
+    apart by the section each sits in, not merely detected as *a* button."""
+    snapshot = """- generic [ref=e1]:
+  - generic [ref=e2]: Resume/CV *
+  - generic [ref=e3] [cursor=pointer]: Attach file
+- generic [ref=e4]:
+  - generic [ref=e5]: Cover Letter
+  - generic [ref=e6] [cursor=pointer]: Attach file"""
+    controls = page_agent.parse_snapshot(snapshot)
+    buttons = [c for c in controls if c.role == "button"]
+    assert len(buttons) == 2, "a plain label with no [cursor=pointer] must not turn into a button too"
+    assert all(b.name == "Attach file" for b in buttons)
+    by_question = {b.question: b.ref for b in buttons}
+    assert by_question == {"Resume/CV *": "e3", "Cover Letter": "e6"}
+
+
+def test_greenhouse_attach_file_label_is_matched_to_the_resume_not_the_cover_letter(resume_file):
+    """The real Rubrik/Greenhouse recording behind the 24 September report:
+    the resume was never attached because attach_documents() only looked at
+    button/press-role controls and Greenhouse's trigger has none. This
+    exercises the real, unmodified attach_documents() against that
+    recording -- do() is stubbed so no browser is needed, since the point
+    here is control discovery, not the click itself."""
+    snapshot = _recorded_page("Rubrik_Job_Board_Software_Engineer_-_Cloud_Infrastructure", "pages", "page_01.txt")
+    controls = page_agent.parse_snapshot(snapshot)
+
+    agent = page_agent.PageAgent.__new__(page_agent.PageAgent)
+    agent.resume_file = resume_file
+    agent.resume_uploaded = False
+    agent._letter_attached = False
+    agent.cover_letter = None
+    calls = []
+    agent.do = lambda page, answer, control: calls.append((answer, control)) or True
+
+    given = agent.attach_documents(page=None, snapshot=snapshot, controls=controls)
+
+    assert len(given) == 1, "the resume's Attach file control was not found"
+    answer, control = given[0]
+    assert answer.action == "upload_resume"
+    assert control.question == "Resume/CV *"
+    assert calls and calls[0][1] is control
 
 
 def test_a_radio_button_carries_its_question():
@@ -381,9 +437,18 @@ def test_a_legal_question_is_answered_only_from_a_profile_field_that_states_it(p
                        name="Have you ever") == ""
 
 
+def asks_the_planner():
+    """A profile that leaves Country open, so the page goes to the planner.
+
+    A page the profile answers whole is planned without the AI (PAGE_FULLY_KNOWN); the tests
+    of what the agent refuses from a plan need a page the plan is asked about."""
+    import dataclasses
+    return dataclasses.replace(config.get_user_profile(), country="")
+
+
 def test_finish_later_is_never_pressed(page, resume_file):
     serve(page)
-    outcome = make_agent(Planner(next_label="Finish Later"), resume_file).run(page)
+    outcome = make_agent(Planner(next_label="Finish Later"), resume_file, profile=asks_the_planner()).run(page)
     assert outcome.kind == "owner_needed" and "never presses" in outcome.summary
     assert page.url.endswith("/apply/1")
 
@@ -480,7 +545,7 @@ def test_an_answer_that_cannot_be_given_is_reported_not_dropped(page, resume_fil
             if answer["question"] == "Country":
                 answer["value"] = "Atlantis"
         return plan
-    outcome = make_agent(SimpleNamespace(plan_page=plan_page), resume_file).run(page)
+    outcome = make_agent(SimpleNamespace(plan_page=plan_page), resume_file, profile=asks_the_planner()).run(page)
     assert outcome.kind == "owner_needed"
     assert any("could not set" in r and "Atlantis" in r for r in outcome.reasons)
     assert page.url.endswith("/apply/1")
@@ -499,8 +564,13 @@ class Tracker:
 
 def test_a_resume_attached_in_an_earlier_run_counts_at_the_last_step(page, resume_file):
     """Schwab's resume went on at step 1; the run that reached the last step
-    started later and was held for "the tailored resume is not attached"."""
-    serve(page)
+    started later and was held for "the tailored resume is not attached".
+
+    The last step here has no upload box (the resume went on at step 1), so the
+    agent cannot attach it itself and only the earlier run's record can count."""
+    step2 = STEP_2.replace('<label for="resume">Resume *</label><input type="file" id="resume">', "") \
+                  .replace("localStorage.resume = resume.files.length ? resume.files[0].name : '';", "")
+    serve(page, step2=step2)
     page.goto("https://jobs.example.com/apply/2")
     planner = Planner()
     original = planner.plan_page
@@ -774,14 +844,17 @@ COVER_LETTER_FORM = """<html><body><h1>Apply</h1><p>Step 1 of 1</p>
                 localStorage.resume = resume.files.length ? resume.files[0].name : '';
                 location.href='/done'; return false;">
   <fieldset><legend>Resume/CV*</legend><input type="file" id="resume" aria-label="Attach"></fieldset>
-  <fieldset><legend>Cover Letter</legend><input type="file" id="cover" aria-label="Attach"></fieldset>
+  <fieldset><legend>Cover Letter*</legend><input type="file" id="cover" aria-label="Attach"></fieldset>
   <button type="submit">Submit Application</button>
 </form></body></html>"""
 
 
 def test_the_cover_letter_is_attached_where_the_form_asks_for_one(page, resume_file, tmp_path):
     """Harbinger's "Cover Letter" section has one control, called "Attach",
-    and the cover letter was forgotten again."""
+    and the cover letter was forgotten again. Since the owner's lazy rule
+    (attach only where the form requires a letter), the section here is
+    required; test_optional_cover_letter_is_skipped_when_not_required covers
+    the optional case."""
     letter = tmp_path / "Yaswanth_Jonnalagadda_Cover_Letter.pdf"
     letter.write_bytes(b"%PDF-1.4 letter")
     page.route("https://jobs.example.com/**", lambda route: route.fulfill(
@@ -803,8 +876,8 @@ def test_the_cover_letter_is_attached_where_the_form_asks_for_one(page, resume_f
 
 
 def test_a_document_already_attached_is_not_attached_again(page, resume_file):
-    filled = COVER_LETTER_FORM.replace('<legend>Cover Letter</legend>',
-                                       '<legend>Cover Letter</legend><p>Cover_Letter.pdf</p>')
+    filled = COVER_LETTER_FORM.replace('<legend>Cover Letter*</legend>',
+                                       '<legend>Cover Letter*</legend><p>Cover_Letter.pdf</p>')
     page.route("https://jobs.example.com/**", lambda route: route.fulfill(
         status=200, content_type="text/html",
         body=DONE if route.request.url.endswith("/done") else filled))
@@ -904,9 +977,23 @@ def test_a_code_split_across_one_box_per_digit_is_typed(page, resume_file):
     assert page.evaluate("document.body.dataset.verified") == "482913"   # Verify was pressed
 
 
-def test_a_code_asked_for_to_prove_a_human_is_never_entered(page, resume_file):
-    """Harbinger's page says the code is there to confirm a human is applying."""
+def test_a_code_the_site_says_confirms_a_human_is_entered_when_no_captcha_is_showing(page, resume_file):
+    """Greenhouse's page says the code is there to confirm a human is applying. It is an emailed code for the
+    owner's own application, and the owner decided (25 September 2026) that the agent enters it itself: it
+    once stopped a Praxis application one step short of done. What stays the owner's is a CAPTCHA."""
     page.set_content(HUMAN_CHECK_PAGE)
+    agent = _code_agent(page, resume_file)
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    assert agent.complete_account_code(page, controls, agent.snapshot(page)) is True
+    assert page.locator("#c").input_value() == "482913"
+
+
+def test_a_code_beside_a_real_captcha_is_never_entered(page, resume_file):
+    """Harbinger's page puts the code beside a reCAPTCHA: the challenge is the owner's, and the agent does not
+    go on to the code past it."""
+    page.set_content(HUMAN_CHECK_PAGE.replace(
+        "<label", '<iframe title="recaptcha challenge expires in two minutes" width="300" height="300" '
+                  'srcdoc="<p>challenge</p>"></iframe><label', 1))
     agent = _code_agent(page, resume_file)
     controls = page_agent.parse_snapshot(agent.snapshot(page))
     assert agent.complete_account_code(page, controls, agent.snapshot(page)) is False
@@ -1315,3 +1402,152 @@ def test_date_field_converts_month_year_and_skips_disabled(page, resume_file):
 
 
 
+
+
+# --- the options confirm what a location question asks (RFC-001, M1) ----------
+
+def _somewhere_profile(**place):
+    """A made-up owner, so these tests hold for anyone's profile."""
+    import dataclasses
+    return dataclasses.replace(config.UserProfile(), full_name="Alex Example", first_name="Alex",
+                               last_name="Example", **place)
+
+
+def test_a_region_question_over_countries_is_answered_with_the_country(resume_file):
+    """23 September: "Country/Region of Residence" was answered "Virginia"
+    from a list of countries, and the field kept the site's default."""
+    agent = make_agent(Planner(), resume_file,
+                       profile=_somewhere_profile(country="United States", state="Virginia", city="Fairfax"))
+    countries = ["- Select -", "Aaland Islands", "Afghanistan", "Albania", "Algeria", "Andorra", "United States"]
+    for label in ("Country/Region of Residence *", "Region of Residence *"):
+        control = page_agent.Control(ref="c", role="combobox", name=label, options=countries)
+        assert agent.known_answer(control)[0] == "United States", label
+
+
+def test_the_same_question_is_answered_for_an_owner_anywhere(resume_file):
+    agent = make_agent(Planner(), resume_file,
+                       profile=_somewhere_profile(country="India", state="Telangana", city="Hyderabad"))
+    countries = ["- Select -", "Afghanistan", "Iceland", "India", "Indonesia", "United States"]
+    control = page_agent.Control(ref="c", role="combobox", name="Region of Residence *", options=countries)
+    assert agent.known_answer(control)[0] == "India"
+
+
+# --- a pre-filled place is put right from the profile, never over the owner -----
+
+_SITE_DEFAULT_COUNTRY = ('<label for=c>Country *</label><select id=c><option>- Select -</option>'
+                         '<option selected>Afghanistan</option><option>Albania</option><option>Algeria</option>'
+                         '<option>Andorra</option><option>Angola</option><option>United States</option></select>')
+
+
+def test_a_country_the_site_defaulted_to_is_put_right_and_reported(page, resume_file):
+    import provenance
+
+    page.set_content(_SITE_DEFAULT_COUNTRY)
+    provenance.install_on_page(page)
+    agent = make_agent(Planner(), resume_file, profile=_somewhere_profile(country="United States"))
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    plan = page_agent.PagePlan.from_json({"page_kind": "application_form", "answers": [], "next": {"kind": "none"}})
+    agent.correct_from_profile(page, plan, controls)
+    assert page.locator("#c").evaluate("el => el.options[el.selectedIndex].text") == "United States"
+    assert any("Afghanistan" in note and "United States" in note for note in agent.notes)   # shown at hand-over
+
+
+def test_a_country_the_owner_typed_is_never_corrected(page, resume_file):
+    import provenance
+
+    page.set_content('<label for=c>Country *</label><input id=c role=combobox value="">')
+    provenance.install_on_page(page)
+    provenance.set_agent_busy(page, False)
+    page.fill("#c", "Afghanistan")                   # the owner's own, trusted typing
+    provenance.set_agent_busy(page, True)
+    agent = make_agent(Planner(), resume_file, profile=_somewhere_profile(country="United States"))
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    plan = page_agent.PagePlan.from_json({"page_kind": "application_form", "answers": [], "next": {"kind": "none"}})
+    agent.correct_from_profile(page, plan, controls)
+    assert page.locator("#c").input_value() == "Afghanistan"
+
+
+def test_a_work_entrys_country_is_not_corrected_to_the_owners(page, resume_file):
+    import provenance
+
+    page.set_content('<fieldset><legend>Work Experience 1</legend>'
+                     + _SITE_DEFAULT_COUNTRY.replace("Afghanistan", "India") + '</fieldset>')
+    provenance.install_on_page(page)
+    agent = make_agent(Planner(), resume_file, profile=_somewhere_profile(country="United States"))
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    plan = page_agent.PagePlan.from_json({"page_kind": "application_form", "answers": [], "next": {"kind": "none"}})
+    agent.correct_from_profile(page, plan, controls)
+    assert page.locator("#c").evaluate("el => el.options[el.selectedIndex].text") == "India"
+
+
+def test_leave_policy_leaves_a_site_default_for_the_owner(page, resume_file, monkeypatch):
+    import provenance
+
+    monkeypatch.setenv("SITE_PREFILL_POLICY", "leave")
+    page.set_content(_SITE_DEFAULT_COUNTRY)
+    provenance.install_on_page(page)
+    agent = make_agent(Planner(), resume_file, profile=_somewhere_profile(country="United States"))
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    plan = page_agent.PagePlan.from_json({"page_kind": "application_form", "answers": [], "next": {"kind": "none"}})
+    agent.correct_from_profile(page, plan, controls)
+    assert page.locator("#c").evaluate("el => el.options[el.selectedIndex].text") == "Afghanistan"
+    assert any("Afghanistan" in note and "leave" in note for note in agent.notes)   # the owner is told
+
+
+# --- a resume the form asks for holds the hand-over until it is on the form -------
+
+_UPLOADS = ('<div><label for=cv style="display:block">Resume/CV <span>*</span></label>'
+            '<input type=file id=cv style="display:none">'
+            '<label for=cv style="cursor:pointer;display:inline-block">Attach file</label>'
+            '<button type=button>Paste</button></div>'
+            '<div><label for=cl style="display:block">Cover Letter</label>'
+            '<input type=file id=cl style="display:none">'
+            '<label for=cl style="cursor:pointer;display:inline-block">Attach file</label>'
+            '<button type=button>Paste</button></div><button>Submit</button>')
+_UPLOAD_NOBODY_RECOGNISES = ('<label for=cv style="display:block">Resume/CV <span>*</span></label>'
+                             '<input type=file id=cv style="display:none">'
+                             '<div style="cursor:pointer" onclick="cv.click()">Drop your file here</div>'
+                             '<button>Submit</button>')
+_NO_RESUME_FIELD = ('<label for=n style="display:block">First name <span>*</span></label>'
+                    '<input id=n aria-label="First name"><button>Submit</button>')
+
+
+def _gate_on(page, resume_file, html, auto_submit=False):
+    page.set_content(html)
+    agent = make_agent(Planner(), resume_file, auto_submit=auto_submit)
+    return agent, agent.submit_gate(page, page_agent.parse_snapshot(agent.snapshot(page)))
+
+
+def test_a_resume_the_form_asks_for_holds_the_handover_until_it_is_attached(page, resume_file):
+    """24 September (Rubrik/Greenhouse): the tailored resume was never attached, yet with
+    automatic submission off the gate answered "ready for you to submit" before it looked at
+    the resume, so the run handed over as READY TO SUBMIT with a form the site would refuse."""
+    _, gate = _gate_on(page, resume_file, _UPLOADS)
+    assert "resume is not attached" in gate
+
+
+def test_the_handover_stands_once_the_resume_is_attached(page, resume_file):
+    page.set_content(_UPLOADS)
+    agent = make_agent(Planner(), resume_file, auto_submit=False)
+    snapshot = agent.snapshot(page)
+    assert agent.attach_documents(page, snapshot, page_agent.parse_snapshot(snapshot))
+    assert page.locator("#cv").evaluate("el => el.files.length") == 1
+    assert "automatic submission is off" in agent.submit_gate(page, page_agent.parse_snapshot(agent.snapshot(page)))
+
+
+def test_a_required_resume_label_holds_the_handover_though_its_trigger_is_not_recognised(page, resume_file):
+    """The class behind that report: an upload the agent cannot name must not read as
+    "the form asks for no resume"."""
+    _, gate = _gate_on(page, resume_file, _UPLOAD_NOBODY_RECOGNISES)
+    assert "resume is not attached" in gate
+
+
+def test_a_form_that_asks_for_no_resume_is_still_ready_without_one(page, resume_file):
+    _, gate = _gate_on(page, resume_file, _NO_RESUME_FIELD)
+    assert "automatic submission is off" in gate
+
+
+def test_automatic_submission_still_needs_the_resume_whatever_the_form_shows(page, resume_file):
+    """The unattended path is not loosened: it never sends without the tailored resume."""
+    _, gate = _gate_on(page, resume_file, _NO_RESUME_FIELD, auto_submit=True)
+    assert "resume is not attached" in gate

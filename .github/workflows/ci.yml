@@ -1,0 +1,82 @@
+# The test suite on every pull request and every push to main (RFC-001, M0).
+# A pull request can be merged only when this passes (branch protection:
+# Settings -> Branches -> main -> "Require status checks to pass" -> "tests").
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      # tests/test_dashboard.py talks to the tracker's Postgres database. This
+      # one exists only for the length of the job; its password is not a secret.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: job_agent
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: job_agent
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U job_agent"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      PYTHONUTF8: "1"
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: job_agent
+      POSTGRES_USER: job_agent
+      POSTGRES_PASSWORD: ci-only
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+          python -m playwright install --with-deps chromium
+
+      # Some tests still read the owner's real profile (RFC-001, M2 replaces
+      # them with synthetic fixtures). It comes from a repository secret --
+      # Settings -> Secrets and variables -> Actions -> PROFILE_JSON, the
+      # contents of data/profile.json -- and is never written to the log.
+      # Without the secret (or on a fork's pull request, which never gets
+      # one) those tests are skipped by tests/conftest.py and every other
+      # test still runs; -rs below lists what was skipped.
+      - name: Profile for the tests
+        env:
+          PROFILE_JSON: ${{ secrets.PROFILE_JSON }}
+        run: |
+          if [ -z "$PROFILE_JSON" ]; then
+            echo "::warning title=PROFILE_JSON is not set::Tests that need the owner's real profile are skipped. Add the repository secret PROFILE_JSON (the contents of data/profile.json) to run them."
+            exit 0
+          fi
+          printf '%s' "$PROFILE_JSON" > "$RUNNER_TEMP/profile.json"
+          echo "PROFILE_PATH=$RUNNER_TEMP/profile.json" >> "$GITHUB_ENV"
+
+      - name: Place data matches its source
+        run: python reference/build_geo.py --check
+
+      - name: Tests
+        run: python -m pytest -q -rs

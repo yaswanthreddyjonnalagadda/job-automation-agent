@@ -1,0 +1,12 @@
+{
+  "id": "f013",
+  "date": "2026-09-25",
+  "class": "An action assumed to have worked because it was made",
+  "symptom": "Even where the agent meant to tick a Workday consent box, Playwright's normal tick failed (\"Clicking the checkbox did not change its state\"); the same tick with force worked.",
+  "site": "HonorHealth (Workday)",
+  "root_cause": "Workday draws the checkbox under an overlay, so a normal click lands on the overlay and the input's state does not change. The code called check() once and went on as if the box were ticked.",
+  "why_tests_missed": "The fixtures used plain checkboxes that a click always reaches.",
+  "fix": "_tick_checkbox tries a normal tick, a forced tick, then the page's own click, and reports whether the box is really ticked; if not, the box is left for the owner and Create is not pressed.",
+  "tests": ["tests/test_account_creation_consent.py"],
+  "prevention": "After any tick, click or choice, read the control's state back and act on that, not on the call having returned."
+}

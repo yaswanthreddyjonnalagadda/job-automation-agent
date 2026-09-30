@@ -111,6 +111,32 @@ def is_privacy_consent(text: str) -> bool:
     return bool(text and _PRIVACY_ONLY_RE.search(text) and not is_attestation(text))
 
 
+# Consent to creating the very account the owner asked the agent to create ("I agree to creating
+# this account to allow me to apply for positions with X"). It states nothing about the candidate
+# and is the act the owner authorized, so the agent may tick it -- owner's approval, 25 September
+# 2026. Anything that goes further is not this: terms and conditions, a declaration or signature,
+# a marketing opt-in, sharing data with anyone.
+_ACCOUNT_CREATION_RE = re.compile(
+    r"\b(agree|consent|acknowledge|accept)\b[^.]{0,40}\b(creat(e|ing|ion of)|open(ing)?|set(ting)? up|register(ing)?)\b"
+    r"[^.]{0,30}\baccount\b",
+    re.IGNORECASE,
+)
+_BEYOND_ACCOUNT_CREATION_RE = re.compile(
+    r"\bterms?\b|\bconditions?\b|\bcertif|\bperjury\b|\btrue\b|\baccurate\b|\bsignature\b|\bsign\b|"
+    r"\breceiv|\balerts?\b|\bnewsletters?\b|\bmarketing\b|\bpromotion|\bhear more\b|\bcontact me\b|"
+    r"\bshare\b|\bsell\b|\bthird[- ]part(y|ies)\b",
+    re.IGNORECASE,
+)
+
+
+def is_account_creation_consent(text: str) -> bool:
+    """True for a box that only consents to creating the account the owner asked for."""
+    text = " ".join((text or "").split())
+    if not text or not _ACCOUNT_CREATION_RE.search(text):
+        return False
+    return not (is_attestation(text) or _BEYOND_ACCOUNT_CREATION_RE.search(text))
+
+
 # --------------------------------------------------------------------------
 # Controls that submit an application: never clicked by the agent
 # --------------------------------------------------------------------------
@@ -192,12 +218,16 @@ def captcha_visible(page) -> bool:
 # Never overwrite what the user typed
 # --------------------------------------------------------------------------
 class AgentValues:
-    """Remembers every value the agent itself put on a page.
+    """Remembers every value the agent itself put on a page, and decides
+    whether a value already on the form may be replaced.
 
-    A field that already holds something is only rewritten when the agent is
-    the one that put it there (correcting its own earlier answer). Anything
-    else -- typed by the user, or pre-filled by the site from the resume --
-    is left exactly as it is.
+    A value the agent wrote may always be rewritten (correcting its own
+    earlier answer). A value the owner entered never is. A value the site
+    put there -- a resume parser's guess, the first entry of a list -- may
+    be corrected from the profile only when provenance.py observed that no
+    person touched it and the owner's pre-fill policy allows it. With no
+    observer on the page there is no way to tell the site from the owner,
+    and the value is left alone, exactly as before.
     """
 
     def __init__(self) -> None:
@@ -243,6 +273,43 @@ class AgentValues:
     def may_write(self, page, ref: str, current_value: str) -> bool:
         """True when the field is empty, or holds a value the agent wrote."""
         return not (current_value or "").strip() or self.is_ours(page, ref, current_value)
+
+    def origin(self, page, ref: str, current_value: str) -> str:
+        """Who put the current value there (provenance.EMPTY/AGENT/OWNER/SITE/UNKNOWN)."""
+        import provenance
+
+        return provenance.origin(page, ref, value=current_value,
+                                 agent_wrote=self.is_ours(page, ref, current_value))
+
+    def may_correct(self, page, ref: str, current_value: str) -> bool:
+        """True when a value that contradicts the owner's profile may be put
+        right from the profile (see may_overrule)."""
+        from config import site_prefill_policy
+
+        return may_overrule(self.origin(page, ref, current_value), site_prefill_policy())
+
+
+def may_overrule(origin: str, policy: str) -> bool:
+    """The one rule for a value already on the form that contradicts the
+    owner's profile: may the agent put it right from the profile?
+
+      EMPTY, AGENT -- yes: nothing to overrule, or the agent's own answer;
+      OWNER        -- never: what the owner entered stands;
+      SITE         -- only when the owner's policy is "correct"
+                      (SITE_PREFILL_POLICY; "leave" keeps the site's value);
+      UNKNOWN      -- never: with no observer on the page the site cannot be
+                      told from the owner.
+
+    `origin` comes from provenance.origin(). The caller decides what
+    contradicts the profile; this is the only place that decides who may be
+    overruled -- the rules engine, the page agent and the address sweep all
+    ask it.
+    """
+    import provenance
+
+    if origin in (provenance.EMPTY, provenance.AGENT):
+        return True
+    return origin == provenance.SITE and policy == "correct"
 
 
 # --------------------------------------------------------------------------
@@ -406,8 +473,14 @@ def handover_status(report: dict) -> tuple[str, str]:
     return "ready_to_submit", " | ".join([message] + notes)
 
 
+# "with or without sponsorship" is a question or a welcome that includes candidates who need
+# sponsorship, so the "without" inside it is not a refusal (owner-approved, 25 September 2026: Praxis's
+# "Are you authorized to work in the United States (with or without sponsorship)?" disqualified a job).
+_INCLUSIVE_WITHOUT = r"(?<!with or )(?<!with and/or )(?<!with/or )"
+
 _NO_SPONSORSHIP = re.compile(
     r"[^.!?\n]*(?:"
+    + _INCLUSIVE_WITHOUT +
     r"without (?:the )?(?:need (?:for|of) )?(?:current or future )?(?:employment[- ]based )?"
     r"(?:visa |immigration )?sponsorship"
     r"|(?:not|unable to|cannot|can't|will not|won't|does not|do not|are not able to|is not able to)"
@@ -482,36 +555,6 @@ def check_visa_sponsorship_shield(
 
     return True, clause, screenshot_path
 
-
-def ready_to_auto_submit(report: dict, resume_on_form: bool, submit_button_found: bool) -> tuple[bool, str]:
-    """(submit?, why) for an application the agent has filled.
-
-    Submitted only when all of these hold:
-      * every mandatory field is filled and the form shows no errors
-        (handover_status says ready_to_submit);
-      * no attestation, acknowledgement or signature is waiting -- the agent
-        never gives one of those, so a form that needs one waits for you;
-      * no CAPTCHA is showing;
-      * the resume the agent prepared is on the form;
-      * this is the last page: the form's own Submit button is there.
-    Duplicates and jobs that will not sponsor a visa never reach this point.
-    Nor does a sponsorship or work-authorization answer that contradicts the
-    profile, whoever filled it in.
-    """
-    if report.get("legal_answer_conflicts"):
-        return False, "a sponsorship or work-authorization answer doesn't match your profile"
-    status, message = handover_status(report)
-    if status != "ready_to_submit":
-        return False, message
-    if report.get("attestations_pending"):
-        return False, "an acknowledgement or signature is waiting for you"
-    if report.get("captcha"):
-        return False, "a CAPTCHA is showing -- only you can complete it"
-    if not resume_on_form:
-        return False, "the resume is not on the form"
-    if not submit_button_found:
-        return False, "this is not the last page yet -- there is no Submit button"
-    return True, "complete: every required field filled, no errors, resume attached, on the last page"
 
 
 def verification_status(evidence: Optional[str]) -> tuple[str, str]:
@@ -752,7 +795,7 @@ def redact(text: str) -> str:
         if value.lower().startswith("sk-ant-"):
             return "sk-ant-***"
         if re.match(r"(?i)\s*(password|api[_\-]?key|token|secret)\s*[=:]", value):
-            key = re.split(r"[=:]", value, 1)[0]
+            key = re.split(r"[=:]", value, maxsplit=1)[0]
             return f"{key}=***"
         if "@" in value:
             name, _, domain = value.partition("@")
@@ -764,29 +807,34 @@ def redact(text: str) -> str:
 
 
 class RedactingFilter(logging.Filter):
-    """Logging filter that runs every message through redact()."""
+    """Logging filter that runs every message through redact().
+
+    The finished message is redacted, never the format string on its own.
+    Redacting the template "Could not read ATS_PASSWORD: %s" turned it into
+    "ATS_PASSWORD=***": the %s placeholder was gone but its argument was
+    still attached, so formatting the record failed later. Normal runs
+    printed a logging error instead of the line, and tests failed or passed
+    depending on which test file happened to import apply_flow first.
+    """
 
     def filter(self, record: "logging.LogRecord") -> bool:
         try:
-            record.msg = redact(str(record.msg))
-            # Only text is redacted: turning numbers into strings would break
-            # %d formatting in the message.
-            if isinstance(record.args, tuple):
-                record.args = tuple(redact(a) if isinstance(a, str) else a for a in record.args)
-            elif isinstance(record.args, dict):
-                record.args = {k: (redact(v) if isinstance(v, str) else v) for k, v in record.args.items()}
+            message = record.getMessage()
         except Exception:
-            pass
+            message = str(record.msg)
+        record.msg = redact(message)
+        record.args = ()
         return True
 
 
 def install_log_redaction(logger_name: str = "") -> None:
-    """Adds the redacting filter to a logger and each of its handlers."""
+    """Adds the redacting filter to a logger and each of its handlers, once."""
     target = logging.getLogger(logger_name)
-    flt = RedactingFilter()
-    target.addFilter(flt)
+    if not any(isinstance(f, RedactingFilter) for f in target.filters):
+        target.addFilter(RedactingFilter())
     for handler in target.handlers:
-        handler.addFilter(flt)
+        if not any(isinstance(f, RedactingFilter) for f in handler.filters):
+            handler.addFilter(RedactingFilter())
 
 
 def profile_values(profile) -> dict:

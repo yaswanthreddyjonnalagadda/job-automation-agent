@@ -1,0 +1,24 @@
+# Line endings: the repository stores LF; a Windows checkout gets CRLF.
+# Without this file, git on Windows and git inside Linux tools disagree about
+# which files changed, and whole files show up as modified for no reason.
+* text=auto
+
+# Binary files are never converted.
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.db binary
+*.sqlite binary
+*.zip binary
+*.docx binary
+
+# Hook scripts run under sh, which cannot read Windows line endings.
+.githooks/* text eol=lf
+*.sh text eol=lf
+
+# A third-party bundle used as a test fixture (see its README): generated,
+# not reviewed line by line.
+tests/fixtures/ant_select/ant-select.bundle.js -diff linguist-generated=true

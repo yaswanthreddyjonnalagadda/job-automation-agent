@@ -1,0 +1,12 @@
+{
+  "id": "f020",
+  "date": "2026-09-25",
+  "class": "A decision that belongs to the owner had no place to live except as a loosened rule",
+  "symptom": "A Discipline list offered \"Computer Science\" but not the owner's \"Computer Technology\"; the agent (correctly, by its own rule) left the box empty, and the owner asked why it could not use the near match.",
+  "site": "Praxis Precision Medicines (Greenhouse)",
+  "root_cause": "The rule that a field of study is never swapped for another subject protects what the owner certifies, but gave the owner no way to say \"this substitute is fine\": the only options were a blank box or loosening the rule for everyone and every value.",
+  "why_tests_missed": "The tests pinned the refusal to substitute; nothing modelled an owner who approves a specific substitute.",
+  "fix": "profile.answer_alternatives (the owner's data, e.g. {\"Computer Technology\": [\"Computer Science\"]}): after the exact value is not offered, choose() tries only the alternatives the owner listed, in order; the hand-over says when one was used; apply_answers records what was chosen so the check that an answer stayed does not loop. Nothing else is substituted, and the exact value always wins.",
+  "tests": ["tests/test_owner_approved_alternatives.py"],
+  "prevention": "When a safety rule refuses something the owner may legitimately want, give the owner a data-level way to approve exactly that case (per value, ordered, reported at hand-over) rather than loosening the rule."
+}

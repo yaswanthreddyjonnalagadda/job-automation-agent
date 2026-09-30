@@ -49,7 +49,9 @@ import config as config_module
 from resume_pdf import build_letter_pdf, build_resume_pdf
 from browser_automation import BlockedLoginDomainError, JobApplicationAssistant
 from claude_integration import ClaudeClient, ClaudeIntegrationError
-from config import get_app_config, get_user_profile
+from gemini_integration import GeminiDocumentClient
+from openai_integration import OpenAIDocumentClient
+from config import get_app_config, get_user_profile, available_tailor_providers
 from jd_analyzer import build_job_description, dedup_key_for_url
 import safety
 from safety import STATUS_DISQUALIFIED_POLICY_MISMATCH
@@ -248,26 +250,114 @@ def reuse_stored_document(tracker, key: str, kind: str, job_dir: Path) -> Path |
         return None
     if not doc or not doc.get("content"):
         return None
-    path = job_dir / doc["filename"]
     content = bytes(doc["content"])
+    # A PDF smaller than 20 KB is almost certainly broken (bad tailoring output
+    # that got PDF'd as a near-empty file). Discard it so the run retailors.
+    if kind == "resume" and doc.get("filename", "").lower().endswith(".pdf") and len(content) < 20_000:
+        logger.warning(
+            "REUSE_SKIPPED: stored resume %s is only %d bytes (likely corrupt) -- will retailor",
+            doc["filename"], len(content),
+        )
+        return None
+    path = job_dir / doc["filename"]
     if not path.is_file() or path.read_bytes() != content:
         path.write_bytes(content)
     return path
 
 
+# ── out-of-credits / quota-exhausted detection ────────────────────────────────
+
+_OUT_OF_CREDITS_PHRASES = (
+    "usage limits",
+    "credit balance",
+    "billing",
+    "quota exceeded",
+    "insufficient_quota",
+    "rate_limit_exceeded",   # OpenAI
+    "resource_exhausted",    # Google
+)
+
+
+def _is_out_of_credits(exc: Exception) -> bool:
+    """True when the error is a hard account-level limit (not a transient 503)."""
+    msg = str(exc).lower()
+    return any(phrase in msg for phrase in _OUT_OF_CREDITS_PHRASES)
+
+
+def _make_tailor_client(provider: str, cfg) -> ClaudeClient:
+    """Build the right client object for *provider*."""
+    if provider == "claude":
+        return ClaudeClient(cfg)
+    if provider == "gemini":
+        return GeminiDocumentClient(cfg)
+    if provider == "openai":
+        return OpenAIDocumentClient(cfg)
+    raise ValueError(f"Unknown tailor provider: {provider!r}")
+
+
+def _tailor_with(client, resume, job, profile, job_dir: Path, resume_txt: Path, resume_pdf: Path,
+                 label: str) -> Path | None:
+    """Attempt to tailor the resume using *client*.
+
+    Returns the PDF path on success.
+    Returns None on transient / unknown failure so the caller tries the next provider.
+    Raises _OutOfCreditsError when the account has hit a hard usage limit, so the
+    caller can warn the user and still try the next provider rather than silently
+    falling through."""
+    try:
+        logger.info("Tailoring resume for %s via %s...", job.company, label)
+        raw = client.tailor_resume(resume, job, profile)
+        tailored = ensure_resume_header(
+            normalise_contact_details(strip_model_preamble(raw, profile), profile),
+            profile, job,
+        )
+        unsupported = safety.unsupported_claims(resume.raw_text, tailored)
+        if unsupported:
+            logger.warning("TAILORING_RETRY (%s): claimed %s, which isn't in the resume",
+                           label, ", ".join(unsupported[:6]))
+            try:
+                retry = client.tailor_resume(
+                    resume, job, profile,
+                    extra_instruction=(
+                        "Your previous draft claimed these, which do NOT appear in the candidate's "
+                        f"resume: {', '.join(unsupported[:10])}. Write it again using only what the "
+                        "resume actually says. Do not name specific product models, versions, metrics "
+                        "or certifications unless the resume names them."
+                    ),
+                )
+                retried = ensure_resume_header(
+                    normalise_contact_details(strip_model_preamble(retry, profile), profile), profile, job)
+                still = safety.unsupported_claims(resume.raw_text, retried)
+                if len(still) < len(unsupported):
+                    tailored, unsupported = retried, still
+            except Exception as retry_exc:
+                logger.warning("TAILORING_RETRY failed (%s) -- keeping the first draft", retry_exc)
+        resume_txt.write_text(tailored, encoding="utf-8")
+        build_resume_pdf(resume_txt, resume_pdf)
+        logger.info("Tailored resume written to %s via %s", resume_pdf.name, label)
+        return resume_pdf
+    except Exception as exc:
+        if _is_out_of_credits(exc):
+            logger.warning(
+                "AI_OUT_OF_CREDITS (%s): %s account has reached its usage limit -- "
+                "add credits or wait for the limit to reset. Trying the next provider.",
+                label, label,
+            )
+        else:
+            logger.warning("TAILORING_FAILED via %s (%s)", label, exc)
+        return None
+
+
 def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None, key: str = "") -> Path:
-    """Returns the resume PDF to attach for THIS job: the one already generated
-    for the posting if there is one (from the database), otherwise a newly
-    tailored one. The cover letter is NOT written here -- see prepare_cover_letter.
+    """Returns the resume PDF to attach for THIS job.
 
-    Without this the flow attached whatever `_resume_override.txt` happened to
-    point at -- a single global file left over from the previous application,
-    which is how one employer's tailored resume nearly went to another. Each
-    job now gets its own PDF under its own output folder.
+    Tailoring priority is driven by which API keys the user has configured in
+    Settings (or .env). The order is always: Claude → Gemini → OpenAI.
+    If none are configured, the local resume is attached immediately — no waiting,
+    no silent fallback.
 
-    Falls back to the generic resume if tailoring fails; sending the untailored
-    resume is a worse application, but sending the wrong company's is worse
-    still, and sending nothing wastes the run."""
+    Falls back to the local generic resume only after every configured provider
+    has been tried."""
     generic = Path(config_module.RESUME_PATH)
     safe_company = re.sub(r"[^A-Za-z0-9]+", "", job.company)[:24] or "Job"
     reused = reuse_stored_document(tracker, key, "resume", job_dir)
@@ -287,45 +377,34 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
     resume_txt = job_dir / "tailored_resume.txt"
     resume_pdf = job_dir / f"Yaswanth_Jonnalagadda_Resume_{safe_company}.pdf"
 
-    try:
-        logger.info("Tailoring resume for %s...", job.company)
-        raw = claude.tailor_resume(resume, job, profile)
-        tailored = ensure_resume_header(
-            normalise_contact_details(strip_model_preamble(raw, profile), profile),
-            profile, job,
+    # Determine which providers are available (have an API key in settings/env)
+    cfg = config_module.get_app_config()
+    providers = available_tailor_providers(cfg)
+
+    if not providers:
+        logger.info(
+            "TAILORING_SKIPPED: no AI API keys configured -- attaching the local resume. "
+            "Add a Claude, Gemini, or OpenAI key in Settings to enable tailoring."
         )
-        # The user's decision (2026-09-15): always send Claude's tailored
-        # resume. If a draft names something the real resume doesn't, it is
-        # rewritten once with that pointed out -- quietly, and the tailored
-        # resume is used either way.
-        unsupported = safety.unsupported_claims(resume.raw_text, tailored)
-        if unsupported:
-            logger.warning("TAILORING_RETRY: it claimed %s, which isn't in the resume",
-                           ", ".join(unsupported[:6]))
-            try:
-                retry = claude.tailor_resume(
-                    resume, job, profile,
-                    extra_instruction=(
-                        "Your previous draft claimed these, which do NOT appear in the candidate's "
-                        f"resume: {', '.join(unsupported[:10])}. Write it again using only what the "
-                        "resume actually says. Do not name specific product models, versions, metrics "
-                        "or certifications unless the resume names them."
-                    ),
-                )
-                retried = ensure_resume_header(
-                    normalise_contact_details(strip_model_preamble(retry, profile), profile), profile, job)
-                still = safety.unsupported_claims(resume.raw_text, retried)
-                if len(still) < len(unsupported):
-                    tailored, unsupported = retried, still
-            except Exception as exc:
-                logger.warning("TAILORING_RETRY failed (%s) -- keeping the first draft", exc)
-        resume_txt.write_text(tailored, encoding="utf-8")
-        build_resume_pdf(resume_txt, resume_pdf)
-        logger.info("Tailored resume written to %s", resume_pdf.name)
-        return resume_pdf
-    except Exception as exc:
-        logger.error("TAILORING_FAILED (%s) -- attaching the generic resume instead", exc)
         return generic
+
+    for provider in providers:
+        try:
+            client = _make_tailor_client(provider, cfg)
+        except Exception as build_exc:
+            logger.warning("Could not build %s client (%s) -- skipping", provider, build_exc)
+            continue
+        result = _tailor_with(client, resume, job, profile, job_dir, resume_txt, resume_pdf,
+                              provider.capitalize())
+        if result is not None:
+            return result
+
+    # All configured providers failed
+    logger.error(
+        "TAILORING_FAILED: all configured AI providers (%s) failed -- attaching the local generic resume.",
+        ", ".join(providers),
+    )
+    return generic
 
 
 def prepare_cover_letter(claude, resume, job, profile, job_dir: Path, tracker=None, key: str = "") -> tuple[Path, Path] | None:
@@ -503,6 +582,43 @@ def worth_returning_to(url: str) -> bool:
     ))
 
 
+def save_stop_page(page, job_dir: Path) -> None:
+    """A screenshot and the page's text where the agent stopped for the owner.
+
+    KBI, 28 September: the run stopped on a sign-in step and left nothing to show which page it was on.
+    The text goes through hide_secrets, so a typed password is never written."""
+    from perception import hide_secrets
+    try:
+        stem = Path(job_dir) / f"stopped_{datetime.now():%Y%m%d_%H%M%S}"
+        stem.parent.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(stem.with_suffix(".png")), full_page=True)
+        stem.with_suffix(".txt").write_text(
+            f"{page.url}\n\n" + hide_secrets(page.locator("body").aria_snapshot(mode="ai")), encoding="utf-8")
+        logger.info("Where it stopped: %s", stem.with_suffix(".png"))
+    except Exception as exc:
+        logger.info("Could not save the page it stopped on: %s", str(exc).splitlines()[0][:100])
+
+
+def shows_the_application(assistant, page) -> bool:
+    """A reopened page still holds the application: a form to fill (any frame), or the job posting.
+
+    Judged by what is on the page, not by its address: a careers home looked like any other page."""
+    try:
+        page.wait_for_timeout(2_000)            # Workday draws the form after the page has loaded
+        if assistant.on_job_description(page):
+            return True
+        for frame in page.frames:
+            found = frame.evaluate("""() => [...document.querySelectorAll(
+                    'input:not([type=hidden]):not([type=search]):not([type=submit]):not([type=button]), '
+                    + 'textarea, select, [role=combobox], [role=radio], [role=checkbox]')]
+                .some(e => !!(e.offsetParent || e.getClientRects().length))""")
+            if found:
+                return True
+    except Exception:
+        return True                             # when the page cannot be read, leave it as it was
+    return False
+
+
 def remember_progress(tracker, key: str, page, note: str = "") -> None:
     """Writes down where this application has got to.
 
@@ -576,8 +692,11 @@ def learn_user_answers(assistant, page, tracker, key, profile) -> int:
     """Records what the user filled in by hand, so the next application answers
     it by itself.
 
-    Only values the agent did not write are learned, and only where they are
-    not already in the profile. Legal attestations and signatures are never
+    Only values a person entered are learned: never the agent's own, and --
+    where the provenance observer ran -- never a value the site put there that
+    nobody touched (a parser's guess would otherwise be remembered as the
+    owner's answer and reused), and only where they are not already in the
+    profile. Legal attestations and signatures are never
     stored: those are the user's to give every time.
     """
     if not hasattr(tracker, "record_answer"):
@@ -587,8 +706,8 @@ def learn_user_answers(assistant, page, tracker, key, profile) -> int:
     learned = 0
     for field in assistant.read_back_fields(page):
         label, value = (field.get("label") or "").strip(), (field.get("value") or "").strip()
-        if field.get("source") == "agent" or not label or not value or len(label) < 6:
-            continue
+        if field.get("source") in ("agent", "site") or not label or not value or len(label) < 6:
+            continue   # the agent's own answer, or one the site put there that nobody touched
         if value.lower() in known or safety.is_attestation(label) or safety.is_attestation(value):
             continue
         if safety.is_legal_status_question(label):
@@ -716,6 +835,8 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
             logger.info("  a CAPTCHA is showing -- only you can complete it")
     if report.get("resume_attached") is False:
         logger.info("  the resume does not show as attached")
+    for question in getattr(assistant, "written_answers", None) or []:
+        logger.info("  written for you -- read before you submit: %s", question)
     if not decision.eligible:
         logger.info("Auto-submit: %s", decision.summary())
     logger.info("Review the form in the browser window, then click Submit yourself.")
@@ -832,7 +953,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             if not page.is_closed():
                 agent.note_owner_changes(page)
             agent._ensure_state()
-            agent.forget_sign_in_attempts()
+            agent.forget_sign_in_attempts(owner_acted=(decision == "continue"))
             if decision == "submitted_by_user":
                 evidence = getattr(assistant, "_confirmation_evidence", "") or "the page confirmed it"
                 status, note = safety.verification_status(evidence)
@@ -847,13 +968,6 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 return
             continue
 
-        if any("already sent" in r or "already applied" in r for r in outcome.reasons) or \
-                "already sent" in outcome.summary or "already applied" in outcome.summary:
-            message = "Already submitted on site -- confirmed by portal" + (f". Worth checking: {notes}" if notes else "")
-            tracker.update_status(key, STATUS_SUBMITTED, notes=message[:1000])
-            logger.info("ALREADY SUBMITTED: %s at %s -- the site confirmed it", job.title, job.company)
-            return
-
         message = outcome.summary + (f" | worth checking: {notes}" if notes else "")
         tracker.update_status(key, STATUS_NEEDS_USER_REVIEW, notes=message[:1000])
         banner = "=" * 78
@@ -865,6 +979,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             logger.info("  worth checking: %s", note)
         logger.info("Deal with it in the browser window, then press Continue on the dashboard: "
                     "the agent reads the page again and carries on.")
+        save_stop_page(page, job_dir)
         logger.info(banner)
         assistant.raise_window(page)
         agent.remember_page_state(page)
@@ -876,7 +991,9 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
         if not page.is_closed():
             agent.note_owner_changes(page)
         agent._ensure_state()
-        agent.forget_sign_in_attempts()
+        # Only the owner's Continue lifts a hold on a sign-in (login_guard): a code reload, a refresh
+        # or a re-upload says nothing about whether the account was looked at.
+        agent.forget_sign_in_attempts(owner_acted=(decision == "continue"))
         if decision == "submitted_by_user":
             evidence = getattr(assistant, "_confirmation_evidence", "") or "the page confirmed it"
             status, note = safety.verification_status(evidence)
@@ -894,6 +1011,10 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             importlib.reload(page_agent)
             agent.__class__ = page_agent.PageAgent
             agent.assistant = assistant
+            # The resume bookkeeping above ran on the old code: run the new code's
+            # (a loop guard that had tripped is re-armed, new state starts empty).
+            agent._ensure_state()
+            agent.forget_sign_in_attempts(owner_acted=False)
             # The profile, application settings and Claude's instructions too:
             # a corrected name or new authorization must reach the live run.
             try:
@@ -914,9 +1035,19 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 # (or back) without restarting, keeping the form as it stands.
                 import session_planner
                 importlib.reload(session_planner)
-                wanted = getattr(config_module.get_app_config(), "agent_brain", "api")
+                fresh = config_module.get_app_config()
+                on_gemini = agent.claude.__class__.__name__ == "GeminiBrain"
+                wanted = getattr(fresh, "agent_brain", "api")
                 on_session = agent.claude.__class__.__name__ == "SessionPlanner"
-                if wanted == "session" and not on_session:
+                if brain_kind(fresh) == "gemini":
+                    # FORM_ANSWER_MODE=gemini decides it, whatever AGENT_BRAIN says.
+                    if not on_gemini:
+                        agent.claude = brain_for(fresh, job)
+                        logger.info("BRAIN: now Gemini answers the pages; Claude writes the documents")
+                elif on_gemini:
+                    agent.claude = brain_for(fresh, job)
+                    logger.info("BRAIN: Gemini no longer answers the pages")
+                elif wanted == "session" and not on_session:
                     api = agent.claude
                     agent.claude = session_planner.SessionPlanner(config, folder=Path("data"), fallback=api)
                     agent.claude.now_applying = f"{job.company} -- {job.title}"
@@ -977,18 +1108,34 @@ def submit_verified(assistant, page, tracker, key, job, job_dir: Path, decision)
     return status == STATUS_SUBMITTED
 
 
+def brain_kind(config) -> str:
+    """Who answers the application pages under this configuration: "profile" (nobody: the saved profile),
+    "gemini", "session" (the Claude Code session) or "api" (Anthropic). FORM_ANSWER_MODE=gemini decides it
+    whatever AGENT_BRAIN says; the documents are Claude's in every case."""
+    mode = getattr(config, "form_answer_mode", "profile")
+    if mode in ("profile", "gemini"):
+        return mode
+    return "session" if getattr(config, "agent_brain", "api") == "session" else "api"
+
+
 def brain_for(config, job=None):
-    """The document writer, and optionally the old assisted page planner.
+    """The document writer, and optionally the assisted page planner.
 
     In profile mode Claude is document-only: it tailors the resume/CV, while
     PageAgent reads the form and answers it from the saved profile without an
-    API or session call.
+    API or session call. In gemini mode Gemini answers the pages and Claude
+    still writes the documents (gemini_integration.GeminiBrain).
     """
     api = ClaudeClient(config)
-    if getattr(config, "form_answer_mode", "profile") == "profile":
+    kind = brain_kind(config)
+    if kind == "profile":
         logger.info("BRAIN: Claude is document-only; form answers use the local profile planner")
         return api
-    if getattr(config, "agent_brain", "api") != "session":
+    if kind == "gemini":
+        from gemini_integration import GeminiBrain
+        logger.info("BRAIN: Gemini answers the application pages; Claude writes the resume and cover letter")
+        return GeminiBrain(config, documents=api)
+    if kind != "session":
         return api
     import session_planner
     brain = session_planner.SessionPlanner(config, folder=Path("data"), fallback=api)
@@ -1170,7 +1317,19 @@ def main() -> None:
             # works out what to do there.
             logger.info("Working the application with the reading agent")
             page = assistant.open_job_page(resume_at or job.url)
+            # The browser opens behind whatever the owner is using: bring it up now, so they can watch
+            # the run, not only at a hand-over.
+            assistant.raise_window(page)
             page = assistant.open_embedded_form(page)
+            if resume_at and not shows_the_application(assistant, page):
+                # KBI's last page was recorded as the careers home (/en-US/KBI_Biopharma/): no form, no
+                # posting, nothing to read, and the run stopped there. The address said nothing wrong;
+                # the page does.
+                logger.info("The page the last run reached no longer shows the application; "
+                            "starting from the posting")
+                page.goto(job.url, wait_until="domcontentloaded")
+                page.wait_for_timeout(3_000)
+                page = assistant.open_embedded_form(page)
             if assistant.on_job_description(page):
                 page = assistant.click_apply_button(page)
                 page = assistant.dismiss_apply_chooser(page)

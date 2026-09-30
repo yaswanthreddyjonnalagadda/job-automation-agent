@@ -1,0 +1,12 @@
+{
+  "id": "f019",
+  "date": "2026-09-25",
+  "class": "A window found by a title that changed when the browser did",
+  "symptom": "The browser the agent opens was never displayed to the owner: it opened behind whatever they were using and nothing brought it forward, at the start of a run or at a hand-over (reported twice; the IGT run's window was never seen either).",
+  "site": "the agent's own Chrome (Windows)",
+  "root_cause": "raise_window looked for a window titled \"Chrome for Testing\", Playwright's bundled browser, but the agent runs real Google Chrome, whose windows are titled \"... - Google Chrome\". Nothing matched, so nothing was raised and nothing said so; it was also called only at a hand-over, never when a run starts. Windows does not let a background program take focus, so the window stayed behind.",
+  "why_tests_missed": "Nothing tested raise_window: it needs a real window, and the tests use headless browsers with no desktop window.",
+  "fix": "pick_agent_window finds the agent's window by the Chrome process running on its own profile (never \"any Chrome window\", so the owner's own Chrome is left alone) and only then by page title, accepting Google Chrome, Chrome for Testing and Chromium. raise_window restores it, puts it briefly on top and asks for focus, logs when it cannot find the window, and apply_flow calls it as soon as the run has opened the page. The \"Restore pages?\" bubble after a forced stop is turned off.",
+  "tests": ["tests/test_agent_window_is_shown.py"],
+  "prevention": "Identify a window by the process that owns it, not by text in its title, and make a UI helper say when it finds nothing. Test it against a real window, gated behind an opt-in switch where it disturbs the desktop."
+}

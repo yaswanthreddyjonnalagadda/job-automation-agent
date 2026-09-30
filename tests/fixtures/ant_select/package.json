@@ -1,0 +1,14 @@
+{
+  "name": "ant-select-fixture",
+  "private": true,
+  "description": "Builds ant-select.bundle.js: Ant Design's real Select with React, for tests/test_ant_select.py.",
+  "scripts": {
+    "build": "esbuild entry.mjs --bundle --minify --format=iife --define:process.env.NODE_ENV='\"production\"' --legal-comments=eof --banner:js=\"/*! Ant Design 5.29.3 Select with React 18.3.1, bundled for tests. MIT licensed: see THIRD_PARTY_LICENSES.txt beside this file. */\" --outfile=ant-select.bundle.js"
+  },
+  "devDependencies": {
+    "antd": "5.29.3",
+    "esbuild": "0.25.12",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  }
+}

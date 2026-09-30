@@ -1,0 +1,12 @@
+{
+  "id": "f011",
+  "date": "2026-09-25",
+  "class": "The same fact in another shape: a dial code read as a country",
+  "symptom": "The agent \"corrected\" the phone's dial-code picker (labelled \"Country\", showing \"+1\") to \"United States\" on every pass, wasting a retry each time.",
+  "site": "Alloy (Greenhouse)",
+  "root_cause": "A phone's country-code picker shows a dial code and is labelled \"Country\"; the residence-correction pass read the label and compared the dial code with the owner's country name.",
+  "why_tests_missed": "The correction tests used real country lists, never a picker whose value is a dial code, and ran without the page observer that makes a site's value eligible for correction.",
+  "fix": "A control showing only a dial code is skipped by correct_from_profile (_holds_dial_code).",
+  "tests": ["tests/test_places_and_commit_check.py"],
+  "prevention": "Decide what a field asks from its value's shape as well as its label: a dial code answers a phone question, never a residence one."
+}

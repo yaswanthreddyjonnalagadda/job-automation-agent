@@ -11,6 +11,8 @@ import re
 from datetime import date
 from typing import Any, Optional
 
+import geo_reference
+
 
 def clean_text(text: str) -> str:
     """Normalize label or question text for concept matching."""
@@ -28,21 +30,24 @@ def clean_text(text: str) -> str:
     return " ".join(t.split())
 
 
-# US State to abbreviation mapping (and vice versa)
-STATE_MAP = {
-    "alabama": "al", "alaska": "ak", "arizona": "az", "arkansas": "ar", "california": "ca",
-    "colorado": "co", "connecticut": "ct", "delaware": "de", "florida": "fl", "georgia": "ga",
-    "hawaii": "hi", "idaho": "id", "illinois": "il", "indiana": "in", "iowa": "ia",
-    "kansas": "ks", "kentucky": "ky", "louisiana": "la", "maine": "me", "maryland": "md",
-    "massachusetts": "ma", "michigan": "mi", "minnesota": "mn", "mississippi": "ms",
-    "missouri": "mo", "montana": "mt", "nebraska": "ne", "nevada": "nv", "new hampshire": "nh",
-    "new jersey": "nj", "new mexico": "nm", "new york": "ny", "north carolina": "nc",
-    "north dakota": "nd", "ohio": "oh", "oklahoma": "ok", "oregon": "or", "pennsylvania": "pa",
-    "rhode island": "ri", "south carolina": "sc", "south dakota": "sd", "tennessee": "tn",
-    "texas": "tx", "utah": "ut", "vermont": "vt", "virginia": "va", "washington": "wa",
-    "west virginia": "wv", "wisconsin": "wi", "wyoming": "wy", "district of columbia": "dc",
-}
+# US state name -> USPS code (and back), from reference/geo.json.
+STATE_MAP = geo_reference.us_state_map()
 REV_STATE_MAP = {v: k.title() for k, v in STATE_MAP.items()}
+
+
+def _is_yes(val: Any, default: bool = False) -> bool:
+    """Safely determines if a profile attribute represents affirmative consent/yes."""
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    s = str(val).strip().lower()
+    if s in ("yes", "true", "1", "y"):
+        return True
+    if s in ("no", "false", "0", "n", ""):
+        return False
+    return default
+
 
 
 # Concepts and their matching patterns, negative guards, and container boosts
@@ -119,24 +124,24 @@ CONCEPTS: dict[str, dict[str, Any]] = {
         ],
         "negative": r"employer|company|school|university|previous|supervisor",
     },
+    "COUNTRY": {
+        "patterns": [
+            r"\b(?:country\s*(?:\/|\s+or\s+)?region(?:\s*of\s*residence)?|country\s*of\s*residence|residence\s*country|country|nation|domicile)\b",
+        ],
+        "negative": r"citizenship|nationality|employer|school",
+    },
     "STATE_PROVINCE": {
         "patterns": [
             r"\b(?:state\s*\/\s*province|state\s+or\s+province|province\s*\/\s*territory|state|province|region|territory)\b",
             r"\bstate\s*of\s*residence\b",
         ],
-        "negative": r"employer|company|school|university|previous|statement|united\s*states",
+        "negative": r"employer|company|school|university|previous|statement|united\s*states|country",
     },
     "POSTAL_CODE": {
         "patterns": [
             r"\b(?:zip\s*(?:code)?|postal\s*(?:code)?|postcode|pin\s*(?:code)?|pincode|zip\s*\/\s*postal)\b",
         ],
         "negative": r"employer|company|school|university|previous",
-    },
-    "COUNTRY": {
-        "patterns": [
-            r"\b(?:country\s*of\s*residence|residence\s*country|country|nation|domicile)\b",
-        ],
-        "negative": r"citizenship|nationality|employer|school",
     },
     "CURRENT_JOB_TITLE": {
         "patterns": [
@@ -258,6 +263,11 @@ CONCEPTS: dict[str, dict[str, Any]] = {
             r"\b(?:willing\s+to\s+relocate|open\s+to\s+relocation|relocate\s+for\s+this\s+role|relocation)\b",
         ],
     },
+    "ONSITE_HYBRID": {
+        "patterns": [
+            r"\b(?:in[-\s]*person|in[-\s]*office|working\s+sessions\s+in\s+office|onsite|on-site|hybrid|3\s+days\s*(?:\/|\s+per\s+)?week|minimum\s+of\s+3\s+days)\b",
+        ],
+    },
     "TRAVEL": {
         "patterns": [
             r"\b(?:willing\s+to\s+travel|travel\s+requirements?|travel\s+(?:for|up\s+to)|travel\s+percentage)\b",
@@ -311,8 +321,20 @@ CONCEPTS: dict[str, dict[str, Any]] = {
     },
     "APPLIED_BEFORE": {
         "patterns": [
-            r"\b(?:(?:ever\s+)?(?:applied|been\s+interviewed|interviewed)\s+(?:at|with|for|here)|previously\s+applied|former\s+employee|worked\s+here\s+before)\b",
+            r"\b(?:(?:ever\s+)?(?:applied|been\s+interviewed|interviewed)\s+(?:at|with|for|here|in\s+the\s+past)|previously\s+applied|interviewed\s+with\b.*?\bin\s+the\s+past)\b",
         ],
+    },
+    "PREVIOUSLY_EMPLOYED": {
+        "patterns": [
+            r"\b(?:(?:ever\s+been|previously)\s+employed(?:\s+by|\s+with|\s+at|\s+here)?|worked\s+here\s+before|former\s+employee)\b",
+        ],
+        "negative": r"applied|interviewed",
+    },
+    "WEEKEND_WORK": {
+        "patterns": [
+            r"\b(?:willing\s+to\s+work\s+weekends?|work\s+weekends?|weekend\s+work|weekend\s+availability|work\s+on\s+weekends?)\b",
+        ],
+        "negative": r"weekday|mon-fri",
     },
     "RELATIVES_EMPLOYED": {
         "patterns": [
@@ -348,6 +370,10 @@ CONCEPTS: dict[str, dict[str, Any]] = {
 }
 
 
+# Concepts that name a place. Inside a longer question they say where it applies.
+PLACE_CONCEPTS = ("COUNTRY", "STATE_PROVINCE", "CITY", "POSTAL_CODE")
+
+
 def match_concept(
     question: str,
     container: str = "",
@@ -369,8 +395,7 @@ def match_concept(
         return None
 
     # Step 1: Specific pattern checks with negative guardrails
-    best_concept = None
-    best_score = 0
+    candidates: list[tuple[int, str, bool]] = []   # (score, concept, matched in the question itself)
 
     for concept_name, defn in CONCEPTS.items():
         patterns = defn.get("patterns", [])
@@ -397,11 +422,44 @@ def match_concept(
                 # (e.g., name="Title" in container="Work Experience")
                 if container_boost and re.search(container_boost, clean_c, re.IGNORECASE):
                     score += 20
-                if score > best_score:
-                    best_score = score
-                    best_concept = concept_name
+                candidates.append((score, concept_name, bool(match_q)))
 
+    # A place named inside a question that asks something else is where the
+    # question applies, not what it asks: "Are you legally authorized to work
+    # in the country ...?" was answered "United States" because COUNTRY tied
+    # WORK_AUTHORIZATION and came first in the table (Writer, 28 September).
+    if any(in_q and concept not in PLACE_CONCEPTS for _s, concept, in_q in candidates):
+        candidates = [c for c in candidates if c[1] not in PLACE_CONCEPTS]
+
+    best_concept, best_score = None, 0
+    for score, concept_name, _in_q in candidates:     # table order breaks a tie, as before
+        if score > best_score:
+            best_score, best_concept = score, concept_name
     return best_concept
+
+
+# Questions about where the owner lives. The options on offer can correct the
+# label: "Region of Residence" over a list of countries asks for a country.
+RESIDENCE_CONCEPTS = ("COUNTRY", "STATE_PROVINCE")
+
+
+def confirm_concept(concept: Optional[str], options: Optional[list[str]]) -> Optional[str]:
+    """The concept a location question really asks, judged by its options.
+
+    Label keywords propose; the option list decides. "Region" belongs to the
+    vocabulary of both country and state, so "Country/Region of Residence"
+    was once answered "Virginia" from a list of countries. Only residence
+    concepts are ever redirected -- a country list under "Country of
+    Citizenship" is a citizenship question, and it is left as the label said.
+    """
+    if concept not in RESIDENCE_CONCEPTS or not options:
+        return concept
+    domain = geo_reference.option_domain(options)
+    if domain == geo_reference.COUNTRY:
+        return "COUNTRY"
+    if domain == geo_reference.US_STATE:
+        return "STATE_PROVINCE"
+    return concept
 
 
 def best_option_match(desired: str, options: list[str]) -> Optional[str]:
@@ -417,23 +475,18 @@ def best_option_match(desired: str, options: list[str]) -> Optional[str]:
         if clean_opt == desired_clean or opt.strip().lower() == desired_lower:
             return opt
 
-    # State abbreviation handling: "Virginia" vs "VA"
-    if desired_lower in STATE_MAP:
-        abbr = STATE_MAP[desired_lower]
+    # The same place spelled another way: "Virginia" / "VA" / "Virginia (VA)",
+    # "United States" / "USA" / "United States of America (+1)" -- for every
+    # country and US state in reference/geo.json, not one of each.
+    state = geo_reference.us_state_code(desired)
+    if state:
         for opt in options:
-            if opt.strip().lower() == abbr or clean_text(opt) == abbr:
+            if geo_reference.us_state_code(opt) == state:
                 return opt
-    if desired_lower in REV_STATE_MAP:
-        full_st = REV_STATE_MAP[desired_lower].lower()
+    country = geo_reference.country_code(desired)
+    if country:
         for opt in options:
-            if clean_text(opt) == full_st:
-                return opt
-
-    # Country variations: "United States" vs "United States of America" / "USA" / "US"
-    if desired_lower in ("united states", "usa", "us", "united states of america"):
-        for opt in options:
-            clean_opt = clean_text(opt)
-            if clean_opt in ("united states", "united states of america", "usa", "us"):
+            if geo_reference.country_code(opt) == country:
                 return opt
 
     # Substring / prefix match
@@ -483,6 +536,13 @@ def best_option_match(desired: str, options: list[str]) -> Optional[str]:
         for opt in options:
             low = opt.strip().lower()
             if re.search(r"\basian\b", low) and not re.search(r"\bcaucasian\b", low):
+                return opt
+
+    # Relocation matching
+    if desired_lower in ("yes", "true", "willing"):
+        for opt in options:
+            low = opt.strip().lower()
+            if ("willing to relocate" in low or "open to relocate" in low) and "not" not in low:
                 return opt
 
     # Yes / No matching
@@ -616,20 +676,23 @@ def resolve_profile_value(
         val = str(getattr(profile, "ethnicity", "") or "").strip()
         src = "profile.ethnicity"
     elif concept == "LEGAL_AGE_18":
-        val = "Yes" if getattr(profile, "at_least_18", True) else "No"
+        val = "Yes" if _is_yes(getattr(profile, "at_least_18", True), default=True) else "No"
         src = "profile.at_least_18"
     elif concept == "BACKGROUND_CHECK":
-        val = str(getattr(profile, "willing_to_submit_to_pre_employment_background_check", "Yes") or "Yes").strip()
+        val = "Yes" if _is_yes(getattr(profile, "willing_to_submit_to_pre_employment_background_check", "Yes"), default=True) else "No"
         src = "profile.willing_to_submit_to_pre_employment_background_check"
     elif concept == "DRUG_TEST":
-        val = "Yes" if getattr(profile, "willing_drug_test_and_physical", True) else "No"
+        val = "Yes" if _is_yes(getattr(profile, "willing_drug_test_and_physical", True), default=True) else "No"
         src = "profile.willing_drug_test_and_physical"
     elif concept == "CRIMINAL_CONVICTION":
-        val = "No" if not getattr(profile, "felony_conviction", False) else "Yes"
+        val = "Yes" if _is_yes(getattr(profile, "felony_conviction", False), default=False) else "No"
         src = "profile.felony_conviction"
     elif concept == "RELOCATION":
-        val = "Yes" if getattr(profile, "open_to_relocation", True) else "No"
+        val = "Yes" if _is_yes(getattr(profile, "open_to_relocation", True), default=True) else "No"
         src = "profile.open_to_relocation"
+    elif concept == "ONSITE_HYBRID":
+        val = str(getattr(profile, "willing_to_work_onsite_three_days", "") or "Yes").strip()
+        src = "profile.willing_to_work_onsite_three_days"
     elif concept == "TRAVEL":
         val = str(getattr(profile, "willing_to_travel", "") or "").strip()
         src = "profile.willing_to_travel"
@@ -648,13 +711,19 @@ def resolve_profile_value(
         val = str(getattr(profile, "how_did_you_hear", "") or "LinkedIn").strip()
         src = "profile.how_did_you_hear"
     elif concept == "APPLIED_BEFORE":
-        val = "No" if not getattr(profile, "applied_here_before", False) else "Yes"
+        val = "Yes" if _is_yes(getattr(profile, "applied_here_before", False), default=False) else "No"
         src = "profile.applied_here_before"
+    elif concept == "PREVIOUSLY_EMPLOYED":
+        val = "Yes" if _is_yes(getattr(profile, "previously_employed_here", False), default=False) else "No"
+        src = "profile.previously_employed_here"
+    elif concept == "WEEKEND_WORK":
+        val = "Yes" if _is_yes(getattr(profile, "willing_to_work_weekends", True), default=True) else "No"
+        src = "profile.willing_to_work_weekends"
     elif concept == "RELATIVES_EMPLOYED":
-        val = str(getattr(profile, "relatives_employed_here", "No") or "No").strip()
+        val = "Yes" if _is_yes(getattr(profile, "relatives_employed_here", False), default=False) else "No"
         src = "profile.relatives_employed_here"
     elif concept == "NON_COMPETE":
-        val = str(getattr(profile, "bound_by_non_compete", "No") or "No").strip()
+        val = "Yes" if _is_yes(getattr(profile, "bound_by_non_compete", False), default=False) else "No"
         src = "profile.bound_by_non_compete"
     elif concept == "PREFERRED_CONTACT":
         val = str(getattr(profile, "preferred_contact_method", "Email") or "Email").strip()

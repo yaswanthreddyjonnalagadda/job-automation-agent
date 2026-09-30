@@ -36,16 +36,30 @@ class ClaudeIntegrationError(RuntimeError):
 
 
 class ClaudeClient:
+    # What the model behind this client is called and what it raises, by kind. gemini_integration.GeminiClient
+    # is this class with Gemini's own in their place, so the prompts, the retry loops and the checks on what
+    # comes back below serve both, and neither has to know the other's library.
+    PROVIDER = "Claude"
+    RATE_LIMITED = anthropic.RateLimitError
+    STATUS_ERROR = anthropic.APIStatusError
+    CONNECTION_ERROR = anthropic.APIConnectionError
+    TIMEOUT_ERROR = anthropic.APITimeoutError
+
     def __init__(self, config: AppConfig):
         self._config = config
         self._client = anthropic.Anthropic(api_key=config.anthropic_api_key)
 
+    @property
+    def _model(self) -> str:
+        return self._config.anthropic_model
+
     def _call(self, *, system: str, user_message: str, max_tokens: int = 2000) -> str:
         last_error: Exception | None = None
-        for attempt in range(1, self._config.claude_max_retries + 1):
+        max_retries = getattr(self._config, "claude_max_retries", 3)
+        for attempt in range(1, max_retries + 1):
             try:
                 response = self._client.messages.create(
-                    model=self._config.anthropic_model,
+                    model=self._model,
                     max_tokens=max_tokens,
                     system=system,
                     messages=[{"role": "user", "content": user_message}],
@@ -54,23 +68,30 @@ class ClaudeClient:
                 return "".join(
                     block.text for block in response.content if block.type == "text"
                 )
-            except anthropic.RateLimitError as exc:
+            except self.RATE_LIMITED as exc:
                 wait = 2 ** attempt
-                logger.warning("Rate limited by Claude API, retrying in %ds", wait)
+                logger.warning("Rate limited by %s API, retrying in %ds", self.PROVIDER, wait)
                 time.sleep(wait)
                 last_error = exc
-            except anthropic.APIStatusError as exc:
-                logger.error("Claude API error (status=%s): %s", exc.status_code, exc.message)
+            except self.STATUS_ERROR as exc:
+                logger.error("%s API error (status=%s): %s", self.PROVIDER, exc.status_code, exc.message)
                 last_error = exc
                 if exc.status_code and exc.status_code < 500:
                     break
                 time.sleep(2 ** attempt)
-            except anthropic.APIConnectionError as exc:
-                logger.warning("Connection error talking to Claude API: %s", exc)
+            except self.CONNECTION_ERROR as exc:
+                # Gemini 503 "busy or down" is transient and typically clears in
+                # 15-30 s; use a longer wait than the exponential backoff for
+                # Claude so we don't give up before Gemini recovers.
+                wait = min(30 * attempt, 90)
+                logger.warning(
+                    "Connection error talking to %s API (attempt %d/%d, retrying in %ds): %s",
+                    self.PROVIDER, attempt, max_retries, wait, exc,
+                )
                 last_error = exc
-                time.sleep(2 ** attempt)
+                time.sleep(wait)
 
-        raise ClaudeIntegrationError(f"Claude API call failed after retries: {last_error}")
+        raise ClaudeIntegrationError(f"{self.PROVIDER} API call failed after retries: {last_error}")
 
     @staticmethod
     def _extract_json(text: str) -> dict[str, Any]:
@@ -87,48 +108,10 @@ class ClaudeClient:
     # ------------------------------------------------------------------
     # Resume structuring
     # ------------------------------------------------------------------
-    def structure_resume(self, resume: ResumeData) -> dict[str, Any]:
-        system = (
-            "You extract structured data from resumes. Respond with ONLY valid JSON, "
-            "no markdown fences, no commentary."
-        )
-        user_message = (
-            "Extract the following fields from this resume as JSON: "
-            "contact (name, email, phone, location), summary, skills (list), "
-            "experience (list of {company, title, start_date, end_date, bullets[]}), "
-            "education (list of {school, degree, field, year}), certifications (list).\n\n"
-            f"RESUME TEXT:\n{resume.raw_text}"
-        )
-        raw = self._call(system=system, user_message=user_message, max_tokens=3000)
-        structured = self._extract_json(raw)
-        resume.structured = structured
-        return structured
 
     # ------------------------------------------------------------------
     # Job description analysis
     # ------------------------------------------------------------------
-    def analyze_job(self, job: JobDescription) -> dict[str, Any]:
-        system = (
-            "You analyze job postings for a job-seeker. Respond with ONLY valid JSON, "
-            "no markdown fences, no commentary."
-        )
-        user_message = (
-            "Analyze this job posting as JSON with fields: "
-            "required_skills (list), preferred_skills (list), seniority_level, "
-            "key_responsibilities (list), ats_keywords (list of exact phrases to mirror "
-            "in a resume), visa_sponsorship_mentioned (bool: true only if the posting "
-            "explicitly says sponsorship is available), "
-            "citizenship_or_clearance_required (bool: true if the posting requires US "
-            "citizenship, permanent residency, or a security clearance), "
-            "min_years_experience_required (integer, or null if not stated), "
-            "estimated_fit_notes (string).\n\n"
-            f"JOB TITLE: {job.title}\nCOMPANY: {job.company}\n\n"
-            f"JOB DESCRIPTION:\n{job.raw_text}"
-        )
-        raw = self._call(system=system, user_message=user_message, max_tokens=2000)
-        analysis = self._extract_json(raw)
-        job.analysis.update(analysis)
-        return analysis
 
     # ------------------------------------------------------------------
     # Resume tailoring
@@ -335,10 +318,119 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
             "reason": (result.get("reason") or "").strip(),
         }
 
+    def answer_single_question(
+        self,
+        question: str,
+        options: Optional[list[str]] = None,
+        resume_text: str = "",
+        profile: Optional[UserProfile] = None,
+        job_title: str = "",
+        company: str = "",
+        job_text: str = "",
+        box: Optional[dict] = None,
+    ) -> str:
+        """Answers ONE specific unanswered question on behalf of the candidate.
+        Extremely fast, token-efficient (< 300 tokens), and strictly grounded in
+        the candidate's resume and profile facts.
+
+        An open question ("Why are you interested in joining us?") is written by
+        open_answers in plain English, inside the form's word or character limit;
+        `box` is what open_answers.read_box saw on the page.
+        """
+        if not question:
+            return ""
+        import safety
+        # is_attestation covers signatures too. (This called safety.is_signature_prompt, which does not
+        # exist: every call raised AttributeError, the caller logged it at debug level, and no question
+        # was ever answered this way.)
+        if safety.is_attestation(question) or safety.is_legal_status_question(question):
+            return ""
+        box = box or {}
+        if not options:
+            import open_answers
+            if open_answers.is_open(question, box.get("multiline", False)):
+                return self._open_answer(question, resume_text, profile, job_title, company, job_text, box)
+
+        system = (
+            "You answer application questions for a real candidate. "
+            "Answer ONLY using truthful facts from their profile and resume. "
+            "If options are provided, the answer MUST be an exact string from the options list. "
+            "If it is a text/essay question (e.g. 'Why are you interested in this role?'), provide a "
+            "concise, professional 1-3 sentence response grounded in their background. "
+            "Respond with ONLY JSON: {\"answer\": \"<your concise answer>\"}"
+        )
+
+        facts_lines = []
+        if profile:
+            facts_lines.append(f"Candidate: {profile.full_name}")
+            if profile.target_titles:
+                facts_lines.append(f"Target Titles: {', '.join(profile.target_titles)}")
+            if profile.current_position_title and profile.current_employer:
+                facts_lines.append(f"Current Role: {profile.current_position_title} at {profile.current_employer}")
+            if profile.years_experience:
+                facts_lines.append(f"Experience: {profile.years_experience} years")
+            if profile.current_location:
+                facts_lines.append(f"Location: {profile.current_location}")
+            if profile.work_authorization:
+                facts_lines.append(f"Work Auth: {profile.work_authorization}")
+
+        snippet = (resume_text or "").strip()[:2500]
+        user_message = (
+            f"FACTS:\n{chr(10).join(facts_lines)}\n\n"
+            f"RESUME EXCERPT:\n{snippet}\n\n"
+            f"TARGET JOB: {job_title or 'Engineer'} at {company or 'Company'}\n\n"
+            f"QUESTION: {question}\n"
+        )
+        if options:
+            user_message += f"\nAVAILABLE OPTIONS (choose exactly one):\n{json.dumps(options, indent=2)}"
+
+        try:
+            raw = self._call(system=system, user_message=user_message, max_tokens=600)
+            data = self._extract_json(raw)
+            ans = str(data.get("answer") or "").strip()
+            if options and ans:
+                for opt in options:
+                    if opt.strip().lower() == ans.lower():
+                        return opt
+                return ""
+            return ans
+        except Exception as exc:
+            logger.info("Could not answer single question %r: %s", question[:50], exc)
+            return ""
+
+    def _open_answer(self, question: str, resume_text: str, profile: Optional[UserProfile],
+                     job_title: str, company: str, job_text: str, box: dict) -> str:
+        """An open question, written in the owner's plain words by open_answers."""
+        import open_answers
+        facts = []
+        if profile:
+            facts.append(f"Name: {profile.full_name}")
+            if profile.current_position_title and profile.current_employer:
+                facts.append(f"Current role: {profile.current_position_title} at {profile.current_employer}")
+            if profile.years_experience:
+                facts.append(f"Years of experience: {profile.years_experience}")
+            if profile.target_titles:
+                facts.append(f"Roles wanted: {', '.join(profile.target_titles)}")
+            for level, subject, school, year in profile.education[:2]:
+                facts.append(f"Education: {level} in {subject}, {school} {year}".strip())
+        facts.append(f"Applying for: {job_title or 'this role'} at {company or 'this company'}")
+        limits = open_answers.limits_from(question, box.get("hint", ""), maxlength=box.get("maxlength"),
+                                          minlength=box.get("minlength"))
+        try:
+            answer, left = open_answers.write(
+                question, ask=lambda system, user, tokens: self._call(system=system, user_message=user,
+                                                                        max_tokens=tokens),
+                facts="\n".join(facts), resume_text=resume_text, job_text=job_text,
+                hint=box.get("hint", ""), limits=limits)
+        except ClaudeIntegrationError as exc:
+            logger.info("Could not write an answer to %r: %s", question[:50], exc)
+            return ""
+        return answer
+
     # ------------------------------------------------------------------
     # Reading an application page and planning its answers
     # ------------------------------------------------------------------
-    PLAN_PAGE_SYSTEM = """You fill in job applications for one applicant. You are given the page as an
+    PLAN_PAGE_SYSTEM ="""You fill in job applications for one applicant. You are given the page as an
 accessibility snapshot (every control with a [ref=...], its current value, its choices, [checked] and
 [selected] states) and FACTS about the applicant. Decide how to answer this page and how to move on.
 
@@ -384,7 +476,7 @@ Rules -- follow every one:
    "upload_cover_letter". A resume already shown as attached needs nothing.
 8. Radio buttons and checkboxes: action "check" with the ref of the button whose label -- its name, or the
    text right after it -- is the answer. For "choose", give the value exactly as one of the offered choices when choices are listed; for a
-   dropdown whose choices aren't listed, give the value to search for (e.g. "United States").
+   dropdown whose choices aren't listed, give the value to search for (e.g. the country's name).
 9. Names: use profile.first_name, profile.middle_name and profile.last_name exactly as given -- never split
    the full name yourself. An empty middle name means there is none: leave that box empty.
 10. Phone numbers: use the digits as in the profile; where a country code is asked separately, use the
@@ -431,14 +523,14 @@ Rules -- follow every one:
                     # Room for a long form: R+L's application page is 43,000
                     # characters and its plan ran past a 6,000-token reply,
                     # which arrived cut off and could not be read at all.
-                    model=self._config.anthropic_model, max_tokens=16_000, system=self.PLAN_PAGE_SYSTEM,
+                    model=self._model, max_tokens=16_000, system=self.PLAN_PAGE_SYSTEM,
                     messages=[{"role": "user", "content": user + cut_off}],
                     timeout=max(self._config.claude_request_timeout, 180.0),
                 )
                 raw = "".join(block.text for block in response.content if block.type == "text")
                 start, end = raw.find("{"), raw.rfind("}")
                 return self._extract_json(raw[start:end + 1] if start >= 0 and end > start else raw)
-            except (anthropic.RateLimitError, anthropic.APIConnectionError, anthropic.APITimeoutError) as exc:
+            except (self.RATE_LIMITED, self.CONNECTION_ERROR, self.TIMEOUT_ERROR) as exc:
                 last_error = exc
                 time.sleep(2 ** attempt)
             except ClaudeIntegrationError as exc:
@@ -497,7 +589,7 @@ Rules -- follow every one:
         for attempt in range(1, self._config.claude_max_retries + 1):
             try:
                 response = self._client.messages.create(
-                    model=self._config.anthropic_model, max_tokens=400, system=system,
+                    model=self._model, max_tokens=400, system=system,
                     messages=[{"role": "user", "content": user_content}],
                     timeout=self._config.claude_request_timeout,
                 )
@@ -506,7 +598,7 @@ Rules -- follow every one:
                 return {"page": str(result.get("page") or "other"),
                         "click": str(result.get("click") or "").strip(),
                         "why": str(result.get("why") or "").strip()}
-            except (anthropic.RateLimitError, anthropic.APIConnectionError) as exc:
+            except (self.RATE_LIMITED, self.CONNECTION_ERROR) as exc:
                 last_error = exc
                 time.sleep(2 ** attempt)
             except Exception as exc:

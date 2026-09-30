@@ -7,8 +7,7 @@
   before submission. `BEHAVIOUR.md` is the authority on consent,
   attestations, credentials, and submission -- nothing in this file
   overrides it.
-- **Primary runtime:** `apply.py` -> `apply_flow.py`. `main.py` is
-  deprecated.
+- **Primary runtime:** `web_ui.py` (the dashboard) -> `apply.py` -> `apply_flow.py`.
 - **Core standard:** accessibility-first perception (roles and labels) and
   synthetic event dispatching, over volatile CSS selectors.
 
@@ -27,11 +26,16 @@
   controlled components can discard a raw value injection. Every fill
   sequences: focus -> `fill(value)` -> dispatch `input` -> dispatch
   `change` -> blur, each bubbling.
-- **Detached dropdowns** (Ant Design `rc-select` and similar): trigger the
-  wrapper via `mousedown` (the native input is often
-  `pointer-events: none`), wait for the option list mounted at
-  `document.body`, match by visible text, click, and verify the portal
-  detaches.
+- **Detached dropdowns** (Ant Design `rc-select` and similar):
+  `interaction.resolve_ant_dropdown()`. Trigger the wrapper via `mousedown`
+  (the native input is often `pointer-events: none`), find the list the
+  field names (`aria-controls`) at `document.body`, and read it WHOLE -- a
+  long list is virtual and holds only the rows in view. Match a real row's
+  label exactly (a place as that place in any spelling); never an empty or
+  partial label, never the first row. Click it, then confirm the select
+  shows that option; if it does not, the answer was not given. Never type
+  and press Enter in a single-choice list: that takes whichever row is
+  first (23 September: "United States" became "Afghanistan").
 - **Pre-progression card commits:** before clicking a wizard's Next/
   Continue, sweep for any inline Work/Education entry still in edit mode
   and click its own Save/Update/Done first (see `sites/workday.py` for the
@@ -50,11 +54,25 @@
 - Login is the human's step. Never type a password for Google, Microsoft,
   Apple, LinkedIn, Indeed, or Dice -- `safety.password_allowed()` enforces
   this in code; do not work around it.
-- ATS account credentials (Workday/Greenhouse/Lever/etc. accounts the user
-  created themselves) come only from the configured `.env` values. Do not
-  build automated password-reset, OTP-interception, or credential-vaulting
-  flows. If a login is broken, surface it to the user rather than
-  automating around it.
+- ATS account credentials come only from the configured `.env` values. Do
+  not build password-reset, OTP-interception, or credential-vaulting flows,
+  with one owner-approved exception: when an employer ATS page says an
+  account already exists for the owner's own email, the agent signs in with
+  the existing `ATS_PASSWORD`; if the site rejects it, it may reset the
+  password to that same `ATS_PASSWORD` using a one-time code emailed to the
+  owner and read from the owner's signed-in Gmail tab. Only on employer ATS
+  domains (`safety.password_allowed`), once per site per run, never a
+  generated or different password. Any other broken login is surfaced to the
+  user.
+- **One rule for reading an emailed code.** Whether the agent may read a
+  one-time code from the owner's mail is decided in `emailed_codes.why_not()`
+  and nowhere else: the owner has allowed mail reads
+  (`check_gmail_for_confirmation`), the site is an employer's, no CAPTCHA is on
+  the page (a code the site words as "to confirm you're a human" is still just
+  an emailed code: the owner's decision of 25 September 2026), and the
+  per-account limit in `login_guard` is not spent. `passcode_from_gmail` asks it before it
+  opens the mail; a new step that reads a code goes through it, it does not
+  re-decide.
 
 ## 6. Safety, Compliance & Circuit Breakers
 - **Sponsorship guardrail:** scan for non-sponsorship language; if the
@@ -68,3 +86,49 @@
 - **Submission:** never implement a code path that clicks Submit outside
   `apply_flow.hand_over()`'s existing review gate, or the strictly-verified
   auto-submit path in `safety.evaluate_auto_submit()`. See `BEHAVIOUR.md`.
+
+## 7. How a change is made (definition of done)
+These rules bind every coding agent working in this repository (Claude Code,
+Antigravity, any other) and every session. A change is done only when all
+of them hold.
+- **Branch and pull request, never `main`.** Work on a branch, open a pull
+  request, and leave the merge to the owner. `.githooks/` refuses commits
+  and pushes to `main` (enable once: `git config core.hooksPath .githooks`);
+  GitHub's branch protection refuses them on the server.
+- **One task per session, started by the owner.** A plan, roadmap or RFC is
+  context, not a queue: never work through its phases on your own.
+- **Fix the class, not the instance.** A bug-fix pull request states the
+  symptom, the root cause as a class ("a label keyword chose the wrong
+  concept"), why the existing tests missed it, and the test that now covers
+  the whole class -- a property test where the class is large. A fix that
+  works for one site, one form or one value is not a fix. The same pull
+  request adds a file to `reference/failures/` (one JSON file per failure:
+  symptom, root cause, why the tests missed it, the fix, the tests, and what
+  a new project should build in from the start); the owner keeps that
+  catalogue in the repository for the next project, and
+  `tests/test_failures_catalogue.py` checks each entry is complete and names
+  real tests.
+- **Data never lives in logic.** No place, company, person or answer
+  literal decides anything in code. Places come from `reference/geo.json`
+  through `geo_reference.py` (regenerate the data with
+  `reference/build_geo.py`); the owner's facts come from the profile; site
+  quirks live in `sites/`. `tests/test_no_place_literals.py` fails the
+  build on a country, state or province name in a logic module.
+- **Ask who put a value there before changing it.** `provenance.py`
+  observes what a person typed; `safety.may_overrule()` is the only place
+  that decides whether a value on the form may be replaced. The owner's
+  values are never changed; the site's only as `SITE_PREFILL_POLICY`
+  allows. Never add an exception for a particular value.
+- **One decision, one place.** If a rule already lives in `safety.py`,
+  call it; if the same decision exists in two modules, consolidate it
+  rather than patching each copy. `safety.py` changes only with the
+  owner's explicit approval on the pull request.
+- **Tests first, all green.** A new behaviour or fix comes with a test that
+  failed before it. `python -m pytest -q` passes locally and in CI, with no
+  test weakened to make it pass.
+- **Say what the owner will see.** Any change to what the agent does on a
+  form updates `BEHAVIOUR.md` in the same pull request.
+- **Plans live outside the repository root.** Roadmaps, RFCs, reviews and
+  postmortems go in the Claude Project; the root keeps rules only. The one
+  exception is `reference/failures/`, the machine-readable failure catalogue
+  above, which is data the project keeps.

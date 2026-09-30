@@ -1,0 +1,12 @@
+{
+  "id": "f007",
+  "date": "2026-09-24",
+  "class": "A list the agent never looked at",
+  "symptom": "A required dropdown (\"If you are under 18 years of age, can you provide proof of your eligibility to work?\") was left for the owner: Claude said its choices were unknown.",
+  "site": "ADP WorkforceNow (Willdan)",
+  "root_cause": "The page draws such a dropdown as a bare button named \"Choose an option\" and builds its list only when opened, so the snapshot Claude planned from held no choices. A question the profile could settle went back to the owner for want of a list nobody opened.",
+  "why_tests_missed": "The dropdown fixtures were native selects or lists drawn open, where the choices are always in the snapshot.",
+  "fix": "read_hidden_choices opens each blank prompt-named dropdown that shows no choices (at most twice), reads the whole list, closes it without choosing (Escape, then the control itself), and gives Claude the question (label_above) and the choices. Choosing stays with the planner's answer and choose().",
+  "tests": ["tests/test_hidden_choices_and_breaker_reset.py"],
+  "prevention": "Before asking anyone a question about a list, open the list and read it whole. Give the planner the choices along with the question, and have the planner's answer checked against them."
+}

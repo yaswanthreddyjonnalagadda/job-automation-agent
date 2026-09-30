@@ -1,0 +1,33 @@
+{
+  "_about": "How the agent writes answers to open questions ('Why do you want to join us?'). The owner's rule of 28 September 2026: plain, simple English a non-native speaker understands on first reading, with no AI wording. Edit these lists to change what is avoided; open_answers.py reads them.",
+  "max_sentence_words": 20,
+  "target_words": {
+    "why": [50, 100],
+    "example": [80, 150],
+    "other": [30, 80]
+  },
+  "avoid": [
+    "delve", "passionate", "passion for", "thrilled", "excited to", "eager to", "leverage", "leveraging",
+    "synergy", "dynamic", "fast-paced", "cutting-edge", "innovative", "robust", "seamless", "seamlessly",
+    "spearhead", "spearheaded", "honed", "journey", "tapestry", "landscape", "realm", "navigate",
+    "foster", "fostering", "pivotal", "paramount", "utilize", "utilizing", "furthermore", "moreover",
+    "additionally", "in today's", "ever-evolving", "resonate", "resonates", "deeply", "truly", "genuinely",
+    "unwavering", "testament", "showcase", "embark", "elevate", "empower", "holistic", "meticulous",
+    "invaluable", "commitment to excellence", "i am confident", "great fit", "perfect fit",
+    "unique opportunity", "meaningful impact", "drive impact", "next level", "in conclusion", "overall",
+    "i would love", "i am drawn to", "world-class", "game-changer", "cornerstone", "harness"
+  ],
+  "replace": {
+    "utilize": "use",
+    "utilizing": "using",
+    "leverage": "use",
+    "leveraging": "using",
+    "furthermore": "also",
+    "moreover": "also",
+    "additionally": "also",
+    "in order to": "to",
+    "commence": "start",
+    "facilitate": "help",
+    "endeavor": "try"
+  }
+}

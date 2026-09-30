@@ -181,3 +181,119 @@ def test_resolve_profile_value():
     assert val == "Not Hispanic or Latino"
     assert src == "profile.hispanic_or_latino"
 
+
+def test_chobani_screening_questions():
+    """Verify specific questions seen on the live Chobani job application."""
+    profile = SimpleNamespace(
+        country="United States",
+        state="Virginia",
+        applied_here_before="No",
+        previously_employed_here="No",
+        willing_to_work_weekends="Yes",
+        felony_conviction="No",
+    )
+
+    # 1. Interviewed in the past
+    q_interview = "Have you interviewed with Chobani in the past?*"
+    c_interview = match_concept(q_interview)
+    assert c_interview == "APPLIED_BEFORE"
+    val, src = resolve_profile_value(c_interview, profile)
+    assert val == "No"
+    assert src == "profile.applied_here_before"
+
+    # 2. Willing to work weekends
+    q_weekends = "Are you willing to work weekends?"
+    c_weekends = match_concept(q_weekends)
+    assert c_weekends == "WEEKEND_WORK"
+    val, src = resolve_profile_value(c_weekends, profile)
+    assert val == "Yes"
+    assert src == "profile.willing_to_work_weekends"
+
+    # 3. Country / Region of Residence (must NOT match State/Province)
+    q_country = "Country/Region of Residence:*"
+    c_country = match_concept(q_country)
+    assert c_country == "COUNTRY"
+    val, src = resolve_profile_value(c_country, profile)
+    assert val == "United States"
+    assert src == "profile.country"
+
+    # 4. Previously employed
+    q_employed = "Have you ever been employed by Chobani?*"
+    c_employed = match_concept(q_employed)
+    assert c_employed == "PREVIOUSLY_EMPLOYED"
+    val, src = resolve_profile_value(c_employed, profile)
+    assert val == "No"
+    assert src == "profile.previously_employed_here"
+
+
+def test_boolean_truthiness_resolution():
+    """Ensure string 'No' is never treated as truthy in boolean fields."""
+    profile = SimpleNamespace(
+        applied_here_before="No",
+        felony_conviction="No",
+        previously_employed_here="No",
+        bound_by_non_compete="No",
+        relatives_employed_here="No",
+        open_to_relocation="Yes",
+        at_least_18="Yes",
+        willing_drug_test_and_physical="Yes",
+    )
+
+    assert resolve_profile_value("APPLIED_BEFORE", profile)[0] == "No"
+    assert resolve_profile_value("CRIMINAL_CONVICTION", profile)[0] == "No"
+    assert resolve_profile_value("PREVIOUSLY_EMPLOYED", profile)[0] == "No"
+    assert resolve_profile_value("NON_COMPETE", profile)[0] == "No"
+    assert resolve_profile_value("RELATIVES_EMPLOYED", profile)[0] == "No"
+    assert resolve_profile_value("RELOCATION", profile)[0] == "Yes"
+    assert resolve_profile_value("LEGAL_AGE_18", profile)[0] == "Yes"
+    assert resolve_profile_value("DRUG_TEST", profile)[0] == "Yes"
+
+
+
+
+# --------------------------------------------------------------------------
+# The options confirm what a location question asks (RFC-001, M1)
+# --------------------------------------------------------------------------
+from concept_matcher import confirm_concept  # noqa: E402
+import geo_reference  # noqa: E402
+
+CHOBANI_COUNTRIES = ["- Select -", "Aaland Islands", "Afghanistan", "Albania", "Algeria",
+                     "American Samoa", "Andorra", "Angola", "United States"]
+US_STATES = ["Select State", "Maryland", "Texas", "Virginia", "Ohio", "District of Columbia", "Georgia"]
+
+
+def test_a_region_question_over_a_country_list_asks_for_a_country():
+    """On 23 September "Country/Region of Residence" was answered "Virginia"
+    from a list of countries. The label is ambiguous; the options are not."""
+    for label in ("Region of Residence", "Region", "Home Region", "Location (Region)"):
+        proposed = match_concept(label)
+        assert confirm_concept(proposed, CHOBANI_COUNTRIES) == "COUNTRY", label
+
+
+def test_a_country_label_over_a_state_list_asks_for_a_state():
+    assert confirm_concept("COUNTRY", US_STATES) == "STATE_PROVINCE"
+
+
+def test_options_never_turn_other_questions_into_residence():
+    # A country list under "Country of Citizenship" stays a citizenship question.
+    assert confirm_concept(None, CHOBANI_COUNTRIES) is None
+    assert confirm_concept("ETHNICITY", CHOBANI_COUNTRIES) == "ETHNICITY"
+    # Without enough options to judge, the label stands.
+    assert confirm_concept("STATE_PROVINCE", ["Yes", "No"]) == "STATE_PROVINCE"
+
+
+def test_the_profile_country_is_found_whatever_the_form_calls_it():
+    for spelling in ("United States of America", "USA", "United States (+1)", "US - United States"):
+        assert best_option_match("United States", ["- Select -", "Canada", spelling, "Mexico"]) == spelling
+    assert best_option_match("Virginia", ["VA - Virginia", "MD - Maryland"]) == "VA - Virginia"
+    assert best_option_match("Virginia", ["Holy See (Vatican City State)", "Canada"]) is None
+
+
+def test_any_country_is_recognised_not_only_one():
+    # The reference data knows every ISO country, so the same rules hold for
+    # an owner who lives anywhere.
+    assert best_option_match("India", ["- Select -", "Iceland", "India", "Indonesia"]) == "India"
+    assert best_option_match("South Korea", ["Korea, Republic of", "Korea, Democratic People's Republic of"]) \
+        == "Korea, Republic of"
+    assert geo_reference.option_domain(CHOBANI_COUNTRIES) == geo_reference.COUNTRY
+    assert geo_reference.option_domain(US_STATES) == geo_reference.US_STATE

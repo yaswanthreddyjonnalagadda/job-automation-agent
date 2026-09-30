@@ -1,0 +1,12 @@
+{
+  "id": "f012",
+  "date": "2026-09-25",
+  "class": "A required control that no rule covers, passed over in silence",
+  "symptom": "Create Account was pressed with the required \"I agree to creating this account to allow me to apply for positions with HonorHealth.\" box unticked; Workday answered \"Please check the box to continue\" and the run stopped on the form.",
+  "site": "HonorHealth (Workday)",
+  "root_cause": "The account form's consent rule (safety.is_privacy_consent) knew privacy notices only. This box is neither a privacy notice nor an attestation, so it matched no rule, was skipped with no log line, and the form was submitted regardless.",
+  "why_tests_missed": "The create-account tests used privacy and terms wording; none used a consent to the account itself, and a skipped box left no trace to assert on.",
+  "fix": "safety.is_account_creation_consent (owner-approved, 25 September 2026) accepts consent to creating the very account the owner asked for and refuses terms, declarations, signatures, marketing and data-sharing wording; _is_account_consent uses it. A box the agent must tick but cannot is left for the owner and Create is not pressed.",
+  "tests": ["tests/test_account_creation_consent.py"],
+  "prevention": "Every required control must end in one of three states: ticked by a named rule, left for the owner with a log line saying which, or blocking the submit. Never skip one silently, and never press the submit control while a required box is unticked."
+}

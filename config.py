@@ -15,6 +15,7 @@ import os
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -33,6 +34,8 @@ DB_PATH = DATA_DIR / "applications.db"
 RESUME_PATH = os.getenv("RESUME_PATH", str(DATA_DIR / "resume.pdf"))
 JOB_QUEUE_PATH = os.getenv("JOB_QUEUE_PATH", str(DATA_DIR / "job_queue.txt"))
 PROFILE_PATH = Path(os.getenv("PROFILE_PATH", str(DATA_DIR / "profile.json")))
+# The owner's standard resume, used only when RESUME_SOURCE=master.
+MASTER_RESUME_PATH = BASE_DIR / "assets" / "master_resume.pdf"
 
 
 @dataclass(frozen=True)
@@ -84,6 +87,7 @@ class UserProfile:
     felony_conviction: str = ""
     previously_employed_here: str = ""
     applied_here_before: str = ""
+    willing_to_work_weekends: str = "Yes"
     relatives_employed_here: str = ""
     willing_drug_test_and_physical: str = ""
     veteran_status: str = ""
@@ -126,6 +130,10 @@ class UserProfile:
     education_dates: tuple[tuple[str, str, str], ...] = ()
     # What the break between jobs was, for forms that ask about gaps.
     work_history_gap: str = ""
+    # Substitutes the OWNER has approved for a value a list may not offer, tried in order after the
+    # exact value fails and never otherwise: {"Computer Technology": ["Computer Science"]}. A field of
+    # study is a fact the application certifies, so the agent never swaps it on its own.
+    answer_alternatives: dict = field(default_factory=dict)
     country: str = ""
     phone_country_code: str = ""
     # Application-form pop-ups like "Data Privacy Agreement" that block the
@@ -146,12 +154,30 @@ class UserProfile:
     check_gmail_for_confirmation: bool = False
 
 
+# The first default, gemini-2.5-flash, answered "no longer available to new users" on the owner's key (25
+# September 2026): the models a key can use change, so GEMINI_MODEL in .env overrides this.
+DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+
+
 @dataclass(frozen=True)
 class AppConfig:
     anthropic_api_key: str = field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", ""))
     anthropic_model: str = field(
         default_factory=lambda: os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
     )
+    # Google's Gemini, used only when FORM_ANSWER_MODE=gemini (gemini_integration.py): it answers the
+    # questions on the application pages, and Claude still writes the resume and the cover letter.
+    # The key comes from aistudio.google.com; it is never logged and never put in an address.
+    gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", "").strip())
+    gemini_model: str = field(
+        default_factory=lambda: os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_GEMINI_MODEL)
+    gemini_base_url: str = field(
+        default_factory=lambda: os.getenv("GEMINI_BASE_URL", "").strip() or DEFAULT_GEMINI_BASE_URL)
+    # OpenAI API key for resume tailoring fallback (optional).
+    openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", "").strip())
+    openai_model: str = field(
+        default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-4o").strip())
     resume_path: Path = Path(RESUME_PATH)
     job_queue_path: Path = Path(JOB_QUEUE_PATH)
     # Used only for employer ATS accounts (Workday/Greenhouse/Lever/iCIMS...)
@@ -192,7 +218,10 @@ class AppConfig:
     )
     # "profile" is the autonomous mode: every form answer comes from the
     # saved profile or local answer library, not an LLM or session planner.
-    # "claude" preserves the previous assisted page-planning workflow.
+    # "claude" preserves the previous assisted page-planning workflow (who plans
+    # each page is then AGENT_BRAIN: the API or the Claude Code session).
+    # "gemini" has Google's Gemini answer the pages and Claude write the documents;
+    # AGENT_BRAIN is not consulted.
     form_answer_mode: str = field(
         default_factory=lambda: os.getenv("FORM_ANSWER_MODE", "profile").strip().lower()
     )
@@ -213,6 +242,17 @@ class AppConfig:
     agent_brain: str = field(default_factory=lambda: os.getenv("AGENT_BRAIN", "api").strip().lower())
     # How many times a flaky page action is retried before it is reported.
     action_retries: int = 3
+    # Which resume an application gets: "tailored" (the default) is the one
+    # Claude tailored to this job; "master" is assets/master_resume.pdf.
+    # See resume_to_attach().
+    resume_source: str = field(
+        default_factory=lambda: os.getenv("RESUME_SOURCE", "tailored").strip().lower())
+    # What the agent does with a value the site put on the form (a resume
+    # parser's guess, a list's first entry) that contradicts the profile:
+    # "correct" (the default) puts it right from the profile and lists the
+    # correction at hand-over; "leave" leaves it for the owner. A value the
+    # owner entered is never changed either way. See site_prefill_policy().
+    site_prefill_policy: str = field(default_factory=lambda: site_prefill_policy())
 
 
 def get_user_profile() -> UserProfile:
@@ -230,10 +270,45 @@ def get_user_profile() -> UserProfile:
         raise RuntimeError(f"Could not load profile from {PROFILE_PATH}: {exc}") from exc
 
 
+def site_prefill_policy() -> str:
+    """"correct" or "leave": what happens to a site's value that contradicts
+    the profile (SITE_PREFILL_POLICY in .env; "correct" unless set)."""
+    value = os.getenv("SITE_PREFILL_POLICY", "correct").strip().lower()
+    return value if value in ("correct", "leave") else "correct"
+
+
+def resume_to_attach(tailored, app_config=None) -> Optional[Path]:
+    """The one resume an application gets.
+
+    By default the resume tailored to this job. With RESUME_SOURCE=master,
+    the owner's standard resume at assets/master_resume.pdf, when it exists.
+    Every place that attaches or verifies a resume asks here, so the
+    uploader and the submit gate can never disagree about which file is
+    the right one -- they did when three places each forced the master
+    file on their own while the gate still expected the tailored one.
+    """
+    source = str(getattr(app_config, "resume_source", "")
+                 or os.getenv("RESUME_SOURCE", "tailored")).strip().lower()
+    if source == "master" and MASTER_RESUME_PATH.is_file():
+        return MASTER_RESUME_PATH
+    return Path(tailored) if tailored else None
+
+
 def get_app_config() -> AppConfig:
-    cfg = AppConfig()
-    if not cfg.anthropic_api_key:
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY is not set. Copy .env.example to .env and fill it in."
-        )
-    return cfg
+    """Returns the app config. No API key is required -- if none are set the
+    agent skips tailoring and attaches the local resume."""
+    return AppConfig()
+
+
+def available_tailor_providers(cfg: AppConfig) -> list[str]:
+    """Returns the list of AI providers that have an API key configured,
+    in priority order: Claude -> Gemini -> OpenAI.
+    An empty list means no AI tailoring is possible; the local resume is used."""
+    providers = []
+    if cfg.anthropic_api_key:
+        providers.append("claude")
+    if cfg.gemini_api_key:
+        providers.append("gemini")
+    if cfg.openai_api_key:
+        providers.append("openai")
+    return providers

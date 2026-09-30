@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+from perception import hide_secrets, hide_secrets_in_tree
+
 logger = logging.getLogger("state_machine")
 
 STATUS_BLOCKED_VALIDATION_LOOP = "BLOCKED_VALIDATION_LOOP"
@@ -138,9 +140,9 @@ def dump_forensic_failure(
     try:
         axtree_data: Any = None
         if hasattr(page, "accessibility") and hasattr(page.accessibility, "snapshot"):
-            axtree_data = page.accessibility.snapshot()
+            axtree_data = hide_secrets_in_tree(page.accessibility.snapshot())
         if not axtree_data:
-            axtree_data = {"aria_snapshot": page.locator("body").aria_snapshot(mode="ai", timeout=5_000)}
+            axtree_data = {"aria_snapshot": hide_secrets(page.locator("body").aria_snapshot(mode="ai", timeout=5_000))}
         axtree_path.write_text(json.dumps(axtree_data, indent=2, default=str), encoding="utf-8")
     except Exception as exc:
         logger.debug("Forensic accessibility snapshot failed: %s", exc)

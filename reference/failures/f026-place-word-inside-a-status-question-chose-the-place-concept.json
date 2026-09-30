@@ -1,0 +1,15 @@
+{
+  "id": "f026",
+  "date": "2026-09-28",
+  "class": "A label keyword chose the wrong concept: a place named inside a question outranked what the question asks",
+  "symptom": "Writer (Ashby), 28 September: once the Yes/No buttons were readable, 'Are you legally authorized to work in the country in which the job you are applying for is located?' and the sponsorship question were answered 'United States', which is not a choice, and left blank.",
+  "site": "Any site whose work-authorization or sponsorship question says where it applies ('in the country', 'in this state')",
+  "root_cause": "concept_matcher.match_concept scored every concept whose keywords appear in the question and kept the first highest score in table order. COUNTRY ('country') and STATE_PROVINCE ('state or province') tied WORK_AUTHORIZATION and VISA_SPONSORSHIP, and came first in the table, so a place word used as a qualifier decided the question.",
+  "why_tests_missed": "Concept tests used short labels ('Country', 'Are you legally authorized to work?'); none put a place word inside a status question, where two concepts match at once.",
+  "fix": "When a concept that is not a place (PLACE_CONCEPTS: country, state/province, city, postal code) matches the question itself, place concepts are dropped before the best score is taken. A bare place label ('Country of residence') still matches only a place concept and is unaffected. Also: PageAgent.failed now exists from the start, so an answer that fails in answer_what_is_known is reported open instead of crashing the page with AttributeError.",
+  "tests": [
+    "tests/test_toggle_button_choices.py::test_a_place_named_inside_a_status_question_does_not_make_it_a_place_question",
+    "tests/test_toggle_button_choices.py::test_the_profile_answers_toggle_questions_with_one_click"
+  ],
+  "prevention": "A concept table ranked by keyword hits needs a rule for two concepts in one sentence. Decide which kinds of word are qualifiers (places, dates, employers) and which name the question, and test every status question with a place phrase attached."
+}

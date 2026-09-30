@@ -1,0 +1,21 @@
+{
+  "id": "f028",
+  "date": "2026-09-28",
+  "class": "A shortcut that skips a step also skips the jobs that step was quietly doing",
+  "symptom": "After pages answered wholly from the profile began skipping the AI plan (to save credits): the resume was not attached, a 'Submit' on step 1 of 2 stopped the run as if it were the last, a work-history page with only 'Add Experience' was given up, and a required 'Choose an option' dropdown was left blank while Next was pressed. Nine tests failed; the change had not been run against them.",
+  "site": "Every site",
+  "root_cause": "The AI page plan did more than answer questions: it named a plain <input type=file> for the upload, reported the step counter, chose a non-Next action (Add Experience), and saw controls the agent's own reader does not take for questions. profile_plan did none of these, and the shortcut used it whenever the recognised questions were all answered. In the same change the relatives-employed rule was overwritten by the office-days rule, and the relocation shortcut matched any choice containing 'relocate', including 'not willing to relocate'.",
+  "why_tests_missed": "The tests existed and failed; the change was used in live runs without running them.",
+  "fix": "attach_documents finds a plain file box by asking the page (PageAgent._file_input_for). profile_plan reads 'Step N of M' from the page and calls a Submit with steps remaining next_step. The shortcut is taken only when profile_plan found a way forward and no dropdown still shows a placeholder (_blank_choice_on_page; 'Choose an option' added to PLACEHOLDER); otherwise the page goes to the plan. The relatives rule is restored, and relocation picks only a 'willing to relocate' choice without 'not'. Tests that check what the agent refuses from a plan now use a page the profile does not answer whole (asks_the_planner).",
+  "tests": [
+    "tests/test_profile_only_pages.py",
+    "tests/test_profile_only_pages.py::test_a_submit_is_the_last_only_when_no_more_steps_are_shown",
+    "tests/test_profile_only_pages.py::test_a_placeholder_still_showing_is_a_blank_answer",
+    "tests/test_profile_only_pages.py::test_a_plain_file_box_named_by_its_label_is_the_resume_upload",
+    "tests/test_profile_only_pages.py::test_willing_to_relocate_never_picks_not_willing",
+    "tests/test_profile_only_pages.py::test_the_relatives_question_is_answered_from_the_profile_again",
+    "tests/test_page_agent.py::test_a_whole_application_is_read_answered_and_submitted",
+    "tests/test_hidden_choices_and_breaker_reset.py::test_the_choices_reach_the_planner_and_the_question_is_answered_by_the_agent"
+  ],
+  "prevention": "Before a shortcut skips a step, list everything that step's output is used for, not only what it is named for, and give each a test on the shortcut's path. Run the whole suite before a change is used on a real application."
+}

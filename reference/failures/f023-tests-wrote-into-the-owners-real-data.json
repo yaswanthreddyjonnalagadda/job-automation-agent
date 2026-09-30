@@ -1,0 +1,12 @@
+{
+  "id": "f023",
+  "date": "2026-09-25",
+  "class": "Test state shared with the owner's real state",
+  "symptom": "The owner's real data/unanswered_questions.json held a question no employer asked: \"I certify ... signature\", site jobs.example.com, company Example, counted 5 times. It was a test's made-up question, written by running the tests in the checkout the agent really runs from.",
+  "site": "The test suite (any test that builds an agent), not a site",
+  "root_cause": "The agent keeps records under a relative path (data/...) that resolves against wherever the process runs. The test setup redirected the one such path it knew of (the sign-in attempts) and nothing else, so the next state file added (the unanswered-questions log) was written by tests into the owner's real data. A fix that names each file leaves the next file unprotected.",
+  "why_tests_missed": "The tests that build an agent asserted on the agent's behaviour, never on what the run left behind in the owner's folder; and a log that is only ever added to looks right whether or not a test wrote some of it.",
+  "fix": "One autouse fixture points every module-level state path spelled relative to data/, in whichever project module holds it, at the test's own temporary folder, so a new state file needs no entry; it replaces the login-only fixture. The modules that hold such a path are found by reading the source and loaded when the tests start, because a test file run alone imports its modules only inside the test, after the fixture has looked (the first version missed exactly that). The made-up entry was removed from the owner's log.",
+  "tests": ["tests/test_next_project_knowledge.py::test_no_module_level_path_into_data_is_left_pointing_at_the_owners_files", "tests/test_next_project_knowledge.py::test_an_agent_that_records_a_question_does_not_write_the_owners_log"],
+  "prevention": "Never let a test share state with the running system: give every process-wide state path one home (config), point all of it at a temporary folder for tests in one place, and have a test that fails when a state path is left pointing at the real folder. Inline path literals inside functions (data/_dropdown_answers.json and others) are not covered: name them as module-level constants when next touched."
+}

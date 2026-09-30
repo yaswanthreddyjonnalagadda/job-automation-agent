@@ -500,26 +500,6 @@ class PostgresTracker:
         logger.info("Stored %s (%d bytes) for %s", kind, len(content), dedup_key[:12])
         return row["id"]
 
-    def fetch_document(self, dedup_key: str, kind: str, out_path: Path | str) -> Optional[Path]:
-        """Writes the most recently stored document of `kind` back to disk."""
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT d.filename, d.content
-                FROM documents d
-                JOIN applications a ON a.id = d.application_id
-                WHERE a.dedup_key = %s AND d.kind = %s
-                ORDER BY d.created_at DESC
-                LIMIT 1
-                """,
-                (dedup_key, kind),
-            ).fetchone()
-        if not row:
-            return None
-        out = Path(out_path)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_bytes(row["content"])
-        return out
 
     # ------------------------------------------------------------------
     # Form answers -- the reusable memory of what was answered where

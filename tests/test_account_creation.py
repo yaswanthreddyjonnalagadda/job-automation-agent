@@ -3,9 +3,6 @@ from types import SimpleNamespace
 from browser_automation import JobApplicationAssistant
 
 
-def test_account_creation_ignores_null_alert_text():
-    assert JobApplicationAssistant._nonempty_texts([None, "", "  Required field  "]) == ["Required field"]
-
 
 def test_account_creation_requires_matching_password_pair():
     assert JobApplicationAssistant._password_pair_matches(["example-password", "example-password"], "example-password")

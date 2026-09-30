@@ -1,0 +1,12 @@
+{
+  "id": "f021",
+  "date": "2026-09-25",
+  "class": "A list the agent never looked at, once the control has a name",
+  "symptom": "Two required dropdowns were answered \"No\" and \"Yes\" and neither took: the form's own choices were \"Never Employed by Praxis\" and \"I have read, authorize and acknowledge\".",
+  "site": "Praxis Precision Medicines (Greenhouse)",
+  "root_cause": "The agent read the choices of a dropdown only when its name was a prompt (\"Choose an option\", f007). Greenhouse names each dropdown by its question, so these were never opened, and the planner guessed at a vocabulary it had not seen.",
+  "why_tests_missed": "The hidden-choices tests used prompt-named buttons; no fixture drew a dropdown named by its question whose list appears only when opened.",
+  "fix": "read_hidden_choices also opens a blank dropdown that names its own question when it is one the agent could not answer itself, reads the list, closes it without choosing, and gives the planner the form's own words. At most six per look, a list of more than thirty choices is left to be typed into, and Ant Design lists keep their own reader.",
+  "tests": ["tests/test_blank_dropdown_choices.py"],
+  "prevention": "Never let the planner answer a choice question without the list it is choosing from: read the list of every dropdown the agent cannot answer from the profile, with limits on how many and how long."
+}

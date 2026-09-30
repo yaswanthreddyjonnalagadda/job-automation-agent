@@ -1,0 +1,12 @@
+{
+  "id": "f003",
+  "date": "2026-09-24",
+  "class": "A recoverable state treated as a dead end",
+  "symptom": "The site said an account already exists for the owner's email; the run logged ACCOUNT_CREATE_FAILED and stopped, leaving the owner to sign in or reset the password by hand.",
+  "site": "employer ATS sites in general",
+  "root_cause": "The create-account failure branch had no way forward when the account existed. Recovery (sign in, or reset the password from the emailed code) was a person's step, so an ordinary and expected state ended the run.",
+  "why_tests_missed": "No fixture modelled a site that answers 'account already exists', with sign-in, forgot-password, an emailed code and a new-password step.",
+  "fix": "sign_in_to_existing_account: sign in with the existing ATS_PASSWORD; if the site rejects it, reset to that same password with the emailed code read from the owner's signed-in Gmail tab. Employer ATS domains only, once per site per run, and it stops on a link-only reset, no code, a refused code, a refused password or a CAPTCHA. CLAUDE.md section 5 carries the owner's exception.",
+  "tests": ["tests/test_existing_account.py"],
+  "prevention": "Treat 'already exists' as a branch of account creation from the start: try sign-in first, keep recovery inside the same guardrails as login (allowed hosts, once per site, no CAPTCHA, no secret in a log), and write the owner's permission for it into the rules before building it."
+}

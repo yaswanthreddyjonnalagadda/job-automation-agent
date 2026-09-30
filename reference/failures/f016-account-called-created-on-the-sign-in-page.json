@@ -1,0 +1,12 @@
+{
+  "id": "f016",
+  "date": "2026-09-25",
+  "class": "A success judged from a page that appears in the failure case too",
+  "symptom": "The agent logged ACCOUNT_CREATED and saved the account as existing because Workday showed its Sign In page after Create Account; the sign-in that followed was rejected with no way to tell whether the account existed.",
+  "site": "HonorHealth (Workday)",
+  "root_cause": "_account_creation_is_confirmed accepted a Sign In page (and any URL ending /login) as proof, though Workday shows that page when the account was made, when it was not, and when it still needs verifying. The false record also steered the next run to sign in only, never create.",
+  "why_tests_missed": "The existing test asserted only that a registration page and an application page differ; no test landed on a Sign In page after creating.",
+  "fix": "Only Candidate Home or the application confirms a new Workday account. Otherwise the run logs ACCOUNT_UNVERIFIED, saves nothing as an account, and holds the sign-in (login_guard) until the owner has verified the account and pressed Continue.",
+  "tests": ["tests/test_secrets_out_of_snapshots_and_account_proof.py", "tests/test_login_guard.py"],
+  "prevention": "Confirm a state from evidence that cannot also appear on the failure path. When the evidence is ambiguous, say so, record nothing, and stop spending limited attempts."
+}

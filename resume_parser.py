@@ -66,8 +66,7 @@ def extract_text(path: str | Path) -> str:
 
 
 def parse_resume(path: str | Path) -> ResumeData:
-    """Extract raw text only. Call claude_integration.structure_resume() separately
-    to get a structured (skills/experience/education) breakdown via Claude."""
+    """Extract the resume's raw text."""
     path = Path(path)
     raw_text = extract_text(path)
     return ResumeData(source_path=str(path), raw_text=raw_text)
