@@ -52,6 +52,15 @@ _VERIFY = re.compile(
     r"verify (your|the) (email|e-mail|account|address)|verification (email|e-mail|link)|check your (email|e-mail|inbox)|"
     r"we('ve| have)? sent (you )?(an? )?(email|e-mail|link|message)|activate your account|confirm your (email|account)",
     re.IGNORECASE)
+# The site says the account itself is not verified yet -- a message that sits ON a sign-in form, so it counts whatever
+# boxes the form has (unlike _VERIFY, whose hint wording also appears on ordinary forms). Ciena on Workday,
+# 30 September: "Verify your account before you sign in or request a verification email" on the Sign In form was
+# read as a plain sign-in form, and the owner was told the password had been refused.
+_UNVERIFIED = re.compile(
+    r"verify your (account|email|e-mail)( address)? (before|to) (you )?(sign|log) ?in|request a (new )?verification "
+    r"(email|e-mail|link)|(account|email|e-mail)( address)? (is |has )?(not|n't) (been |yet )*(verified|activated|"
+    r"confirmed)|unverified (account|email)|account (may |might )?needs? (to be )?(verified|verification|activated)",
+    re.IGNORECASE)
 _CREATE = re.compile(r"\bcreate (an |your )?account\b|\bregister\b|\bsign ?up\b", re.IGNORECASE)
 _SIGN_IN = re.compile(r"\bsign ?in\b|\blog ?in\b", re.IGNORECASE)
 _WAYS_IN = re.compile(r"(?:sign|log)[\s-]?(?:in|on|up) (?:with|using|via) (google|email|linkedin|apple|microsoft|"
@@ -120,7 +129,8 @@ def read_state(snapshot: str, password_boxes: Optional[int] = None) -> AccountSt
         # Google's own account picker: part of a Google sign-in already under way, not the employer's page.
         return AccountState(NONE, "Google's account picker")
 
-    for kind, pattern in ((LOCKED, _LOCKED), (WRONG_PASSWORD, _WRONG_PASSWORD), (ACCOUNT_EXISTS, _EXISTS)):
+    for kind, pattern in ((LOCKED, _LOCKED), (VERIFY_EMAIL, _UNVERIFIED), (WRONG_PASSWORD, _WRONG_PASSWORD),
+                          (ACCOUNT_EXISTS, _EXISTS)):
         said = _first(pattern, texts)
         if said and (passwords or on_account_step or _first(_SIGN_IN, texts) or _first(_CREATE, texts)):
             return state(kind, said)

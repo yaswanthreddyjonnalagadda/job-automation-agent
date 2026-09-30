@@ -423,7 +423,8 @@ counts before what the form looks like. Then one table decides:
   with the code emailed to you -- once per site per run (see "An account that already
   exists").
 - **Stop and tell you** when only you can act: open the verification email and click
-  its link, a refused password the reset did not cure (or on an account the site has
+  its link (also when the site says so on its sign-in form, as Workday does: "Verify your
+  account before you sign in"), a refused password the reset did not cure (or on an account the site has
   not shown it knows), a locked account, or sign-in held back to protect the
   account. The run says exactly what to do; press Continue when it is done. It no
   longer treats a sign-in page it could not get past as a form to fill in.
