@@ -1011,6 +1011,22 @@ def label_above(snapshot: str, ref: str) -> str:
     return ""
 
 
+_CLICK_LABEL_JS = """e => {
+  const label = (e.id && document.querySelector(`label[for="${CSS.escape(e.id)}"]`)) || e.closest('label')
+      || (e.nextElementSibling && e.nextElementSibling.tagName !== 'INPUT' ? e.nextElementSibling : null);
+  if (!label) throw new Error('no label beside the box');
+  label.click();
+}"""
+
+
+def _is_checked(loc) -> Optional[bool]:
+    """Whether a tick box shows as ticked -- a native box or one drawn with aria-checked."""
+    try:
+        return bool(loc.evaluate("e => e.checked === true || e.getAttribute('aria-checked') === 'true'"))
+    except Exception:
+        return None
+
+
 def closest_choice(choices: list[str], wanted: str) -> Optional[int]:
     """The choice that says what the profile says, where the words differ.
 
@@ -3547,12 +3563,21 @@ class PageAgent:
                     pass
             return True
         if answer.action in ("check", "uncheck"):
+            # A tick box drawn as a hidden input behind a styled label (ADP's "Yes, I agree to sign electronically.",
+            # SK AX USA, 30 September) refuses set_checked and a click on the input: its label is clicked, then the
+            # input's own click() is dispatched. Done only when the box then shows the state asked for.
             want = answer.action == "check"
-            try:
-                loc.set_checked(want, timeout=5_000)
-            except Exception:
-                loc.click(timeout=5_000)
-            return True
+            for attempt in (lambda: loc.set_checked(want, timeout=5_000),
+                            lambda: loc.click(timeout=3_000),
+                            lambda: loc.evaluate(_CLICK_LABEL_JS),
+                            lambda: loc.evaluate("e => e.click()")):
+                try:
+                    attempt()
+                except Exception:
+                    continue
+                if _is_checked(loc) == want:
+                    return True
+            return _is_checked(loc) == want
         if answer.action in ("upload_resume", "upload_cover_letter"):
             if answer.action == "upload_resume":
                 path = self.resume_file
