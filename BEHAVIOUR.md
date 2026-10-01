@@ -524,6 +524,14 @@ is not typed again. A phone box that holds only its country's dial code ("+1")
 is still empty, and is filled. That dial-code picker is never "corrected" to your
 country: a "+1" is the prefix your number takes, not where you live.
 
+## Choices whose words sit beside them
+
+Some forms draw each choice as a button with its word in a separate box beside it (Meta's
+"Male", "Female", "I choose not to disclose"). The agent reads that word as the button's
+name and picks the button that is your answer. A choice is never picked because its text
+merely contains your answer -- "Male" is inside "Female". Before, Meta's gender showed
+Female for an owner whose profile says Male (30 September).
+
 ## Which locations you would like
 
 When a form asks which of its locations you would like to work or apply in ("Please

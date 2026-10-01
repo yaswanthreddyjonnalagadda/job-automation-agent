@@ -353,7 +353,10 @@ def parse_snapshot(snapshot: str) -> list[Control]:
             # their own: each is followed by its text ("I AM NOT A PROTECTED
             # VETERAN"). That text is the button's name.
             if controls and not controls[-1].name and controls[-1].role in ("radio", "checkbox", "switch") \
-                    and not controls[-1].value and role == "text":
+                    and not controls[-1].value and (role == "text" or (role == "generic" and indent == last_control_indent)):
+                # Meta draws each choice as a radio and then its word in a box beside it ("radio" / "generic: Male"):
+                # that word, right after the radio at its own level, is the radio's name. Left nameless, "Male" was
+                # matched to nothing and the Female button was the one clicked (30 September).
                 controls[-1].name = candidate_text
             # After a choice: text that reads as a question starts the next one. Not the choice's own label -- the
             # same words as its name, or any text right after a choice that has no name of its own (Federal
@@ -430,9 +433,13 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         )
         if ref_m and (role in ANSWER_ROLES or role in PRESS_ROLES or role in OPTION_ROLES
                       or role in ("radiogroup", "group", "list", "region") or clickable_generic):
+            # The tick box before this one, list items aside: Meta puts each tick box in a list item of its own, and
+            # counting the list item, every box began a run of one -- the question over them was lost (30 September).
+            # (Named groups still end a run: they are where one question stops and the next begins.)
+            before = next((c for c in reversed(controls) if c.role != "listitem"), None)
             if role == "radio" and (not (controls and controls[-1].role == "radio") or text_since_choice):
                 radio_context = text_since_choice or last_text
-            if role == "checkbox" and (not (controls and controls[-1].role == "checkbox") or text_since_choice):
+            if role == "checkbox" and (not (before and before.role == "checkbox") or text_since_choice):
                 checkbox_context, checkbox_run = text_since_choice or last_text, checkbox_run + 1
             shown = value if value and not value.endswith(":") else ""
             # Some widgets put the chosen value in a box beside the control
@@ -4066,9 +4073,12 @@ class PageAgent:
                         candidates.extend(["I am not a protected veteran", "Not a protected veteran", "No"])
                     for cand in candidates:
                         role_sel = control.role if control.role in ("radio", "checkbox") else "radio"
-                        radio_loc = tab.locator(f"input[type='{role_sel}']").filter(has_text=cand).first
+                        # The whole text, not a part of it: "Male" is inside "Female", and a label holding a whole
+                        # group was clicked in its middle -- Meta's gender went to Female (30 September).
+                        whole = re.compile(rf"^\s*{re.escape(cand)}\s*$", re.IGNORECASE)
+                        radio_loc = tab.locator(f"input[type='{role_sel}']").filter(has_text=whole).first
                         if not radio_loc.count():
-                            radio_loc = tab.locator("label").filter(has_text=cand).first
+                            radio_loc = tab.locator("label").filter(has_text=whole).first
                         if radio_loc.count():
                             try:
                                 radio_loc.click(timeout=3_000)
