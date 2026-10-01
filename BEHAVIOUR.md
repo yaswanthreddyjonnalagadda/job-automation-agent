@@ -483,15 +483,15 @@ email box, or the box will not keep your email, it does not press Create Account
 the passwords are never sent alone. Sign-in works the same way: email first, checked,
 then the password.
 
-Before it signs in to a new account it looks for the evidence that it can: the
-verification email the site sent. It opens that email's link from your Gmail (your
-decision of 30 September 2026), and only then signs in with your email and
-`ATS_PASSWORD`. If no verification email comes, it does not try a sign-in on a guess
--- a sign-in to an unverified account is refused and counts towards a lock (Waystar,
-1 October). It stops and says: the account was created, open the verification email,
-click its link, then press Continue; the agent then signs in. If the site emails a
-one-time code at sign-in, the agent reads it from your Gmail under the rules in "When
-a one-time code may be read from your mail".
+After creating an account it gets itself in, without stopping for you (your rule of 1 October):
+it opens the site's verification email from your Gmail if one has come within a minute (your
+decision of 30 September), then signs in with your email and `ATS_PASSWORD`. If no verification
+email came, the site may not verify new accounts, so it signs in anyway. If that sign-in is
+refused, it looks for a late verification email once more, opens its link and signs in again;
+only if all of that fails does it stop for you. Gmail is always opened for the address the agent
+applies with -- the agent's browser is signed in to two Google accounts, and the first one is not
+necessarily that address. If the site emails a one-time code at sign-in, the agent reads it under
+the rules in "When a one-time code may be read from your mail".
 
 ## Signing in without locking your accounts
 

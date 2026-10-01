@@ -4924,26 +4924,36 @@ class JobApplicationAssistant:
             if not self._account_creation_is_confirmed(page):
                 logger.warning("ACCOUNT_UNVERIFIED: the site took the new-account form but shows no signed-in page")
                 # The site accepted the form, so the account exists: it is recorded now, and no later run tries to
-                # make it again. Whether it can be signed in to is not known yet -- most sites (Workday) want the
-                # email verified first, and a sign-in before that is refused and counts towards a lock (Waystar,
-                # 1 October: created, then signed in at once, refused). So the evidence comes first: the
-                # verification link the site emailed is opened (the owner's decision of 30 September); only then is
-                # the sign-in tried. With no verification email to open, nothing is guessed: the owner is asked.
+                # make it again. Then the agent gets itself in -- the owner's rule (1 October: "just tell the agent
+                # to do that"): it does not stop to ask.
+                #   1. The site's verification email, if it sent one: its link is opened from the applying address's
+                #      Gmail (the owner's decision of 30 September), then the sign-in.
+                #   2. No verification email: the site may not verify new accounts (Waystar went straight to Sign In),
+                #      so it signs in once (the owner's decision of 28 September).
+                #   3. That sign-in refused: the email may have been slow -- it looks once more, opens the link, and
+                #      signs in again. Only if that fails too is the owner needed.
                 self.remember_account(page, email, "password (created, not yet verified)")
-                if not self.verify_account_by_email_link(page):
-                    login_guard.hold_for_verification(site, email)
-                    self._login_paused = login_guard.may_sign_in(site, email) or (
-                        f"an account was just created on {site}: verify its email, then press Continue")
-                    logger.warning("ACCOUNT_HELD: %s", self._login_paused)
-                    return False
-                logger.info("ACCOUNT_VERIFIED: the email link was opened -- signing in to the new account")
+                verified = self.verify_account_by_email_link(page, wait_seconds=60)
+                logger.info("ACCOUNT_VERIFIED: the email link was opened -- signing in" if verified else
+                            "ACCOUNT: no verification email within 60s -- the site may not verify new accounts: "
+                            "signing in")
                 if not self._open_sign_in(page):
                     self._login_paused = (f"an account was just created on {site}, but no sign-in form was found: "
                                           f"sign in yourself, then press Continue")
                     logger.warning("ACCOUNT_HELD: %s", self._login_paused)
                     return False
-                return self.attempt_auto_login(page, email, password, scope=self._sign_in_scope(page),
-                                               create_if_missing=False)
+                if self.attempt_auto_login(page, email, password, scope=self._sign_in_scope(page),
+                                           create_if_missing=False):
+                    return True
+                if verified:
+                    return False                  # refused after verifying: the account needs the owner
+                logger.info("ACCOUNT: the sign-in was refused -- looking for a late verification email once more")
+                if self.verify_account_by_email_link(page, wait_seconds=180):
+                    self._login_paused = ""
+                    if self._open_sign_in(page) and self.attempt_auto_login(
+                            page, email, password, scope=self._sign_in_scope(page), create_if_missing=False):
+                        return True
+                return False
             logger.info("ACCOUNT_CREATED: new %s account for %s",
                         getattr(self, "employer", "") or urlparse(page.url).netloc, email)
             self.remember_account(page, email, "password")
@@ -6101,7 +6111,7 @@ class JobApplicationAssistant:
         tab = page.context.new_page()
         try:
             query = quote(f"{company} newer_than:2d")
-            tab.goto(f"https://mail.google.com/mail/u/0/#search/{query}", wait_until="domcontentloaded", timeout=45_000)
+            tab.goto(self._gmail_search_url(query), wait_until="domcontentloaded", timeout=45_000)
             try:
                 tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)
             except Exception:
@@ -6232,7 +6242,7 @@ class JobApplicationAssistant:
             deadline = time.time() + wait_seconds
             while time.time() < deadline:
                 query = quote("newer_than:1h (passcode OR \"one-time\" OR verification OR code)")
-                tab.goto(f"https://mail.google.com/mail/u/0/#search/{query}", wait_until="domcontentloaded", timeout=45_000)
+                tab.goto(self._gmail_search_url(query), wait_until="domcontentloaded", timeout=45_000)
                 try:
                     tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)
                 except Exception:
@@ -6276,6 +6286,22 @@ class JobApplicationAssistant:
             except Exception:
                 pass
 
+    def _applying_email(self) -> str:
+        """The address applications are made with: ATS_EMAIL, else the profile's."""
+        return ((getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
+                or str(getattr(self._owner_profile(), "email", "") or "").strip())
+
+    def _gmail_search_url(self, query: str) -> str:
+        """A Gmail search in the inbox of the address the agent applies with.
+
+        It opened /mail/u/0/ -- the first Google account signed in to the browser, whichever that is. The agent's
+        browser holds two (1 October), so the verification email Waystar sent and Premier Health's confirmation were
+        looked for in the wrong inbox and 'not found'. authuser picks the account by its address."""
+        email = self._applying_email()
+        if not email:
+            return f"https://mail.google.com/mail/u/0/#search/{query}"
+        return f"https://mail.google.com/mail/u/?authuser={quote(email)}#search/{query}"
+
     def verification_link_from_gmail(self, page: Page, wait_seconds: int = 150) -> str:
         """The newest account-verification link (last hour) the site at `page` emailed the owner, read from the Gmail
         this browser is signed in to, in a separate tab; "" when there is none or the owner's rule does not allow it.
@@ -6293,7 +6319,7 @@ class JobApplicationAssistant:
             deadline = time.time() + wait_seconds
             while time.time() < deadline:
                 query = quote("newer_than:1h (verify OR verification OR activate OR confirm)")
-                tab.goto(f"https://mail.google.com/mail/u/0/#search/{query}", wait_until="domcontentloaded",
+                tab.goto(self._gmail_search_url(query), wait_until="domcontentloaded",
                          timeout=45_000)
                 try:
                     tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)
@@ -6342,11 +6368,11 @@ class JobApplicationAssistant:
     _LINK_FAILED = re.compile(r"expired|invalid|no longer valid|already been used|could not (be )?verif|error",
                               re.IGNORECASE)
 
-    def verify_account_by_email_link(self, page: Page) -> bool:
+    def verify_account_by_email_link(self, page: Page, wait_seconds: int = 150) -> bool:
         """The site has sent the owner a link to verify the account it just made: open that link from Gmail in a tab
         of this browser, and say whether the site then shows the account verified (the owner's decision of 30
         September 2026). On success the sign-in refused for the unverified account no longer holds it back."""
-        link = self.verification_link_from_gmail(page)
+        link = self.verification_link_from_gmail(page, wait_seconds=wait_seconds)
         if not link:
             return False
         host = urlparse(page.url).netloc.lower()

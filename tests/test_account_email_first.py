@@ -180,21 +180,41 @@ def test_after_creating_the_account_it_opens_the_verification_link_then_signs_in
                        extra=WIRE_SIGN_IN.replace("ON_SIGN_IN", "document.body.innerHTML = '<h1>Candidate Home</h1>';"))
     serve(page, body)
     a = assistant_for(monkeypatch, WorkdayAdapter())
-    monkeypatch.setattr(a, "verify_account_by_email_link", lambda page: True)      # the link was in the mail
+    monkeypatch.setattr(a, "verify_account_by_email_link", lambda page, wait_seconds=150: True)      # the link was in the mail
     assert a.fill_create_account_form(page, EMAIL) is True
     assert page.evaluate("window.signins") == 1
     assert page.evaluate("window.at_signin") == {"email": EMAIL, "password": PASSWORD}
 
 
-def test_a_new_account_with_no_verification_email_is_never_signed_in_on_a_guess(page, monkeypatch):
-    """Waystar, 1 October: created, then signed in at once -- refused, and the refusal counts towards a lock.
-    With no verification email to open, no sign-in is tried: the owner is asked to verify, then Continue."""
+def test_a_new_account_with_no_verification_email_is_signed_in_by_the_agent(page, monkeypatch):
+    """Waystar, 1 October: no verification email came, and the run stopped to ask the owner. The owner's rule: the
+    agent gets itself in -- with no verification email the site may not verify new accounts, so it signs in."""
     body = create_page(EMAIL_BOXES["workday"], after_create=SIGN_IN_AFTER_CREATE,
-                       extra=WIRE_SIGN_IN.replace("ON_SIGN_IN", ""))
+                       extra=WIRE_SIGN_IN.replace("ON_SIGN_IN", "document.body.innerHTML = '<h1>Candidate Home</h1>';"))
     serve(page, body)
     a = assistant_for(monkeypatch, WorkdayAdapter())
-    monkeypatch.setattr(a, "verify_account_by_email_link", lambda page: False)     # nothing in the mail
-    assert a.fill_create_account_form(page, EMAIL) is False
-    assert page.evaluate("window.signins") == 0
-    why = login_guard.may_sign_in(HOST, EMAIL)
-    assert why and "verif" in why and "Continue" in why
+    monkeypatch.setattr(a, "verify_account_by_email_link", lambda page, wait_seconds=150: False)
+    assert a.fill_create_account_form(page, EMAIL) is True
+    assert page.evaluate("window.signins") == 1
+
+
+def test_a_refused_sign_in_looks_for_a_late_verification_email_and_signs_in_again(page, monkeypatch):
+    """The verification email can arrive after the first look: the refusal sends the agent back to the mail once."""
+    accept_second = ("if (window.signins >= 2) { document.body.innerHTML = '<h1>Candidate Home</h1>'; } else {"
+                     " document.getElementById('alert').textContent = 'You may have entered the wrong email address"
+                     " or password or your account might be locked.'; }")
+    body = create_page(EMAIL_BOXES["workday"], after_create=SIGN_IN_AFTER_CREATE,
+                       extra=WIRE_SIGN_IN.replace("ON_SIGN_IN", accept_second))
+    serve(page, body)
+    a = assistant_for(monkeypatch, WorkdayAdapter())
+    looks = []
+
+    def verify(page, wait_seconds=150):
+        looks.append(wait_seconds)
+        if len(looks) == 2:
+            login_guard.clear_hold(HOST, EMAIL)        # what opening the link does
+            return True
+        return False
+    monkeypatch.setattr(a, "verify_account_by_email_link", verify)
+    a.fill_create_account_form(page, EMAIL)
+    assert len(looks) == 2 and page.evaluate("window.signins") == 2
