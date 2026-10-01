@@ -458,6 +458,17 @@ did not work shows what the site said.
 
 ## Creating an account
 
+**The order (your rule of 1 October).** On an employer's site the agent always tries to
+create the account first -- also when the page opens on Sign In and offers "Create
+Account", and also when it has a record of an account there. Then:
+1. If the site says the account already exists, it signs in.
+2. If the site wants the account verified, it verifies it -- by the link or the code the
+   site emailed, read from your Gmail -- and then signs in.
+3. If the site took the form and shows neither, it looks for a verification email, then
+   signs in.
+It never resets a password by an emailed link. A code sent by text message (SMS) cannot be
+read yet: the agent has no access to your texts.
+
 On an employer's create-account form the agent ticks two kinds of box and no
 others: a privacy notice, and consent to creating the very account you asked it
 to create ("I agree to creating this account to allow me to apply for positions

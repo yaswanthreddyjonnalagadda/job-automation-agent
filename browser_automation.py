@@ -3553,16 +3553,8 @@ class JobApplicationAssistant:
                 return self.sign_in_to_existing_account(page, email)
             if candidate_state in ("registration", "registration_error"):
                 logger.info("ACCOUNT: Workday Candidate Home is in %s", candidate_state)
-                # An account already exists here and the page offers Sign In:
-                # sign in rather than registering again -- registration cannot
-                # succeed for an email that already has an account.
-                if self._read_ats_password() and self.account_on_record() and self._has_sign_in_affordance(page):
-                    logger.info("ACCOUNT: an account already exists here -- signing in instead of registering")
-                    if self._goto_login_page(page):
-                        return self.attempt_auto_login(page, email, "", scope=self._sign_in_scope(page))
-                    scope = self._sign_in_scope(page)
-                    if scope is not None:
-                        return self.attempt_auto_login(page, email, "", scope=scope)
+                # The owner's order (1 October): create first, whatever the record says; if the account exists
+                # Workday says so, and fill_create_account_form signs in (_account_exists_message).
                 self._create_form_attempted = False
                 # Do not fall back to create_ats_account here: its legacy path
                 # can tick a terms checkbox that requires the candidate.
@@ -3594,8 +3586,6 @@ class JobApplicationAssistant:
             if not self._read_ats_password():
                 return False
             if pw_count >= 2:
-                if self.account_on_record():
-                    return False  # already have one here: two password-type boxes are something else (a passcode step)
                 self._create_form_attempted = False
                 if self.fill_create_account_form(page, email):
                     return True
@@ -4560,7 +4550,7 @@ class JobApplicationAssistant:
         if control is None:
             return False
         employer = getattr(self, "employer", "") or urlparse(page.url).netloc
-        logger.info("ACCOUNT: no %s account on record -- creating one instead of trying to sign in", employer)
+        logger.info("ACCOUNT: creating the %s account first -- if it exists the site will say so", employer)
         # A cookie banner over the link swallowed the click on IGT's page.
         self.dismiss_cookie_banner(page)
         control = self._create_account_control(page) or control
@@ -4732,6 +4722,10 @@ class JobApplicationAssistant:
         self._create_form_attempted = True
         site = urlparse(page.url).netloc.lower()
         held = login_guard.may_create_account(site, email)
+        if held and self.account_on_record() and not login_guard.may_sign_in(site, email):
+            # The day's creations are spent and the account is on record: it exists, so sign in to it.
+            logger.info("ACCOUNT: %s -- the account is on record, signing in to it", held)
+            return self.sign_in_to_existing_account(page, email)
         if held:
             self._login_paused = held
             logger.warning("ACCOUNT_HELD: %s -- leaving it to the user", held)

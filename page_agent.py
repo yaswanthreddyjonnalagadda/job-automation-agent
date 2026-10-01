@@ -1009,6 +1009,16 @@ class PageAgent:
             self._account_waits[host] = waited + 1
             self.settle(page, 3_000)
             return True
+        if step.action == account_state.OPEN_CREATE and email:
+            # The owner's order (1 October): create first, from a sign-in page that offers it; an existing account
+            # is then said so by the site, and the agent signs in (fill_create_account_form).
+            self._created_at.add(host)
+            logger.info("LOGIN: %s on %s", step.why, host)
+            try:
+                return bool(self.assistant.create_account_from_link(tab, email))
+            except Exception as exc:
+                logger.warning("LOGIN: could not open Create Account (%s)", str(exc).splitlines()[0][:100])
+                return False
         if step.action == account_state.OPEN_SIGN_IN:
             logger.info("LOGIN: %s -- opening sign-in instead of making another account", step.why)
             try:

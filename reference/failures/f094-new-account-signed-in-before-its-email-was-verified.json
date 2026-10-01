@@ -11,7 +11,7 @@
     "tests/test_account_email_first.py::test_after_creating_the_account_it_opens_the_verification_link_then_signs_in",
     "tests/test_account_email_first.py::test_a_new_account_with_no_verification_email_is_signed_in_by_the_agent",
     "tests/test_interrupted_account_creation.py::test_a_new_unverified_account_holds_every_sign_in_until_the_owner_looks",
-    "tests/test_interrupted_account_creation.py::test_with_the_account_on_record_the_next_run_signs_in_instead_of_creating",
+    "tests/test_interrupted_account_creation.py::test_with_the_account_on_record_the_next_run_still_creates_first",
     "tests/test_account_email_first.py::test_a_refused_sign_in_looks_for_a_late_verification_email_and_signs_in_again",
     "tests/test_account_email_first.py::test_a_refused_sign_in_opens_the_verification_email_before_any_password_reset",
     "tests/test_interrupted_account_creation.py::test_opening_the_verification_link_lifts_the_refusals_of_the_unverified_account"

@@ -132,8 +132,24 @@ def test_nothing_is_tried_twice_in_one_run():
     assert step(A.EMAIL_FIRST, email_given=True).action == A.NOTHING
 
 
-def test_an_account_known_to_exist_is_signed_in_to_not_created_again():
-    assert step(A.CREATE_FORM, account_exists=True).action == A.OPEN_SIGN_IN
+def test_the_account_is_created_first_whatever_the_record_says():
+    """The owner's order (1 October): create first; an existing account is said so by the site (ACCOUNT_EXISTS), and
+    only then does the agent sign in."""
+    assert step(A.CREATE_FORM, account_exists=True).action == A.CREATE
+    assert step(A.ACCOUNT_EXISTS).action == A.OPEN_SIGN_IN
+
+
+def test_a_sign_in_page_that_offers_create_account_creates_first():
+    page = A.AccountState(A.SIGN_IN_FORM, "Sign In", can_create=True)
+    assert A.next_step(page, A.Memory()).action == A.OPEN_CREATE
+    assert A.next_step(page, A.Memory(created=True)).action == A.SIGN_IN          # created this run: now sign in
+    assert A.next_step(A.AccountState(A.SIGN_IN_FORM, "Sign In"), A.Memory()).action == A.SIGN_IN   # no create offered
+
+
+def test_a_sign_in_page_says_whether_it_offers_create_account():
+    snapshot = ('- heading "Sign In" [level=2] [ref=e1]\n- textbox "Password" [ref=e2]\n'
+                '- button "Create Account" [ref=e3]')
+    assert A.read_state(snapshot).can_create is True
 
 
 def test_a_held_account_is_left_for_the_owner_with_the_reason():

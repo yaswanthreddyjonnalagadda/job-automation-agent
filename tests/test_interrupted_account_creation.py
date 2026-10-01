@@ -43,11 +43,12 @@ def test_a_new_unverified_account_holds_every_sign_in_until_the_owner_looks():
     assert login_guard.may_sign_in(HOST, EMAIL) is None
 
 
-def test_with_the_account_on_record_the_next_run_signs_in_instead_of_creating():
+def test_with_the_account_on_record_the_next_run_still_creates_first():
+    """The owner's order (1 October): create first; the site's 'account exists' message leads to the sign-in."""
     import account_state as a
     form = a.AccountState(a.CREATE_FORM, "Create Account")
-    assert a.next_step(form, a.Memory(account_exists=True)).action == a.OPEN_SIGN_IN
-    assert a.next_step(form, a.Memory()).action == a.CREATE
+    assert a.next_step(form, a.Memory(account_exists=True)).action == a.CREATE
+    assert a.next_step(a.AccountState(a.ACCOUNT_EXISTS, "already exists"), a.Memory()).action == a.OPEN_SIGN_IN
 
 
 def test_opening_the_verification_link_lifts_the_refusals_of_the_unverified_account():

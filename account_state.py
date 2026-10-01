@@ -90,6 +90,7 @@ class AccountState:
     google_offered: bool = False
     password_boxes: int = 0
     form_error: str = ""             # what the site says is wrong with the form it is showing
+    can_create: bool = False         # a sign-in page that also offers 'Create Account'
 
     def __str__(self) -> str:
         return f"{self.kind}" + (f" ({self.why[:80]})" if self.why else "")
@@ -125,8 +126,11 @@ def read_state(snapshot: str, password_boxes: Optional[int] = None) -> AccountSt
     step = _STEP.search(snapshot or "")
     on_account_step = bool(_first(_ACCOUNT_STEP, texts))
 
+    can_create = bool(re.search(r'- (?:button|link) "\s*(?:create (?:an |a new |your )?account|register|sign up)\s*"',
+                                snapshot or "", re.IGNORECASE))
+
     def state(kind, why=""):
-        return AccountState(kind, why, google, passwords, form_error)
+        return AccountState(kind, why, google, passwords, form_error, can_create)
 
     if any(re.fullmatch(r"choose an account", t, re.IGNORECASE) for t in texts):
         # Google's own account picker: part of a Google sign-in already under way, not the employer's page.
@@ -220,6 +224,7 @@ ENTER_CODE = "enter_code"
 VERIFY_BY_LINK = "verify_by_link"    # open the site's account-verification link from the owner's Gmail
 RESET_PASSWORD = "reset_password"    # a known account refused its password: the owner's rule resets it
 OPEN_SIGN_IN = "open_sign_in"        # a create form, but this email already has an account here
+OPEN_CREATE = "open_create"         # a sign-in page that offers 'Create Account': create first (owner, 1 October)
 WAIT = "wait"                        # read the page again: it is still drawing
 FOR_OWNER = "for_owner"              # the owner has to act; `why` says what
 NOTHING = "nothing"                  # not an account page, or done
@@ -302,13 +307,16 @@ def next_step(state: AccountState, memory: Memory) -> Step:
             # The site wants the form finished (a box it points at): that is the form to fill, whatever the
             # record of an account says; login_guard still limits the tries.
             return Step(CREATE, f"the form says: {state.form_error}")
-        if memory.account_exists:
-            return Step(OPEN_SIGN_IN, "an account already exists for this email here")
+        # The owner's order (1 October): create the account first; if it already exists the site says so
+        # (ACCOUNT_EXISTS) and the agent signs in. A record of the account is not a reason to skip creating:
+        # the site's own message is the evidence.
         if memory.created:
             return Step(FOR_OWNER, "the new-account form is still showing after the account was created: "
                                    "look at the page, then press Continue")
         return Step(CREATE, "no account here yet")
     if kind == SIGN_IN_FORM:
+        if state.can_create and not memory.created and not memory.signed_in_tried:
+            return Step(OPEN_CREATE, "create the account first; if it exists the site will say so")
         if memory.signed_in_tried:
             return Step(FOR_OWNER, "signing in did not get past the sign-in form: look at the page, then Continue")
         return Step(SIGN_IN)
