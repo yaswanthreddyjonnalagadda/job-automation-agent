@@ -51,6 +51,7 @@ from jd_analyzer import build_job_description, dedup_key_for_url
 import ai_choice
 import answer_bank
 import checkpoint
+import run_metrics
 import evidence as capture        # `evidence` is a local name in this module's functions
 import safety
 from safety import STATUS_DISQUALIFIED_POLICY_MISMATCH
@@ -808,6 +809,7 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
                              payload=decision.as_dict())
 
     status, message = safety.handover_status(report)
+    run_metrics.outcome("review")
     if decision.eligible:
         submitted = submit_verified(assistant, page, tracker, key, job, job_dir, decision)
         if submitted:
@@ -946,6 +948,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             return
         if outcome.kind == "no_sponsorship":
             tracker.update_status(key, STATUS_SKIPPED, notes=f"Skipped: no visa sponsorship -- {outcome.summary}")
+            run_metrics.outcome("skipped")
             logger.warning("SKIPPED: %s at %s does not sponsor visas -- %r", job.title, job.company, outcome.summary)
             return
 
@@ -980,12 +983,14 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 status, note = safety.verification_status(evidence)
                 tracker.update_status(key, status, notes=note)
                 logger.info("SUBMITTED_BY_USER: %s", note)
+                run_metrics.outcome("submitted")
                 return
             if decision in RUN_ENDS:
                 remember_progress(tracker, key, page, f"run ended: {decision}")
                 return
             if decision in ("skip", "decline", "abort", "quit"):
                 tracker.update_status(key, STATUS_SKIPPED, notes="Skipped by you")
+                run_metrics.outcome("skipped")
                 return
             if decision == "reload_code":
                 # Resume: a new run carries on from this page with the latest code. Code is never swapped into a
@@ -999,6 +1004,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
         banner = "=" * 78
         logger.info(banner)
         logger.info("NEEDS YOU -- %s at %s", job.title, job.company)
+        run_metrics.owner_stop(outcome.summary)
         for reason in outcome.reasons:
             logger.info("  %s", reason)
         for note in agent.notes[:5]:
@@ -1035,12 +1041,14 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             status, note = safety.verification_status(evidence)
             tracker.update_status(key, status, notes=note)
             logger.info("SUBMITTED_BY_USER: %s", note)
+            run_metrics.outcome("submitted")
             return
         if decision in RUN_ENDS:
             remember_progress(tracker, key, page, f"run ended: {decision}")
             return
         if decision in ("skip", "decline", "abort", "quit"):
             tracker.update_status(key, STATUS_SKIPPED, notes="Skipped by you")
+            run_metrics.outcome("skipped")
             return
         if decision == "reload_code":
             end_for_resume(tracker, key, page)
@@ -1093,6 +1101,8 @@ def submit_verified(assistant, page, tracker, key, job, job_dir: Path, decision)
     if status == STATUS_SUBMITTED:
         delete_screenshots(job_dir)
     logger.info("AUTO_SUBMIT result: %s -- %s", status, note)
+    if status == STATUS_SUBMITTED:
+        run_metrics.outcome("submitted")
     return status == STATUS_SUBMITTED
 
 
@@ -1168,6 +1178,7 @@ def confirmed_after_all(agent, page, tracker, key: str) -> bool:
         status, note = safety.verification_status("the page confirmed it: " + said[:200])
         tracker.update_status(key, status, notes=note)
         logger.info("SUBMITTED_BY_USER: the page confirmed the application when the run stopped")
+        run_metrics.outcome("submitted")
         return True
     except Exception as exc:
         logger.debug("Could not check for a confirmation after the error: %s", exc)
@@ -1222,6 +1233,7 @@ def main() -> None:
     tracker = open_tracker(config)
     refresh_answer_bank(tracker)
     key = dedup_key_for_url(job.url)
+    run_metrics.start(key, job.url, checkpoint.code_version(), resumed=bool(getattr(args, "open_url", "")))
     # Postgres upserts, so a re-run corrects a title/company that an earlier,
     # worse read of the posting recorded (status is never changed there). The
     # SQLite fallback has no upsert and would raise on a duplicate.
@@ -1299,6 +1311,8 @@ def main() -> None:
                 # and pressing it again could send the application twice. The owner checks first.
                 message = checkpoint.what_to_check(pending, job)
                 logger.warning("OUTCOME UNKNOWN: %s", message)
+                run_metrics.unknown_outcome()
+                run_metrics.owner_stop("outcome unknown: an earlier Submit was not seen through")
                 tracker.update_status(key, STATUS_NEEDS_USER_REVIEW, notes=message[:1000])
                 save_stop_page(page, job_dir)
                 try:
@@ -1312,6 +1326,7 @@ def main() -> None:
             reopened = checkpoint.reconcile(key, page, assistant.on_job_description) if resume_at else None
             if reopened is not None:
                 logger.info("RESUME CHECK: %s -- %s", reopened.verdict, reopened.why)
+                run_metrics.resume(reopened.verdict)
             if reopened is not None and not reopened.is_the_application:
                 # KBI's last page was recorded as the careers home (/en-US/KBI_Biopharma/): no form, no
                 # posting, nothing to read, and the run stopped there. Judged by the page and the
@@ -1576,6 +1591,7 @@ def main() -> None:
                 tracker.update_status(key, status, notes=note)
                 remember_progress(tracker, key, page, "submitted by the user")
                 logger.info("SUBMITTED_BY_USER: confirmation seen on %s", page.url)
+                run_metrics.outcome("submitted")
                 return
 
             if decision in RUN_ENDS:
@@ -1636,6 +1652,7 @@ def main() -> None:
 
             if decision in ("skip", "decline", "abort", "quit"):
                 tracker.update_status(key, STATUS_SKIPPED, notes=f"User declined at chat review, step {step}")
+                run_metrics.outcome("skipped")
                 logger.info("DECLINED")
                 return
 

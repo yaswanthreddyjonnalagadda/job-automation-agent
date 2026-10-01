@@ -320,14 +320,21 @@ class GeminiDocumentClient(GeminiClient):
 
     def _call(self, *, system: str, user_message: str, max_tokens: int = 2000) -> str:
         """Single-attempt call -- fails fast so the provider fallback loop moves on."""
+        import run_metrics
+        began = time.time()
         try:
-            response = self._client.messages.create(
-                model=self._model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": user_message}],
-                timeout=self._config.claude_request_timeout,
-            )
+            try:
+                response = self._client.messages.create(
+                    model=self._model,
+                    max_tokens=max_tokens,
+                    system=system,
+                    messages=[{"role": "user", "content": user_message}],
+                    timeout=self._config.claude_request_timeout,
+                )
+            except Exception:
+                run_metrics.ai_call("Gemini", time.time() - began, False)
+                raise
+            run_metrics.ai_call("Gemini", time.time() - began, True)
             return "".join(block.text for block in response.content if block.type == "text")
         except (self.RATE_LIMITED, self.CONNECTION_ERROR, self.TIMEOUT_ERROR) as exc:
             raise ClaudeIntegrationError(

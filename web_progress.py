@@ -4,6 +4,7 @@ from __future__ import annotations
 from flask import Blueprint, render_template_string
 
 import progress
+import run_metrics
 import ui_shell
 
 progress_pages = Blueprint("progress_pages", __name__)
@@ -23,7 +24,7 @@ def progress_page():
                         reached.add(record.dedup_key)
                 except Exception:
                     continue
-    return render_template_string(PROGRESS_HTML, f=progress.funnel(records, reached))
+    return render_template_string(PROGRESS_HTML, f=progress.funnel(records, reached), m=run_metrics.summary())
 
 
 PROGRESS_HTML = ui_shell.page("Progress", """
@@ -71,6 +72,42 @@ PROGRESS_HTML = ui_shell.page("Progress", """
         </table>
       </div>
     </div>
+  </div>
+
+  <h2>How each run went</h2>
+  <p class="sub">Counted run by run since 1 October: a run that reached Review without stopping for you is the agent doing
+    the work. Shown by job site and by agent version, so a change that makes things worse shows up.</p>
+  <div class="funnel">
+    <div class="stat tone-info"><b>{{ m.all.runs }}</b><span>Runs</span></div>
+    <div class="stat tone-ok"><b>{{ m.all.rate_without_you }}</b><span>Reached Review without you</span><small>{{ m.all.without_you }} of {{ m.all.runs }}</small></div>
+    <div class="stat tone-info"><b>{{ m.all.stops_per_run }}</b><span>Stops for you per run</span></div>
+    <div class="stat tone-info"><b>{{ m.all.minutes_per_run }}</b><span>Minutes per run</span><small>{{ m.all.ai_calls_per_run }} AI calls ({{ m.all.ai_failure_rate }} failed)</small></div>
+    <div class="stat tone-violet"><b>{{ m.all.unknown_outcomes }}</b><span>Unknown outcomes</span><small>{{ m.all.resumes_on_the_application }} of {{ m.all.resumes }} resumes found the application</small></div>
+  </div>
+  <div class="grid-2">
+    {% for title, groups in (("By job site", m.by_site), ("By agent version", m.by_code)) %}
+    <div>
+      <h2>{{ title }}</h2>
+      <div class="card flush">
+        <table>
+          <thead><tr><th></th><th class="num">Runs</th><th class="num">Review</th><th class="num">Without you</th><th class="num">Stops</th><th class="num">Min</th></tr></thead>
+          {% for name, g in groups.items() %}
+          <tr><td>{{ name }}</td><td class="num">{{ g.runs }}</td><td class="num">{{ g.rate_review }}</td>
+              <td class="num">{{ g.rate_without_you }}</td><td class="num">{{ g.stops_per_run }}</td><td class="num">{{ g.minutes_per_run }}</td></tr>
+          {% else %}<tr><td colspan="6" class="muted">No runs counted yet.</td></tr>
+          {% endfor %}
+        </table>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <h2>Why runs stopped for you</h2>
+  <div class="card flush">
+    <table>
+      <thead><tr><th>Reason</th><th class="num">Times</th></tr></thead>
+      {% for reason, n in m.stop_reasons %}<tr><td>{{ reason }}</td><td class="num">{{ n }}</td></tr>
+      {% else %}<tr><td colspan="2" class="muted">None yet.</td></tr>{% endfor %}
+    </table>
   </div>
 </main>
 """)

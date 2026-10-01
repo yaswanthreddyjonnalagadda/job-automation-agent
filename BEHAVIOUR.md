@@ -853,6 +853,13 @@ most common reasons runs stopped before Review. After you submit, set what happe
 on the application's page (**Interviewing**, **Rejected** or **Offer**) and the last
 steps fill in. It reads only what the tracker already keeps.
 
+Below that, **How each run went** counts runs (from 1 October): how many reached Review
+without stopping for you, how often each stopped for you and why, minutes and AI calls
+per run (and how many AI calls failed), how many resumes found the application again,
+and any unknown outcomes -- overall, by job site and by agent version, so a change that
+makes the agent worse shows up in its own row. Each run writes one line to
+`data/run_metrics.jsonl` on your computer; `python run_metrics.py` prints the same summary.
+
 ## Statuses
 
 `prepared` → `form_filled` → `ready_to_submit` → `submitted`,

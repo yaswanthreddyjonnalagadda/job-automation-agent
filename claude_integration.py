@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import logging
+import run_metrics
 import time
 from typing import Any
 
@@ -79,13 +80,19 @@ class ClaudeClient:
         max_retries = getattr(self._config, "claude_max_retries", 3)
         for attempt in range(1, max_retries + 1):
             try:
-                response = self._client.messages.create(
-                    model=self._model,
-                    max_tokens=max_tokens,
-                    system=system,
-                    messages=[{"role": "user", "content": user_message}],
-                    timeout=self._config.claude_request_timeout,
-                )
+                began = time.time()
+                try:
+                    response = self._client.messages.create(
+                        model=self._model,
+                        max_tokens=max_tokens,
+                        system=system,
+                        messages=[{"role": "user", "content": user_message}],
+                        timeout=self._config.claude_request_timeout,
+                    )
+                except Exception:
+                    run_metrics.ai_call(self.PROVIDER, time.time() - began, False)
+                    raise
+                run_metrics.ai_call(self.PROVIDER, time.time() - began, True)
                 return "".join(
                     block.text for block in response.content if block.type == "text"
                 )
