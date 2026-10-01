@@ -50,30 +50,16 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
+            constraints.txt
 
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
+          pip install -r requirements.txt -r requirements-dev.txt -c constraints.txt
           python -m playwright install --with-deps chromium
 
-      # Some tests still read the owner's real profile (RFC-001, M2 replaces
-      # them with synthetic fixtures). It comes from a repository secret --
-      # Settings -> Secrets and variables -> Actions -> PROFILE_JSON, the
-      # contents of data/profile.json -- and is never written to the log.
-      # Without the secret (or on a fork's pull request, which never gets
-      # one) those tests are skipped by tests/conftest.py and every other
-      # test still runs; -rs below lists what was skipped.
-      - name: Profile for the tests
-        env:
-          PROFILE_JSON: ${{ secrets.PROFILE_JSON }}
-        run: |
-          if [ -z "$PROFILE_JSON" ]; then
-            echo "::warning title=PROFILE_JSON is not set::Tests that need the owner's real profile are skipped. Add the repository secret PROFILE_JSON (the contents of data/profile.json) to run them."
-            exit 0
-          fi
-          printf '%s' "$PROFILE_JSON" > "$RUNNER_TEMP/profile.json"
-          echo "PROFILE_PATH=$RUNNER_TEMP/profile.json" >> "$GITHUB_ENV"
+      # Every test reads the made-up applicant in tests/fixtures/profile.synthetic.json (tests/conftest.py):
+      # the owner's profile is not needed here and is never sent to CI.
 
       - name: Place data matches its source
         run: python reference/build_geo.py --check

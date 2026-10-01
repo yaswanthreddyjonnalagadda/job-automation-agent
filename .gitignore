@@ -45,3 +45,7 @@ runs/
 data/*.log
 # Backups of the owner's own records.
 data/*.backup*.json
+
+# Local records the agent keeps (review, 1 October): never committed
+data/checkpoints/
+data/run_metrics.jsonl
