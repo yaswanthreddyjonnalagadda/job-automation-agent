@@ -5110,8 +5110,16 @@ class PageAgent:
                 note = f"{question[:80]}: the page says {said!r}, your profile says {str(mismatch.get('facts_say') or '')[:60]!r}"
                 if note not in self.notes:
                     self.notes.append(note)
+        try:
+            optional_account = bool(account_state._OPTIONAL_ACCOUNT.search(self.snapshot(page) or ""))
+        except Exception:
+            optional_account = False
         for item in plan.for_owner:
             question = str(item.get("question") or "")
+            if optional_account and re.search(r"pass ?word|pass ?code|one[- ]time code", question, re.IGNORECASE):
+                # The password of an account the page calls optional stays empty: it is not the owner's to answer
+                # either (Meta, 30 September: "needs your answer: Password" stopped a finished application).
+                continue
             required = bool(item.get("required")) or "*" in question
             still_blank = not any(c.question == question and c.answer for c in controls)
             if required and still_blank:
