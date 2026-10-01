@@ -154,9 +154,15 @@ def read_state(snapshot: str, password_boxes: Optional[int] = None) -> AccountSt
     # (optional)" below Meta's Resume upload and Self ID; "the system will create your account after you submit"):
     # the page is the application, not an account step. Read as a new-account form, Meta's run tried to make the
     # account, then stopped for the owner twice, "the new-account form is still showing" (30 September).
-    optional = _OPTIONAL_ACCOUNT.search(snapshot or "")
-    if passwords and optional:
-        return state(NONE, optional.group(0).split(":")[-1].strip()[:80])
+    # Decided per box, by the section each sits in (field_requirements): only when every secret box on the page
+    # is inside an optional section is the page the application. A required sign-in elsewhere on the same page
+    # still makes it an account step -- a heading anywhere used to let every password on the page off.
+    if passwords and _OPTIONAL_ACCOUNT.search(snapshot or ""):
+        import field_requirements
+        optional_section = field_requirements.optional_section_of(snapshot)
+        if optional_section:
+            return state(NONE, optional_section[:80])
+        passwords = field_requirements.secret_boxes_in_use(snapshot) or passwords
     if passwords >= 2:
         return state(CREATE_FORM, _first(_CREATE, texts))
     headings = [_unescape(h) for h in re.findall(r'- heading "((?:[^"\\]|\\.)*)"', snapshot or "")]

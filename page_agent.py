@@ -44,6 +44,7 @@ import concept_matcher
 import emailed_codes
 import geo_reference
 import account_state
+import field_requirements
 import job_sources
 import answer_bank
 from claude_integration import JOB_POSTING_CHARS, is_non_answer
@@ -5111,18 +5112,21 @@ class PageAgent:
                 if note not in self.notes:
                     self.notes.append(note)
         try:
-            optional_account = bool(account_state._OPTIONAL_ACCOUNT.search(self.snapshot(page) or ""))
+            snapshot = self.snapshot(page) or ""
         except Exception:
-            optional_account = False
+            snapshot = ""
         for item in plan.for_owner:
             question = str(item.get("question") or "")
-            if optional_account and re.search(r"pass ?word|pass ?code|one[- ]time code", question, re.IGNORECASE):
-                # The password of an account the page calls optional stays empty: it is not the owner's to answer
-                # either (Meta, 30 September: "needs your answer: Password" stopped a finished application).
-                continue
-            required = bool(item.get("required")) or "*" in question
+            # Whether this field needs the owner is the field's own requirement (its section, its label, the
+            # planner's word), decided in field_requirements. A password in an optional account section stays
+            # empty (Meta, 30 September); a required one elsewhere on the same page still stops the run.
+            req = field_requirements.requirement_for(snapshot, question, str(item.get("ref") or ""),
+                                                     bool(item.get("required")))
             still_blank = not any(c.question == question and c.answer for c in controls)
-            if required and still_blank:
+            if req.status in (field_requirements.OPTIONAL, field_requirements.CONDITIONAL):
+                logger.info("NOT NEEDED: %s -- %s", question[:70], req.evidence)
+                continue
+            if field_requirements.needs_owner(req, not still_blank):
                 note = f"needs your answer: {question[:90]} ({item.get('reason', '')})"
                 self.record_unanswered(question, str(item.get("reason", "")), controls)
                 if about_to_send:

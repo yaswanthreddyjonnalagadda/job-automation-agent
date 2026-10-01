@@ -411,6 +411,14 @@ account (optional)" at the foot of Meta's form) is part of the application, not 
 step: the agent does not make that account, leaves its password boxes empty, and goes on
 with the form (Meta, 30 September).
 
+This is decided box by box, by the section each box sits in -- not by the page. A password
+or code box in a different section of the same page that is required (a sign-in, an
+emailed code) still counts, and still stops the run if it cannot be filled. The same
+holds for every question: a blank one stops the run only when the question itself is
+marked required (or the page planner says it is) and no optional section holds it. Each
+field the agent leaves because it is not needed is written in the run's log as
+"NOT NEEDED", with the reason.
+
 Before it does anything on an account page, the agent reads which step the page is
 at: a new-account form, a sign-in form, a sign-in that asks for the email first, a
 choice of ways in, a page still loading, a box for an emailed code, a message saying
