@@ -6303,7 +6303,7 @@ class JobApplicationAssistant:
         return f"https://mail.google.com/mail/u/?authuser={quote(email)}#search/{query}"
 
     def verification_link_from_gmail(self, page: Page, wait_seconds: int = 150) -> str:
-        """The newest account-verification link (last hour) the site at `page` emailed the owner, read from the Gmail
+        """The newest account-verification link (last 3 days) the site at `page` emailed the owner, read from the Gmail
         this browser is signed in to, in a separate tab; "" when there is none or the owner's rule does not allow it.
 
         Asked through emailed_codes.why_not (the owner's permission to read mail, an employer site, no CAPTCHA, the
@@ -6318,7 +6318,7 @@ class JobApplicationAssistant:
         try:
             deadline = time.time() + wait_seconds
             while time.time() < deadline:
-                query = quote("newer_than:1h (verify OR verification OR activate OR confirm)")
+                query = quote("newer_than:3d (verify OR verification OR activate OR confirm)")  # an account made earlier today too
                 tab.goto(self._gmail_search_url(query), wait_until="domcontentloaded",
                          timeout=45_000)
                 try:
@@ -6618,6 +6618,17 @@ class JobApplicationAssistant:
         if safety.captcha_visible(page):
             logger.warning("RECOVERY: a CAPTCHA is showing on %s -- only you can complete it", domain)
             return False
+        # A site refuses an account whose email is not verified yet with the same words as a wrong password
+        # ("wrong email address or password or your account might be locked"). The verification email comes
+        # first: opened from the applying address's Gmail, it is the cheaper and likelier fix, and it spends no
+        # password reset (Waystar, 1 October: the account made that morning had never been verified).
+        logger.info("RECOVERY: %s refused the sign-in -- looking first for the account's verification email",
+                    domain)
+        if self.verify_account_by_email_link(page, wait_seconds=60):
+            self._login_paused = ""
+            if self._open_sign_in(page) and self.attempt_auto_login(
+                    page, email, password, scope=self._sign_in_scope(page), create_if_missing=False):
+                return True
         logger.info("RECOVERY: %s knows the account but refused the password -- resetting it to the same "
                     "ATS password with the code emailed to you", domain)
         return self._reset_password_with_emailed_code(page, email, password)

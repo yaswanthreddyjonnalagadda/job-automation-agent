@@ -218,3 +218,18 @@ def test_a_refused_sign_in_looks_for_a_late_verification_email_and_signs_in_agai
     monkeypatch.setattr(a, "verify_account_by_email_link", verify)
     a.fill_create_account_form(page, EMAIL)
     assert len(looks) == 2 and page.evaluate("window.signins") == 2
+
+
+def test_a_refused_sign_in_opens_the_verification_email_before_any_password_reset(page, monkeypatch):
+    """Waystar, 1 October: the account made that morning was refused at sign-in; the agent went straight to a
+    password reset (which Workday does by link, so it stopped for the owner). An unverified account is refused in
+    the same words as a wrong password: the verification email is looked for first."""
+    serve(page, sign_in_page(EMAIL_BOXES["workday"]))
+    a = assistant_for(monkeypatch, WorkdayAdapter())
+    steps = []
+    monkeypatch.setattr(a, "verify_account_by_email_link", lambda page, wait_seconds=150: steps.append("verify") or True)
+    monkeypatch.setattr(a, "_open_sign_in", lambda page: True)
+    monkeypatch.setattr(a, "attempt_auto_login", lambda *args, **kw: steps.append("sign in") or True)
+    monkeypatch.setattr(a, "_reset_password_with_emailed_code", lambda *args: steps.append("reset") or False)
+    assert a.recover_rejected_sign_in(page, EMAIL) is True
+    assert steps == ["verify", "sign in"]

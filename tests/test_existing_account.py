@@ -131,6 +131,9 @@ def agent(monkeypatch):
         return a.codes.pop(0) if a.codes else ""
 
     a.passcode_from_gmail = gmail
+    # A refused sign-in looks for the verification email first (Waystar, 1 October); these accounts are verified,
+    # so there is none, and the reset these tests are about follows.
+    a.verify_account_by_email_link = lambda page, wait_seconds=150: False
     monkeypatch.setattr(JobApplicationAssistant, "_read_ats_password", staticmethod(lambda: ATS_PASSWORD))
     return a
 

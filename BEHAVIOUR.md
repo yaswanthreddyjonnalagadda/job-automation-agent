@@ -490,7 +490,9 @@ email came, the site may not verify new accounts, so it signs in anyway. If that
 refused, it looks for a late verification email once more, opens its link and signs in again;
 only if all of that fails does it stop for you. Gmail is always opened for the address the agent
 applies with -- the agent's browser is signed in to two Google accounts, and the first one is not
-necessarily that address. If the site emails a one-time code at sign-in, the agent reads it under
+necessarily that address. When a sign-in to an account it already has is refused, it first looks for
+that site's verification email from the last 3 days and opens it -- an unverified account is refused
+in the same words as a wrong password -- before it thinks of resetting the password. If the site emails a one-time code at sign-in, the agent reads it under
 the rules in "When a one-time code may be read from your mail".
 
 ## Signing in without locking your accounts
