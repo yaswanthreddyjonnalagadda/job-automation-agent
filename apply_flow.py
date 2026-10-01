@@ -993,6 +993,10 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             if decision in ("skip", "decline", "abort", "quit"):
                 tracker.update_status(key, STATUS_SKIPPED, notes="Skipped by you")
                 return
+            if decision == "reload_code":
+                # Resume at the review stop loads the latest code too; it was taken for Continue, and the page was
+                # read again with the code the run started with (Meta, 30 September).
+                assistant = load_latest_code(agent, assistant, job, experience_data)
             continue
 
         message = outcome.summary + (f" | worth checking: {notes}" if notes else "")
@@ -1044,40 +1048,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             tracker.update_status(key, STATUS_SKIPPED, notes="Skipped by you")
             return
         if decision == "reload_code":
-            assistant = reload_browser_automation(assistant)
-            importlib.reload(page_agent)
-            agent.__class__ = page_agent.PageAgent
-            agent.assistant = assistant
-            # The resume bookkeeping above ran on the old code: run the new code's
-            # (a loop guard that had tripped is re-armed, new state starts empty).
-            agent._ensure_state()
-            agent.forget_sign_in_attempts(owner_acted=False)
-            # The profile, application settings and Claude's instructions too:
-            # a corrected name or new authorization must reach the live run.
-            try:
-                agent.config = config_module.get_app_config()
-                agent.profile = config_module.get_user_profile()
-                assistant._profile = agent.profile
-                import repeated_entries
-                agent.history = repeated_entries.with_profile(experience_data, agent.profile)
-            except Exception as exc:
-                logger.warning("Could not reload the profile or settings: %s", exc)
-            try:
-                import claude_integration
-                importlib.reload(claude_integration)
-                if agent.claude.__class__.__name__ == "ClaudeClient":
-                    agent.claude.__class__ = claude_integration.ClaudeClient
-            except Exception as exc:
-                logger.warning("Could not reload the Claude instructions: %s", exc)
-            try:
-                # A run started on the API can be moved onto the session brain
-                # (or back) without restarting, keeping the form as it stands.
-                import session_planner
-                importlib.reload(session_planner)
-                agent.claude = rechoose_brain(agent.claude, config_module.get_app_config(), job)
-            except Exception as exc:
-                logger.warning("Could not switch the brain over: %s", exc)
-            logger.info("Reloaded the reading agent, your profile and the instructions")
+            assistant = load_latest_code(agent, assistant, job, experience_data)
         elif decision == "fill_experience":
             # The reading agent normally handles ordinary profile fields.
             # Workday's repeated employment/education widget needs the
@@ -1231,6 +1202,47 @@ def project_modules_used_by(*modules) -> list:
     for module in modules:
         visit(module)
     return [m for m in order if m.__name__ not in _RELOADED_ON_THEIR_OWN]
+
+
+def load_latest_code(agent, assistant, job, experience_data):
+    """Resume on a waiting run: the agent's latest code, the owner's latest profile and settings, the same form.
+    Every stop where the run waits calls this one routine (the review stop once treated Resume as Continue)."""
+    import page_agent
+    assistant = reload_browser_automation(assistant)
+    importlib.reload(page_agent)
+    agent.__class__ = page_agent.PageAgent
+    agent.assistant = assistant
+    # The resume bookkeeping above ran on the old code: run the new code's
+    # (a loop guard that had tripped is re-armed, new state starts empty).
+    agent._ensure_state()
+    agent.forget_sign_in_attempts(owner_acted=False)
+    # The profile, application settings and Claude's instructions too:
+    # a corrected name or new authorization must reach the live run.
+    try:
+        agent.config = config_module.get_app_config()
+        agent.profile = config_module.get_user_profile()
+        assistant._profile = agent.profile
+        import repeated_entries
+        agent.history = repeated_entries.with_profile(experience_data, agent.profile)
+    except Exception as exc:
+        logger.warning("Could not reload the profile or settings: %s", exc)
+    try:
+        import claude_integration
+        importlib.reload(claude_integration)
+        if agent.claude.__class__.__name__ == "ClaudeClient":
+            agent.claude.__class__ = claude_integration.ClaudeClient
+    except Exception as exc:
+        logger.warning("Could not reload the Claude instructions: %s", exc)
+    try:
+        # A run started on the API can be moved onto the session brain
+        # (or back) without restarting, keeping the form as it stands.
+        import session_planner
+        importlib.reload(session_planner)
+        agent.claude = rechoose_brain(agent.claude, config_module.get_app_config(), job)
+    except Exception as exc:
+        logger.warning("Could not switch the brain over: %s", exc)
+    logger.info("Reloaded the reading agent, your profile and the instructions")
+    return assistant
 
 
 def reload_browser_automation(assistant: JobApplicationAssistant) -> JobApplicationAssistant:
