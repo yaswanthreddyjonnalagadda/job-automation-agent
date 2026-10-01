@@ -519,6 +519,18 @@ is not typed again. A phone box that holds only its country's dial code ("+1")
 is still empty, and is filled. That dial-code picker is never "corrected" to your
 country: a "+1" is the prefix your number takes, not where you live.
 
+## Which locations you would like
+
+When a form asks which of its locations you would like to work or apply in ("Please
+select one or more locations where you'd like to apply."), your decision of 30 September
+2026 applies: a place in your state (Virginia, from your profile) first; after that,
+anywhere is fine. A tick-all-that-apply list gets your state's places and, because your
+profile is open to relocation, every other place too. A pick-one list or row of buttons
+gets the first place in your state, or, if none is offered, the first place listed. The
+rule reads your profile (state, preferred locations, open to relocation) -- change those
+and it follows. A question about where you live now, or whether you would relocate, is not
+this question; and a question you or the site already answered is left alone.
+
 ## An upload button that opens a menu
 
 Some sites' upload buttons open a menu of sources instead of a file window (Jobvite:

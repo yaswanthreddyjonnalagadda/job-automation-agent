@@ -49,6 +49,7 @@ import answer_bank
 from claude_integration import JOB_POSTING_CHARS, is_non_answer
 import employment_history
 import form_fields
+import location_choice
 import option_match
 import repeated_entries
 import login_guard
@@ -2683,6 +2684,11 @@ class PageAgent:
                 still_open = [q for q in still_open
                               if not any(_same_question(c.question, q) and c.answer for c in controls)]
                 self._commit_learned_memory(controls)
+            # "Select one or more locations where you'd like to apply": the owner's rule (location_choice.py).
+            if self.answer_location_choices(page, controls):
+                self.settle(page, 600)
+                snapshot = self.read_when_loaded(page)
+                controls = parse_snapshot(snapshot)
             # Fields the accessibility snapshot does not show as questions -- a hidden resume input, a list drawn as a
             # button -- found by what they are (form_fields.py).
             if self.inventory_pass(page):
@@ -4123,6 +4129,56 @@ class PageAgent:
         found = [f for f in fields if f.kind in ("combobox", "select", "button_list") and f.visible and not f.trap
                  and _same_question(f.question or f.label, control.question)]
         return found[0] if len(found) == 1 else None
+
+    def answer_location_choices(self, page, controls: list[Control]) -> int:
+        """Answers a question asking which of its places the owner would like to work or apply in, by the owner's
+        rule (location_choice.py): tick boxes take the owner's own state's places and, open to relocation, the rest;
+        a pick-one list or radio row takes the owner's state's place first. Only a question nothing has answered yet
+        -- never one the owner or the site already answered. Returns how many questions were answered."""
+        answered = 0
+        groups: dict[tuple[str, str], list[Control]] = {}
+        for c in controls:
+            # The question over a row of boxes: their group, or the fieldset they sit in.
+            asked = c.group or c.container
+            if c.role in ("checkbox", "radio") and asked and not c.disabled:
+                groups.setdefault((c.role, asked), []).append(c)
+        for (role, question), boxes in groups.items():
+            if len(boxes) < 2 or any(b.checked for b in boxes):
+                continue
+            picks = location_choice.choices(question, [b.name for b in boxes], self.profile, several=role == "checkbox")
+            if not picks:
+                continue
+            done = []
+            for k in picks:
+                try:
+                    target = self.locate(page, boxes[k].ref)
+                    try:
+                        target.set_checked(True, timeout=5_000)
+                    except Exception:
+                        target.click(timeout=5_000)
+                    done.append(boxes[k].name)
+                except Exception as exc:
+                    logger.info("Could not tick %r: %s", boxes[k].name, str(exc).splitlines()[0][:100])
+            if done:
+                answered += 1
+                self.written[question] = "; ".join(done)
+                logger.info("KNEW: %s = %s (your state first%s)", question[:50], "; ".join(done)[:120],
+                            ", then anywhere -- open to relocation" if len(done) > 1 else "")
+        for c in controls:
+            if c.role not in ("combobox", "listbox") or c.disabled or c.answer or len(c.options) < 2:
+                continue
+            picks = location_choice.choices(c.question, list(c.options), self.profile, several=False)
+            if not picks:
+                continue
+            answer = Answer(c.ref, c.question, "choose", c.options[picks[0]], "profile.locations")
+            try:
+                if self.do(page, answer, c):
+                    answered += 1
+                    self.written[c.question] = answer.value
+                    logger.info("KNEW: %s = %r (your state first)", c.question[:50], answer.value)
+            except Exception as exc:
+                logger.info("Could not choose %r: %s", answer.value, str(exc).splitlines()[0][:100])
+        return answered
 
     def _tick_several(self, page, boxes: list[Control], value: str) -> bool:
         """Ticks the boxes a "select any that apply" answer names: the whole answer when it is one of them, else each
