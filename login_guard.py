@@ -169,6 +169,19 @@ def record_account_attempt(host: str, email: str) -> None:
     _save(data)
 
 
+def account_verified(host: str, email: str) -> None:
+    """The site's verification link was opened: the refusals before it were for an unverified account, not a wrong
+    password, so they no longer hold the next sign-in back (Waystar, 1 October: two refusals of a new, unverified
+    account blocked every sign-in for a day)."""
+    data = _load()
+    entry = _entry(data, host, email)
+    entry.pop("failed_sign_ins", None)
+    entry.pop("hold", None)
+    entry.pop("hold_reason", None)
+    data[_key(host, email)] = entry
+    _save(data)
+
+
 def hold_for_verification(host: str, email: str) -> None:
     """An account was just made here and is not shown signed in: the site may want its email verified first. No
     sign-in is tried until the owner has looked (Continue) -- a sign-in to an unverified account is refused and

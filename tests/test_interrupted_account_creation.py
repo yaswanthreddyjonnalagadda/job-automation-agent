@@ -48,3 +48,11 @@ def test_with_the_account_on_record_the_next_run_signs_in_instead_of_creating():
     form = a.AccountState(a.CREATE_FORM, "Create Account")
     assert a.next_step(form, a.Memory(account_exists=True)).action == a.OPEN_SIGN_IN
     assert a.next_step(form, a.Memory()).action == a.CREATE
+
+
+def test_opening_the_verification_link_lifts_the_refusals_of_the_unverified_account():
+    for _ in range(login_guard.MAX_FAILED_SIGN_INS):
+        login_guard.record_sign_in(HOST, EMAIL, ok=False)
+    assert login_guard.may_sign_in(HOST, EMAIL)                 # held for a day
+    login_guard.account_verified(HOST, EMAIL)
+    assert login_guard.may_sign_in(HOST, EMAIL) is None

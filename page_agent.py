@@ -1040,8 +1040,25 @@ class PageAgent:
                 if account_state.next_step(refused, known).action == account_state.RESET_PASSWORD \
                         and self._reset_refused_password(tab, host, email):
                     return True
-            # Held back on purpose (login_guard): the owner is told why, and what to do.
+            # Held back on purpose (login_guard) for an account on record: before the owner is asked, the agent tries
+            # the one thing that needs no sign-in -- the site's verification email. Refusals of an unverified account
+            # are what held it (Waystar, 1 October); opening the link lifts them (login_guard.account_verified), and
+            # the sign-in is tried once more.
             reason = str(getattr(self.assistant, "_login_paused", "") or "")
+            if reason and not making_account and host not in self._verify_asked and \
+                    (memory.account_exists or host in self._account_known) and \
+                    login_guard.may_sign_in(host, email) and hasattr(self.assistant, "verify_account_by_email_link"):
+                self._verify_asked.add(host)
+                logger.info("LOGIN: sign-in is held on %s -- opening the account's verification email first", host)
+                if self.assistant.verify_account_by_email_link(tab, wait_seconds=60) and \
+                        login_guard.may_sign_in(host, email) is None:
+                    self.assistant._login_paused = ""
+                    try:
+                        if self.assistant.handle_auth_gate(tab, email):
+                            return True
+                    except Exception as exc:
+                        logger.warning("LOGIN: %s", str(exc).splitlines()[0][:120])
+                    reason = str(getattr(self.assistant, "_login_paused", "") or "")
             if reason:
                 note = f"sign-in on {host} is paused to protect the account: {reason}"
                 if note not in self.notes:

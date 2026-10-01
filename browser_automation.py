@@ -6393,7 +6393,7 @@ class JobApplicationAssistant:
             logger.info("VERIFY_LINK_OK: opened the verification link -- the account on %s is verified", host)
             email = (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip() \
                 or getattr(self._owner_profile(), "email", "")
-            login_guard.clear_hold(host, email)        # the refusal was for an unverified account
+            login_guard.account_verified(host, email)  # the refusals were for an unverified account
             return True
         except Exception as exc:
             logger.warning("VERIFY_LINK: could not open the link: %s", str(exc).splitlines()[0][:120])
