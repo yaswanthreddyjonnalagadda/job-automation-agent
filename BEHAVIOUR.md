@@ -530,7 +530,9 @@ Some forms draw each choice as a button with its word in a separate box beside i
 "Male", "Female", "I choose not to disclose"). The agent reads that word as the button's
 name and picks the button that is your answer. A choice is never picked because its text
 merely contains your answer -- "Male" is inside "Female". Before, Meta's gender showed
-Female for an owner whose profile says Male (30 September).
+Female for an owner whose profile says Male (30 September). If a self-identification answer (gender, race,
+veteran, disability) on the page differs from your profile and you did not choose it
+yourself, the agent puts it right; a choice you made stands.
 
 ## Which locations you would like
 

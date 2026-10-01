@@ -3604,6 +3604,27 @@ class PageAgent:
             if any(_same_question(question, q) for q, _v, _s, _e in fixes):
                 continue
             fixes.append((question, value, source, False))
+        # Who the owner is (gender, race, veteran, disability) shown otherwise than the profile says: put right, under
+        # the one rule for who may be overruled -- never a choice the owner made. Meta, 30 September: the agent's own
+        # (since fixed) fallback chose Female for an owner whose profile says Male, and nothing ever looked again.
+        for control in controls:
+            question = control.question
+            if control.role != "radio" or not control.checked or not control.name or not question \
+                    or not concept_matcher.is_self_identification(question) \
+                    or any(_same_question(question, q) for q, _v, _s, _e in fixes):
+                continue
+            value, source = self.known_answer(control)
+            if not value or not str(source).startswith("profile.") \
+                    or self.assistant._best_option([control.name], [value]) is not None:
+                continue
+            who = provenance.origin(self.locate(page, control.ref), value=control.name,
+                                    agent_wrote=self._ours(question, control.name))
+            if not safety.may_overrule(who, policy):
+                if who != provenance.OWNER:
+                    self.notes.append(f"left {question[:70]!r} as {control.name[:40]!r}; your {source} says "
+                                      f"{value[:40]!r}")
+                continue
+            fixes.append((question, value, source, False))
 
         given: list[tuple[Answer, Control]] = []
         for question, value, source, exact in fixes:
