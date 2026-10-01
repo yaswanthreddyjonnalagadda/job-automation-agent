@@ -160,6 +160,8 @@ def run_one(url: str, auto: bool = True, open_url: str = "") -> int:
     import checkpoint
     logger.info("Agent code version: %s (this run keeps it to the end; Resume starts a new run)",
                 checkpoint.code_version())
+    import evidence
+    evidence.prune()                     # screenshots and page copies older than EVIDENCE_KEEP_DAYS (30)
     return subprocess.call(cmd, cwd=str(Path(__file__).parent))
 
 

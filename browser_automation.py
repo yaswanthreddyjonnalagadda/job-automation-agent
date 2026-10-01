@@ -33,6 +33,7 @@ from playwright.sync_api import BrowserContext, Page, sync_playwright
 import geo_reference
 import emailed_codes
 import login_guard
+import evidence
 import provenance
 import account_state
 import form_fields
@@ -2014,7 +2015,8 @@ class JobApplicationAssistant:
             logger.info("LOOKED: a CAPTCHA is showing -- only you can complete it; the agent does nothing")
             return "captcha", False
         try:
-            shot = page.screenshot(full_page=False, timeout=15_000)
+            # Sent to the AI: every secret box painted over first.
+            shot = evidence.screenshot(page, None, full_page=False)
             seen = claude.read_page(shot, page.url, goal)
         except Exception as exc:
             logger.warning("LOOKED: could not read the page (%s)", str(exc).splitlines()[0][:100])
@@ -4623,7 +4625,7 @@ class JobApplicationAssistant:
             folder = Path("logs") / "account_failures"
             folder.mkdir(parents=True, exist_ok=True)
             stem = f"{re.sub(r'[^A-Za-z0-9.-]+', '_', site or 'site')}_{datetime.now():%Y%m%d_%H%M%S}"
-            page.screenshot(path=str(folder / f"{stem}.png"), full_page=True)
+            evidence.screenshot(page, folder / f"{stem}.png")
             (folder / f"{stem}.txt").write_text(hide_secrets(page.locator("body").aria_snapshot(mode="ai")),
                                                 encoding="utf-8")
             logger.warning("ACCOUNT_CREATE_FAILED: what the site showed is saved in %s", folder / stem)
@@ -7041,11 +7043,10 @@ class JobApplicationAssistant:
         job_dir.mkdir(parents=True, exist_ok=True)
         screenshot_path = job_dir / "review_screenshot.png"
         self.accept_consent_dialog(page)
-        page.screenshot(path=str(screenshot_path), full_page=True)
-        try:  # the page's markup beside the screenshot, for diagnosing unfamiliar forms
-            (job_dir / "review_page.html").write_text(page.content(), encoding="utf-8")
-        except Exception:
-            pass
+        evidence.screenshot(page, screenshot_path)
+        content = evidence.html(page)       # the page's markup beside the screenshot, scripts and secrets removed
+        if content:
+            (job_dir / "review_page.html").write_text(content, encoding="utf-8")
         leftovers = self.find_required_blanks(page)
         for label in leftovers["required_still_blank"]:
             logger.warning("REQUIRED_BLANK: %s", " ".join(label.split()))

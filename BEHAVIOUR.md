@@ -988,12 +988,16 @@ or run `python web_ui.py` in a terminal you opened.
 * **Retries** — flaky page actions are retried (`with_retries`, `action_retries`).
 * **Progress is saved** — the form's own Save button is clicked before handing
   over, so a part-finished application survives a reload.
-* **Reload code** — a waiting run takes up edited code without closing its browser.
-  Every part of the agent it uses is reloaded, each after the parts it relies on;
-  before, only a few were, so new code could meet an old helper and stop the run.
-  If any file has a syntax error, the run keeps the whole version it started with.
-  Who answers the form pages is decided the same way as when the run started (Settings'
-  form-answering choice); before, a reload could move them to the Claude Code session.
+* **One version per run** — a run keeps the version of the agent it started with to the
+  end and names it in its log ("Agent code version: ..."). Resume and Reload agent code
+  end the waiting run and start a new one on the same page with the latest code; code is
+  never loaded into a run that is already going (1 October).
+* **Evidence without secrets** — every screenshot, page copy and page text the agent keeps,
+  and the screenshot it may send to the AI to read a page, goes through one capture step:
+  password, passcode, one-time-code, PIN and card boxes are painted over in screenshots and
+  emptied in page copies; scripts, hidden form tokens and token tags are removed. Screenshots
+  and page copies older than 30 days (`EVIDENCE_KEEP_DAYS` in `.env`) are deleted when a run
+  starts; the page texts the replay guard uses and your documents are kept.
 * **Structured logs** — each run also writes `logs/run_<timestamp>.jsonl`.
 * **No secrets in logs** — every log line passes through `safety.redact()`,
   which masks API keys, passwords, email addresses and phone numbers. The page text

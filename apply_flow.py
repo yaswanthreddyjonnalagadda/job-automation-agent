@@ -51,6 +51,7 @@ from jd_analyzer import build_job_description, dedup_key_for_url
 import ai_choice
 import answer_bank
 import checkpoint
+import evidence as capture        # `evidence` is a local name in this module's functions
 import safety
 from safety import STATUS_DISQUALIFIED_POLICY_MISMATCH
 from state_machine import (
@@ -537,14 +538,16 @@ def collect_evidence(assistant, page, job_dir: Path, step: int) -> dict:
     paths = {}
     try:
         shot = evidence_dir / "page.png"
-        page.screenshot(path=str(shot), full_page=True)
+        capture.screenshot(page, shot)                     # secret boxes painted over
         paths["screenshot"] = str(shot)
     except Exception as exc:
         logger.warning("Could not capture the screenshot: %s", exc)
     try:
         html = evidence_dir / "page.html"
-        html.write_text(page.content(), encoding="utf-8")
-        paths["html"] = str(html)
+        content = capture.html(page)                       # scripts, hidden tokens and secrets removed
+        if content:
+            html.write_text(content, encoding="utf-8")
+            paths["html"] = str(html)
     except Exception as exc:
         logger.warning("Could not capture the page HTML: %s", exc)
     return paths
@@ -594,7 +597,7 @@ def save_stop_page(page, job_dir: Path) -> None:
     try:
         stem = Path(job_dir) / f"stopped_{datetime.now():%Y%m%d_%H%M%S}"
         stem.parent.mkdir(parents=True, exist_ok=True)
-        page.screenshot(path=str(stem.with_suffix(".png")), full_page=True)
+        capture.screenshot(page, stem.with_suffix(".png"))   # secret boxes painted over
         stem.with_suffix(".txt").write_text(
             f"{page.url}\n\n" + hide_secrets(page.locator("body").aria_snapshot(mode="ai")), encoding="utf-8")
         logger.info("Where it stopped: %s", stem.with_suffix(".png"))
@@ -913,7 +916,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
 
         if outcome.kind == "submitted":
             try:
-                page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
+                capture.screenshot(page, job_dir / "submitted_confirmation.png")
             except Exception:
                 pass
             delete_screenshots(job_dir)
@@ -1084,7 +1087,7 @@ def submit_verified(assistant, page, tracker, key, job, job_dir: Path, decision)
     checkpoint.finish(key, "submit", f"{status}: {note}")
     tracker.update_status(key, status, notes=note)
     try:
-        page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
+        capture.screenshot(page, job_dir / "submitted_confirmation.png")
     except Exception:
         pass
     if status == STATUS_SUBMITTED:
@@ -1562,7 +1565,7 @@ def main() -> None:
                 # The user submitted it themselves and the site (or their
                 # inbox) confirmed it.
                 try:
-                    page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
+                    capture.screenshot(page, job_dir / "submitted_confirmation.png")
                 except Exception as exc:
                     logger.warning("Could not capture confirmation screenshot: %s", exc)
                 evidence = getattr(assistant, "_confirmation_evidence", "") or \

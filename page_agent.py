@@ -45,6 +45,7 @@ import emailed_codes
 import geo_reference
 import account_state
 import field_requirements
+import evidence
 import job_sources
 import answer_bank
 from claude_integration import JOB_POSTING_CHARS, is_non_answer
@@ -1609,7 +1610,7 @@ class PageAgent:
             folder = Path(self.job_dir) / "account"
             folder.mkdir(parents=True, exist_ok=True)
             stem = folder / f"{time.strftime('%Y%m%d_%H%M%S')}_{state.kind}"
-            self.tab(page).screenshot(path=str(stem.with_suffix(".png")), full_page=True)
+            evidence.screenshot(self.tab(page), stem.with_suffix(".png"))
             stem.with_suffix(".txt").write_text(f"{self.tab(page).url}\n{state}\n-> {step.action} {step.why}\n\n"
                                                 + self.snapshot(page), encoding="utf-8")
         except Exception as exc:
