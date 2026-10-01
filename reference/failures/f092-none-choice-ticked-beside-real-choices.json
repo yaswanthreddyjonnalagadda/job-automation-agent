@@ -1,0 +1,16 @@
+{
+  "id": "f092",
+  "date": "2026-10-01",
+  "class": "Contradictory picks on one multi-choice question",
+  "symptom": "Premier Health, 1 October: 'I have experience in the following areas of Information Technology' was ticked 'I have no experience in the following areas' together with 'System Analysis/Installing/Design' and 'Security'.",
+  "site": "Any portal with 'select all that apply' questions",
+  "root_cause": "apply_answers applied every answer the page plan proposed for a question, one by one; nothing checked that a 'none' choice excludes the others.",
+  "why_tests_missed": "Multi-choice tests gave one consistent answer per question.",
+  "fix": "page_agent._without_contradicting_none drops a 'none' pick (none / none of the above / not applicable / no experience / I have no ...) when the same question also has a real pick; a 'none' pick alone stands.",
+  "tests": [
+    "tests/test_live_run_fixes_1_october.py::test_none_is_dropped_beside_real_choices",
+    "tests/test_live_run_fixes_1_october.py::test_none_alone_stands",
+    "tests/test_live_run_fixes_1_october.py::test_real_choices_that_merely_start_with_no_are_kept"
+  ],
+  "prevention": "Treat a question's picks as one answer and check it against the choices' meaning (exclusive options) before applying any of them."
+}

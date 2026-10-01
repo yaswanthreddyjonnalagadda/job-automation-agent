@@ -174,23 +174,27 @@ WIRE_SIGN_IN = ("<script>new MutationObserver(() => { const b = document.getElem
                 ".observe(document.documentElement, {childList: true, subtree: true});</script>")
 
 
-def test_after_creating_the_account_it_signs_in_with_the_email_and_password(page, monkeypatch):
+def test_after_creating_the_account_it_opens_the_verification_link_then_signs_in(page, monkeypatch):
+    """Waystar, 1 October: the sign-in waits for the evidence -- the site's verification link, opened from Gmail."""
     body = create_page(EMAIL_BOXES["workday"], after_create=SIGN_IN_AFTER_CREATE,
                        extra=WIRE_SIGN_IN.replace("ON_SIGN_IN", "document.body.innerHTML = '<h1>Candidate Home</h1>';"))
     serve(page, body)
-    assert assistant_for(monkeypatch, WorkdayAdapter()).fill_create_account_form(page, EMAIL) is True
+    a = assistant_for(monkeypatch, WorkdayAdapter())
+    monkeypatch.setattr(a, "verify_account_by_email_link", lambda page: True)      # the link was in the mail
+    assert a.fill_create_account_form(page, EMAIL) is True
     assert page.evaluate("window.signins") == 1
     assert page.evaluate("window.at_signin") == {"email": EMAIL, "password": PASSWORD}
 
 
-def test_a_new_account_the_site_will_not_sign_in_yet_is_tried_once_and_left_to_the_owner(page, monkeypatch):
-    reject = ("document.getElementById('alert').textContent = 'You may have entered the wrong email address or "
-              "password or your account might be locked.';")
+def test_a_new_account_with_no_verification_email_is_never_signed_in_on_a_guess(page, monkeypatch):
+    """Waystar, 1 October: created, then signed in at once -- refused, and the refusal counts towards a lock.
+    With no verification email to open, no sign-in is tried: the owner is asked to verify, then Continue."""
     body = create_page(EMAIL_BOXES["workday"], after_create=SIGN_IN_AFTER_CREATE,
-                       extra=WIRE_SIGN_IN.replace("ON_SIGN_IN", reject))
+                       extra=WIRE_SIGN_IN.replace("ON_SIGN_IN", ""))
     serve(page, body)
     a = assistant_for(monkeypatch, WorkdayAdapter())
+    monkeypatch.setattr(a, "verify_account_by_email_link", lambda page: False)     # nothing in the mail
     assert a.fill_create_account_form(page, EMAIL) is False
-    assert page.evaluate("window.signins") == 1
+    assert page.evaluate("window.signins") == 0
     why = login_guard.may_sign_in(HOST, EMAIL)
-    assert why and "verify" in why and "Continue" in why
+    assert why and "verif" in why and "Continue" in why

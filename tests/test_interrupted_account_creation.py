@@ -32,3 +32,19 @@ def test_the_daily_limit_still_counts_seen_attempts():
         login_guard.record_account_attempt(HOST, EMAIL)
         login_guard.account_creation_seen(HOST, EMAIL)
     assert "already tried" in (login_guard.may_create_account(HOST, EMAIL) or "")
+
+
+def test_a_new_unverified_account_holds_every_sign_in_until_the_owner_looks():
+    """Waystar, 1 October: created, then signed in at once and refused -- a refusal that counts towards a lock."""
+    login_guard.hold_for_verification(HOST, EMAIL)
+    why = login_guard.may_sign_in(HOST, EMAIL)
+    assert why and "verification email" in why and "press Continue" in why
+    login_guard.owner_resumed(HOST)
+    assert login_guard.may_sign_in(HOST, EMAIL) is None
+
+
+def test_with_the_account_on_record_the_next_run_signs_in_instead_of_creating():
+    import account_state as a
+    form = a.AccountState(a.CREATE_FORM, "Create Account")
+    assert a.next_step(form, a.Memory(account_exists=True)).action == a.OPEN_SIGN_IN
+    assert a.next_step(form, a.Memory()).action == a.CREATE

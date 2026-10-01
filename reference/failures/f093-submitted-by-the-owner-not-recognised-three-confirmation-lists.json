@@ -1,0 +1,15 @@
+{
+  "id": "f093",
+  "date": "2026-10-01",
+  "class": "One decision kept in three lists: the wait after hand-over did not read the site's own confirmation words",
+  "symptom": "Premier Health (Eightfold), 1 October: the owner pressed Submit and the site confirmed it; the run kept checking Gmail and the status stayed 'ready to submit'.",
+  "site": "Eightfold and any site whose confirmation wording was only in its adapter",
+  "root_cause": "'Is this a confirmation?' was decided by browser_automation._CONFIRMATION_PHRASES (the wait), page_agent.CONFIRMATION_TEXT (the reading agent) and each adapter's confirmation_phrases -- and the wait never read the adapter's.",
+  "why_tests_missed": "Each list was tested on its own; no test compared them or used an adapter-only phrase in the wait.",
+  "fix": "confirmation.py holds the patterns and says_received(text, site_phrases); page_agent imports them and submission_confirmed uses them with the site adapter's phrases. _CONFIRMATION_PHRASES is removed.",
+  "tests": [
+    "tests/test_live_run_fixes_1_october.py::test_a_confirmation_is_read_the_same_way_everywhere",
+    "tests/test_live_run_fixes_1_october.py::test_the_reading_agent_and_the_wait_use_the_same_words"
+  ],
+  "prevention": "One module per decision; a site adapter's words are an input to it, never a separate check."
+}

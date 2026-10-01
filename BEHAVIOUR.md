@@ -468,10 +468,11 @@ under an overlay so a normal click ticks nothing: the agent then forces the tick
 then uses the page's own click, and checks the box really is ticked. If it cannot
 tick a box it must, it does not press Create Account: it stops and says which box.
 
-An account counts as created only when the site shows Candidate Home or the
-application. Landing on a Sign In page proves nothing (the site shows it when the
-account was made, when it was not, and when it still needs verifying), so nothing
-is saved as an account then: the agent signs in (see below).
+An account counts as signed in only when the site shows Candidate Home or the
+application. When the site accepts the Create Account form but shows neither, the
+account exists all the same: it is recorded at once as "created, not yet verified",
+so no later run tries to create it again -- a later run finds it on record and goes
+to Sign In instead (1 October).
 
 The order is always: your email, then the password and its retype, then Create
 Account. The email box is found by what it is labelled ("Email Address", however
@@ -482,12 +483,15 @@ email box, or the box will not keep your email, it does not press Create Account
 the passwords are never sent alone. Sign-in works the same way: email first, checked,
 then the password.
 
-After creating the account it signs in once with your email and `ATS_PASSWORD` (your
-decision of 28 September 2026). If the site then emails a one-time code, the agent
-reads it from your Gmail under the rules in "When a one-time code may be read from
-your mail". If the site rejects the sign-in -- which on Workday can simply mean the
-new account's email is not verified yet -- that counts as a rejected sign-in (next
-section): it stops and tells you to verify the account, then press Continue.
+Before it signs in to a new account it looks for the evidence that it can: the
+verification email the site sent. It opens that email's link from your Gmail (your
+decision of 30 September 2026), and only then signs in with your email and
+`ATS_PASSWORD`. If no verification email comes, it does not try a sign-in on a guess
+-- a sign-in to an unverified account is refused and counts towards a lock (Waystar,
+1 October). It stops and says: the account was created, open the verification email,
+click its link, then press Continue; the agent then signs in. If the site emails a
+one-time code at sign-in, the agent reads it from your Gmail under the rules in "When
+a one-time code may be read from your mail".
 
 ## Signing in without locking your accounts
 

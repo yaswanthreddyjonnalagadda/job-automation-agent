@@ -169,6 +169,20 @@ def record_account_attempt(host: str, email: str) -> None:
     _save(data)
 
 
+def hold_for_verification(host: str, email: str) -> None:
+    """An account was just made here and is not shown signed in: the site may want its email verified first. No
+    sign-in is tried until the owner has looked (Continue) -- a sign-in to an unverified account is refused and
+    counts towards a lock (Waystar, 1 October)."""
+    data = _load()
+    entry = _entry(data, host, email)
+    entry["hold"] = "new_account"
+    entry["hold_reason"] = (f"an account was just created on {host} and the site did not sign it in: it may need its "
+                            f"email verified. Open the verification email it sent you, click its link, then press "
+                            f"Continue -- the agent then signs in")
+    data[_key(host, email)] = entry
+    _save(data)
+
+
 def account_creation_seen(host: str, email: str) -> None:
     """The page after Create Account was read: whatever it said, the result is known."""
     data = _load()

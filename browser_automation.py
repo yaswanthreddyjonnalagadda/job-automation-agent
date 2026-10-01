@@ -34,6 +34,7 @@ import geo_reference
 import emailed_codes
 import login_guard
 import evidence
+import confirmation
 import provenance
 import account_state
 import form_fields
@@ -4921,14 +4922,21 @@ class JobApplicationAssistant:
                 self._save_account_failure(page, site)
                 return False
             if not self._account_creation_is_confirmed(page):
-                logger.warning(
-                    "ACCOUNT_UNVERIFIED: Workday left registration without Candidate Home or application evidence"
-                    " -- signing in with the email and password"
-                )
-                # The owner's decision (28 September): sign in once with the email and the password. A code
-                # the site then emails is read by the code step (emailed_codes.why_not decides); a rejection
-                # -- which may only mean the email is not verified yet -- is counted by login_guard and
-                # waits for the owner (Continue), as any rejected sign-in does.
+                logger.warning("ACCOUNT_UNVERIFIED: the site took the new-account form but shows no signed-in page")
+                # The site accepted the form, so the account exists: it is recorded now, and no later run tries to
+                # make it again. Whether it can be signed in to is not known yet -- most sites (Workday) want the
+                # email verified first, and a sign-in before that is refused and counts towards a lock (Waystar,
+                # 1 October: created, then signed in at once, refused). So the evidence comes first: the
+                # verification link the site emailed is opened (the owner's decision of 30 September); only then is
+                # the sign-in tried. With no verification email to open, nothing is guessed: the owner is asked.
+                self.remember_account(page, email, "password (created, not yet verified)")
+                if not self.verify_account_by_email_link(page):
+                    login_guard.hold_for_verification(site, email)
+                    self._login_paused = login_guard.may_sign_in(site, email) or (
+                        f"an account was just created on {site}: verify its email, then press Continue")
+                    logger.warning("ACCOUNT_HELD: %s", self._login_paused)
+                    return False
+                logger.info("ACCOUNT_VERIFIED: the email link was opened -- signing in to the new account")
                 if not self._open_sign_in(page):
                     self._login_paused = (f"an account was just created on {site}, but no sign-in form was found: "
                                           f"sign in yourself, then press Continue")
@@ -6032,17 +6040,6 @@ class JobApplicationAssistant:
                            (": " + "; ".join(said)) if said else " and said nothing about why")
         return True
 
-    _CONFIRMATION_PHRASES = (
-        "thank you for applying", "application submitted", "thanks for applying",
-        "we have received your application", "your application has been submitted",
-        "submission received", "application received",
-        # Ashby / Lever wording
-        "application was successfully submitted", "successfully submitted your application",
-        "your application was submitted",
-        # SuccessFactors wording
-        "your application has been sent", "application has been sent", "application was sent",
-    )
-
     def submission_confirmed(self, page: Page, job_title: str = "") -> bool:
         """True when the human has submitted the application themselves:
         either the page shows an application-received confirmation with the
@@ -6051,8 +6048,14 @@ class JobApplicationAssistant:
         they jump straight to 'My applications'."""
         if self.find_submit_button(page) is not None:
             return False  # still on the form
-        body = (page.locator("body").inner_text(timeout=5_000) or "").lower()
-        if any(phrase in body for phrase in self._CONFIRMATION_PHRASES):
+        body = page.locator("body").inner_text(timeout=5_000) or ""
+        # One decision for every caller: the general wording and this site's own (Premier Health on Eightfold,
+        # 1 October: its words were only in the site adapter, which this wait never read).
+        try:
+            site_phrases = tuple(getattr(self.adapter(page), "confirmation_phrases", ()) or ())
+        except Exception:
+            site_phrases = ()
+        if confirmation.says_received(body, site_phrases):
             return True
         if not job_title:
             return False
