@@ -406,6 +406,11 @@ the site; they now all do.
 
 ## The account step, one state at a time
 
+An account section the application page itself calls optional ("Create a Career Profile
+account (optional)" at the foot of Meta's form) is part of the application, not an account
+step: the agent does not make that account, leaves its password boxes empty, and goes on
+with the form (Meta, 30 September).
+
 Before it does anything on an account page, the agent reads which step the page is
 at: a new-account form, a sign-in form, a sign-in that asks for the email first, a
 choice of ways in, a page still loading, a box for an emailed code, a message saying

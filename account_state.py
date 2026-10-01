@@ -61,6 +61,9 @@ _UNVERIFIED = re.compile(
     r"(email|e-mail|link)|(account|email|e-mail)( address)? (is |has )?(not|n't) (been |yet )*(verified|activated|"
     r"confirmed)|unverified (account|email)|account (may |might )?needs? (to be )?(verified|verification|activated)",
     re.IGNORECASE)
+# A heading that says the account it offers is optional.
+_OPTIONAL_ACCOUNT = re.compile(r"- heading[^\n]*\baccount\b[^\n]*\boptional\b|- heading[^\n]*\boptional\b[^\n]*\baccount\b",
+                               re.IGNORECASE)
 _CREATE = re.compile(r"\bcreate (an |your )?account\b|\bregister\b|\bsign ?up\b", re.IGNORECASE)
 _SIGN_IN = re.compile(r"\bsign ?in\b|\blog ?in\b", re.IGNORECASE)
 _WAYS_IN = re.compile(r"(?:sign|log)[\s-]?(?:in|on|up) (?:with|using|via) (google|email|linkedin|apple|microsoft|"
@@ -147,6 +150,13 @@ def read_state(snapshot: str, password_boxes: Optional[int] = None) -> AccountSt
         return state(VERIFY_EMAIL, said)
     if step and int(step.group(1)) >= 1 and not passwords and not on_account_step_is_current(snapshot):
         return state(SIGNED_IN, step.group(0))
+    # An account the page itself calls optional, under the application ("Create a Career Profile account
+    # (optional)" below Meta's Resume upload and Self ID; "the system will create your account after you submit"):
+    # the page is the application, not an account step. Read as a new-account form, Meta's run tried to make the
+    # account, then stopped for the owner twice, "the new-account form is still showing" (30 September).
+    optional = _OPTIONAL_ACCOUNT.search(snapshot or "")
+    if passwords and optional:
+        return state(NONE, optional.group(0).split(":")[-1].strip()[:80])
     if passwords >= 2:
         return state(CREATE_FORM, _first(_CREATE, texts))
     headings = [_unescape(h) for h in re.findall(r'- heading "((?:[^"\\]|\\.)*)"', snapshot or "")]

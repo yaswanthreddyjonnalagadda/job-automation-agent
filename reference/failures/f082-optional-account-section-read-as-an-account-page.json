@@ -1,0 +1,12 @@
+{
+  "id": "f082",
+  "date": "2026-09-30",
+  "class": "A page's shape (two password boxes) outranked what the page says about them (optional)",
+  "symptom": "Meta, 30 September: the application page ends with 'Create a Career Profile account (optional)' -- Password / Confirm password, 'the system will create your account after you submit'. The agent took the whole page for a new-account form, tried to create the account ('no Create Account button found'), then stopped for the owner twice: 'the new-account form is still showing after the account was created' -- Continue and Resume both led back to it.",
+  "site": "Meta careers; any application form with an optional account section",
+  "root_cause": "account_state.read_state made any page with two password boxes a CREATE_FORM, without reading the section's own heading saying the account is optional.",
+  "why_tests_missed": "Account tests used pages that are only an account form; none had an optional account section under the application.",
+  "fix": "A heading that says the account it offers is optional makes the page NONE (the application): no account is created, its password boxes stay empty, and the agent goes on with the form.",
+  "tests": ["replay_guard.py"],
+  "prevention": "What the page says about a section (optional, required, already done) decides before the section's shape does."
+}
