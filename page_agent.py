@@ -956,6 +956,7 @@ class PageAgent:
             google_tried=host in self._google_tried, google_refused=host in self._google_failed,
             created=host in self._created_at, signed_in_tried=host in self._signed_in_at,
             email_given=host in self._emailed_in, account_exists=exists or host in self._account_known,
+            account_active=bool(getattr(self.assistant, "account_signed_in_before", lambda: False)()),
             reset_tried=host in self._reset_asked,
             verify_tried=host in self._verify_asked,
             refused_before=bool(email) and login_guard.refused_before(host, email),

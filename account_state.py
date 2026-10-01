@@ -239,6 +239,7 @@ class Memory:
     signed_in_tried: bool = False
     email_given: bool = False
     account_exists: bool = False
+    account_active: bool = False     # signed in to successfully before: creating it again cannot succeed
     reset_tried: bool = False        # a reset to the ATS password was already asked for on this site
     refused_before: bool = False     # login_guard: this account's last sign-in here was refused (kept across runs)
     verify_tried: bool = False       # the verification link was already looked for on this site in this run
@@ -307,15 +308,17 @@ def next_step(state: AccountState, memory: Memory) -> Step:
             # The site wants the form finished (a box it points at): that is the form to fill, whatever the
             # record of an account says; login_guard still limits the tries.
             return Step(CREATE, f"the form says: {state.form_error}")
-        # The owner's order (1 October): create the account first; if it already exists the site says so
-        # (ACCOUNT_EXISTS) and the agent signs in. A record of the account is not a reason to skip creating:
-        # the site's own message is the evidence.
+        # Create first (owner, 1 October): an unknown account, or one made but never signed in to -- if it exists the
+        # site says so (ACCOUNT_EXISTS) and the agent signs in. An account signed in to before is signed in to:
+        # creating it again cannot succeed and spends one of the day's two creations.
+        if memory.account_active:
+            return Step(OPEN_SIGN_IN, "the agent has signed in to this account before")
         if memory.created:
             return Step(FOR_OWNER, "the new-account form is still showing after the account was created: "
                                    "look at the page, then press Continue")
         return Step(CREATE, "no account here yet")
     if kind == SIGN_IN_FORM:
-        if state.can_create and not memory.created and not memory.signed_in_tried:
+        if state.can_create and not memory.created and not memory.signed_in_tried and not memory.account_active:
             return Step(OPEN_CREATE, "create the account first; if it exists the site will say so")
         if memory.signed_in_tried:
             return Step(FOR_OWNER, "signing in did not get past the sign-in form: look at the page, then Continue")

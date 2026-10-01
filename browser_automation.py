@@ -3553,8 +3553,12 @@ class JobApplicationAssistant:
                 return self.sign_in_to_existing_account(page, email)
             if candidate_state in ("registration", "registration_error"):
                 logger.info("ACCOUNT: Workday Candidate Home is in %s", candidate_state)
-                # The owner's order (1 October): create first, whatever the record says; if the account exists
-                # Workday says so, and fill_create_account_form signs in (_account_exists_message).
+                # Create first (owner, 1 October) -- except for an account the agent has signed in to before:
+                # creating it again cannot succeed and spends one of the day's creations.
+                if self._read_ats_password() and self.account_signed_in_before() and self._has_sign_in_affordance(page):
+                    logger.info("ACCOUNT: signed in to this account before -- signing in instead of registering")
+                    if self._goto_login_page(page):
+                        return self.attempt_auto_login(page, email, "", scope=self._sign_in_scope(page))
                 self._create_form_attempted = False
                 # Do not fall back to create_ats_account here: its legacy path
                 # can tick a terms checkbox that requires the candidate.
@@ -4521,6 +4525,18 @@ class JobApplicationAssistant:
         except Exception as exc:
             logger.warning("Could not check the account record: %s", exc)
             return None
+
+    def account_signed_in_before(self) -> bool:
+        """The agent has signed in to this employer's account before (its record is not 'created, not yet
+        verified'): creating it again cannot succeed, so the run signs straight in."""
+        tracker, employer = getattr(self, "tracker", None), (getattr(self, "employer", "") or "").strip()
+        if tracker is None or not employer or not hasattr(tracker, "get_ats_account"):
+            return False
+        try:
+            record = tracker.get_ats_account(employer)
+        except Exception:
+            return False
+        return bool(record) and "not yet verified" not in str(record.get("method") or "")
 
     def remember_account(self, page: Page, email: str, method: str) -> None:
         tracker, employer = getattr(self, "tracker", None), (getattr(self, "employer", "") or "").strip()

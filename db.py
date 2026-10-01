@@ -276,7 +276,10 @@ class PostgresTracker:
                 INSERT INTO ats_accounts (employer, email, login_host, method, last_login_at)
                 VALUES (%s, %s, %s, %s, now())
                 ON CONFLICT (employer) DO UPDATE
-                    SET last_login_at = now(), login_host = EXCLUDED.login_host
+                    SET last_login_at = now(), login_host = EXCLUDED.login_host,
+                        -- a later sign-in upgrades 'created, not yet verified'; nothing downgrades a working account
+                        method = CASE WHEN EXCLUDED.method LIKE '%%not yet verified%%' THEN ats_accounts.method
+                                      ELSE EXCLUDED.method END
                 """,
                 (employer.strip().lower(), email, login_host, method),
             )

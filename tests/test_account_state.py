@@ -254,3 +254,22 @@ def test_a_box_for_the_code_makes_it_a_code_step_whatever_the_page_says():
         '- button "Sign In" [ref=e5]',
     ])
     assert A.read_state(snapshot).kind == A.CODE_ENTRY
+
+
+def test_an_account_signed_in_to_before_is_signed_in_to_not_created_again():
+    """Creating an account that works cannot succeed and spends one of the day's two creations."""
+    assert step(A.CREATE_FORM, account_active=True).action == A.OPEN_SIGN_IN
+    page = A.AccountState(A.SIGN_IN_FORM, "Sign In", can_create=True)
+    assert A.next_step(page, A.Memory(account_active=True)).action == A.SIGN_IN
+    assert step(A.CREATE_FORM, account_exists=True).action == A.CREATE        # made, never signed in: create first
+
+
+def test_a_working_account_record_is_upgraded_and_never_downgraded(tmp_path):
+    from job_tracker import JobTracker
+    t = JobTracker(tmp_path / "a.db")
+    t.record_ats_account("Acme", "o@example.com", "acme.wd1.myworkdayjobs.com", "password (created, not yet verified)")
+    assert "not yet verified" in t.get_ats_account("Acme")["method"]
+    t.record_ats_account("Acme", "o@example.com", "acme.wd1.myworkdayjobs.com", "password")        # signed in
+    assert t.get_ats_account("Acme")["method"] == "password"
+    t.record_ats_account("Acme", "o@example.com", "acme.wd1.myworkdayjobs.com", "password (created, not yet verified)")
+    assert t.get_ats_account("Acme")["method"] == "password"

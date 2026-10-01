@@ -460,7 +460,10 @@ did not work shows what the site said.
 
 **The order (your rule of 1 October).** On an employer's site the agent always tries to
 create the account first -- also when the page opens on Sign In and offers "Create
-Account", and also when it has a record of an account there. Then:
+Account", and also when it made an account there before that was never signed in to. The
+one exception: an account it has signed in to successfully before is signed in to
+directly, since creating it again cannot work and uses up one of the day's two
+creations. Then:
 1. If the site says the account already exists, it signs in.
 2. If the site wants the account verified, it verifies it -- by the link or the code the
    site emailed, read from your Gmail -- and then signs in.
