@@ -539,18 +539,38 @@ def delete_application(app_id: int):
     return redirect(url_for("index"))
 
 
+def _resume_with_latest_code() -> str:
+    """Resume: ends the run that is waiting and starts a new one on the page it reached, with the latest code.
+
+    Until 1 October Resume reloaded modules into the waiting process and swapped live objects' classes, so new
+    code ran on old in-memory state and no run had one version. A run is now one code version (named in its log
+    and checkpoint). The browser profile keeps the sign-in; the new run reconciles the reopened page with the
+    application's checkpoint before it does anything. Returns "" when started, else why not."""
+    url = _running_url()
+    if not url:
+        return "Nothing is running to resume."
+    record = None
+    try:
+        record = next((a for a in get_tracker().list_all() if a.url == url), None)
+    except Exception:
+        pass
+    open_url = getattr(record, "last_page_url", "") or ""
+    _stop_run(url)
+
+    def start_again() -> None:
+        time.sleep(3)                      # the closed browser lets go of its profile before the next one opens it
+        _run_apply(url, open_url)
+
+    threading.Thread(target=start_again, daemon=True).start()
+    return ""
+
+
 @app.post("/reload-agent")
 def reload_agent():
-    """Loads edited agent code into the run that is already going, without
-    closing its browser or losing the part-filled form (the flow's
-    'reload_code' signal)."""
-    written = 0
-    for signal_file in (BASE_DIR / "data").glob("_signal_*.txt"):
-        signal_file.write_text("reload_code", encoding="utf-8")
-        written += 1
-    if not written:
-        # No flow is waiting on a signal right now; leave one for when it is.
-        return redirect(url_for("index", error="No run is waiting -- nothing to reload."))
+    """Resume with the latest code: the waiting run ends and a new one carries on from the page it reached."""
+    why_not = _resume_with_latest_code()
+    if why_not:
+        return redirect(url_for("index", error=why_not.replace("to resume", "to reload")))
     return redirect(url_for("index"))
 
 
@@ -565,7 +585,11 @@ def send_signal(signal_file: str):
         abort(400)
     # "submit" is deliberately not accepted: the agent does not submit
     # applications, and this UI must not offer a button that looks like it does.
-    if decision in {"refresh", "skip", "continue", "reload_code", "close"}:
+    if decision == "reload_code":
+        # Resume: a new run on this page with the latest code, not code swapped into the waiting one.
+        why_not = _resume_with_latest_code()
+        return redirect(url_for("index", error=why_not) if why_not else url_for("index"))
+    if decision in {"refresh", "skip", "continue", "close"}:
         target.write_text(decision, encoding="utf-8")
     return redirect(url_for("index"))
 
@@ -1122,7 +1146,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
               <form method="post" action="/signal/{{ s.signal }}" class="actions">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button name="decision" value="continue" title="You dealt with it: the agent reads the page again and carries on">Continue</button>
-                <button class="ghost" name="decision" value="reload_code" title="Carry on from this page with the agent's latest logic -- the form stays as it is">Resume</button>
+                <button class="ghost" name="decision" value="reload_code" title="Carry on from this page with the agent's latest logic: a new run opens this page again, still signed in">Resume</button>
                 <button class="ghost" name="decision" value="skip">Skip</button>
                 <button class="ghost" name="decision" value="close">Close browser</button>
               </form>
@@ -1175,7 +1199,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
         {% if r.state == 'running' %}
         <form method="post" action="/reload-agent">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <button class="ghost" title="Load edited agent code into this run without restarting it">Reload agent code</button>
+          <button class="ghost" title="Carry on from this page with the agent's latest code: a new run opens this page again, still signed in">Reload agent code</button>
         </form>
         <form method="post" action="/stop"
               onsubmit="return confirm('Stop this application and close its browser? Nothing will be submitted, and you can start it again.')">

@@ -717,9 +717,12 @@ stopped typing), it carries on by itself -- as it already did after a CAPTCHA or
 
 A run waiting for you has, beside **Continue**, two more ways on:
 
-- **Resume** -- carries on from the page it is on with the agent's latest logic: new code
-  is loaded into the waiting run and the page is read again; the browser and everything
-  already filled stay as they are.
+- **Resume** -- carries on from the page it is on with the agent's latest logic: the waiting
+  run ends and a new one opens the same page again, still signed in (the browser keeps
+  your session), checks it is still this application, and reads it with the latest code.
+  What the site already saved stays; boxes on the current page that were not yet saved by
+  the site are filled again from your profile. Each run uses one version of the agent from
+  start to finish, and its log says which ("Agent code version: ...").
 - **Reload** -- starts the application fresh: after you confirm, the waiting run and its
   browser close (nothing is submitted, and what the site itself saved stays saved) and
   the application starts again from its posting with the latest logic. The tailored

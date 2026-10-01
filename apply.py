@@ -157,6 +157,9 @@ def run_one(url: str, auto: bool = True, open_url: str = "") -> int:
         cmd.append("--auto")
 
     logger.info("Starting the application. It will stop at Review and wait for you.")
+    import checkpoint
+    logger.info("Agent code version: %s (this run keeps it to the end; Resume starts a new run)",
+                checkpoint.code_version())
     return subprocess.call(cmd, cwd=str(Path(__file__).parent))
 
 

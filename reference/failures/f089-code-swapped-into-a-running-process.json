@@ -1,0 +1,17 @@
+{
+  "id": "f089",
+  "date": "2026-10-01",
+  "class": "New code swapped into a running process, so no run had one code version",
+  "symptom": "Found in the architecture review of 1 October, after f065 and f085: Resume and 'Reload agent code' reloaded modules into a waiting run and reassigned live objects' classes. Each fix to the reload (helpers left old, the review stop not reloading) was another case of new code meeting old in-memory state, and no log could say which version had produced a given action.",
+  "site": "Every portal",
+  "root_cause": "The reload kept the browser and the form by keeping the process; the process's state (objects, guards, caches, half-finished steps) was built by the old code and then driven by the new. The only reliable unit of 'one version' is a process, and the reload broke that.",
+  "why_tests_missed": "The reload tests recorded which modules importlib.reload was called on; they could not test that the old objects were consistent with the new classes, which is the actual risk.",
+  "fix": "load_latest_code, reload_browser_automation and project_modules_used_by are removed. Resume ('reload_code') makes the run record its page (end_for_resume) and end; the dashboard's _resume_with_latest_code stops the waiting run and starts a new one with --open-url on the page it reached. The browser profile keeps the sign-in, and the new run's checkpoint.reconcile confirms the page is still the application. Each run logs 'Agent code version: <commit>' at its start, and every checkpoint record carries the version. Also fixed on the way: the legacy flow's 'submitted by the user' path read `status` before setting it (a NameError).",
+  "tests": [
+    "tests/test_dashboard.py::test_resume_ends_the_waiting_run_and_starts_a_new_one_on_its_page",
+    "tests/test_dashboard.py::test_reload_agent_says_so_when_nothing_is_running",
+    "tests/test_login_guard.py::test_apply_flow_hands_the_owners_decision_to_the_agent",
+    "tests/test_resume_point.py::test_every_record_names_the_code_version_it_ran"
+  ],
+  "prevention": "Pin a run to one code version for its whole life; apply a fix to paused work by starting a new run from a checkpoint, never by changing classes under live objects. Log the version at the start of every run."
+}

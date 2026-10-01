@@ -21,10 +21,9 @@ summary and writes one of these to the signal file:
   "goto:<url>"    -- send the browser back to a page it has wandered off
                      (a sign-in redirect, or the user navigating), keeping
                      the run and its part-filled form
-  "reload_code"   -- hot-reload browser_automation.py's code into this
-                     already-running process (see reload_browser_automation
-                     below) instead of restarting the whole script -- keeps
-                     the SAME browser tab/session open across a code fix
+  "reload_code"   -- Resume: this run records the page it is on and ends; the
+                     dashboard starts a new run on that page with the latest
+                     code (one code version per run -- see checkpoint.py)
 
 Usage:
     python apply_flow.py <job_input.json> --signal-file <path> [--timeout SECONDS]
@@ -33,8 +32,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import importlib
-import inspect
 import json
 from datetime import datetime, timezone
 from typing import Optional
@@ -45,7 +42,6 @@ from pathlib import Path
 
 import re
 
-import browser_automation
 import config as config_module
 from resume_pdf import build_letter_pdf, build_resume_pdf
 from browser_automation import BlockedLoginDomainError, JobApplicationAssistant
@@ -607,6 +603,18 @@ def save_stop_page(page, job_dir: Path) -> None:
 
 
 
+def end_for_resume(tracker, key: str, page) -> None:
+    """Resume ends this run where it stands; the dashboard starts a new one on this page with the latest code.
+
+    Until 1 October Resume reloaded modules into the running process and swapped the classes of live objects:
+    new code met old in-memory state, and no run could say which version it was. Now a run is one code version
+    (logged at its start and kept in its checkpoint); the browser profile keeps the sign-in, and the new run's
+    checkpoint.reconcile confirms the page is still this application."""
+    remember_progress(tracker, key, page, "ended for Resume: a new run carries on with the latest code")
+    logger.info("RESUME: this run (code %s) ends here; the next one carries on from this page with the latest code",
+                checkpoint.code_version())
+
+
 def remember_progress(tracker, key: str, page, note: str = "") -> None:
     """Writes down where this application has got to.
 
@@ -977,9 +985,10 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 tracker.update_status(key, STATUS_SKIPPED, notes="Skipped by you")
                 return
             if decision == "reload_code":
-                # Resume at the review stop loads the latest code too; it was taken for Continue, and the page was
-                # read again with the code the run started with (Meta, 30 September).
-                assistant = load_latest_code(agent, assistant, job, experience_data)
+                # Resume: a new run carries on from this page with the latest code. Code is never swapped into a
+                # running process, so every run is one version, named in its log and checkpoint (review, 1 October).
+                end_for_resume(tracker, key, page)
+                return
             continue
 
         message = outcome.summary + (f" | worth checking: {notes}" if notes else "")
@@ -1031,7 +1040,8 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             tracker.update_status(key, STATUS_SKIPPED, notes="Skipped by you")
             return
         if decision == "reload_code":
-            assistant = load_latest_code(agent, assistant, job, experience_data)
+            end_for_resume(tracker, key, page)
+            return
         elif decision == "fill_experience":
             # The reading agent normally handles ordinary profile fields.
             # Workday's repeated employment/education widget needs the
@@ -1163,149 +1173,6 @@ def confirmed_after_all(agent, page, tracker, key: str) -> bool:
 
 _RELOADED_ON_THEIR_OWN = {"__main__", "apply_flow", "browser_automation", "page_agent", "config"}
 
-
-def project_modules_used_by(*modules) -> list:
-    """The project's own modules these modules use, directly or through each other, each listed after the
-    modules it uses: the order a reload must follow, or a reloaded module binds the old version of what it
-    imports. The modules that are reloaded on their own (this one, the two agents, config) are left out."""
-    root = Path(__file__).resolve().parent
-    order, seen = [], set()
-
-    def visit(module) -> None:
-        if module.__name__ in seen:
-            return
-        seen.add(module.__name__)
-        for value in list(vars(module).values()):
-            try:
-                used = value if inspect.ismodule(value) else sys.modules.get(getattr(value, "__module__", None) or "")
-                path = getattr(used, "__file__", None)
-                if used is not None and used is not module and path and Path(path).resolve().parent == root:
-                    visit(used)
-            except Exception:
-                continue
-        order.append(module)
-
-    for module in modules:
-        visit(module)
-    return [m for m in order if m.__name__ not in _RELOADED_ON_THEIR_OWN]
-
-
-def load_latest_code(agent, assistant, job, experience_data):
-    """Resume on a waiting run: the agent's latest code, the owner's latest profile and settings, the same form.
-    Every stop where the run waits calls this one routine (the review stop once treated Resume as Continue)."""
-    import page_agent
-    assistant = reload_browser_automation(assistant)
-    importlib.reload(page_agent)
-    agent.__class__ = page_agent.PageAgent
-    agent.assistant = assistant
-    # The resume bookkeeping above ran on the old code: run the new code's
-    # (a loop guard that had tripped is re-armed, new state starts empty).
-    agent._ensure_state()
-    agent.forget_sign_in_attempts(owner_acted=False)
-    # The profile, application settings and Claude's instructions too:
-    # a corrected name or new authorization must reach the live run.
-    try:
-        agent.config = config_module.get_app_config()
-        agent.profile = config_module.get_user_profile()
-        assistant._profile = agent.profile
-        import repeated_entries
-        agent.history = repeated_entries.with_profile(experience_data, agent.profile)
-    except Exception as exc:
-        logger.warning("Could not reload the profile or settings: %s", exc)
-    try:
-        import claude_integration
-        importlib.reload(claude_integration)
-        if agent.claude.__class__.__name__ == "ClaudeClient":
-            agent.claude.__class__ = claude_integration.ClaudeClient
-    except Exception as exc:
-        logger.warning("Could not reload the Claude instructions: %s", exc)
-    try:
-        # A run started on the API can be moved onto the session brain
-        # (or back) without restarting, keeping the form as it stands.
-        import session_planner
-        importlib.reload(session_planner)
-        agent.claude = rechoose_brain(agent.claude, config_module.get_app_config(), job)
-    except Exception as exc:
-        logger.warning("Could not switch the brain over: %s", exc)
-    logger.info("Reloaded the reading agent, your profile and the instructions")
-    return assistant
-
-
-def reload_browser_automation(assistant: JobApplicationAssistant) -> JobApplicationAssistant:
-    """Re-reads browser_automation.py from disk and rebinds `assistant` to
-    the freshly-reloaded class, so a bug fix takes effect in THIS already
-    -running process -- without closing the browser or losing the session/
-    login/draft state. importlib.reload() redefines the module's classes in
-    place; reassigning __class__ makes the existing instance use the new
-    method implementations (Python looks up methods on the instance's
-    __class__ at call time, not at instance-creation time).
-
-    The reload is attempted only after the file compiles, and any failure is
-    swallowed: a SyntaxError propagating out of importlib.reload() kills the
-    process, which closes the browser and throws away a part-filled
-    application and its login session. A bad edit should cost a retry, not
-    the whole run."""
-    path = Path(browser_automation.__file__)
-    try:
-        compile(path.read_text(encoding="utf-8"), str(path), "exec")
-    except SyntaxError as exc:
-        logger.error("RELOAD_REJECTED: %s has a syntax error (line %s): %s -- keeping the running version",
-                     path.name, exc.lineno, exc.msg)
-        return assistant
-
-    try:
-        # The profile too: the answers in config.py are data the run uses, and
-        # a fix to them was reaching the code but not the values -- the run
-        # went on offering the answer it had started with.
-        try:
-            importlib.reload(config_module)
-            fresh = config_module.get_user_profile()
-            if getattr(assistant, "_profile", None) is not None:
-                assistant._profile = fresh
-            logger.info("Reloaded the profile as well")
-        except Exception as exc:
-            logger.warning("Could not reload config.py: %s", exc)
-
-        # Every project module the running code uses (safety.py's rules, account_state's table, the fillers ...),
-        # each after the modules it uses. Reloading browser_automation and page_agent alone left new code calling
-        # what the old helpers do not have: a reload into Mutual of Enumclaw's waiting run (29 September) would have
-        # met an account_state without its reset step.
-        helpers = project_modules_used_by(*(m for m in (browser_automation, sys.modules.get("page_agent")) if m))
-        for module in helpers:
-            try:
-                compile(Path(module.__file__).read_text(encoding="utf-8"), module.__file__, "exec")
-            except SyntaxError as exc:
-                logger.error("RELOAD_REJECTED: %s (line %s): %s -- keeping the running version",
-                             Path(module.__file__).name, exc.lineno, exc.msg)
-                return assistant
-        for module in helpers:
-            try:
-                importlib.reload(module)
-            except Exception as exc:
-                logger.warning("Could not reload %s: %s", Path(module.__file__).name, exc)
-
-        # The site adapters first: browser_automation calls hooks on them, and
-        # reloading only one half left a new call meeting an old adapter --
-        # which killed a live Amazon application with AttributeError.
-        import sites
-        for module in [sites.base] + [
-            importlib.import_module(f"sites.{name}") for name in
-            ("amazon", "ashby", "eightfold", "greenhouse", "lever", "successfactors", "workday")
-        ]:
-            try:
-                compile(Path(module.__file__).read_text(encoding="utf-8"), module.__file__, "exec")
-                importlib.reload(module)
-            except SyntaxError as exc:
-                logger.error("RELOAD_REJECTED: %s (line %s): %s", Path(module.__file__).name, exc.lineno, exc.msg)
-                return assistant
-        importlib.reload(sites)
-        sites._CACHE.clear()  # adapters are cached per run; drop the old objects
-        importlib.reload(browser_automation)
-        assistant.__class__ = browser_automation.JobApplicationAssistant
-        logger.info("Reloaded browser_automation.py and the site adapters in place")
-    except Exception as exc:
-        logger.error("RELOAD_FAILED: %s -- keeping the running version", exc)
-    return assistant
 
 
 def main() -> None:
@@ -1698,11 +1565,11 @@ def main() -> None:
                     page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
                 except Exception as exc:
                     logger.warning("Could not capture confirmation screenshot: %s", exc)
-                if status == STATUS_SUBMITTED:
-                    delete_screenshots(job_dir)
                 evidence = getattr(assistant, "_confirmation_evidence", "") or \
                     "the page confirmed it (see submitted_confirmation.png)"
                 status, note = safety.verification_status(evidence)
+                if status == STATUS_SUBMITTED:          # was read before it was set: a NameError on this path
+                    delete_screenshots(job_dir)
                 tracker.update_status(key, status, notes=note)
                 remember_progress(tracker, key, page, "submitted by the user")
                 logger.info("SUBMITTED_BY_USER: confirmation seen on %s", page.url)
@@ -1723,9 +1590,8 @@ def main() -> None:
                 return
 
             if decision == "reload_code":
-                assistant = reload_browser_automation(assistant)
-                step -= 1  # this iteration didn't actually do anything yet
-                continue
+                end_for_resume(tracker, key, page)
+                return
 
             if decision == "submit":
                 # Kept only to answer it: the agent stops before Submit, and

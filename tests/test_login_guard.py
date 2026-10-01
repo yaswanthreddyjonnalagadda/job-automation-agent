@@ -260,5 +260,7 @@ def test_apply_flow_hands_the_owners_decision_to_the_agent():
     from pathlib import Path
     source = (Path(__file__).parents[1] / "apply_flow.py").read_text(encoding="utf-8")
     assert source.count('forget_sign_in_attempts(owner_acted=(decision == "continue"))') == 2
-    assert "forget_sign_in_attempts(owner_acted=False)" in source
     assert "forget_sign_in_attempts()" not in source
+    # Resume is a new run (review, 1 October), so no reload path forgives the sign-in attempts: a hold on the
+    # account is kept in login_guard's file and only the owner's Continue lifts it.
+    assert "forget_sign_in_attempts(owner_acted=False)" not in source

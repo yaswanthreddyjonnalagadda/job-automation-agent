@@ -118,20 +118,38 @@ def test_a_run_whose_process_is_gone_does_not_block_a_new_one(client, monkeypatc
     assert client.started == [(record.url, "")]
 
 
-def test_reload_agent_signals_a_waiting_run(client, tmp_path, monkeypatch):
-    signals = tmp_path / "data"
-    signals.mkdir()
-    (signals / "_signal_Example.txt").write_text("", encoding="utf-8")
-    monkeypatch.setattr(web_ui, "BASE_DIR", tmp_path)
-    assert client.post("/reload-agent").status_code == 302
-    assert (signals / "_signal_Example.txt").read_text(encoding="utf-8") == "reload_code"
+def _waiting_run(client, monkeypatch, record):
+    """A run waiting for the owner on the page `record.last_page_url`."""
+    stopped = []
+    monkeypatch.setattr(web_ui, "_running_url", lambda: record.url)
+    monkeypatch.setattr(web_ui, "_stop_run", lambda url: stopped.append(url) or True)
+    monkeypatch.setattr(web_ui, "get_tracker", lambda: type("T", (), {"list_all": lambda s: [record]})())
+    monkeypatch.setattr(web_ui.time, "sleep", lambda s: None)
+    return stopped
 
 
-def test_reload_agent_says_so_when_nothing_is_waiting(client, tmp_path, monkeypatch):
+@pytest.mark.parametrize("press", [
+    lambda c: c.post("/reload-agent"),
+    lambda c: c.post("/signal/_signal_Example.txt", data={"decision": "reload_code"}),
+])
+def test_resume_ends_the_waiting_run_and_starts_a_new_one_on_its_page(client, monkeypatch, tmp_path, press):
+    """Review, 1 October: code is never swapped into a running process; Resume is a new run, one code version."""
     (tmp_path / "data").mkdir()
     monkeypatch.setattr(web_ui, "BASE_DIR", tmp_path)
+    record = Record()
+    record.last_page_url = "https://jobs.example.com/apply/42/step3"
+    stopped = _waiting_run(client, monkeypatch, record)
+    assert press(client).status_code == 302
+    assert stopped == [record.url]
+    assert client.started == [(record.url, record.last_page_url)]
+    assert not (tmp_path / "data" / "_signal_Example.txt").exists()      # no in-process reload signal
+
+
+def test_reload_agent_says_so_when_nothing_is_running(client, monkeypatch):
+    monkeypatch.setattr(web_ui, "_running_url", lambda: "")
     response = client.post("/reload-agent", follow_redirects=True)
-    assert "nothing to reload" in response.get_data(as_text=True).lower()
+    assert "nothing is running to reload" in response.get_data(as_text=True).lower()
+    assert client.started == []
 
 
 def test_settings_save_credentials_without_redisplaying_secrets(client, tmp_path, monkeypatch):
