@@ -737,6 +737,23 @@ redraws itself (hCaptcha's) could be missed at that moment, and the run then wai
 for a Continue after you had solved it (Mutual of Enumclaw, 29 September). It never
 carries on for a CAPTCHA it has not seen.
 
+## When a run is cut off
+
+Each application keeps a small checkpoint on your computer (`data/checkpoints/`): which job it
+is, the last page the agent saw and understood, and which version of the agent read it.
+
+- **Reopening where it left off:** the page must be this application -- the same site, and the
+  job's title, an application step counter, or the very page it last saw with its form. A
+  careers home page, another form on the same site, a different site, or a page that cannot be
+  read is not taken for it: the agent goes back to the job posting instead.
+- **Submit:** before the verified auto-submit presses Submit, it writes down that it is about to.
+  If the run ends before it sees the result, the next run does not press it again: it stops,
+  says "outcome unknown", and asks you to check your email and the employer's portal. Your
+  Continue closes it.
+- **Create Account:** the same. If the run ends between pressing Create Account and reading the
+  page after it, the next run does not make the account again; it asks you to check your email
+  for the site's welcome or verification message first. Your Continue closes it.
+
 ## A job that will not sponsor
 
 When your profile needs sponsorship, the agent reads each page for wording that says

@@ -4892,13 +4892,16 @@ class JobApplicationAssistant:
                 if not button.count():
                     logger.warning("ACCOUNT_CREATE_FAILED: no Create Account button found")
                     return False
-            self._click_resiliently(button, timeout_ms=8_000)
+            # Written before the press: a run that ends between the press and reading the result leaves the
+            # attempt pending, and the next run asks the owner instead of making the account again.
             login_guard.record_account_attempt(site, email)
+            self._click_resiliently(button, timeout_ms=8_000)
             page.wait_for_timeout(5_000)
             try:
                 page.wait_for_load_state("domcontentloaded", timeout=15_000)
             except Exception:
                 pass
+            login_guard.account_creation_seen(site, email)
 
             still_on_form = len(visible(page.locator("input[type='password']"))) >= 2
             errors = self._visible_error_texts(page)

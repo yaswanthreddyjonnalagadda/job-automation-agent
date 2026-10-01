@@ -54,6 +54,7 @@ from config import get_app_config, get_user_profile
 from jd_analyzer import build_job_description, dedup_key_for_url
 import ai_choice
 import answer_bank
+import checkpoint
 import safety
 from safety import STATUS_DISQUALIFIED_POLICY_MISMATCH
 from state_machine import (
@@ -605,25 +606,6 @@ def save_stop_page(page, job_dir: Path) -> None:
         logger.info("Could not save the page it stopped on: %s", str(exc).splitlines()[0][:100])
 
 
-def shows_the_application(assistant, page) -> bool:
-    """A reopened page still holds the application: a form to fill (any frame), or the job posting.
-
-    Judged by what is on the page, not by its address: a careers home looked like any other page."""
-    try:
-        page.wait_for_timeout(2_000)            # Workday draws the form after the page has loaded
-        if assistant.on_job_description(page):
-            return True
-        for frame in page.frames:
-            found = frame.evaluate("""() => [...document.querySelectorAll(
-                    'input:not([type=hidden]):not([type=search]):not([type=submit]):not([type=button]), '
-                    + 'textarea, select, [role=combobox], [role=radio], [role=checkbox]')]
-                .some(e => !!(e.offsetParent || e.getClientRects().length))""")
-            if found:
-                return True
-    except Exception:
-        return True                             # when the page cannot be read, leave it as it was
-    return False
-
 
 def remember_progress(tracker, key: str, page, note: str = "") -> None:
     """Writes down where this application has got to.
@@ -638,6 +620,7 @@ def remember_progress(tracker, key: str, page, note: str = "") -> None:
         return
     if not worth_returning_to(url):
         return
+    checkpoint.verified(key, url)
     if hasattr(tracker, "update_last_page"):
         try:
             tracker.update_last_page(key, url)
@@ -1080,12 +1063,15 @@ def submit_verified(assistant, page, tracker, key, job, job_dir: Path, decision)
     if hasattr(tracker, "record_event"):
         tracker.record_event(key, "auto_submit", "clicked Submit after verification",
                              payload={"reasons": [], "evidence": decision.evidence_paths})
+    checkpoint.begin(key, "submit", f"{job.title} at {job.company}")
     clicked = assistant.click_verified_submit(page)
     if not clicked:
+        checkpoint.finish(key, "submit", "the button could not be clicked")
         logger.error("AUTO_SUBMIT_FAILED: the Submit button could not be clicked")
         return False
     evidence = assistant.wait_for_submission_evidence(page, job.title)
     status, note = safety.verification_status(evidence)
+    checkpoint.finish(key, "submit", f"{status}: {note}")
     tracker.update_status(key, status, notes=note)
     try:
         page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
@@ -1404,6 +1390,7 @@ def main() -> None:
         # Lets the assistant check and record which employers have accounts.
         assistant.tracker, assistant.employer, assistant._profile = tracker, job.company, profile
         assistant.application_key = key
+        checkpoint.note_application(key, job)
         existing = tracker.get(key) if hasattr(tracker, "get") else None
         if existing and existing.status not in ("prepared",):
             logger.info("PICKING UP: %s was last %s%s", existing.title[:50],
@@ -1436,12 +1423,30 @@ def main() -> None:
             # the run, not only at a hand-over.
             assistant.raise_window(page)
             page = assistant.open_embedded_form(page)
-            if resume_at and not shows_the_application(assistant, page):
+            pending = checkpoint.unresolved(key)
+            if pending:
+                # A Submit was pressed and the run ended before its result was seen: the result is unknown,
+                # and pressing it again could send the application twice. The owner checks first.
+                message = checkpoint.what_to_check(pending, job)
+                logger.warning("OUTCOME UNKNOWN: %s", message)
+                tracker.update_status(key, STATUS_NEEDS_USER_REVIEW, notes=message[:1000])
+                save_stop_page(page, job_dir)
+                try:
+                    decision = assistant.wait_for_signal(Path(args.signal_file), timeout_seconds=args.timeout,
+                                                         page=page)
+                except TimeoutError:
+                    return
+                if decision != "continue":
+                    return
+                checkpoint.owner_checked(key)
+            reopened = checkpoint.reconcile(key, page, assistant.on_job_description) if resume_at else None
+            if reopened is not None:
+                logger.info("RESUME CHECK: %s -- %s", reopened.verdict, reopened.why)
+            if reopened is not None and not reopened.is_the_application:
                 # KBI's last page was recorded as the careers home (/en-US/KBI_Biopharma/): no form, no
-                # posting, nothing to read, and the run stopped there. The address said nothing wrong;
-                # the page does.
-                logger.info("The page the last run reached no longer shows the application; "
-                            "starting from the posting")
+                # posting, nothing to read, and the run stopped there. Judged by the page and the
+                # checkpoint together: same site, and the job, a step counter, or the last verified form.
+                logger.info("The page the last run reached is not this application; starting from the posting")
                 page.goto(job.url, wait_until="domcontentloaded")
                 page.wait_for_timeout(3_000)
                 page = assistant.open_embedded_form(page)
