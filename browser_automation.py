@@ -5120,13 +5120,20 @@ class JobApplicationAssistant:
                         domain)
         else:
             # The email first, and checked: a password is never sent without it.
-            email_locator.fill(email)
+            fill_and_dispatch(email_locator, email)
             if not self._email_kept([email_locator], email):
                 self._type_email(page, email_locator, email)
             if not self._email_kept([email_locator], email):
                 logger.warning("LOGIN_HELD: the email box on %s did not keep the address -- not signing in", domain)
                 return False
-        pw_locator.fill(password)
+        # Typed as a person types it, then left (Tab), and checked -- as the Create Account form does. A value set
+        # in one go, with no events, can be dropped by a React form (Workday): the form then sends the password
+        # it last registered, and the site answers "wrong email address or password" (Waystar, Crescent Energy,
+        # 1 October -- the owner signed in by hand with the same password at once). A password the box did not
+        # keep is never submitted: that would spend one of the account's few attempts.
+        if not self._type_password(pw_locator, password):
+            logger.warning("LOGIN_HELD: the password box on %s did not keep the password -- not signing in", domain)
+            return False
 
         # Sign-in buttons are often duplicated (one hidden) or covered by a
         # cookie banner, so go through the same resilient click path that the
@@ -5151,6 +5158,22 @@ class JobApplicationAssistant:
         page.wait_for_timeout(3000)
         logger.info("Attempted auto-login on %s via Enter key", domain)
         return self._after_login_attempt(page, email, create_if_missing)
+
+    @staticmethod
+    def _type_password(box, password: str) -> bool:
+        """Types the password key by key into `box`, leaves the box, and says whether it holds exactly that."""
+        for _attempt in range(2):
+            try:
+                box.click(timeout=5_000)
+                box.press("Control+A")
+                box.press("Backspace")
+                box.press_sequentially(password, delay=25)
+                box.press("Tab")
+                if (box.input_value(timeout=3_000) or "") == password:
+                    return True
+            except Exception as exc:
+                logger.debug("Could not type the password: %s", str(exc).splitlines()[0][:100])
+        return False
 
     @staticmethod
     def _email_already_given(page: Page, email: str) -> bool:

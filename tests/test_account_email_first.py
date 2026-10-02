@@ -249,3 +249,31 @@ def test_the_mail_is_read_only_when_the_page_asks_for_it(page, body, asks):
     from browser_automation import JobApplicationAssistant
     page.set_content(f"<html><body>{body}</body></html>")
     assert JobApplicationAssistant._page_asks_to_verify(page) == asks
+
+
+KEYED_SIGN_IN = """<html><body><h2>Sign In</h2><div id=alert role=alert></div>
+<label for=se>Email Address*</label><input type=text id=se data-automation-id=email>
+<label for=sp>Password*</label><input type=password id=sp>
+<button id=go>Sign In</button>
+<script>
+  // Like a React form: the password it sends is the one it registered from keystrokes, not the box's raw value.
+  let typed = '';
+  const pw = document.getElementById('sp');
+  pw.addEventListener('keydown', e => { if (e.key.length === 1) typed += e.key; else if (e.key === 'Backspace') typed = ''; });
+  window.sent = null;
+  document.getElementById('go').addEventListener('click', () => {
+    window.sent = typed;
+    if (typed === 'Corr3ct!Horse#9') { document.body.innerHTML = '<h1>Candidate Home</h1>'; }
+    else { document.getElementById('alert').textContent =
+           'You may have entered the wrong email address or password or your account might be locked.'; }
+  });
+</script></body></html>"""
+
+
+def test_the_sign_in_password_is_typed_so_a_react_form_registers_it(page, monkeypatch):
+    """Waystar and Crescent Energy (Workday), 1 October: the agent's sign-in was refused, the owner's -- typed by
+    hand, same password -- went through. A value set in one go was not what the form sent."""
+    serve(page, KEYED_SIGN_IN)
+    a = assistant_for(monkeypatch)
+    assert a.attempt_auto_login(page, EMAIL, "Corr3ct!Horse#9", create_if_missing=False) is True
+    assert page.evaluate("window.sent") == "Corr3ct!Horse#9"
