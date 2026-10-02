@@ -1,0 +1,21 @@
+{
+  "id": "f096",
+  "date": "2026-10-02",
+  "class": "An account press whose result was assumed, not read; and an account's scope (one employer or a whole portal) never asked",
+  "symptom": "Waystar (Workday), 1-2 October: 'created, not yet verified' logged six times after Create Account, each followed by a refused sign-in, with nothing kept of what the page said -- whether the account was ever made could not be told. Segra (Dayforce), 16 September: refused, on a portal whose one account serves every Dayforce employer. A refused password with no account on record always stopped for the owner.",
+  "site": "Every ATS with candidate accounts; Dayforce, UKG and iCIMS's shared login for the scope",
+  "root_cause": "fill_create_account_form decided the outcome from two checks (two password boxes still showing; a validation error) and otherwise assumed the account was made; the page after the press was never read as an account state, logged in the site's words or saved. Accounts were recorded and decided per employer only, so a portal with one shared login was treated like Workday: create first. The decision table had no way to ask the site whether an unknown account exists, so 'wrong email or password' with no record went to the owner.",
+  "why_tests_missed": "Test pages after Create Account were either the account form again or a signed-in page; none showed a blank page, a banner on a different page, or nothing at all. The decision table was tested state by state for one employer's site; nothing tested it over every memory, or for a shared login.",
+  "fix": "_account_click_result reads the page after every Create Account and Sign In press as an account state, logs ACCOUNT_RESULT with the site's own words, and saves a screenshot and the page text (secrets hidden) in logs/account_steps/. A create press after which the page shows no account step, no message and no application is reported as failed and not recorded; an 'already exists' banner on the next page goes to sign-in; a verify message opens the link at once. sites/accounts.py names the shared logins; there the table signs in first and the account is recorded once for the portal (record_key). A refused password for an account with no record, on a page offering Create Account, opens Create Account so the site says whether it exists; 'exists' after a refused sign-in goes to the owner's reset rule.",
+  "tests": [
+    "tests/test_account_loop.py::test_on_a_shared_login_the_agent_never_creates_before_it_has_tried_to_sign_in",
+    "tests/test_account_loop.py::test_a_refused_password_is_never_typed_again",
+    "tests/test_account_loop.py::test_a_refused_password_for_an_account_on_no_record_asks_the_site_by_creating_it",
+    "tests/test_account_loop.py::test_an_account_the_site_says_exists_and_refused_is_reset_by_the_owners_rule",
+    "tests/test_account_loop.py::test_a_create_press_that_leads_nowhere_records_no_account",
+    "tests/test_account_loop.py::test_what_the_page_said_after_create_is_logged_and_saved",
+    "tests/test_account_loop.py::test_an_exists_message_after_the_form_has_gone_signs_in",
+    "tests/test_account_loop.py::test_a_verify_message_after_create_opens_the_link_before_signing_in"
+  ],
+  "prevention": "Every press that changes account state is followed by one reading of the page that names the result and keeps the evidence; nothing is recorded on a guess. Model whose account it is (one employer, or a portal's shared login) from the start, and test the decision table over every combination of its memory, not one case at a time."
+}

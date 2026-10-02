@@ -244,6 +244,7 @@ class Memory:
     refused_before: bool = False     # login_guard: this account's last sign-in here was refused (kept across runs)
     verify_tried: bool = False       # the verification link was already looked for on this site in this run
     held: str = ""                   # login_guard's reason for holding back, if any
+    shared_portal: str = ""          # the portal whose one account covers every employer on it (sites.accounts)
 
 
 @dataclass(frozen=True)
@@ -282,8 +283,14 @@ def next_step(state: AccountState, memory: Memory) -> Step:
         if _knows_account(memory) and not memory.reset_tried:
             return Step(RESET_PASSWORD, "the site knows this account and refused its password: resetting it to the "
                                         "ATS password with the code emailed to you")
-        return Step(FOR_OWNER, f"the site refused the email and password ({state.why}). Check them on the site "
-                               f"(or reset the password to the one in Settings), then press Continue")
+        if state.can_create and not memory.created:
+            # Whether an account exists here is the site's to say: creating it either makes it or meets "already
+            # exists", which makes it a known account whose password the owner's rule resets (owner, 2 October).
+            return Step(OPEN_CREATE, "the site refused the password for an account the agent has no record of: "
+                                     "creating it, and the site will say if it already exists")
+        return Step(FOR_OWNER, f"the site refused the email and password ({state.why})"
+                               + (" and the reset did not go through" if memory.reset_tried else "")
+                               + ". Check them on the site, then press Continue")
     if state.google_offered and not memory.google_tried and not memory.google_refused:
         return Step(GOOGLE, "the site offers Google sign-in")
     if kind == SIGN_IN_FORM and memory.refused_before:
@@ -293,6 +300,9 @@ def next_step(state: AccountState, memory: Memory) -> Step:
         if _knows_account(memory) and not memory.reset_tried:
             return Step(RESET_PASSWORD, "this account's password was refused here before: resetting it to the "
                                         "ATS password with the code emailed to you")
+        if state.can_create and not memory.created:
+            return Step(OPEN_CREATE, "this password was refused here before and no account is on record: creating "
+                                     "it, and the site will say if it already exists")
         return Step(FOR_OWNER, "this account's password was refused here before"
                                + (" and the reset did not go through" if memory.reset_tried else "")
                                + ": set it on the site to the password in Settings (or check the account), "
@@ -300,9 +310,15 @@ def next_step(state: AccountState, memory: Memory) -> Step:
     if memory.held and kind in (CREATE_FORM, SIGN_IN_FORM, ACCOUNT_EXISTS):
         return Step(FOR_OWNER, memory.held)
     if kind == ACCOUNT_EXISTS:
-        return Step(OPEN_SIGN_IN if not memory.signed_in_tried else FOR_OWNER,
-                    "this email already has an account here" if not memory.signed_in_tried else
-                    "this email has an account here and signing in did not work: check it on the site, then Continue")
+        if not memory.signed_in_tried:
+            return Step(OPEN_SIGN_IN, "this email already has an account here")
+        if not memory.reset_tried:
+            # The site says the account exists and refused its password: the owner's rule resets it to the ATS
+            # password with the code emailed to you (CLAUDE.md section 5).
+            return Step(RESET_PASSWORD, "this email has an account here and its password was refused: resetting it "
+                                        "to the ATS password with the code emailed to you")
+        return Step(FOR_OWNER, "this email has an account here, signing in was refused and the reset did not go "
+                               "through: check it on the site, then press Continue")
     if kind == CREATE_FORM:
         if state.form_error:
             # The site wants the form finished (a box it points at): that is the form to fill, whatever the
@@ -313,12 +329,16 @@ def next_step(state: AccountState, memory: Memory) -> Step:
         # creating it again cannot succeed and spends one of the day's two creations.
         if memory.account_active:
             return Step(OPEN_SIGN_IN, "the agent has signed in to this account before")
+        if memory.shared_portal and not memory.signed_in_tried:
+            # One account for every employer on this portal: it most likely exists from an earlier application.
+            return Step(OPEN_SIGN_IN, f"one {memory.shared_portal} account covers every employer: signing in first")
         if memory.created:
             return Step(FOR_OWNER, "the new-account form is still showing after the account was created: "
                                    "look at the page, then press Continue")
         return Step(CREATE, "no account here yet")
     if kind == SIGN_IN_FORM:
-        if state.can_create and not memory.created and not memory.signed_in_tried and not memory.account_active:
+        if state.can_create and not memory.created and not memory.signed_in_tried and not memory.account_active \
+                and not memory.shared_portal:
             return Step(OPEN_CREATE, "create the account first; if it exists the site will say so")
         if memory.signed_in_tried:
             return Step(FOR_OWNER, "signing in did not get past the sign-in form: look at the page, then Continue")

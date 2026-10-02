@@ -729,7 +729,8 @@ def test_dedicated_email_first_login_screen_fills_email_and_advances(page, resum
 def test_recorded_account_uses_sign_in_instead_of_stale_registration(page, resume_file):
     page.set_content('<button>Create Account</button><input type="password"><input type="password">')
     agent, calls = agent_with_fake_login(resume_file)
-    agent.assistant.account_on_record = lambda: True
+    agent.assistant.account_on_record = lambda url="": True
+    agent.assistant.account_signed_in_before = lambda url="": True    # signed in to before (owner, 1 October)
     agent.assistant._create_account_control = lambda tab: tab.get_by_role("button", name="Create Account")
     agent.assistant._goto_login_page = lambda tab: calls.append(("goto_login", tab.url)) or True
     controls = page_agent.parse_snapshot(agent.snapshot(page))
@@ -742,7 +743,7 @@ def test_visible_registration_errors_override_a_transient_account_record(page, r
     page.set_content('<button>Create Account</button><input type="password"><input type="password">'
                      '<p>Error: Passwords do not match</p>')
     agent, calls = agent_with_fake_login(resume_file)
-    agent.assistant.account_on_record = lambda: True
+    agent.assistant.account_on_record = lambda url="": True
     agent.assistant._create_account_control = lambda tab: tab.get_by_role("button", name="Create Account")
     agent.assistant._goto_login_page = lambda tab: calls.append(("goto_login", tab.url)) or True
     controls = page_agent.parse_snapshot(agent.snapshot(page))
@@ -762,7 +763,8 @@ def test_workday_recorded_account_signs_in_instead_of_registering(page, resume_f
     </form>''')
     agent, calls = agent_with_fake_login(resume_file)
     agent.assistant.adapter = lambda _tab: WorkdayAdapter()
-    agent.assistant.account_on_record = lambda: True
+    agent.assistant.account_on_record = lambda url="": True
+    agent.assistant.account_signed_in_before = lambda url="": True    # signed in to before (owner, 1 October)
     agent.assistant._create_account_control = lambda tab: tab.get_by_role("button", name="Create Account")
     agent.assistant._goto_login_page = lambda tab: calls.append(("goto_login", tab.url)) or True
     controls = page_agent.parse_snapshot(agent.snapshot(page))

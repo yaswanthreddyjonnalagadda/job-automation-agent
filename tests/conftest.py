@@ -47,7 +47,8 @@ def _keep_state_files_out_of_the_owners_data(monkeypatch, tmp_path):
         for name, value in list(vars(module).items()):
             if not isinstance(value, Path):
                 continue
-            if not value.is_absolute() and value.parts[:1] == ("data",):
+            # logs/ too: an account test's screenshots went into the owner's logs/account_failures.
+            if not value.is_absolute() and value.parts[:1] in (("data",), ("logs",)):
                 monkeypatch.setattr(module, name, tmp_path / value.name)
             # The same file named by its full path (profile_setup.ANSWERS_PATH, config.DB_PATH): a test's typed
             # 'First Name = Yash R.' was saved into the owner's real answers on 29 September. The profile is

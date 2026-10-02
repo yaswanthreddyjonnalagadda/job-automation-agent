@@ -190,5 +190,6 @@ def test_landing_on_sign_in_after_create_is_reported_unverified_and_not_recorded
     page.goto("https://careers.example-ats.com/en-US/careers/apply")
     caplog.set_level("INFO")
     a.fill_create_account_form(page, "owner@example.com")
-    assert remembered == []                                             # nothing was saved as an account
+    # Saved only as made-but-not-verified (1 October: so no later run makes it again), never as a working account.
+    assert [args[2] for args in remembered] == ["password (created, not yet verified)"]
     assert "ACCOUNT_CREATED" not in caplog.text and "ACCOUNT_UNVERIFIED" in caplog.text

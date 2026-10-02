@@ -55,8 +55,13 @@ from perception import (
     is_ant_dropdown,
 )
 from sites import adapter_for
+from sites import accounts as site_accounts
 
 logger = logging.getLogger(__name__)
+
+# What each account press led to, and the account forms a site refused: a screenshot and the page text for each.
+ACCOUNT_STEPS = Path("logs") / "account_steps"
+ACCOUNT_FAILURES = Path("logs") / "account_failures"
 
 # A Chrome-family window is titled "<page> - Google Chrome" (real Chrome, what the agent uses),
 # "... - Chrome for Testing" (Playwright's bundled browser) or "... - Chromium". Chrome's own bubbles
@@ -3555,7 +3560,7 @@ class JobApplicationAssistant:
                 logger.info("ACCOUNT: Workday Candidate Home is in %s", candidate_state)
                 # Create first (owner, 1 October) -- except for an account the agent has signed in to before:
                 # creating it again cannot succeed and spends one of the day's creations.
-                if self._read_ats_password() and self.account_signed_in_before() and self._has_sign_in_affordance(page):
+                if self._read_ats_password() and self.account_signed_in_before(page.url) and self._has_sign_in_affordance(page):
                     logger.info("ACCOUNT: signed in to this account before -- signing in instead of registering")
                     if self._goto_login_page(page):
                         return self.attempt_auto_login(page, email, "", scope=self._sign_in_scope(page))
@@ -4514,14 +4519,19 @@ class JobApplicationAssistant:
     # ------------------------------------------------------------------
     # Employer accounts: sign in only where one exists, otherwise create it
     # ------------------------------------------------------------------
-    def account_on_record(self) -> Optional[bool]:
+    def _account_record_key(self, url: str = "") -> str:
+        """The name the account is recorded under: the employer's, or for a portal with one shared login (Dayforce,
+        UKG, iCIMS) the portal's -- the account made for one of its employers is the one every other asks for."""
+        return site_accounts.record_key((getattr(self, "employer", "") or "").strip(), url)
+
+    def account_on_record(self, url: str = "") -> Optional[bool]:
         """True/False whether the database records an account with this
-        employer; None when that can't be known (no tracker, no employer)."""
-        tracker, employer = getattr(self, "tracker", None), (getattr(self, "employer", "") or "").strip()
-        if tracker is None or not employer or not hasattr(tracker, "get_ats_account"):
+        employer (or shared portal); None when that can't be known (no tracker, no employer)."""
+        tracker, key = getattr(self, "tracker", None), self._account_record_key(url)
+        if tracker is None or not key or not hasattr(tracker, "get_ats_account"):
             return None
         try:
-            return tracker.get_ats_account(employer) is not None
+            return tracker.get_ats_account(key) is not None
         except Exception as exc:
             logger.warning("Could not check the account record: %s", exc)
             return None
@@ -4537,23 +4547,23 @@ class JobApplicationAssistant:
         kind = account_state.read_state(snapshot).kind
         return {account_state.CODE_ENTRY: "code", account_state.VERIFY_EMAIL: "link"}.get(kind, "")
 
-    def account_signed_in_before(self) -> bool:
+    def account_signed_in_before(self, url: str = "") -> bool:
         """The agent has signed in to this employer's account before (its record is not 'created, not yet
         verified'): creating it again cannot succeed, so the run signs straight in."""
-        tracker, employer = getattr(self, "tracker", None), (getattr(self, "employer", "") or "").strip()
-        if tracker is None or not employer or not hasattr(tracker, "get_ats_account"):
+        tracker, key = getattr(self, "tracker", None), self._account_record_key(url)
+        if tracker is None or not key or not hasattr(tracker, "get_ats_account"):
             return False
         try:
-            record = tracker.get_ats_account(employer)
+            record = tracker.get_ats_account(key)
         except Exception:
             return False
         return bool(record) and "not yet verified" not in str(record.get("method") or "")
 
     def remember_account(self, page: Page, email: str, method: str) -> None:
-        tracker, employer = getattr(self, "tracker", None), (getattr(self, "employer", "") or "").strip()
-        if tracker is not None and employer and hasattr(tracker, "record_ats_account"):
+        tracker, key = getattr(self, "tracker", None), self._account_record_key(page.url)
+        if tracker is not None and key and hasattr(tracker, "record_ats_account"):
             try:
-                tracker.record_ats_account(employer, email, urlparse(page.url).netloc.lower(), method)
+                tracker.record_ats_account(key, email, urlparse(page.url).netloc.lower(), method)
             except Exception as exc:
                 logger.warning("Could not record the account: %s", exc)
 
@@ -4640,7 +4650,7 @@ class JobApplicationAssistant:
         from datetime import datetime
         from perception import hide_secrets
         try:
-            folder = Path("logs") / "account_failures"
+            folder = ACCOUNT_FAILURES
             folder.mkdir(parents=True, exist_ok=True)
             stem = f"{re.sub(r'[^A-Za-z0-9.-]+', '_', site or 'site')}_{datetime.now():%Y%m%d_%H%M%S}"
             evidence.screenshot(page, folder / f"{stem}.png")
@@ -4649,6 +4659,47 @@ class JobApplicationAssistant:
             logger.warning("ACCOUNT_CREATE_FAILED: what the site showed is saved in %s", folder / stem)
         except Exception as exc:
             logger.info("Could not save the account page: %s", str(exc).splitlines()[0][:100])
+
+    def _account_click_result(self, page: Page, action: str):
+        """What the page says after an account button was pressed (create, sign in): read as an account state, the
+        site's own words beside it, and a screenshot with the page text saved -- so a result is read, never assumed.
+
+        Waystar (Workday), 1-2 October: after Create Account the agent logged "created, not yet verified" six times
+        and went on to sign in, and nothing was kept of what the page said; whether the account was ever made could
+        not be told. Returns the account_state.AccountState; the words are logged and saved, never a secret."""
+        from datetime import datetime
+        from perception import hide_secrets
+        try:
+            snapshot = page.locator("body").aria_snapshot(mode="ai")
+        except Exception:
+            snapshot = ""
+        state = account_state.read_state(snapshot, password_boxes=len(self._visible_password_boxes(page)))
+        said = " / ".join(dict.fromkeys(" ".join(t.split()) for t in self._visible_error_texts(page)
+                                        if t and t.strip()))[:300]
+        site = urlparse(page.url).netloc.lower()
+        logger.info("ACCOUNT_RESULT: %s on %s -> %s%s", action, site, state,
+                    f' -- the page says: "{said}"' if said else " -- the page shows no message")
+        try:
+            folder = ACCOUNT_STEPS
+            folder.mkdir(parents=True, exist_ok=True)
+            stem = f"{re.sub(r'[^A-Za-z0-9.-]+', '_', site or 'site')}_{datetime.now():%Y%m%d_%H%M%S}_{action}"
+            evidence.screenshot(page, folder / f"{stem}.png")
+            (folder / f"{stem}.txt").write_text(f"{page.url}\n{action} -> {state}\nsays: {said}\n\n"
+                                                + hide_secrets(snapshot), encoding="utf-8")
+        except Exception as exc:
+            logger.debug("Could not save the account result: %s", str(exc).splitlines()[0][:100])
+        return state
+
+    @staticmethod
+    def _account_page_left(page: Page) -> bool:
+        """Whether the page after an account press is something to go on with -- the application's own boxes (at
+        least two to fill), not a blank or half-drawn page."""
+        try:
+            return bool(page.evaluate(
+                """() => [...document.querySelectorAll('input, select, textarea')].filter(e =>
+                    e.type !== 'hidden' && e.type !== 'password' && e.getClientRects().length).length >= 2"""))
+        except Exception:
+            return False
 
     def _visible_error_texts(self, page: Page) -> list[str]:
         try:
@@ -4749,7 +4800,7 @@ class JobApplicationAssistant:
         self._create_form_attempted = True
         site = urlparse(page.url).netloc.lower()
         held = login_guard.may_create_account(site, email)
-        if held and self.account_on_record() and not login_guard.may_sign_in(site, email):
+        if held and self.account_on_record(page.url) and not login_guard.may_sign_in(site, email):
             # The day's creations are spent and the account is on record: it exists, so sign in to it.
             logger.info("ACCOUNT: %s -- the account is on record, signing in to it", held)
             return self.sign_in_to_existing_account(page, email)
@@ -4935,11 +4986,24 @@ class JobApplicationAssistant:
                 still_on_form = len(visible(page.locator("input[type='password']"))) >= 2
                 errors = self._visible_error_texts(page)
                 has_validation_error = self._account_form_has_validation_error(page)
+            result = self._account_click_result(page, "create")
             if still_on_form or has_validation_error:
                 if self._account_exists_message(page, include_body=True):
                     return self.sign_in_to_existing_account(page, email)
                 logger.warning("ACCOUNT_CREATE_FAILED: the site kept the form open%s",
                                f" -- {' / '.join(errors)[:200]}" if errors else "")
+                self._save_account_failure(page, site)
+                return False
+            if result.kind == account_state.ACCOUNT_EXISTS:
+                # Said after the form left the screen (a banner on the sign-in page it moved to).
+                return self.sign_in_to_existing_account(page, email)
+            if not self._account_creation_is_confirmed(page) and result.kind == account_state.NONE \
+                    and not self._account_page_left(page):
+                # The form went, but nothing an account step shows came in its place -- no sign-in, no "check your
+                # email", no code, no application: the press is not known to have made anything, so nothing is
+                # recorded as made (Waystar, 1-2 October: "created" was assumed six times).
+                logger.warning("ACCOUNT_CREATE_FAILED: after Create Account the page shows no account step, no "
+                               "message and no application -- not recording an account")
                 self._save_account_failure(page, site)
                 return False
             if not self._account_creation_is_confirmed(page):
@@ -4958,7 +5022,8 @@ class JobApplicationAssistant:
                 # why is it going and checking?" -- Crescent Energy spent two minutes in Gmail first). A page that
                 # asks for a code is the code step's (read again by the page agent); one that asks to verify gets
                 # its link opened; otherwise the agent signs in now, and the mail is read only if that is refused.
-                asks = self._page_asks_to_verify(page)
+                asks = {account_state.CODE_ENTRY: "code",
+                        account_state.VERIFY_EMAIL: "link"}.get(result.kind, "") or self._page_asks_to_verify(page)
                 if asks == "code":
                     logger.info("ACCOUNT: the site asks for an emailed code -- the code step takes it from here")
                     return False
@@ -5091,8 +5156,10 @@ class JobApplicationAssistant:
 
         # Don't try saved credentials on an employer we have no account with:
         # IGT rejected them twice before anyone checked. Create the account
-        # instead when the page offers to.
-        if create_if_missing and self.account_on_record() is False \
+        # instead when the page offers to. Not on a portal with one shared login (Dayforce, UKG, iCIMS): there the
+        # account most likely exists from an earlier employer, and the sign-in is tried first.
+        if create_if_missing and self.account_on_record(page.url) is False \
+                and not site_accounts.shared_portal(page.url) \
                 and self._create_account_control(page) is not None:
             return self.create_account_from_link(page, email)
 
@@ -5203,6 +5270,7 @@ class JobApplicationAssistant:
         creates the account if the page offers that (and the caller has not
         already learned that the account exists)."""
         self._last_login_rejected = False
+        self._account_click_result(page, "sign_in")
         body = ""
         try:
             body = (page.locator("body").inner_text(timeout=5_000) or "").lower()
@@ -5223,7 +5291,7 @@ class JobApplicationAssistant:
         if rejected:
             self._last_login_rejected = True
             logger.warning("LOGIN_REJECTED: the site didn't accept %s -- not retrying", email)
-            if create_if_missing and self.account_on_record() is not True \
+            if create_if_missing and self.account_on_record(page.url) is not True \
                     and self._create_account_control(page) is not None:
                 return self.create_account_from_link(page, email)
         return False

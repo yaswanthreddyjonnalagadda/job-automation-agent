@@ -473,6 +473,26 @@ creations. Then:
 It never resets a password by an emailed link. A code sent by text message (SMS) cannot be
 read yet: the agent has no access to your texts.
 
+**Portals with one login for every employer (2 October).** Dayforce, UKG and iCIMS's own
+login keep one account for you across all the employers that use them (the list is
+`sites/accounts.py`). There the agent **signs in first** -- the account most likely exists
+from an earlier application -- and the account is recorded once for the whole portal, so
+the next employer on it finds it. Creating first there only met "already exists" and used
+up the day's creations.
+
+**A refused password with no account on record (2 October).** Instead of stopping for you,
+the agent asks the site: it presses Create Account. Either the account is made, or the
+site says it already exists -- and then the reset of an existing account applies (below).
+
+**Every account press is read, not assumed (2 October).** After Create Account and after
+Sign In the agent reads what the page now shows (signed in, "check your email", a code box,
+"already exists", wrong password, errors on the form, or nothing) and writes it to the
+log as `ACCOUNT_RESULT`, with the site's own words, plus a screenshot and the page's text
+in `logs/account_steps/` (passwords hidden). A Create Account press after which the page
+shows no account step, no message and no application is not recorded as an account: it
+is reported as failed, with what the page showed. Before, Waystar's account was logged as
+"created" six times without anything showing that it had been.
+
 On an employer's create-account form the agent ticks two kinds of box and no
 others: a privacy notice, and consent to creating the very account you asked it
 to create ("I agree to creating this account to allow me to apply for positions

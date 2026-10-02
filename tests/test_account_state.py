@@ -128,7 +128,7 @@ def test_what_the_site_says_is_answered_before_google_is_tried(kind):
 def test_nothing_is_tried_twice_in_one_run():
     assert step(A.CREATE_FORM, created=True).action == A.FOR_OWNER
     assert step(A.SIGN_IN_FORM, signed_in_tried=True).action == A.FOR_OWNER
-    assert step(A.ACCOUNT_EXISTS, signed_in_tried=True).action == A.FOR_OWNER
+    assert step(A.ACCOUNT_EXISTS, signed_in_tried=True, reset_tried=True).action == A.FOR_OWNER
     assert step(A.EMAIL_FIRST, email_given=True).action == A.NOTHING
 
 

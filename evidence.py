@@ -122,6 +122,7 @@ def capture(page, folder: Path, stem: str, *, shot: bool = True, page_html: bool
 # and in output/ only screenshots and page copies -- output/<job>/pages/*.txt is the replay guard's record of real
 # pages (replay_guard.py), and the documents are the applications' own. data/ and the tracker are never touched.
 PRUNE = {"runs": (".png", ".html", ".txt", ".json"), "logs/account_failures": (".png", ".html", ".txt"),
+         "logs/account_steps": (".png", ".txt"),
          "output": (".png", ".html")}
 
 

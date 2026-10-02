@@ -74,6 +74,7 @@ from perception import (
 )
 import provenance
 import safety
+from sites import accounts as site_accounts
 from page_reading import (  # noqa: F401 -- the reading stage, re-exported for existing callers
     ANSWER_ROLES,
     Control,
@@ -949,18 +950,19 @@ class PageAgent:
             state = account_state.AccountState(account_state.VERIFY_EMAIL, "the site's own account page says so",
                                                state.google_offered, state.password_boxes, state.form_error)
         try:
-            exists = self.assistant.account_on_record() is True
+            exists = self.assistant.account_on_record(tab.url) is True
         except Exception:
             exists = False
         memory = account_state.Memory(
             google_tried=host in self._google_tried, google_refused=host in self._google_failed,
             created=host in self._created_at, signed_in_tried=host in self._signed_in_at,
             email_given=host in self._emailed_in, account_exists=exists or host in self._account_known,
-            account_active=bool(getattr(self.assistant, "account_signed_in_before", lambda: False)()),
+            account_active=bool(getattr(self.assistant, "account_signed_in_before", lambda url="": False)(tab.url)),
             reset_tried=host in self._reset_asked,
             verify_tried=host in self._verify_asked,
             refused_before=bool(email) and login_guard.refused_before(host, email),
-            held=str(getattr(self.assistant, "_login_paused", "") or ""))
+            held=str(getattr(self.assistant, "_login_paused", "") or ""),
+            shared_portal=site_accounts.shared_portal(tab.url))
         step = account_state.next_step(state, memory)
         self._note_account_state(page, host, state, step)
 
@@ -1047,10 +1049,23 @@ class PageAgent:
             # asked now rather than after the sign-in page has been read as a form of questions for the owner.
             if not making_account and getattr(self.assistant, "_last_login_rejected", False):
                 refused = account_state.AccountState(account_state.WRONG_PASSWORD, "the site refused the password")
-                known = replace(memory, account_exists=memory.account_exists or host in self._account_known)
-                if account_state.next_step(refused, known).action == account_state.RESET_PASSWORD \
-                        and self._reset_refused_password(tab, host, email):
+                known = replace(memory, account_exists=memory.account_exists or host in self._account_known,
+                                signed_in_tried=True)
+                refused = replace(refused, can_create=state.can_create or bool(
+                    getattr(self.assistant, "_create_account_control", lambda _p: None)(tab)))
+                after = account_state.next_step(refused, known)
+                logger.info("LOGIN: the sign-in was refused -> %s%s", after.action,
+                            f" ({after.why})" if after.why else "")
+                if after.action == account_state.RESET_PASSWORD and self._reset_refused_password(tab, host, email):
                     return True
+                if after.action == account_state.OPEN_CREATE:
+                    # No record of an account here: creating it either makes it or the site says it exists.
+                    self._created_at.add(host)
+                    try:
+                        if self.assistant.create_account_from_link(tab, email):
+                            return True
+                    except Exception as exc:
+                        logger.warning("LOGIN: could not open Create Account (%s)", str(exc).splitlines()[0][:100])
             # Held back on purpose (login_guard) for an account on record: before the owner is asked, the agent tries
             # the one thing that needs no sign-in -- the site's verification email. Refusals of an unverified account
             # are what held it (Waystar, 1 October); opening the link lifts them (login_guard.account_verified), and
