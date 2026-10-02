@@ -1,0 +1,12 @@
+{
+  "id": "f074",
+  "date": "2026-09-30",
+  "class": "A list of refusal wordings that the model's newer phrasings slip past",
+  "symptom": "Ciena on Workday, 30 September: 'I am unable to answer this question as the provided...' was typed into the Facebook box, and the AI also offered 'Yaswanth Reddy Jonnalagadda does not have a professional Twitter account'.",
+  "site": "Every portal (Gemini answering)",
+  "root_cause": "claude_integration._NON_ANSWER knew 'not provided', 'I don't know', 'the resume does not say' -- not 'I am unable to', 'cannot answer', or a third-person '<name> does not have ...'.",
+  "why_tests_missed": "The non-answer tests used Claude's usual wordings; Gemini words its refusals differently.",
+  "fix": "_NON_ANSWER also matches 'I am/I'm unable/not able to ...', '(do not|cannot) answer/provide ...', and any short '... does not have/hold/say/mention ...' statement about the candidate; the one check (is_non_answer) keeps them out of every form box.",
+  "tests": ["replay_guard.py"],
+  "prevention": "Refusals are recognised by their shape (first-person inability, third-person statements about the candidate), not by one model's phrasing; every provider's outputs go through the same check."
+}

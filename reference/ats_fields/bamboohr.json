@@ -1,0 +1,27 @@
+{
+  "portal": "BambooHR (<company>.bamboohr.com/careers/<id>)",
+  "studied": "2026-09-29",
+  "sample": "https://secunetics.bamboohr.com/careers/59",
+  "single_page": true,
+  "opens_with": "the posting page's 'Apply for This Job' reveals the form on the same address",
+  "fields": {
+    "text": "input type=text with <label for>; required marked by ' *' in the label text only (no required attribute)",
+    "choice": {
+      "widget": "button.fab-SelectToggle (aria-haspopup=true) named '<label> <current value>' ('State –Select–', 'Country United States'), with a hidden native <select required> (opacity 0, aria-hidden) that mirrors ONLY the current value -- it holds one option and cannot be filled directly",
+      "open": "a real click on the toggle button",
+      "options": "a portal div.fab-MenuList role=menu at the end of the page; each item is role=menuitem (not option); a 'Search...' input sits at the top of the menu",
+      "pick": "type into the menu's Search box, then click the menuitem whose text equals the answer exactly ('Virginia', never 'West Virginia')",
+      "value_shown": "the toggle button's name changes from '<label> –Select–' to '<label> <value>'",
+      "empty_means": "'–Select–' in the button name"
+    },
+    "state": "fab-SelectToggle with 60 entries: US states plus territories (American Samoa, ...)",
+    "country": "fab-SelectToggle, clearable, preset to United States",
+    "file": {
+      "widget": "input type=file required (labelled 'file-input') behind a 'Choose File*' button; the section's text is a <p>Resume*</p>",
+      "fill": "set_input_files on the required input[type=file]; no click on 'Choose File' needed"
+    },
+    "date": "text input 'Date Available' with a 'Pick a date.' button (popup=dialog); typing mm/dd/yyyy works",
+    "bot_trap": "a text input and a hidden textarea labelled 'Please leave this field blank'",
+    "captcha": "reCAPTCHA checkbox at the bottom (the owner's)"
+  }
+}

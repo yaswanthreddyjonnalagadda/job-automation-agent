@@ -1,0 +1,15 @@
+{
+  "id": "f045",
+  "date": "2026-09-29",
+  "class": "A costly result kept only in the step that uses it, so every failure before that step pays for it again",
+  "symptom": "Writer (Ashby), 28 September: 14 attempts at one application each asked the AI to tailor the resume again, spending the day's AI allowance on the same document.",
+  "site": "Every site",
+  "root_cause": "prepare_materials wrote the tailored resume to the job's output folder, but it was filed in the database (where reuse_stored_document looks) only once the run reached the application form. A run that failed earlier -- the browser, a sign-in, a stop -- left nothing to reuse.",
+  "why_tests_missed": "No test covered prepare_materials across two runs; reuse was only ever exercised on a run whose resume had already been filed.",
+  "fix": "prepare_materials files the resume in the database as soon as it is written. The store is keyed by content hash, so filing it again later adds nothing.",
+  "tests": [
+    "tests/test_resume_written_once_per_job.py::test_the_resume_is_in_the_database_as_soon_as_it_is_written",
+    "tests/test_resume_written_once_per_job.py::test_a_retry_after_a_failed_run_reuses_it_without_asking_the_ai"
+  ],
+  "prevention": "Save anything that costs money or quota the moment it exists, in the place later attempts look, and test a second attempt after a failed first."
+}

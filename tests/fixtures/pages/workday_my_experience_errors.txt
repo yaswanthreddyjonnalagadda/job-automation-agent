@@ -1,0 +1,289 @@
+- generic [ref=f10e4]:
+  - link "Skip to main content" [ref=f10e5] [cursor=pointer]:
+    - /url: ""
+  - banner [ref=f10e8]:
+    - generic [ref=f10e10]:
+      - link [ref=f10e13] [cursor=pointer]:
+        - /url: https://theocc.wd5.myworkdayjobs.com/en-US/careers
+        - img "careers home" [ref=f10e14]
+      - generic [ref=f10e15]:
+        - heading [level=1]
+      - generic [ref=f10e17]:
+        - generic [ref=f10e18]:
+          - button "Settings" [ref=f10e20] [cursor=pointer]
+          - button "jane.doe@example.com" [ref=f10e28] [cursor=pointer]
+        - navigation [ref=f10e34]:
+          - button "Home" [ref=f10e35] [cursor=pointer]
+          - button "Search for Jobs" [ref=f10e36] [cursor=pointer]
+          - button "Candidate Home" [ref=f10e37] [cursor=pointer]
+  - main [ref=f10e40]:
+    - generic [ref=f10e41]:
+      - generic [ref=f10e42]:
+        - link "Back to Job Posting" [ref=f10e44] [cursor=pointer]
+        - heading "Associate Principal, Cloud Engineering" [level=2] [ref=f10e49]
+      - generic "Application Progress" [ref=f10e50]:
+        - list [ref=f10e51]:
+          - listitem [ref=f10e52]:
+            - generic: completed step 1 of 5
+            - generic [ref=f10e58]: My Information
+          - listitem [ref=f10e59]:
+            - generic: current step 2 of 5
+            - generic [ref=f10e65]: My Experience
+          - listitem [ref=f10e66]:
+            - generic: step 3 of 5
+            - generic [ref=f10e72]: Application Questions
+          - listitem [ref=f10e73]:
+            - generic: step 4 of 5
+            - generic [ref=f10e79]: Voluntary Disclosures
+          - listitem [ref=f10e80]:
+            - generic: step 5 of 5
+            - generic [ref=f10e86]: Review
+      - generic [ref=f10e87]:
+        - generic [ref=f10e88]:
+          - heading "My Experience" [level=3] [ref=f10e320]
+          - generic [ref=f10e90]: "* Indicates a required field"
+          - generic [ref=f10e747]:
+            - heading [level=3] [ref=f10e748]:
+              - button "Errors Found" [expanded] [active] [ref=f10e749] [cursor=pointer]
+            - list [ref=f10e793]:
+              - listitem [ref=f10e794]:
+                - generic [ref=f10e795]:
+                  - button "Error Upload a file (5MB max)" [ref=f10e796] [cursor=pointer]:
+                    - text: Error
+                    - generic [aria-hidden] [ref=f10e797]: "-"
+                    - text: Upload a file (5MB max)
+                  - generic [ref=f10e798]: The field Upload a file (5MB max) is required and must have a value.
+          - generic [ref=f10e321]:
+            - group [ref=f10e322]:
+              - heading "Work Experience" [level=4] [ref=f10e323]
+              - group [ref=f10e324]:
+                - generic [ref=f10e325]:
+                  - heading "Work Experience 1" [level=5] [ref=f10e326]
+                  - button [ref=f10e327] [cursor=pointer]
+                - generic [ref=f10e333]:
+                  - generic [ref=f10e334]:
+                    - generic [ref=f10e335]: Job Title*
+                    - textbox "Job Title" [ref=f10e339]: Network Engineer
+                  - generic [ref=f10e340]:
+                    - generic [ref=f10e341]: Company*
+                    - textbox "Company" [ref=f10e345]: Acme Corp
+                  - generic [ref=f10e346]:
+                    - generic [ref=f10e347]: Location
+                    - textbox "Location" [ref=f10e350]: Springfield, IL
+                  - generic [ref=f10e351]:
+                    - generic [ref=f10e352]: I currently work here
+                    - checkbox "I currently work here" [checked] [ref=f10e357] [cursor=pointer]
+                  - group "From" [ref=f10e360]:
+                    - generic [ref=f10e361]: From*
+                    - generic [ref=f10e365]:
+                      - generic [aria-hidden] [ref=f10e366]: current value is 2/2025
+                      - group [ref=f10e367]:
+                        - generic [ref=f10e368] [cursor=pointer]:
+                          - generic [ref=f10e369]:
+                            - generic [aria-hidden] [ref=f10e370]: "02"
+                            - spinbutton "Month" [ref=f10e371]: "2"
+                          - generic [ref=f10e372]: /
+                          - generic [ref=f10e373]:
+                            - generic [aria-hidden] [ref=f10e374]: "2025"
+                            - spinbutton "Year" [ref=f10e375]: "2025"
+                        - button "Calendar" [ref=f10e376] [cursor=pointer]
+                  - generic [ref=f10e381]:
+                    - generic [ref=f10e382]: Role Description
+                    - textbox "Role Description" [ref=f10e385]: Built and ran enterprise networks.
+              - group [ref=f10e386]:
+                - generic [ref=f10e387]:
+                  - heading "Work Experience 2" [level=5] [ref=f10e388]
+                  - button [ref=f10e389] [cursor=pointer]
+                - generic [ref=f10e395]:
+                  - generic [ref=f10e396]:
+                    - generic [ref=f10e397]: Job Title*
+                    - textbox "Job Title" [ref=f10e401]: Network Engineer
+                  - generic [ref=f10e402]:
+                    - generic [ref=f10e403]: Company*
+                    - textbox "Company" [ref=f10e407]: Globex Inc
+                  - generic [ref=f10e408]:
+                    - generic [ref=f10e409]: Location
+                    - textbox "Location" [ref=f10e412]: Springfield, IL
+                  - generic [ref=f10e413]:
+                    - generic [ref=f10e414]: I currently work here
+                    - checkbox "I currently work here" [ref=f10e419] [cursor=pointer]
+                  - generic [ref=f10e420]:
+                    - group "From" [ref=f10e422]:
+                      - generic [ref=f10e423]: From*
+                      - generic [ref=f10e427]:
+                        - generic [aria-hidden] [ref=f10e428]: current value is 2/2023
+                        - group [ref=f10e429]:
+                          - generic [ref=f10e430] [cursor=pointer]:
+                            - generic [ref=f10e431]:
+                              - generic [aria-hidden] [ref=f10e432]: "02"
+                              - spinbutton "Month" [ref=f10e433]: "2"
+                            - generic [ref=f10e434]: /
+                            - generic [ref=f10e435]:
+                              - generic [aria-hidden] [ref=f10e436]: "2023"
+                              - spinbutton "Year" [ref=f10e437]: "2023"
+                          - button "Calendar" [ref=f10e438] [cursor=pointer]
+                    - group "To" [ref=f10e444]:
+                      - generic [ref=f10e445]: To*
+                      - generic [ref=f10e449]:
+                        - generic [aria-hidden] [ref=f10e450]: current value is 1/2025
+                        - group [ref=f10e451]:
+                          - generic [ref=f10e452] [cursor=pointer]:
+                            - generic [ref=f10e453]:
+                              - generic [aria-hidden] [ref=f10e454]: "01"
+                              - spinbutton "Month" [ref=f10e455]: "1"
+                            - generic [ref=f10e456]: /
+                            - generic [ref=f10e457]:
+                              - generic [aria-hidden] [ref=f10e458]: "2025"
+                              - spinbutton "Year" [ref=f10e459]: "2025"
+                          - button "Calendar" [ref=f10e460] [cursor=pointer]
+                  - generic [ref=f10e465]:
+                    - generic [ref=f10e466]: Role Description
+                    - textbox "Role Description" [ref=f10e469]: Built and ran enterprise networks.
+              - group [ref=f10e470]:
+                - generic [ref=f10e471]:
+                  - heading "Work Experience 3" [level=5] [ref=f10e472]
+                  - button [ref=f10e473] [cursor=pointer]
+                - generic [ref=f10e479]:
+                  - generic [ref=f10e480]:
+                    - generic [ref=f10e481]: Job Title*
+                    - textbox "Job Title" [ref=f10e485]: Network Engineer
+                  - generic [ref=f10e486]:
+                    - generic [ref=f10e487]: Company*
+                    - textbox "Company" [ref=f10e491]: Initech Ltd.
+                  - generic [ref=f10e492]:
+                    - generic [ref=f10e493]: Location
+                    - textbox "Location" [ref=f10e496]: Hyderabad, India
+                  - generic [ref=f10e497]:
+                    - generic [ref=f10e498]: I currently work here
+                    - checkbox "I currently work here" [ref=f10e503] [cursor=pointer]
+                  - generic [ref=f10e504]:
+                    - group "From" [ref=f10e506]:
+                      - generic [ref=f10e507]: From*
+                      - generic [ref=f10e511]:
+                        - generic [aria-hidden] [ref=f10e512]: current value is 5/2019
+                        - group [ref=f10e513]:
+                          - generic [ref=f10e514] [cursor=pointer]:
+                            - generic [ref=f10e515]:
+                              - generic [aria-hidden] [ref=f10e516]: "05"
+                              - spinbutton "Month" [ref=f10e517]: "5"
+                            - generic [ref=f10e518]: /
+                            - generic [ref=f10e519]:
+                              - generic [aria-hidden] [ref=f10e520]: "2019"
+                              - spinbutton "Year" [ref=f10e521]: "2019"
+                          - button "Calendar" [ref=f10e522] [cursor=pointer]
+                    - group "To" [ref=f10e528]:
+                      - generic [ref=f10e529]: To*
+                      - generic [ref=f10e533]:
+                        - generic [aria-hidden] [ref=f10e534]: current value is 7/2021
+                        - group [ref=f10e535]:
+                          - generic [ref=f10e536] [cursor=pointer]:
+                            - generic [ref=f10e537]:
+                              - generic [aria-hidden] [ref=f10e538]: "07"
+                              - spinbutton "Month" [ref=f10e539]: "7"
+                            - generic [ref=f10e540]: /
+                            - generic [ref=f10e541]:
+                              - generic [aria-hidden] [ref=f10e542]: "2021"
+                              - spinbutton "Year" [ref=f10e543]: "2021"
+                          - button "Calendar" [ref=f10e544] [cursor=pointer]
+                  - generic [ref=f10e549]:
+                    - generic [ref=f10e550]: Role Description
+                    - textbox "Role Description" [ref=f10e553]: Built and ran enterprise networks.
+              - button "Add Another" [ref=f10e557] [cursor=pointer]
+            - group [ref=f10e559]:
+              - heading "Education" [level=4] [ref=f10e560]
+              - group [ref=f10e561]:
+                - generic [ref=f10e562]:
+                  - heading "Education 1" [level=5] [ref=f10e563]
+                  - button [ref=f10e564] [cursor=pointer]
+                - generic [ref=f10e570]:
+                  - generic [ref=f10e571]:
+                    - generic [ref=f10e572]: School or University*
+                    - textbox "School or University" [ref=f10e576]: State Technical University
+                  - generic [ref=f10e577]:
+                    - generic [ref=f10e578]: Degree*
+                    - button "Degree Undergraduate Required" [ref=f10e583]: Undergraduate
+                  - generic [ref=f10e584]:
+                    - generic [ref=f10e586]:
+                      - generic [ref=f10e587]: Field of Study
+                      - generic [ref=f10e593] [cursor=pointer]:
+                        - textbox "Field of Study" [ref=f10e594]:
+                          - /placeholder: Search
+                        - generic [aria-hidden] [ref=f10e595]: 0 items selected
+                    - button "The field will alphabetically return the first 100 results and can also return specified matches." [ref=f10e599] [cursor=pointer]
+                  - generic [ref=f10e603]:
+                    - generic [ref=f10e604]: Overall Result (GPA)
+                    - textbox "Overall Result (GPA)" [ref=f10e767]
+              - group [ref=f10e608]:
+                - generic [ref=f10e609]:
+                  - heading "Education 2" [level=5] [ref=f10e610]
+                  - button [ref=f10e611] [cursor=pointer]
+                - generic [ref=f10e617]:
+                  - generic [ref=f10e618]:
+                    - generic [ref=f10e619]: School or University*
+                    - textbox "School or University" [ref=f10e623]: State University
+                  - generic [ref=f10e624]:
+                    - generic [ref=f10e625]: Degree*
+                    - button "Degree Graduate Required" [ref=f10e630]: Graduate
+                  - generic [ref=f10e631]:
+                    - generic [ref=f10e633]:
+                      - generic [ref=f10e634]: Field of Study
+                      - generic [ref=f10e640] [cursor=pointer]:
+                        - textbox "Field of Study" [ref=f10e641]:
+                          - /placeholder: Search
+                        - generic [aria-hidden] [ref=f10e642]: 0 items selected
+                    - button "The field will alphabetically return the first 100 results and can also return specified matches." [ref=f10e646] [cursor=pointer]
+                  - generic [ref=f10e650]:
+                    - generic [ref=f10e651]: Overall Result (GPA)
+                    - textbox "Overall Result (GPA)" [ref=f10e768]
+              - button "Add Another" [ref=f10e658] [cursor=pointer]
+            - group [ref=f10e660]:
+              - heading "Skills" [level=4] [ref=f10e661]
+              - generic [ref=f10e663]:
+                - generic [ref=f10e664]: Type to Add Skills
+                - generic [ref=f10e670] [cursor=pointer]:
+                  - textbox "Type to Add Skills" [ref=f10e671]:
+                    - /placeholder: Search
+                  - generic [aria-hidden] [ref=f10e672]: 0 items selected
+            - group [ref=f10e677]:
+              - heading "Resume/CV" [level=4] [ref=f10e678]
+              - paragraph [ref=f10e680]:
+                - generic [ref=f10e681]:
+                  - generic [ref=f10e682]: Upload a file (5MB max)*
+                  - generic [ref=f10e684]:
+                    - generic "Upload a file (5MB max)" [ref=f10e686]:
+                      - generic [ref=f10e688] [cursor=pointer]:
+                        - generic [ref=f10e694]: Drop files here
+                        - generic [ref=f10e695]:
+                          - generic [ref=f10e696]: or
+                          - button "Select files" [ref=f10e697]
+                    - paragraph [ref=f10e800]:
+                      - generic [ref=f10e801]: "Error:"
+                      - text: The field Upload a file (5MB max) is required and must have a value.
+            - group [ref=f10e727]:
+              - heading "Websites" [level=4] [ref=f10e728]
+              - generic [ref=f10e729]: Add any relevant websites.
+              - button "Add" [ref=f10e733] [cursor=pointer]
+            - group [ref=f10e735]:
+              - heading "Social Network URLs" [level=4] [ref=f10e736]
+              - generic [ref=f10e738]:
+                - generic [ref=f10e739]: If you would like to provide your LinkedIn profile, please do so here.
+                - textbox "If you would like to provide your LinkedIn profile, please do so here." [ref=f10e742]: https://www.linkedin.com/in/jane-doe
+        - generic [ref=f10e95]:
+          - button "Back" [ref=f10e745] [cursor=pointer]
+          - button "Save and Continue" [ref=f10e98] [cursor=pointer]
+  - generic [ref=f10e99]:
+    - heading "Follow Us" [level=4] [ref=f10e100]
+    - list [ref=f10e101]:
+      - listitem [ref=f10e102] [cursor=pointer]:
+        - link "Google Plus" [ref=f10e103]:
+          - /url: https://plus.google.com/u/1/b/102920950054418934398/102920950054418934398/posts?gmbpt=true&hl=en
+      - listitem [ref=f10e107] [cursor=pointer]:
+        - link "X" [ref=f10e108]:
+          - /url: https://twitter.com/OptionsClearing
+      - listitem [ref=f10e112] [cursor=pointer]:
+        - link "LinkedIn" [ref=f10e113]:
+          - /url: https://www.linkedin.com/company/occ
+      - listitem [ref=f10e117] [cursor=pointer]:
+        - link "Facebook" [ref=f10e118]:
+          - /url: https://www.facebook.com/OptionsClearingCorporation
+    - generic [ref=f10e122]: © 2026 Workday, Inc. All rights reserved.

@@ -174,23 +174,115 @@ WIRE_SIGN_IN = ("<script>new MutationObserver(() => { const b = document.getElem
                 ".observe(document.documentElement, {childList: true, subtree: true});</script>")
 
 
-def test_after_creating_the_account_it_signs_in_with_the_email_and_password(page, monkeypatch):
+def test_after_creating_the_account_it_opens_the_verification_link_then_signs_in(page, monkeypatch):
+    """Waystar, 1 October: the sign-in waits for the evidence -- the site's verification link, opened from Gmail."""
     body = create_page(EMAIL_BOXES["workday"], after_create=SIGN_IN_AFTER_CREATE,
                        extra=WIRE_SIGN_IN.replace("ON_SIGN_IN", "document.body.innerHTML = '<h1>Candidate Home</h1>';"))
     serve(page, body)
-    assert assistant_for(monkeypatch, WorkdayAdapter()).fill_create_account_form(page, EMAIL) is True
+    a = assistant_for(monkeypatch, WorkdayAdapter())
+    monkeypatch.setattr(a, "verify_account_by_email_link", lambda page, wait_seconds=150: True)      # the link was in the mail
+    assert a.fill_create_account_form(page, EMAIL) is True
     assert page.evaluate("window.signins") == 1
     assert page.evaluate("window.at_signin") == {"email": EMAIL, "password": PASSWORD}
 
 
-def test_a_new_account_the_site_will_not_sign_in_yet_is_tried_once_and_left_to_the_owner(page, monkeypatch):
-    reject = ("document.getElementById('alert').textContent = 'You may have entered the wrong email address or "
-              "password or your account might be locked.';")
+def test_a_new_account_with_no_verification_email_is_signed_in_by_the_agent(page, monkeypatch):
+    """Waystar, 1 October: no verification email came, and the run stopped to ask the owner. The owner's rule: the
+    agent gets itself in -- with no verification email the site may not verify new accounts, so it signs in."""
     body = create_page(EMAIL_BOXES["workday"], after_create=SIGN_IN_AFTER_CREATE,
-                       extra=WIRE_SIGN_IN.replace("ON_SIGN_IN", reject))
+                       extra=WIRE_SIGN_IN.replace("ON_SIGN_IN", "document.body.innerHTML = '<h1>Candidate Home</h1>';"))
     serve(page, body)
     a = assistant_for(monkeypatch, WorkdayAdapter())
-    assert a.fill_create_account_form(page, EMAIL) is False
+    monkeypatch.setattr(a, "verify_account_by_email_link", lambda page, wait_seconds=150: False)
+    assert a.fill_create_account_form(page, EMAIL) is True
     assert page.evaluate("window.signins") == 1
-    why = login_guard.may_sign_in(HOST, EMAIL)
-    assert why and "verify" in why and "Continue" in why
+
+
+def test_a_refused_sign_in_looks_for_a_late_verification_email_and_signs_in_again(page, monkeypatch):
+    """The page asked for nothing, so the agent signed in at once; the refusal sends it to the mail, once, for the
+    verification email (owner, 1 October: no Gmail before the site asks)."""
+    accept_second = ("if (window.signins >= 2) { document.body.innerHTML = '<h1>Candidate Home</h1>'; } else {"
+                     " document.getElementById('alert').textContent = 'You may have entered the wrong email address"
+                     " or password or your account might be locked.'; }")
+    body = create_page(EMAIL_BOXES["workday"], after_create=SIGN_IN_AFTER_CREATE,
+                       extra=WIRE_SIGN_IN.replace("ON_SIGN_IN", accept_second))
+    serve(page, body)
+    a = assistant_for(monkeypatch, WorkdayAdapter())
+    looks = []
+
+    def verify(page, wait_seconds=150):
+        looks.append(wait_seconds)
+        if len(looks) == 1:
+            login_guard.clear_hold(HOST, EMAIL)        # what opening the link does
+            return True
+        return False
+    monkeypatch.setattr(a, "verify_account_by_email_link", verify)
+    a.fill_create_account_form(page, EMAIL)
+    assert len(looks) == 1 and page.evaluate("window.signins") == 2
+
+
+def test_a_refused_sign_in_opens_the_verification_email_before_any_password_reset(page, monkeypatch):
+    """Waystar, 1 October: the account made that morning was refused at sign-in; the agent went straight to a
+    password reset (which Workday does by link, so it stopped for the owner). An unverified account is refused in
+    the same words as a wrong password: the verification email is looked for first."""
+    serve(page, sign_in_page(EMAIL_BOXES["workday"]))
+    a = assistant_for(monkeypatch, WorkdayAdapter())
+    steps = []
+    monkeypatch.setattr(a, "verify_account_by_email_link", lambda page, wait_seconds=150: steps.append("verify") or True)
+    monkeypatch.setattr(a, "_open_sign_in", lambda page: True)
+    monkeypatch.setattr(a, "attempt_auto_login", lambda *args, **kw: steps.append("sign in") or True)
+    monkeypatch.setattr(a, "_reset_password_with_emailed_code", lambda *args: steps.append("reset") or False)
+    assert a.recover_rejected_sign_in(page, EMAIL) is True
+    assert steps == ["verify", "sign in"]
+
+
+@pytest.mark.parametrize("body, asks", [
+    ('<h2>Sign In</h2><label>Email Address <input type=text></label><label>Password <input type=password></label>'
+     '<button>Sign In</button>', ""),
+    ("<h2>Verify your account</h2><p>We have sent you an email. Verify your email address before you sign in.</p>",
+     "link"),
+    ('<h2>Enter the verification code</h2><p>We sent a verification code to your email.</p>'
+     '<label>Verification code <input type=text></label><button>Verify</button>', "code"),
+])
+def test_the_mail_is_read_only_when_the_page_asks_for_it(page, body, asks):
+    """Crescent Energy, 1 October: the page asked for nothing and the agent spent two minutes in Gmail first."""
+    from browser_automation import JobApplicationAssistant
+    page.set_content(f"<html><body>{body}</body></html>")
+    assert JobApplicationAssistant._page_asks_to_verify(page) == asks
+
+
+KEYED_SIGN_IN = """<html><body><h2>Sign In</h2><div id=alert role=alert></div>
+<label for=se>Email Address*</label><input type=text id=se data-automation-id=email>
+<label for=sp>Password*</label><input type=password id=sp>
+<button id=go>Sign In</button>
+<script>
+  // Like a React form: the password it sends is the one it registered from keystrokes, not the box's raw value.
+  let typed = '';
+  const pw = document.getElementById('sp');
+  pw.addEventListener('keydown', e => { if (e.key.length === 1) typed += e.key; else if (e.key === 'Backspace') typed = ''; });
+  window.sent = null;
+  document.getElementById('go').addEventListener('click', () => {
+    window.sent = typed;
+    if (typed === 'Corr3ct!Horse#9') { document.body.innerHTML = '<h1>Candidate Home</h1>'; }
+    else { document.getElementById('alert').textContent =
+           'You may have entered the wrong email address or password or your account might be locked.'; }
+  });
+</script></body></html>"""
+
+
+def test_the_sign_in_password_is_typed_so_a_react_form_registers_it(page, monkeypatch):
+    """Waystar and Crescent Energy (Workday), 1 October: the agent's sign-in was refused, the owner's -- typed by
+    hand, same password -- went through. A value set in one go was not what the form sent."""
+    serve(page, KEYED_SIGN_IN)
+    a = assistant_for(monkeypatch)
+    assert a.attempt_auto_login(page, EMAIL, "Corr3ct!Horse#9", create_if_missing=False) is True
+    assert page.evaluate("window.sent") == "Corr3ct!Horse#9"
+
+
+def test_the_sign_in_never_types_into_a_create_account_form(page, monkeypatch):
+    """Waystar, 1 October: the create form also holds an 'Already have an account? Sign In' link; read as a sign-in
+    form, it got the email and password typed in and its Sign In link pressed."""
+    serve(page, create_page(EMAIL_BOXES["workday"]))
+    a = assistant_for(monkeypatch, WorkdayAdapter())
+    assert a.attempt_auto_login(page, EMAIL, PASSWORD, create_if_missing=False) is False
+    assert page.evaluate("[...document.querySelectorAll('input[type=password]')].every(e => !e.value)")

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+import evidence
 from perception import hide_secrets, hide_secrets_in_tree
 
 logger = logging.getLogger("state_machine")
@@ -123,15 +124,16 @@ def dump_forensic_failure(
     # 1. Full-page screenshot (.png)
     screenshot_path = dump_dir / "screenshot.png"
     try:
-        page.screenshot(path=str(screenshot_path), full_page=True)
+        evidence.screenshot(page, screenshot_path)          # secret boxes painted over
     except Exception as exc:
         logger.debug("Forensic screenshot capture failed: %s", exc)
 
     # 2. Raw HTML snapshot (page_state.html)
     html_path = dump_dir / "page_state.html"
     try:
-        html_content = page.content() or ""
-        html_path.write_text(html_content, encoding="utf-8")
+        html_content = evidence.html(page)                  # scripts, hidden tokens and secrets removed
+        if html_content:
+            html_path.write_text(html_content, encoding="utf-8")
     except Exception as exc:
         logger.debug("Forensic HTML capture failed: %s", exc)
 

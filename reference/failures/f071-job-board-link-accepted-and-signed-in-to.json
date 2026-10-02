@@ -1,0 +1,12 @@
+{
+  "id": "f071",
+  "date": "2026-09-30",
+  "class": "A hand-kept list of job boards was the only guard, and it was checked only where a link comes in",
+  "symptom": "Erias Ventures via Adzuna, 30 September: a LinkedIn link led to adzuna.com, whose 'Apply for this job' is Adzuna's own easy-apply behind an Adzuna login. The link was accepted, the run tried to sign in to Adzuna, an overlay blocked the Apply button, and the run stalled for the owner.",
+  "site": "Adzuna; any job board or aggregator not on the list",
+  "root_cause": "job_sources refused only LinkedIn, Indeed and Dice (and four aggregators), and only in resolve_job; the account step had no idea whether the site it was signing in to was the employer's.",
+  "why_tests_missed": "The refusal was tested for the listed boards; nothing covered a board missing from the list or an account step on a board.",
+  "fix": "job_sources.job_board(url) is the one test, with the common boards named (Adzuna, ZipRecruiter, Glassdoor, Monster, CareerBuilder, SimplyHired, Talent.com, Jooble, Jobrapido, Lensa, Jobgether, Snagajob, Joblist, Ladders); resolve_job refuses such a link, and the page agent's account step never signs in to, creates an account on, or uses Google with such a site -- it stops and says to use the employer's own careers page.",
+  "tests": ["replay_guard.py"],
+  "prevention": "Guard an owner's sourcing rule at every point where it matters (the link, and the account step), from one function; keep the list of boards as data in one place."
+}

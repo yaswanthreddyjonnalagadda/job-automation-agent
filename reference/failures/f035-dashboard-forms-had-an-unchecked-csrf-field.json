@@ -1,0 +1,18 @@
+{
+  "id": "f035",
+  "date": "2026-09-29",
+  "class": "A protection written into the page but never enforced",
+  "symptom": "Every dashboard form carried a csrf_token field whose value was empty and was never checked, so any website open in the owner's browser could post to 127.0.0.1:5000 (start an application, change saved answers, delete one), and a site that resolves its own name to 127.0.0.1 could read the dashboard.",
+  "site": "The dashboard (web_ui.py)",
+  "root_cause": "The templates were written with a csrf_token field, as if a framework filled and checked it; Flask does neither on its own, and nothing supplied or verified it. Nothing checked the Host a request was addressed to.",
+  "why_tests_missed": "The dashboard tests posted forms without any token and passed, which is exactly the hole; none posted from another origin or under another host name.",
+  "fix": "web_guard.install(): a token made fresh at start-up is put in every page (context processor) and required on every POST, a POST whose Origin or Referer is another site is refused, and a request addressed to any name but 127.0.0.1, localhost or [::1] is refused. The setup, profile and answers forms carry the token.",
+  "tests": [
+    "tests/test_web_guard.py",
+    "tests/test_web_guard.py::test_a_form_without_the_dashboards_token_is_refused",
+    "tests/test_web_guard.py::test_a_form_posted_from_another_site_is_refused_even_with_the_token",
+    "tests/test_web_guard.py::test_a_request_under_another_name_is_refused",
+    "tests/test_web_guard.py::test_every_form_on_every_page_carries_the_token"
+  ],
+  "prevention": "A security control is done only when a test shows it refusing the attack it exists for; a field in a template is not a control."
+}

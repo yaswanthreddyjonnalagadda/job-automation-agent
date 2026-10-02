@@ -1,0 +1,12 @@
+{
+  "id": "f070",
+  "date": "2026-09-30",
+  "class": "Two copies of one wording decision, and the one that decides was narrower",
+  "symptom": "Adzuna, 30 September: the sign-in box offered 'Login with Google', but the account step read it as a plain sign-in form (sign_in_form -> sign_in), tried the site's own form, stalled, and waited for the owner -- although the owner's standing rule is Google first.",
+  "site": "Any site that words it 'Login with Google', 'Sign-in using Google', 'Sign up with Google'",
+  "root_cause": "account_state._GOOGLE knew only 'sign in / log in / continue with Google' (with a space in 'log in'); the page agent kept its own, different GOOGLE_SIGN_IN pattern ('(sign|log) ?in'), which would have found the button -- but the account step's copy decides whether Google is offered. The page agent's fallback also looked for a button only; Adzuna's Google option is a link.",
+  "why_tests_missed": "The Google tests used 'Sign in with Google' and 'Continue with Google' buttons only.",
+  "fix": "account_state.GOOGLE_SIGN_IN is the one wording: (sign|log)[ -]?(in|on|up) with/using/via/through Google, continue with/using Google, Google sign-in. The page agent uses it, and finds the option as a button or a link.",
+  "tests": ["replay_guard.py"],
+  "prevention": "A wording that decides a step lives once, next to the decision; the code that acts on it imports it. Build wording patterns from how sites actually word it (one-word 'Login', hyphens, 'using'), and find a control by role button or link."
+}

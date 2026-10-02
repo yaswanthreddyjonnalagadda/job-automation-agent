@@ -1,0 +1,22 @@
+{
+  "id": "f059",
+  "date": "2026-09-29",
+  "class": "Fields recognised only by the shapes the accessibility snapshot shows, so fields built other ways were never seen",
+  "symptom": "Secunetics (BambooHR), 29 September: State (a styled button over a hidden one-option <select>) and the resume (a hidden file input behind 'Choose File*') were never filled, and the page was reported '0 to answer' -- complete. Steelcase's resume box ('From Device') and Rippling's custom questions (boxes named only 'Select') were missed the same way.",
+  "site": "BambooHR, Avature, Rippling, Greenhouse, Ashby, Lever, Breezy, SmartRecruiters (reference/ats_fields/)",
+  "root_cause": "The agent read each page only through its accessibility snapshot and matched fields by their wording. The snapshot does not show hidden file inputs or which question an unlabelled box belongs to, and shows a mirror <select> as if it were the question; a required field it did not recognise was never counted, so nothing stopped the page being called complete. The resume upload was found only through a handful of phrasings, while in the agent's own recordings 26 of 30 upload buttons had no 'resume' near them.",
+  "why_tests_missed": "Tests were built from pages the agent already handled; there was no study of how portals build their fields until reference/ats_fields/, and no check that every required field on a page is accounted for.",
+  "fix": "form_fields.py takes an inventory of every field in every frame and open shadow root by what it is (text, select, combobox, button_list, yes_no, checkbox, radio, date, file), pairs each with its label or the nearest question text above it, and flags traps (hidden fields, honeypot names and labels). The page agent puts the resume in the file input the inventory finds by the section it sits in, answers lists drawn as buttons by the exact item ('Virginia', never 'West Virginia'), and before the last press names every visible required field still empty. Tested on pages shaped like each portal and checked read-only against the live forms from the research.",
+  "tests": [
+    "tests/test_form_fields.py::test_bamboohr_state_is_a_required_blank_list_and_the_mirror_select_is_not_a_field",
+    "tests/test_form_fields.py::test_bamboohr_resume_is_found_by_its_block_not_its_name",
+    "tests/test_form_fields.py::test_greenhouse_two_attach_buttons_the_resume_is_the_one_under_its_heading",
+    "tests/test_form_fields.py::test_ashby_the_resume_field_not_the_autofill_upload",
+    "tests/test_form_fields.py::test_rippling_box_named_only_select_takes_the_question_above_it",
+    "tests/test_form_fields.py::test_smartrecruiters_fields_inside_shadow_dom_are_found",
+    "tests/test_form_fields.py::test_honeypots_are_traps",
+    "tests/test_form_fields.py::test_a_list_button_is_answered_by_the_exact_item_never_one_that_contains_it",
+    "tests/test_form_fields.py::test_a_run_attaches_the_resume_and_answers_state_and_stops_before_submitting"
+  ],
+  "prevention": "Study how the target sites build their forms before writing the reader (reference/ats_fields/), find fields by what they are rather than what they are called, and never call a page complete without accounting for every required field on it."
+}

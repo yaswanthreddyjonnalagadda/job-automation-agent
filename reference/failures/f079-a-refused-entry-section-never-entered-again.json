@@ -1,0 +1,12 @@
+{
+  "id": "f079",
+  "date": "2026-09-30",
+  "class": "A section the site refused was never put right: the agent only added to empty sections",
+  "symptom": "Ciena on Workday, 30 September: My Experience held an extra empty degree and a job whose start month was missing; the agent re-read the page and pressed Save and Continue three times, the loop guard stopped the run, and the owner was asked to delete the entry and fix the date by hand.",
+  "site": "Workday (and any site whose adapter has an entry filler)",
+  "root_cause": "add_entries_the_site_way acted only on an empty section; a section with the wrong number of entries, or boxes the site's own error list names, was left as it was. And a school is written differently in the record ('JNTU'), the profile ('JNTU Hyderabad') and the employer's list ('Jawaharlal Nehru Technological University Hyderabad'), while the list pick matched on a leading prefix ('JNTU' -> 'JNTU Kakinada' would have been taken).",
+  "why_tests_missed": "Entry filling was only ever started from an empty section; no case began from a section the site had refused.",
+  "fix": "The adapter counts a section's entries (WorkdayAdapter.entry_count); the page agent has the site's filler clear and re-enter a section once per run when its count differs from the record or the site's error list names one of its boxes. A school list is picked only by the row option_match says IS one of the owner's names for the school (record, profile spelling, answer_alternatives), by its exact label -- never a prefix, never the first row; none, and it is left for the owner.",
+  "tests": ["replay_guard.py"],
+  "prevention": "A repair step starts from what the site says is wrong, not only from a blank page; a pick from a long list of look-alike names (schools, employers) goes through the one matcher with the owner's own spellings."
+}

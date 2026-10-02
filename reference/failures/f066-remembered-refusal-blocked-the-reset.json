@@ -1,0 +1,19 @@
+{
+  "id": "f066",
+  "date": "2026-09-29",
+  "class": "A guard against repeating an action also blocked the remedy the rules prescribe",
+  "symptom": "Mutual of Enumclaw (iCIMS), 29 September, 18:54, the run after f064's fix: the owner solved the CAPTCHA, the agent gave the email, reached 'Enter Your Password' and stopped with 'sign-in on login.icims.com is paused to protect the account' -- without typing anything and without the reset. The owner asked how it knew the page was blocked without trying.",
+  "site": "iCIMS (login.icims.com); any site whose refusal was recorded by an earlier run",
+  "root_cause": "login_guard keeps a refusal across runs ('hold: rejected') so a refused password is not typed again. attempt_auto_login read that hold and stopped before typing, which is right, but the reset (f064) only followed a refusal seen in this run -- a WRONG_PASSWORD page or a rejection just produced -- so a refusal remembered from an earlier run reached no reset at all: the guard stood in for the refusal and swallowed its remedy.",
+  "why_tests_missed": "f064's tests produced the refusal inside the test (a rejected attempt, or a page showing the message); none began a run with the refusal already on record, as every real resumed run does.",
+  "fix": "login_guard.refused_before answers whether this account's last sign-in here was refused; account_state's table treats a sign-in page with that record like the refusal itself: RESET_PASSWORD for a known account not yet reset this run, otherwise the owner's -- never another try of the password. A reset that stops now says why on the dashboard (the site sent a link, no code step, no code in Gmail), and 'instructions to reset' is read as a link.",
+  "tests": [
+    "tests/test_account_state.py::test_a_password_refused_in_an_earlier_run_is_reset_not_retyped_or_handed_over",
+    "tests/test_account_state.py::test_a_password_refused_before_is_never_retyped",
+    "tests/test_account_state.py::test_google_still_comes_first_on_a_sign_in_page_after_a_refusal",
+    "tests/test_account_step.py::test_a_refusal_remembered_from_an_earlier_run_starts_the_reset_not_a_retype",
+    "tests/test_account_step.py::test_a_reset_that_stops_says_why_and_the_password_is_not_retyped",
+    "tests/test_existing_account.py::test_a_reset_by_link_is_handed_to_the_owner_saying_so"
+  ],
+  "prevention": "A remembered fact is the same fact: a decision table reads what earlier runs recorded as well as what the page shows now, and a fix for a situation is tested starting from each way a run can arrive at it -- fresh, and resumed with the record already written."
+}

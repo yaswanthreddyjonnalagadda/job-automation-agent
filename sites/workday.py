@@ -222,6 +222,38 @@ class WorkdayAdapter(SiteAdapter):
                     self.fill_date_spinner(assistant, page, "workExperience", "startDate", i, start_month, start_year)
         logger.info("Final correction pass done for work experience")
 
+    # What every entry of a section has on this site, to count them: a job's title box; a degree's school, drawn as a
+    # text box on some tenants and as a search-and-pick list on others.
+    ENTRY_PROBES = {"Work Experience": "input[id$='--jobTitle']",
+                    "Education": "input[id$='--schoolName'], [data-automation-id='formField-school']"}
+
+    def entry_count(self, page: Page, section_heading: str):
+        """How many entries a jobs or degrees section shows, or None when this site has no way to tell."""
+        probe = self.ENTRY_PROBES.get(section_heading)
+        if not probe:
+            return None
+        try:
+            return page.locator(probe).count()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _school_names(assistant, school: str) -> list[str]:
+        """Every name the owner has for this school, record first: the profile's own spelling of it ("JNTU" in the
+        work history is "JNTU Hyderabad" in the profile) and the substitutes the owner listed (answer_alternatives).
+        A list is picked only by a row matching one of them."""
+        import repeated_entries
+        profile = getattr(assistant, "_profile", None)
+        names = [school]
+        for row in (getattr(profile, "education", None) or ()):
+            other = str(row[2]) if len(row) > 2 else ""
+            if other and repeated_entries._identifies(other, school):
+                names.append(other)
+        alternatives = getattr(profile, "answer_alternatives", None) or {}
+        for name in list(names):
+            names += [str(a) for a in (alternatives.get(name) or [])]
+        return [n for n in dict.fromkeys(n.strip() for n in names) if n]
+
     def fill_education_section(self, assistant, page: Page, education: list[dict]) -> None:
         self.delete_all_entries(assistant, page, "Education", "Certifications")
         # Some Workday tenants collect only school, degree and field of study.
@@ -230,9 +262,20 @@ class WorkdayAdapter(SiteAdapter):
         has_completion_year = page.locator(
             "input[data-automation-id='dateSectionYear-input'][id*='education']"
         ).count() > 0
+        # The School box is a text box on some tenants (--schoolName) and a search-and-pick list on others (--school,
+        # Ciena, 30 September). Counted only by the text box, every entry looked missing and "Add Another" was
+        # pressed again and again (an extra, empty entry whose Degree was then "required"), and typed into, the
+        # list never took the school. Entries are counted by whichever the tenant draws; a list is picked from.
+        school_probe = "input[id$='--schoolName'], [data-automation-id='formField-school']"
         for i, edu in enumerate(education):
-            self._ensure_entry_slot(assistant, page, "Education", "input[id$='--schoolName']", i)
-            self.fill_by_id_suffix(assistant, page, "--schoolName", i, edu.get("school", ""))
+            self._ensure_entry_slot(assistant, page, "Education", school_probe, i)
+            school = edu.get("school", "")
+            if page.locator("input[id$='--schoolName']").count() > i:
+                self.fill_by_id_suffix(assistant, page, "--schoolName", i, school)
+            elif school and not self.select_from_searchable_input(assistant, page, "--school",
+                                                                  self._school_names(assistant, school), i,
+                                                                  keyboard=False):
+                logger.info("School %r is not in this employer's list as written -- left for you", school)
             degree = edu.get("degree", "")
             if degree:
                 self.select_from_button_dropdown(assistant, page, "--degree", i, _degree_candidates(degree))
@@ -255,7 +298,8 @@ class WorkdayAdapter(SiteAdapter):
         for wait_ms in (3_000, 4_000, 5_000):
             page.wait_for_timeout(wait_ms)
             for i, edu in enumerate(education):
-                self.fill_by_id_suffix(assistant, page, "--schoolName", i, edu.get("school", ""))
+                if page.locator("input[id$='--schoolName']").count() > i:
+                    self.fill_by_id_suffix(assistant, page, "--schoolName", i, edu.get("school", ""))
                 field = edu.get("field", "")
                 if field and not self._multiselect_selection(page, "--fieldOfStudy", index=i):
                     self.select_from_searchable_input(assistant, page, "--fieldOfStudy", [field], i)
@@ -491,7 +535,8 @@ class WorkdayAdapter(SiteAdapter):
             return False
 
     def select_from_searchable_input(
-        self, assistant, page: Page, id_suffix: str, candidates: list[str], index: int = 0
+        self, assistant, page: Page, id_suffix: str, candidates: list[str], index: int = 0,
+        keyboard: bool = True,
     ) -> bool:
         """Picks a value from a type-ahead combobox (an <input> that filters
         a list as you type, e.g. 'How Did You Hear About Us?'). Types the
@@ -518,7 +563,11 @@ class WorkdayAdapter(SiteAdapter):
                 # match highlighted, so ArrowDown+Enter commits it. Clicking
                 # the option needs the list to still be open, and reopening it
                 # first closed the very list that had just been populated.
-                for strategy in ("suggestion_text", "keyboard", "prompt_option"):
+                # keyboard=False (a school): only the row the matcher says IS this name is clicked, by its exact
+                # label. ArrowDown+Enter takes whichever row comes first, and a suggestion that merely starts with the
+                # typed words ("JNTU" -> "JNTU Kakinada") would be another university.
+                strategies = ("suggestion_text", "keyboard", "prompt_option") if keyboard else ("matched_row",)
+                for strategy in strategies:
                     if strategy == "prompt_option":
                         page.keyboard.press("Escape")
                         page.wait_for_timeout(200)
@@ -530,6 +579,21 @@ class WorkdayAdapter(SiteAdapter):
                     field.type(cand, delay=40)
                     page.wait_for_timeout(1_200)
 
+                    if strategy == "matched_row":
+                        import option_match
+                        rows = assistant._visible_option_texts(page)
+                        k = option_match.best_option(rows, cand)
+                        if k is None:
+                            continue
+                        row = page.locator(f"[data-automation-id='promptOption']"
+                                           f"[data-automation-label={json.dumps(rows[k])}]")
+                        if not row.count() or not assistant._click_resiliently(row.first):
+                            continue
+                        page.wait_for_timeout(800)
+                        if self._searchable_value_committed(assistant, page, id_suffix, rows[k], multiselect_id, index):
+                            logger.info("Selected %r in %s (the row that is %r)", rows[k], id_suffix, cand)
+                            return True
+                        continue
                     if strategy == "suggestion_text":
                         if not assistant._click_visible_suggestion(page, field, cand):
                             continue
@@ -550,6 +614,9 @@ class WorkdayAdapter(SiteAdapter):
                         cand, id_suffix,
                     )
 
+            if not keyboard:
+                page.keyboard.press("Escape")       # none of the owner's names is in the list: left for the owner
+                return False
             # None of our wordings matched this tenant's list. Read what it
             # actually offers and let Claude pick the equivalent, so a new
             # employer's vocabulary doesn't need a code change.
@@ -761,11 +828,11 @@ class WorkdayAdapter(SiteAdapter):
 
         # Only leave it alone when what's showing is actually one of the
         # answers wanted. Skipping on ANY displayed text let stale leftovers
-        # ('Fairfax' typed into the search box) pass as a committed answer, so
+        # ('Springfield' typed into the search box) pass as a committed answer, so
         # a required field was never filled at all.
         # Only leave it alone when what's showing IS one of the wanted answers,
         # matched exactly. Skipping on any displayed text let a stale leftover
-        # ('Fairfax' still sitting in the search box) pass as a committed
+        # ('Springfield' still sitting in the search box) pass as a committed
         # answer, so a required field went unfilled while looking done.
         already = assistant._displayed_value(page, id_suffix)
         if already and any(already.lower() == c.strip().lower() for c in candidates if c):

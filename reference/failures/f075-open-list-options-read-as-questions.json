@@ -1,0 +1,12 @@
+{
+  "id": "f075",
+  "date": "2026-09-30",
+  "class": "Controls drawn inside a list's own options were read as questions of their own",
+  "symptom": "Ciena on Workday, 30 September: after the degrees were entered, Workday's Field of Study list stayed open; the agent 'answered' Accounting, Advertising, African Languages ... one subject at a time for three minutes, which the owner saw as the run looping again.",
+  "site": "Workday (multi-select prompts draw a radio inside each option); any site that draws a tick or radio inside list options",
+  "root_cause": "parse_snapshot made a question of every radio/checkbox with a reference, named by the text after it; it did not look at what the control sat inside, so each option of an open listbox became a question.",
+  "why_tests_missed": "Snapshots in the tests had lists closed, or options without their own radio pictures.",
+  "fix": "parse_snapshot keeps the indents of the list options (and open lists) a line sits inside; a radio or tick inside one is that choice's picture and is skipped. Radios inside ordinary list items (Yes/No drawn as a list) are still questions.",
+  "tests": ["replay_guard.py"],
+  "prevention": "A control's meaning depends on what it sits inside: read the ancestor roles (option, menu, listbox) before making a question of it."
+}

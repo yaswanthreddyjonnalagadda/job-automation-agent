@@ -1,0 +1,12 @@
+{
+  "id": "f085",
+  "date": "2026-09-30",
+  "class": "The same request handled at one stop and silently ignored at another",
+  "symptom": "Meta, 30 September: Resume was pressed on a run waiting at its review stop, to load the fixes for its page; the run read the page again with the code it started with and stopped on the same wrong reason.",
+  "site": "Every run that reaches the review stop",
+  "root_cause": "run_page_agent loaded new code for 'reload_code' only at the ordinary 'needs you' stop; the review-stop wait handled the other signals and fell through to continue for reload_code.",
+  "why_tests_missed": "Resume was only ever exercised at a 'needs you' stop.",
+  "fix": "load_latest_code(agent, assistant, job, experience_data) is the one routine for Resume, called from both stops.",
+  "tests": ["replay_guard.py"],
+  "prevention": "Every wait for the owner handles the same set of signals through one shared handler."
+}

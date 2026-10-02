@@ -1,0 +1,12 @@
+{
+  "id": "f068",
+  "date": "2026-09-30",
+  "class": "A second, weaker copy of a decision: the job's title and employer read from page chrome by a reader that ignored the shared helpers",
+  "symptom": "Forterra on Rippling (ats.rippling.com/forterra/jobs/...), 30 September: the job was recorded as 'Unknown Role @ Ats' and the tailored resume attached to the application was named ..._Resume_Ats.pdf, although the page's title is 'Senior Staff Network Systems Engineer' and its share title says '| Forterra Careers'.",
+  "site": "Rippling; any posting read by the plain page reader (no JSON-LD, no platform API)",
+  "root_cause": "fetch_generic_job looked for a bare '<title>' (Rippling writes <title data-rh=\"true\">) and named the company after the host's first label ('ats'), with its own prefix list, instead of the helpers the rendered reader already used (_clean_page_title, _employer_named_in, _company_from_url). _company_from_url's hand-kept vendor list lacked Rippling and its prefix list lacked 'ats.'.",
+  "why_tests_missed": "The generic reader was only met with pages whose <title> had no attributes and whose host named the employer.",
+  "fix": "page_identity(html, text, url) is the one reading of a page's title and employer: og:title or <title> with any attributes, cleaned of the site name; the employer from the site's own name (og:site_name or the part after ' | ', never a vendor's name), then the equal-opportunity sentence, then the address. ATS_VENDORS is one list of hosting vendors (Rippling, Workable, Jobvite, UKG and others added), and 'ats.', 'boards.' and 'hire.' are generic host labels.",
+  "tests": ["replay_guard.py"],
+  "prevention": "One function names a job from a page, and every reader calls it; a vendor that hosts many employers is data in one list, and its name is never taken for the employer."
+}

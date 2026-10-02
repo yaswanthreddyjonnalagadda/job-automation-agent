@@ -1,0 +1,15 @@
+{
+  "id": "f091",
+  "date": "2026-10-01",
+  "class": "A label keyword chose the answer: any question containing the word 'state' got the owner's state",
+  "symptom": "Premier Health, 1 October: 'If applicable, has your professional license/certification (in any state) ever been revoked?' was answered 'Virginia'. The replay guard found the same on an earlier application: 'Have you ... worked for the US Government (e.g., ... State ...)?' -> 'Virginia'.",
+  "site": "Any portal",
+  "root_cause": "PageAgent.known_answer gave profile.state to any question matching \b(state|province)\b, outside the concept matcher that decides every other field kind.",
+  "why_tests_missed": "State tests used short labels ('State', 'State/Province'); none put the word inside a yes/no question.",
+  "fix": "known_answer gives the state only when concept_matcher.match_concept reads the question as STATE_PROVINCE. The replay guard showed exactly the two corrections above across 850 saved pages.",
+  "tests": [
+    "tests/test_live_run_fixes_1_october.py::test_a_question_that_only_mentions_a_state_is_not_given_the_owners_state",
+    "tests/test_live_run_fixes_1_october.py::test_a_question_that_asks_for_the_state_still_gets_it"
+  ],
+  "prevention": "One place decides what a question asks (the concept matcher); no answer path matches a keyword on its own."
+}

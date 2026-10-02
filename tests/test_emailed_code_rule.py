@@ -224,3 +224,20 @@ def test_no_step_refuses_a_code_for_how_the_site_words_it():
     for name in ("page_agent.py", "browser_automation.py", "emailed_codes.py"):
         text = (root / name).read_text(encoding="utf-8")
         assert "HUMAN_CHECK" not in text and "not a robot" not in text, name
+
+
+
+# --- the account-verification link (the owner's decision of 30 September 2026) ----------------------------------------
+
+@pytest.mark.parametrize("link, text, ok", [
+    ("https://ciena.wd5.myworkdayjobs.com/en-US/Ciena_Careers/activate/abc", "Verify Account", True),
+    ("https://www.google.com/url?q=https://ciena.wd5.myworkdayjobs.com/activate/abc&sa=D", "Verify", True),
+    ("https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternal/activate/abc", "Verify", False),     # another employer
+    ("https://u123.ct.sendgrid.net/ls/click?upn=abc", "Verify your account", False),          # a tracking redirect
+    ("https://ciena.wd5.myworkdayjobs.com/en-US/Ciena_Careers/passwordreset/abc", "Reset password", False),
+    ("http://ciena.wd5.myworkdayjobs.com/activate/abc", "Verify", False),                     # not https
+    ("https://evil-myworkdayjobs.com.attacker.net/activate", "Verify", False),
+])
+def test_only_this_sites_own_verification_link_is_opened(link, text, ok):
+    import emailed_codes
+    assert emailed_codes.verification_link_ok(link, text, "https://ciena.wd5.myworkdayjobs.com/en-US/Ciena_Careers/login") is ok

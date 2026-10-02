@@ -1,0 +1,12 @@
+{
+  "id": "f072",
+  "date": "2026-09-30",
+  "class": "A site message was believed only on pages of one shape, and a later rule filled the gap with the wrong reason",
+  "symptom": "Ciena on Workday, 30 September: the agent created the account; Workday switched to Sign In with the alert 'Verify your account before you sign in or request a verification email'. The run stopped telling the owner 'this account's password was refused here before: set it on the site to the password in Settings' -- the owner saw a sign-in page and thought no account had been made.",
+  "site": "Workday; any site that shows 'account not verified' on its sign-in form",
+  "root_cause": "account_state read a verification message only on a page with no password box (so hint text like 'Verify your email address and password below' is not taken for one). Workday puts its unverified-account alert on the sign-in form, so the page was a plain SIGN_IN_FORM; the sign-in attempt the agent makes after creating an account was refused and recorded, and f066's 'refused before' rule then gave the password as the reason.",
+  "why_tests_missed": "Verification pages were tested as pages of their own ('Check your email'); none showed the message on a sign-in form.",
+  "fix": "_UNVERIFIED -- wording that says the account itself is not verified ('verify your account before you sign in', 'request a verification email', 'account not verified/activated', 'account may need verification') -- is read with the site's other messages, before wrong-password, whatever boxes the form has, and leads to VERIFY_EMAIL: 'open the verification email, click its link, then press Continue'.",
+  "tests": ["replay_guard.py"],
+  "prevention": "What the site says about the account outranks the form's shape; each message has a wording precise enough to trust on any page, instead of trusting a loose wording only on pages of one shape."
+}

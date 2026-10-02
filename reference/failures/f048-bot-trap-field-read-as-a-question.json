@@ -1,0 +1,15 @@
+{
+  "id": "f048",
+  "date": "2026-09-29",
+  "class": "A field hidden from people to catch programs was treated as the applicant's question",
+  "symptom": "Writer (Ashby), 28 September: 'Enter website. This input is for robots only, do not enter if you're human.' was sent to the AI as a question, spending a request; filled, it would mark the application as a bot's.",
+  "site": "Ashby (Writer); any site with a honeypot field",
+  "root_cause": "The accessibility snapshot includes the hidden field, and parse_snapshot read every named text box as a question.",
+  "why_tests_missed": "No fixture had a honeypot field.",
+  "fix": "page_agent.is_bot_trap(): a field whose label says it is for robots, or tells a human not to fill it, is not read as a control at all.",
+  "tests": [
+    "tests/test_posting_page_and_bot_traps.py::test_a_field_for_robots_is_not_read_as_a_question",
+    "tests/test_posting_page_and_bot_traps.py::test_an_ordinary_field_is_not_taken_for_a_trap"
+  ],
+  "prevention": "Read what a field says about itself before treating it as a question, and keep a fixture of every kind of trap a site sets."
+}

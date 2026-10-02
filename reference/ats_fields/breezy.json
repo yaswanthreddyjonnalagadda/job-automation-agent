@@ -1,0 +1,15 @@
+{
+  "portal": "Breezy HR (<company>.breezy.hr/p/<id>/apply)",
+  "studied": "2026-09-29",
+  "sample": "https://casm-limitlessli.breezy.hr/p/9ccb37fa4feb-systems-network-engineer/apply",
+  "single_page": true,
+  "fields": {
+    "standard": "names cName (full name, one box), cEmail, cPhoneNumber; labels are not linked to the boxes -- the placeholders ('Full Name', 'Email Address', 'Phone Number') say what each is",
+    "file": "input type=file name=cResume, hidden, required",
+    "work_history": "'Work History' and 'Education' sections filled by 'Add position' / 'Add education' buttons that open a small form per entry (repeated entries)",
+    "long_answer": "textarea cSummary (summary), textarea cCoverLetter",
+    "consent": "checkbox smsConsent -- the owner's decision",
+    "bot_trap": "an unlabelled text input named hp_7f2b ('hp' = honeypot) -- never fill a field with no label and a honeypot-style name",
+    "screening": "some postings add questions below (text, radio, select)"
+  }
+}

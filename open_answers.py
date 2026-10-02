@@ -48,6 +48,9 @@ _EXAMPLE = re.compile(
     r"share (an|a) (example|experience|story))\b", re.IGNORECASE)
 _WHY = re.compile(r"\bwhy\b|interest(ed)? in|what (draws|attracts|excites|motivates|interests)|motivat",
                   re.IGNORECASE)
+_LIST = re.compile(r"^\W*(?:please\s+)?list\b|\b(?:which|what|any)\s+(?:certifications?|licen[cs]es?|languages|"
+                   r"tools|technologies|software|programming languages|clearances?)\b|\bname (?:the|any|your)\b",
+                   re.IGNORECASE)
 
 
 def is_open(question: str, multiline: bool = False) -> bool:
@@ -56,6 +59,10 @@ def is_open(question: str, multiline: bool = False) -> bool:
 
 
 def kind(question: str) -> str:
+    # A question that asks for a list is answered with the list: "List any certifications you have" in a large box
+    # was written up as a paragraph about experience, padded to the essay minimum (SK AX USA, ADP, 30 September).
+    if _LIST.search(question or ""):
+        return "list"
     if _EXAMPLE.search(question or ""):
         return "example"
     if _WHY.search(question or ""):
@@ -209,6 +216,8 @@ def _system(question_kind: str, lo: int, hi: int) -> str:
                "applicant has actually done.",
         "example": "Tell ONE real example from the resume: what the situation was, what the applicant did, "
                    "and what happened because of it. Use a number from the resume if there is one.",
+        "list": "Give only the items asked for, as a short comma-separated list taken from the resume and the "
+                "applicant's details -- no sentences about experience. If the resume shows none, write: None.",
         "other": "Answer only what is asked.",
     }[question_kind]
     avoid = ", ".join(f'"{p}"' for p in style()["avoid"])

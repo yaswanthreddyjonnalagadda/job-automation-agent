@@ -1,0 +1,12 @@
+{
+  "id": "f069",
+  "date": "2026-09-30",
+  "class": "A residence fact answered a place question qualified by something else (birth, origin, passport, visa, issuance)",
+  "symptom": "Forterra on Rippling, 30 September: 'What is the Country of your birth?' was answered 'United States' from profile.country -- where the owner lives, not where they were born.",
+  "site": "Every portal (any question naming a country, state or city with a qualifier)",
+  "root_cause": "The COUNTRY concept matches the word 'country' anywhere and excluded only citizenship, nationality, employer and school; CITY and STATE_PROVINCE had the same gap, and the page agent's own address table matched any label starting with 'Country' ('Country of Birth'). Each place concept listed its exclusions by hand.",
+  "why_tests_missed": "Place questions were tested as residence questions and as citizenship questions; no question asked for a place of birth, origin or a passport's issuance.",
+  "fix": "concept_matcher.NOT_WHERE_YOU_LIVE (birth, born, origin, passport, issued/issuance, visa) is excluded from every residence concept (COUNTRY, STATE_PROVINCE, CITY, CITY_STATE) and from page_agent._detail_field, so such a question is never answered from the owner's address. Also: 'I am not a veteran' is 'I am not a protected veteran' (answer_equivalents.json).",
+  "tests": ["replay_guard.py"],
+  "prevention": "A residence answer is given only to a question about where the owner lives; every qualifier that moves a place question elsewhere lives in one shared pattern that all place concepts use."
+}

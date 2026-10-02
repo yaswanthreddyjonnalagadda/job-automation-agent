@@ -36,6 +36,8 @@ import psycopg
 from psycopg.types.json import Json
 from psycopg.rows import dict_row
 
+import application_status
+
 logger = logging.getLogger(__name__)
 
 
@@ -274,7 +276,10 @@ class PostgresTracker:
                 INSERT INTO ats_accounts (employer, email, login_host, method, last_login_at)
                 VALUES (%s, %s, %s, %s, now())
                 ON CONFLICT (employer) DO UPDATE
-                    SET last_login_at = now(), login_host = EXCLUDED.login_host
+                    SET last_login_at = now(), login_host = EXCLUDED.login_host,
+                        -- a later sign-in upgrades 'created, not yet verified'; nothing downgrades a working account
+                        method = CASE WHEN EXCLUDED.method LIKE '%%not yet verified%%' THEN ats_accounts.method
+                                      ELSE EXCLUDED.method END
                 """,
                 (employer.strip().lower(), email, login_host, method),
             )
@@ -400,7 +405,13 @@ class PostgresTracker:
             conn.execute("DELETE FROM applications WHERE id = %s", (application_id,))
         return True
 
-    def update_status(self, dedup_key: str, status: str, notes: Optional[str] = None) -> None:
+    def update_status(self, dedup_key: str, status: str, notes: Optional[str] = None,
+                      by_owner: bool = False) -> None:
+        current = self.get(dedup_key)
+        if current is not None and not application_status.may_replace(current.status, status, by_owner):
+            logger.info("KEPT: %s stays %s -- a run does not move an application that has gone back to %s",
+                        dedup_key[:12], current.status, status)
+            return
         with self._connect() as conn:
             conn.execute(
                 """
@@ -500,6 +511,27 @@ class PostgresTracker:
         logger.info("Stored %s (%d bytes) for %s", kind, len(content), dedup_key[:12])
         return row["id"]
 
+
+    def documents_for(self, application_id: int) -> list[dict]:
+        """An application's stored documents, newest first (without their bytes), for the dashboard."""
+        with self._connect() as conn:
+            rows = conn.execute("SELECT id, kind, filename, byte_size, created_at FROM documents "
+                                "WHERE application_id = %s ORDER BY created_at DESC", (application_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def document(self, document_id: int) -> Optional[dict]:
+        """One stored document: filename, content_type and its bytes."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT filename, content_type, content FROM documents WHERE id = %s",
+                               (document_id,)).fetchone()
+        return dict(row) if row else None
+
+    def answers_for(self, application_id: int) -> list[dict]:
+        """What was answered on an application's forms, by question, for the dashboard."""
+        with self._connect() as conn:
+            rows = conn.execute("SELECT question, answer, host, answered_by FROM form_answers "
+                                "WHERE application_id = %s ORDER BY question", (application_id,)).fetchall()
+        return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
     # Form answers -- the reusable memory of what was answered where

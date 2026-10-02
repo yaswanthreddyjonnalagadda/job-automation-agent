@@ -21,10 +21,9 @@ summary and writes one of these to the signal file:
   "goto:<url>"    -- send the browser back to a page it has wandered off
                      (a sign-in redirect, or the user navigating), keeping
                      the run and its part-filled form
-  "reload_code"   -- hot-reload browser_automation.py's code into this
-                     already-running process (see reload_browser_automation
-                     below) instead of restarting the whole script -- keeps
-                     the SAME browser tab/session open across a code fix
+  "reload_code"   -- Resume: this run records the page it is on and ends; the
+                     dashboard starts a new run on that page with the latest
+                     code (one code version per run -- see checkpoint.py)
 
 Usage:
     python apply_flow.py <job_input.json> --signal-file <path> [--timeout SECONDS]
@@ -33,7 +32,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 from datetime import datetime, timezone
 from typing import Optional
@@ -44,15 +42,17 @@ from pathlib import Path
 
 import re
 
-import browser_automation
 import config as config_module
 from resume_pdf import build_letter_pdf, build_resume_pdf
 from browser_automation import BlockedLoginDomainError, JobApplicationAssistant
 from claude_integration import ClaudeClient, ClaudeIntegrationError
-from gemini_integration import GeminiDocumentClient
-from openai_integration import OpenAIDocumentClient
-from config import get_app_config, get_user_profile, available_tailor_providers
+from config import get_app_config, get_user_profile
 from jd_analyzer import build_job_description, dedup_key_for_url
+import ai_choice
+import answer_bank
+import checkpoint
+import run_metrics
+import evidence as capture        # `evidence` is a local name in this module's functions
 import safety
 from safety import STATUS_DISQUALIFIED_POLICY_MISMATCH
 from state_machine import (
@@ -108,26 +108,24 @@ class JsonLogHandler(logging.Handler):
             pass
 
 
-def open_tracker(config):
-    """Use Postgres, with SQLite only for a transient connection outage.
-
-    Authentication, schema, and programming errors fail closed so tracking
-    cannot silently split between two databases."""
-    from db import is_transient_connection_error
+def refresh_answer_bank(tracker) -> None:
+    """Rebuilds the answer bank from the tracker (answer_bank.py): when a run starts, and after each wait for the owner,
+    so what they answered or sent meanwhile is reused at once. Never stops a run."""
+    if tracker is None:
+        return
     try:
-        from db import get_tracker
-        tracker = get_tracker()
-        logger.info("Tracking to Postgres")
-        return tracker
+        held = answer_bank.rebuild(tracker)
+        logger.info("ANSWER_BANK: %d question(s) answered before can be answered on any portal", held)
     except Exception as exc:
-        if not is_transient_connection_error(exc):
-            raise RuntimeError(f"Postgres tracking failed; refusing SQLite fallback: {exc}") from exc
-        logger.warning(
-            "Postgres unavailable (%s) -- falling back to SQLite at %s. "
-            "Start it with `docker compose up -d`.",
-            str(exc).splitlines()[0][:120], config.db_path,
-        )
-        return JobTracker(config.db_path)
+        logger.warning("ANSWER_BANK: not rebuilt (%s)", str(exc).splitlines()[0][:120] if str(exc) else type(exc).__name__)
+
+
+def open_tracker(config):
+    """The tracker, as tracking.open_tracker() decides: Postgres when configured, otherwise SQLite."""
+    import tracking
+    tracker = tracking.open_tracker(getattr(config, "db_path", None))
+    logger.info("Tracking to %s", "SQLite" if isinstance(tracker, JobTracker) else "Postgres")
+    return tracker
 
 
 def phone_for_documents(profile) -> str:
@@ -234,6 +232,11 @@ def ensure_resume_header(text: str, profile, job) -> str:
     return header + "\n" + text.lstrip()
 
 
+def _whole_pdf(content: bytes) -> bool:
+    """A PDF that starts as one and ends as one, with a page in it."""
+    return content.startswith(b"%PDF") and b"%%EOF" in content[-2048:] and b"/Page" in content
+
+
 def reuse_stored_document(tracker, key: str, kind: str, job_dir: Path) -> Path | None:
     """Returns the document already generated for this posting, restored from
     the database into the job's output folder, or None if there isn't one.
@@ -251,13 +254,12 @@ def reuse_stored_document(tracker, key: str, kind: str, job_dir: Path) -> Path |
     if not doc or not doc.get("content"):
         return None
     content = bytes(doc["content"])
-    # A PDF smaller than 20 KB is almost certainly broken (bad tailoring output
-    # that got PDF'd as a near-empty file). Discard it so the run retailors.
-    if kind == "resume" and doc.get("filename", "").lower().endswith(".pdf") and len(content) < 20_000:
-        logger.warning(
-            "REUSE_SKIPPED: stored resume %s is only %d bytes (likely corrupt) -- will retailor",
-            doc["filename"], len(content),
-        )
+    # A broken PDF (cut off, or not a PDF at all) is discarded so the run retailors. Its size says nothing:
+    # a text-only tailored resume is about 5 KB, and the old "under 20 KB is corrupt" rule threw away
+    # Aristocrat's good resume (5,339 bytes, 29 September), so every retry would have written a new one.
+    if kind == "resume" and doc.get("filename", "").lower().endswith(".pdf") and not _whole_pdf(content):
+        logger.warning("REUSE_SKIPPED: stored resume %s is not a whole PDF (%d bytes) -- will retailor",
+                       doc["filename"], len(content))
         return None
     path = job_dir / doc["filename"]
     if not path.is_file() or path.read_bytes() != content:
@@ -285,14 +287,8 @@ def _is_out_of_credits(exc: Exception) -> bool:
 
 
 def _make_tailor_client(provider: str, cfg) -> ClaudeClient:
-    """Build the right client object for *provider*."""
-    if provider == "claude":
-        return ClaudeClient(cfg)
-    if provider == "gemini":
-        return GeminiDocumentClient(cfg)
-    if provider == "openai":
-        return OpenAIDocumentClient(cfg)
-    raise ValueError(f"Unknown tailor provider: {provider!r}")
+    """A client that writes documents with *provider* (its default model)."""
+    return ai_choice.writer_client(provider, "", cfg)
 
 
 def _tailor_with(client, resume, job, profile, job_dir: Path, resume_txt: Path, resume_pdf: Path,
@@ -348,6 +344,17 @@ def _tailor_with(client, resume, job, profile, job_dir: Path, resume_txt: Path, 
         return None
 
 
+def document_name(profile, kind: str, company: str) -> str:
+    """The file name an employer sees: the applicant's own name, the document, the company.
+
+    'Jane_Doe_Resume_Acme'. The name comes from the profile -- it was the owner's, written into the code, so every
+    applicant's resume would have gone out under his name."""
+    name = " ".join(filter(None, (getattr(profile, "first_name", ""), getattr(profile, "last_name", ""))))         or getattr(profile, "full_name", "")
+    person = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")
+    safe_company = re.sub(r"[^A-Za-z0-9]+", "", company or "")[:24] or "Job"
+    return "_".join(part for part in (person, kind, safe_company) if part)
+
+
 def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None, key: str = "") -> Path:
     """Returns the resume PDF to attach for THIS job.
 
@@ -361,7 +368,7 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
     generic = Path(config_module.RESUME_PATH)
     safe_company = re.sub(r"[^A-Za-z0-9]+", "", job.company)[:24] or "Job"
     reused = reuse_stored_document(tracker, key, "resume", job_dir)
-    if reused is not None and reused.name not in (generic.name, f"Yaswanth_Jonnalagadda_Resume_{safe_company}.pdf"):
+    if reused is not None and reused.name != generic.name and not reused.name.endswith(f"Resume_{safe_company}.pdf"):
         # Written when the posting was read as someone else's: Schwab's was
         # tailored to its careers page's menu ("Career Schwab"), not the job.
         logger.info("RETAILORING: %s was written from a misread posting; tailoring it again", reused.name)
@@ -375,34 +382,33 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
         return reused
 
     resume_txt = job_dir / "tailored_resume.txt"
-    resume_pdf = job_dir / f"Yaswanth_Jonnalagadda_Resume_{safe_company}.pdf"
+    resume_pdf = job_dir / f"{document_name(profile, 'Resume', job.company)}.pdf"
 
-    # Determine which providers are available (have an API key in settings/env)
+    # The writers the owner chose on Settings (RESUME_WRITER, then RESUME_WRITER_FALLBACK); with no choice,
+    # every provider that has a key, Claude first (ai_choice.writers).
     cfg = config_module.get_app_config()
-    providers = available_tailor_providers(cfg)
+    found = ai_choice.writers(cfg)
 
-    if not providers:
+    if not found:
         logger.info(
             "TAILORING_SKIPPED: no AI API keys configured -- attaching the local resume. "
             "Add a Claude, Gemini, or OpenAI key in Settings to enable tailoring."
         )
         return generic
 
-    for provider in providers:
-        try:
-            client = _make_tailor_client(provider, cfg)
-        except Exception as build_exc:
-            logger.warning("Could not build %s client (%s) -- skipping", provider, build_exc)
-            continue
-        result = _tailor_with(client, resume, job, profile, job_dir, resume_txt, resume_pdf,
-                              provider.capitalize())
+    for label, client in found:
+        result = _tailor_with(client, resume, job, profile, job_dir, resume_txt, resume_pdf, label)
         if result is not None:
+            # Filed now, not when the form is reached: a run that failed before the form (the browser, a
+            # sign-in, a stop) lost its resume, and every retry paid for a new one (Writer, 28 September:
+            # 14 tailoring attempts for one job).
+            store_materials(tracker, key, result, None)
             return result
 
-    # All configured providers failed
+    # All configured writers failed
     logger.error(
-        "TAILORING_FAILED: all configured AI providers (%s) failed -- attaching the local generic resume.",
-        ", ".join(providers),
+        "TAILORING_FAILED: every writer (%s) failed -- attaching the local generic resume.",
+        ", ".join(label for label, _ in found),
     )
     return generic
 
@@ -428,8 +434,7 @@ def prepare_cover_letter(claude, resume, job, profile, job_dir: Path, tracker=No
         except Exception as exc:
             logger.warning("Stored cover letter unusable (%s) -- writing a new one", exc)
 
-    safe_company = re.sub(r"[^A-Za-z0-9]+", "", job.company)[:24] or "Job"
-    letter_txt = job_dir / f"Yaswanth_Jonnalagadda_Cover_Letter_{safe_company}.txt"
+    letter_txt = job_dir / f"{document_name(profile, 'Cover_Letter', job.company)}.txt"
     letter_pdf = letter_txt.with_suffix(".pdf")
     try:
         logger.info("Form has a cover letter field -- writing one for %s...", job.company)
@@ -534,14 +539,16 @@ def collect_evidence(assistant, page, job_dir: Path, step: int) -> dict:
     paths = {}
     try:
         shot = evidence_dir / "page.png"
-        page.screenshot(path=str(shot), full_page=True)
+        capture.screenshot(page, shot)                     # secret boxes painted over
         paths["screenshot"] = str(shot)
     except Exception as exc:
         logger.warning("Could not capture the screenshot: %s", exc)
     try:
         html = evidence_dir / "page.html"
-        html.write_text(page.content(), encoding="utf-8")
-        paths["html"] = str(html)
+        content = capture.html(page)                       # scripts, hidden tokens and secrets removed
+        if content:
+            html.write_text(content, encoding="utf-8")
+            paths["html"] = str(html)
     except Exception as exc:
         logger.warning("Could not capture the page HTML: %s", exc)
     return paths
@@ -591,7 +598,7 @@ def save_stop_page(page, job_dir: Path) -> None:
     try:
         stem = Path(job_dir) / f"stopped_{datetime.now():%Y%m%d_%H%M%S}"
         stem.parent.mkdir(parents=True, exist_ok=True)
-        page.screenshot(path=str(stem.with_suffix(".png")), full_page=True)
+        capture.screenshot(page, stem.with_suffix(".png"))   # secret boxes painted over
         stem.with_suffix(".txt").write_text(
             f"{page.url}\n\n" + hide_secrets(page.locator("body").aria_snapshot(mode="ai")), encoding="utf-8")
         logger.info("Where it stopped: %s", stem.with_suffix(".png"))
@@ -599,24 +606,17 @@ def save_stop_page(page, job_dir: Path) -> None:
         logger.info("Could not save the page it stopped on: %s", str(exc).splitlines()[0][:100])
 
 
-def shows_the_application(assistant, page) -> bool:
-    """A reopened page still holds the application: a form to fill (any frame), or the job posting.
 
-    Judged by what is on the page, not by its address: a careers home looked like any other page."""
-    try:
-        page.wait_for_timeout(2_000)            # Workday draws the form after the page has loaded
-        if assistant.on_job_description(page):
-            return True
-        for frame in page.frames:
-            found = frame.evaluate("""() => [...document.querySelectorAll(
-                    'input:not([type=hidden]):not([type=search]):not([type=submit]):not([type=button]), '
-                    + 'textarea, select, [role=combobox], [role=radio], [role=checkbox]')]
-                .some(e => !!(e.offsetParent || e.getClientRects().length))""")
-            if found:
-                return True
-    except Exception:
-        return True                             # when the page cannot be read, leave it as it was
-    return False
+def end_for_resume(tracker, key: str, page) -> None:
+    """Resume ends this run where it stands; the dashboard starts a new one on this page with the latest code.
+
+    Until 1 October Resume reloaded modules into the running process and swapped the classes of live objects:
+    new code met old in-memory state, and no run could say which version it was. Now a run is one code version
+    (logged at its start and kept in its checkpoint); the browser profile keeps the sign-in, and the new run's
+    checkpoint.reconcile confirms the page is still this application."""
+    remember_progress(tracker, key, page, "ended for Resume: a new run carries on with the latest code")
+    logger.info("RESUME: this run (code %s) ends here; the next one carries on from this page with the latest code",
+                checkpoint.code_version())
 
 
 def remember_progress(tracker, key: str, page, note: str = "") -> None:
@@ -632,6 +632,7 @@ def remember_progress(tracker, key: str, page, note: str = "") -> None:
         return
     if not worth_returning_to(url):
         return
+    checkpoint.verified(key, url)
     if hasattr(tracker, "update_last_page"):
         try:
             tracker.update_last_page(key, url)
@@ -688,7 +689,10 @@ def remembered_answers(tracker, questions) -> dict:
     return recalled
 
 
-def learn_user_answers(assistant, page, tracker, key, profile) -> int:
+_EVERYDAY_ANSWERS = frozenset({"yes", "no", "n/a", "na", "none", "true", "false", "not applicable"})
+
+
+def learn_user_answers(assistant, page, tracker, key, profile, company: str = "") -> int:
     """Records what the user filled in by hand, so the next application answers
     it by itself.
 
@@ -708,7 +712,9 @@ def learn_user_answers(assistant, page, tracker, key, profile) -> int:
         label, value = (field.get("label") or "").strip(), (field.get("value") or "").strip()
         if field.get("source") in ("agent", "site") or not label or not value or len(label) < 6:
             continue   # the agent's own answer, or one the site put there that nobody touched
-        if value.lower() in known or safety.is_attestation(label) or safety.is_attestation(value):
+        # A profile detail (a name, an address) is not learned again -- but 'Yes' and 'No' are in every profile,
+        # and skipping them left every yes/no question the person answered unlearned.
+        if (value.lower() in known and value.lower() not in _EVERYDAY_ANSWERS)                 or safety.is_attestation(label) or safety.is_attestation(value):
             continue
         if safety.is_legal_status_question(label):
             continue  # the user answers these afresh every time
@@ -719,6 +725,14 @@ def learn_user_answers(assistant, page, tracker, key, profile) -> int:
             learned += 1
         except Exception as exc:
             logger.debug("Could not remember %r: %s", label[:50], exc)
+        # A general question, answered in a few words, is the person's answer for every employer: it joins
+        # their saved answers, which every form is answered from and the dashboard shows and edits.
+        try:
+            import profile_setup
+            if profile_setup.remember_answer(label, value, company):
+                logger.info("SAVED ANSWER: %r = %r, for every application", label[:60], value[:40])
+        except Exception as exc:
+            logger.debug("Could not add %r to the saved answers: %s", label[:50], exc)
     if learned:
         logger.info("LEARNED: remembered %d answer(s) you filled in, for next time", learned)
     return learned
@@ -737,7 +751,7 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
     """
     documents = documents or {}
     if profile is not None:
-        learn_user_answers(assistant, page, tracker, key, profile)
+        learn_user_answers(assistant, page, tracker, key, profile, getattr(job, "company", ""))
     report = assistant.validate_application(page, resume_name)
     form_fields = assistant.read_back_fields(page)
     # Sponsorship and work authorization, checked against the profile whoever
@@ -795,6 +809,7 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
                              payload=decision.as_dict())
 
     status, message = safety.handover_status(report)
+    run_metrics.outcome("review")
     if decision.eligible:
         submitted = submit_verified(assistant, page, tracker, key, job, job_dir, decision)
         if submitted:
@@ -877,11 +892,19 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
     store_materials(tracker, key, resume_file, None)
     agent = page_agent.PageAgent(assistant, claude, config, profile, resume, job, tracker, key,
                                  job_dir, resume_file, cover_letter)
+    import repeated_entries
+    # each job and degree, for boxes that repeat per entry; a degree's dates completed from the profile
+    agent.history = repeated_entries.with_profile(experience_data, profile)
     while True:
         try:
             outcome = agent.run(page)
         except (Exception, TimeoutError) as exc:
             logger.exception("UNHANDLED ERROR / STALL in agent.run: %s", exc)
+            # What the page says now comes first: the owner may have sent it while the agent was busy (Secunetics,
+            # 29 September -- "Your application was submitted successfully" showed while the run crashed, and the
+            # application was recorded as needing the owner).
+            if confirmed_after_all(agent, page, tracker, key):
+                return
             try:
                 dump_path = dump_forensic_failure(page, reason=f"Unhandled agent error/stall: {exc}", console_logs=getattr(page, "_console_logs", []))
                 tracker.update_status(key, STATUS_NEEDS_USER_REVIEW, notes=f"Crashed/Stalled: {exc} (dump: {dump_path})")
@@ -895,7 +918,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
 
         if outcome.kind == "submitted":
             try:
-                page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
+                capture.screenshot(page, job_dir / "submitted_confirmation.png")
             except Exception:
                 pass
             delete_screenshots(job_dir)
@@ -925,6 +948,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             return
         if outcome.kind == "no_sponsorship":
             tracker.update_status(key, STATUS_SKIPPED, notes=f"Skipped: no visa sponsorship -- {outcome.summary}")
+            run_metrics.outcome("skipped")
             logger.warning("SKIPPED: %s at %s does not sponsor visas -- %r", job.title, job.company, outcome.summary)
             return
 
@@ -959,12 +983,19 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 status, note = safety.verification_status(evidence)
                 tracker.update_status(key, status, notes=note)
                 logger.info("SUBMITTED_BY_USER: %s", note)
+                run_metrics.outcome("submitted")
                 return
-            if decision in ("browser_closed", "left_form"):
+            if decision in RUN_ENDS:
                 remember_progress(tracker, key, page, f"run ended: {decision}")
                 return
             if decision in ("skip", "decline", "abort", "quit"):
                 tracker.update_status(key, STATUS_SKIPPED, notes="Skipped by you")
+                run_metrics.outcome("skipped")
+                return
+            if decision == "reload_code":
+                # Resume: a new run carries on from this page with the latest code. Code is never swapped into a
+                # running process, so every run is one version, named in its log and checkpoint (review, 1 October).
+                end_for_resume(tracker, key, page)
                 return
             continue
 
@@ -973,23 +1004,34 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
         banner = "=" * 78
         logger.info(banner)
         logger.info("NEEDS YOU -- %s at %s", job.title, job.company)
+        run_metrics.owner_stop(outcome.summary)
         for reason in outcome.reasons:
             logger.info("  %s", reason)
         for note in agent.notes[:5]:
             logger.info("  worth checking: %s", note)
-        logger.info("Deal with it in the browser window, then press Continue on the dashboard: "
-                    "the agent reads the page again and carries on.")
+        if outcome.kind == "captcha":
+            logger.info("Solve it in the browser window: the agent notices when it is gone and carries on by "
+                        "itself (Continue on the dashboard works too).")
+        elif any("still blank" in r for r in outcome.reasons):
+            logger.info("Fill it in the browser window: once nothing required is blank and you stop typing, the "
+                        "agent carries on by itself (Continue on the dashboard works too).")
+        else:
+            logger.info("Deal with it in the browser window, then press Continue on the dashboard: "
+                        "the agent reads the page again and carries on.")
         save_stop_page(page, job_dir)
         logger.info(banner)
         assistant.raise_window(page)
         agent.remember_page_state(page)
         try:
-            decision = assistant.wait_for_signal(signal_path, timeout_seconds=args.timeout, page=page)
+            decision = assistant.wait_for_signal(signal_path, timeout_seconds=args.timeout, page=page,
+                                                 for_captcha=outcome.kind == "captcha",
+                                                 for_blanks=any("still blank" in r for r in outcome.reasons))
         except TimeoutError:
             logger.info("No instruction received; the application is left as it is, unsubmitted.")
             return
         if not page.is_closed():
             agent.note_owner_changes(page)
+        refresh_answer_bank(tracker)
         agent._ensure_state()
         # Only the owner's Continue lifts a hold on a sign-in (login_guard): a code reload, a refresh
         # or a re-upload says nothing about whether the account was looked at.
@@ -999,67 +1041,18 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             status, note = safety.verification_status(evidence)
             tracker.update_status(key, status, notes=note)
             logger.info("SUBMITTED_BY_USER: %s", note)
+            run_metrics.outcome("submitted")
             return
-        if decision in ("browser_closed", "left_form"):
+        if decision in RUN_ENDS:
             remember_progress(tracker, key, page, f"run ended: {decision}")
             return
         if decision in ("skip", "decline", "abort", "quit"):
             tracker.update_status(key, STATUS_SKIPPED, notes="Skipped by you")
+            run_metrics.outcome("skipped")
             return
         if decision == "reload_code":
-            assistant = reload_browser_automation(assistant)
-            importlib.reload(page_agent)
-            agent.__class__ = page_agent.PageAgent
-            agent.assistant = assistant
-            # The resume bookkeeping above ran on the old code: run the new code's
-            # (a loop guard that had tripped is re-armed, new state starts empty).
-            agent._ensure_state()
-            agent.forget_sign_in_attempts(owner_acted=False)
-            # The profile, application settings and Claude's instructions too:
-            # a corrected name or new authorization must reach the live run.
-            try:
-                agent.config = config_module.get_app_config()
-                agent.profile = config_module.get_user_profile()
-                assistant._profile = agent.profile
-            except Exception as exc:
-                logger.warning("Could not reload the profile or settings: %s", exc)
-            try:
-                import claude_integration
-                importlib.reload(claude_integration)
-                if agent.claude.__class__.__name__ == "ClaudeClient":
-                    agent.claude.__class__ = claude_integration.ClaudeClient
-            except Exception as exc:
-                logger.warning("Could not reload the Claude instructions: %s", exc)
-            try:
-                # A run started on the API can be moved onto the session brain
-                # (or back) without restarting, keeping the form as it stands.
-                import session_planner
-                importlib.reload(session_planner)
-                fresh = config_module.get_app_config()
-                on_gemini = agent.claude.__class__.__name__ == "GeminiBrain"
-                wanted = getattr(fresh, "agent_brain", "api")
-                on_session = agent.claude.__class__.__name__ == "SessionPlanner"
-                if brain_kind(fresh) == "gemini":
-                    # FORM_ANSWER_MODE=gemini decides it, whatever AGENT_BRAIN says.
-                    if not on_gemini:
-                        agent.claude = brain_for(fresh, job)
-                        logger.info("BRAIN: now Gemini answers the pages; Claude writes the documents")
-                elif on_gemini:
-                    agent.claude = brain_for(fresh, job)
-                    logger.info("BRAIN: Gemini no longer answers the pages")
-                elif wanted == "session" and not on_session:
-                    api = agent.claude
-                    agent.claude = session_planner.SessionPlanner(config, folder=Path("data"), fallback=api)
-                    agent.claude.now_applying = f"{job.company} -- {job.title}"
-                    logger.info("BRAIN: now asking the Claude Code session about each page")
-                elif on_session:
-                    agent.claude.__class__ = session_planner.SessionPlanner
-                    if wanted != "session":
-                        agent.claude = agent.claude._fallback
-                        logger.info("BRAIN: back to asking the API about each page")
-            except Exception as exc:
-                logger.warning("Could not switch the brain over: %s", exc)
-            logger.info("Reloaded the reading agent, your profile and the instructions")
+            end_for_resume(tracker, key, page)
+            return
         elif decision == "fill_experience":
             # The reading agent normally handles ordinary profile fields.
             # Workday's repeated employment/education widget needs the
@@ -1091,123 +1084,109 @@ def submit_verified(assistant, page, tracker, key, job, job_dir: Path, decision)
     if hasattr(tracker, "record_event"):
         tracker.record_event(key, "auto_submit", "clicked Submit after verification",
                              payload={"reasons": [], "evidence": decision.evidence_paths})
+    checkpoint.begin(key, "submit", f"{job.title} at {job.company}")
     clicked = assistant.click_verified_submit(page)
     if not clicked:
+        checkpoint.finish(key, "submit", "the button could not be clicked")
         logger.error("AUTO_SUBMIT_FAILED: the Submit button could not be clicked")
         return False
     evidence = assistant.wait_for_submission_evidence(page, job.title)
     status, note = safety.verification_status(evidence)
+    checkpoint.finish(key, "submit", f"{status}: {note}")
     tracker.update_status(key, status, notes=note)
     try:
-        page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
+        capture.screenshot(page, job_dir / "submitted_confirmation.png")
     except Exception:
         pass
     if status == STATUS_SUBMITTED:
         delete_screenshots(job_dir)
     logger.info("AUTO_SUBMIT result: %s -- %s", status, note)
+    if status == STATUS_SUBMITTED:
+        run_metrics.outcome("submitted")
     return status == STATUS_SUBMITTED
+
+
+# What the owner can say, from the dashboard or by closing the window, that ends the run. "close" is the
+# dashboard's "Close browser" button: it was missing here, so the flow took it for "continue" and went on
+# reading pages and resetting the status after the owner had closed it (Aristocrat, 29 September).
+RUN_ENDS = ("browser_closed", "left_form", "close")
 
 
 def brain_kind(config) -> str:
     """Who answers the application pages under this configuration: "profile" (nobody: the saved profile),
-    "gemini", "session" (the Claude Code session) or "api" (Anthropic). FORM_ANSWER_MODE=gemini decides it
-    whatever AGENT_BRAIN says; the documents are Claude's in every case."""
+    "gemini", "openai", "session" (the Claude Code session) or "api" (Claude). FORM_ANSWER_MODE=gemini or openai
+    decides it whatever AGENT_BRAIN says."""
     mode = getattr(config, "form_answer_mode", "profile")
-    if mode in ("profile", "gemini"):
+    if mode in ("profile", "gemini", "openai"):
         return mode
     return "session" if getattr(config, "agent_brain", "api") == "session" else "api"
 
 
 def brain_for(config, job=None):
-    """The document writer, and optionally the assisted page planner.
+    """The document writers, and the page planner the owner chose (ai_choice.py).
 
-    In profile mode Claude is document-only: it tailors the resume/CV, while
-    PageAgent reads the form and answers it from the saved profile without an
-    API or session call. In gemini mode Gemini answers the pages and Claude
-    still writes the documents (gemini_integration.GeminiBrain).
+    The documents always go to the owner's writers (Settings: RESUME_WRITER). The pages go to Gemini, OpenAI or
+    Claude as FORM_ANSWER_MODE says, each climbing the owner's ladder of models; in profile mode the pages are
+    answered from the saved profile, and in session mode the Claude Code session plans them.
     """
-    api = ClaudeClient(config)
+    documents = ai_choice.Writers(ai_choice.writers(config))
     kind = brain_kind(config)
     if kind == "profile":
-        logger.info("BRAIN: Claude is document-only; form answers use the local profile planner")
-        return api
-    if kind == "gemini":
+        logger.info("BRAIN: form answers use the local profile planner; the writers write the documents")
+        brain = ai_choice.Brain(ClaudeClient(config), documents)
+    elif kind == "session":
+        import session_planner
+        brain = session_planner.SessionPlanner(config, folder=Path("data"), fallback=ClaudeClient(config))
+        brain.now_applying = f"{getattr(job, 'company', '')} -- {getattr(job, 'title', '')}".strip(" -")
+        logger.info("BRAIN: this run asks the Claude Code session about each page (no API credit used)")
+    elif kind == "gemini":
         from gemini_integration import GeminiBrain
-        logger.info("BRAIN: Gemini answers the application pages; Claude writes the resume and cover letter")
-        return GeminiBrain(config, documents=api)
-    if kind != "session":
-        return api
-    import session_planner
-    brain = session_planner.SessionPlanner(config, folder=Path("data"), fallback=api)
-    brain.now_applying = f"{getattr(job, 'company', '')} -- {getattr(job, 'title', '')}".strip(" -")
-    logger.info("BRAIN: this run asks the Claude Code session about each page (no API credit used)")
+        logger.info("BRAIN: Gemini answers the application pages; the chosen writer writes the documents")
+        brain = GeminiBrain(config, documents=documents)
+    else:
+        logger.info("BRAIN: %s answers the application pages; the chosen writer writes the documents",
+                    "OpenAI" if kind == "openai" else "Claude")
+        brain = ai_choice.Brain(ai_choice.answer_client(config, "openai" if kind == "openai" else "claude"),
+                                documents)
+    brain.made_for = kind          # what rechoose_brain compares with after a code reload
     return brain
 
 
-def reload_browser_automation(assistant: JobApplicationAssistant) -> JobApplicationAssistant:
-    """Re-reads browser_automation.py from disk and rebinds `assistant` to
-    the freshly-reloaded class, so a bug fix takes effect in THIS already
-    -running process -- without closing the browser or losing the session/
-    login/draft state. importlib.reload() redefines the module's classes in
-    place; reassigning __class__ makes the existing instance use the new
-    method implementations (Python looks up methods on the instance's
-    __class__ at call time, not at instance-creation time).
+def rechoose_brain(current, config, job=None):
+    """After a code reload: the brain the settings choose now -- the same decision as at the start (brain_kind),
+    never a second reading of the settings. The brain in use is kept when they still choose it (a session brain
+    takes its class's new code). Mutual of Enumclaw, 29 September: a run started on the profile planner was moved
+    to the Claude Code session by a reload that read AGENT_BRAIN on its own."""
+    kind = brain_kind(config)
+    if getattr(current, "made_for", None) == kind:
+        if kind == "session":
+            import session_planner
+            current.__class__ = session_planner.SessionPlanner
+        return current
+    logger.info("BRAIN: after the reload, the settings choose '%s' for the pages", kind)
+    return brain_for(config, job)
 
-    The reload is attempted only after the file compiles, and any failure is
-    swallowed: a SyntaxError propagating out of importlib.reload() kills the
-    process, which closes the browser and throws away a part-filled
-    application and its login session. A bad edit should cost a retry, not
-    the whole run."""
-    path = Path(browser_automation.__file__)
+
+def confirmed_after_all(agent, page, tracker, key: str) -> bool:
+    """After a run stopped on an error: if the page now says the application was received, it is recorded as
+    submitted (by the owner -- the agent never presses the last Submit) and True is returned."""
     try:
-        compile(path.read_text(encoding="utf-8"), str(path), "exec")
-    except SyntaxError as exc:
-        logger.error("RELOAD_REJECTED: %s has a syntax error (line %s): %s -- keeping the running version",
-                     path.name, exc.lineno, exc.msg)
-        return assistant
-
-    try:
-        # The profile too: the answers in config.py are data the run uses, and
-        # a fix to them was reaching the code but not the values -- the run
-        # went on offering the answer it had started with.
-        try:
-            importlib.reload(config_module)
-            fresh = config_module.get_user_profile()
-            if getattr(assistant, "_profile", None) is not None:
-                assistant._profile = fresh
-            logger.info("Reloaded the profile as well")
-        except Exception as exc:
-            logger.warning("Could not reload config.py: %s", exc)
-
-        # The site adapters first: browser_automation calls hooks on them, and
-        # reloading only one half left a new call meeting an old adapter --
-        # which killed a live Amazon application with AttributeError.
-        import sites
-        # safety.py holds the rules the run applies -- a fix to them reached
-        # the code on disk but not the running process, which went on using
-        # the version it started with.
-        try:
-            importlib.reload(safety)
-        except Exception as exc:
-            logger.warning("Could not reload safety.py: %s", exc)
-        for module in [sites.base] + [
-            importlib.import_module(f"sites.{name}") for name in
-            ("amazon", "ashby", "eightfold", "greenhouse", "lever", "successfactors", "workday")
-        ]:
-            try:
-                compile(Path(module.__file__).read_text(encoding="utf-8"), module.__file__, "exec")
-                importlib.reload(module)
-            except SyntaxError as exc:
-                logger.error("RELOAD_REJECTED: %s (line %s): %s", Path(module.__file__).name, exc.lineno, exc.msg)
-                return assistant
-        importlib.reload(sites)
-        sites._CACHE.clear()  # adapters are cached per run; drop the old objects
-        importlib.reload(browser_automation)
-        assistant.__class__ = browser_automation.JobApplicationAssistant
-        logger.info("Reloaded browser_automation.py and the site adapters in place")
+        tab = agent.tab(page)
+        if not agent._site_confirms(tab):
+            return False
+        said = " ".join((tab.inner_text("body", timeout=5_000) or "").split())
+        status, note = safety.verification_status("the page confirmed it: " + said[:200])
+        tracker.update_status(key, status, notes=note)
+        logger.info("SUBMITTED_BY_USER: the page confirmed the application when the run stopped")
+        run_metrics.outcome("submitted")
+        return True
     except Exception as exc:
-        logger.error("RELOAD_FAILED: %s -- keeping the running version", exc)
-    return assistant
+        logger.debug("Could not check for a confirmation after the error: %s", exc)
+        return False
+
+
+_RELOADED_ON_THEIR_OWN = {"__main__", "apply_flow", "browser_automation", "page_agent", "config"}
+
 
 
 def main() -> None:
@@ -1248,9 +1227,13 @@ def main() -> None:
         title=job_input["title"], company=job_input["company"], location=job_input["location"],
         url=job_input["url"], raw_text=job_input["raw_text"],
     )
+    # The questions the job site publishes for this application (Greenhouse), with their exact choices.
+    job.analysis["published_questions"] = list(job_input.get("questions") or [])
 
     tracker = open_tracker(config)
+    refresh_answer_bank(tracker)
     key = dedup_key_for_url(job.url)
+    run_metrics.start(key, job.url, checkpoint.code_version(), resumed=bool(getattr(args, "open_url", "")))
     # Postgres upserts, so a re-run corrects a title/company that an earlier,
     # worse read of the posting recorded (status is never changed there). The
     # SQLite fallback has no upsert and would raise on a duplicate.
@@ -1289,6 +1272,7 @@ def main() -> None:
         # Lets the assistant check and record which employers have accounts.
         assistant.tracker, assistant.employer, assistant._profile = tracker, job.company, profile
         assistant.application_key = key
+        checkpoint.note_application(key, job)
         existing = tracker.get(key) if hasattr(tracker, "get") else None
         if existing and existing.status not in ("prepared",):
             logger.info("PICKING UP: %s was last %s%s", existing.title[:50],
@@ -1321,12 +1305,33 @@ def main() -> None:
             # the run, not only at a hand-over.
             assistant.raise_window(page)
             page = assistant.open_embedded_form(page)
-            if resume_at and not shows_the_application(assistant, page):
+            pending = checkpoint.unresolved(key)
+            if pending:
+                # A Submit was pressed and the run ended before its result was seen: the result is unknown,
+                # and pressing it again could send the application twice. The owner checks first.
+                message = checkpoint.what_to_check(pending, job)
+                logger.warning("OUTCOME UNKNOWN: %s", message)
+                run_metrics.unknown_outcome()
+                run_metrics.owner_stop("outcome unknown: an earlier Submit was not seen through")
+                tracker.update_status(key, STATUS_NEEDS_USER_REVIEW, notes=message[:1000])
+                save_stop_page(page, job_dir)
+                try:
+                    decision = assistant.wait_for_signal(Path(args.signal_file), timeout_seconds=args.timeout,
+                                                         page=page)
+                except TimeoutError:
+                    return
+                if decision != "continue":
+                    return
+                checkpoint.owner_checked(key)
+            reopened = checkpoint.reconcile(key, page, assistant.on_job_description) if resume_at else None
+            if reopened is not None:
+                logger.info("RESUME CHECK: %s -- %s", reopened.verdict, reopened.why)
+                run_metrics.resume(reopened.verdict)
+            if reopened is not None and not reopened.is_the_application:
                 # KBI's last page was recorded as the careers home (/en-US/KBI_Biopharma/): no form, no
-                # posting, nothing to read, and the run stopped there. The address said nothing wrong;
-                # the page does.
-                logger.info("The page the last run reached no longer shows the application; "
-                            "starting from the posting")
+                # posting, nothing to read, and the run stopped there. Judged by the page and the
+                # checkpoint together: same site, and the job, a step counter, or the last verified form.
+                logger.info("The page the last run reached is not this application; starting from the posting")
                 page.goto(job.url, wait_until="domcontentloaded")
                 page.wait_for_timeout(3_000)
                 page = assistant.open_embedded_form(page)
@@ -1399,7 +1404,7 @@ def main() -> None:
             # Anything on the form the agent did not write is the user's own
             # answer: remember it before filling, both so it is not overwritten
             # and so the next application can use it.
-            learn_user_answers(assistant, page, tracker, key, profile)
+            learn_user_answers(assistant, page, tracker, key, profile, getattr(job, "company", ""))
             remember_progress(tracker, key, page)
 
             # A job may say it will not sponsor a visa only inside its form --
@@ -1575,20 +1580,21 @@ def main() -> None:
                 # The user submitted it themselves and the site (or their
                 # inbox) confirmed it.
                 try:
-                    page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
+                    capture.screenshot(page, job_dir / "submitted_confirmation.png")
                 except Exception as exc:
                     logger.warning("Could not capture confirmation screenshot: %s", exc)
-                if status == STATUS_SUBMITTED:
-                    delete_screenshots(job_dir)
                 evidence = getattr(assistant, "_confirmation_evidence", "") or \
                     "the page confirmed it (see submitted_confirmation.png)"
                 status, note = safety.verification_status(evidence)
+                if status == STATUS_SUBMITTED:          # was read before it was set: a NameError on this path
+                    delete_screenshots(job_dir)
                 tracker.update_status(key, status, notes=note)
                 remember_progress(tracker, key, page, "submitted by the user")
                 logger.info("SUBMITTED_BY_USER: confirmation seen on %s", page.url)
+                run_metrics.outcome("submitted")
                 return
 
-            if decision in ("browser_closed", "left_form"):
+            if decision in RUN_ENDS:
                 remember_progress(tracker, key, page, f"run ended: {decision}")
                 # The application left the screen without any confirmation. It
                 # may or may not have gone through, so it is never recorded as
@@ -1603,9 +1609,8 @@ def main() -> None:
                 return
 
             if decision == "reload_code":
-                assistant = reload_browser_automation(assistant)
-                step -= 1  # this iteration didn't actually do anything yet
-                continue
+                end_for_resume(tracker, key, page)
+                return
 
             if decision == "submit":
                 # Kept only to answer it: the agent stops before Submit, and
@@ -1647,6 +1652,7 @@ def main() -> None:
 
             if decision in ("skip", "decline", "abort", "quit"):
                 tracker.update_status(key, STATUS_SKIPPED, notes=f"User declined at chat review, step {step}")
+                run_metrics.outcome("skipped")
                 logger.info("DECLINED")
                 return
 

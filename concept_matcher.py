@@ -7,8 +7,11 @@ Greenhouse, Lever, Taleo, iCIMS, SuccessFactors, SmartRecruiters, Jobvite, etc.)
 
 from __future__ import annotations
 
+import calendar
+import json
 import re
 from datetime import date
+from pathlib import Path
 from typing import Any, Optional
 
 import geo_reference
@@ -51,6 +54,11 @@ def _is_yes(val: Any, default: bool = False) -> bool:
 
 
 # Concepts and their matching patterns, negative guards, and container boosts
+# A place question qualified by anything but where the owner lives now: the country (state, city) of birth or origin,
+# of a passport's or licence's issuance, of a visa. The owner's address never answers these (Forterra on Rippling,
+# 30 September: "What is the Country of your birth?" was answered with the country of residence).
+NOT_WHERE_YOU_LIVE = r"\bbirth|\bborn\b|\borigin\b|passport|issu(?:ed|ance|ing)|\bvisa\b"
+
 CONCEPTS: dict[str, dict[str, Any]] = {
     "FIRST_NAME": {
         "patterns": [
@@ -117,25 +125,44 @@ CONCEPTS: dict[str, dict[str, Any]] = {
         ],
         "negative": r"email|e-mail|web|employer|company|school|work|supervisor|line\s*2",
     },
+    # One box for where the owner lives, in several parts: "Where do you currently reside? (City, State)" was
+    # answered "Virginia" from the word "State" (Paylocity, 29 September). Asked with a list, the options still
+    # decide (confirm_concept).
+    "CITY_STATE": {
+        "patterns": [
+            r"\bcity\s*(?:,|\/|&|and)?\s*state\b",       # clean_text has already taken the comma out
+            r"\blocation\s*\(?\s*city\b",
+            r"^\W*where\s+do\s+you\s+(?:currently\s+)?(?:live|reside)\W*$",
+        ],
+        "negative": r"employer|company|school|university|previous|supervisor|willing|relocat|" + NOT_WHERE_YOU_LIVE,
+    },
+    # "Do you currently reside in the United States?": Yes or No by where the owner lives, whatever place is named.
+    "RESIDES_IN": {
+        "patterns": [
+            r"\b(?:do|are)\s+you\s+(?:currently\s+)?(?:reside|residing|live|living|located|based)\s+(?:in|within)\b",
+            r"\bare\s+you\s+(?:currently\s+)?(?:a\s+)?(?:legal\s+)?resident\s+of\b",
+        ],
+        "negative": r"willing|relocat|commut|miles|distance|near",
+    },
     "CITY": {
         "patterns": [
             r"^\W*(?:city|town|municipality|city\s*\/\s*town)\b",
             r"\bcity\s*of\s*residence\b",
         ],
-        "negative": r"employer|company|school|university|previous|supervisor",
+        "negative": r"employer|company|school|university|previous|supervisor|" + NOT_WHERE_YOU_LIVE,
     },
     "COUNTRY": {
         "patterns": [
             r"\b(?:country\s*(?:\/|\s+or\s+)?region(?:\s*of\s*residence)?|country\s*of\s*residence|residence\s*country|country|nation|domicile)\b",
         ],
-        "negative": r"citizenship|nationality|employer|school",
+        "negative": r"citizenship|nationality|employer|school|" + NOT_WHERE_YOU_LIVE,
     },
     "STATE_PROVINCE": {
         "patterns": [
             r"\b(?:state\s*\/\s*province|state\s+or\s+province|province\s*\/\s*territory|state|province|region|territory)\b",
             r"\bstate\s*of\s*residence\b",
         ],
-        "negative": r"employer|company|school|university|previous|statement|united\s*states|country",
+        "negative": r"employer|company|school|university|previous|statement|united\s*states|country|" + NOT_WHERE_YOU_LIVE,
     },
     "POSTAL_CODE": {
         "patterns": [
@@ -277,12 +304,16 @@ CONCEPTS: dict[str, dict[str, Any]] = {
         "patterns": [
             r"\b(?:available\s+to\s+start|when\s+can\s+you\s+start|notice\s+period|earliest\s+start\s+date|availability\s+to\s+start|available\s+start\s+date|target\s+start\s+date)\b",
         ],
-        "negative": r"employer|company|school|university|education|work|employment|job|experience|from\s+date",
+        # A past job's or school's dates, not when the owner can start ("Date Available to Start Work" is the latter).
+        "negative": r"employer|company|school|university|education|work\s+(?:history|experience)|employment\s+"
+                    r"(?:history|dates?)|job\s+(?:history|title)|experience|from\s+date",
     },
     "LINKEDIN_URL": {
         "patterns": [
             r"\b(?:linked\s*in(?:\s*profile|\s*url)?)\b",
         ],
+        # "How did you hear about us? LinkedIn" names LinkedIn as where the owner heard, not for a profile link.
+        "negative": r"\bhear\b|learn(?:ed)?\s+about|find\s+out\s+about|\bsource\b|\breferr",
     },
     "CURRENT_JOB": {
         "patterns": [
@@ -371,7 +402,31 @@ CONCEPTS: dict[str, dict[str, Any]] = {
 
 
 # Concepts that name a place. Inside a longer question they say where it applies.
-PLACE_CONCEPTS = ("COUNTRY", "STATE_PROVINCE", "CITY", "POSTAL_CODE")
+# ---------------------------------------------------------------------------------------------------------------
+# The same table as data (reference/concepts.json): a new wording of a known question, or a new question a profile
+# field answers, is a line there -- not a change to this file. Its concepts come first, so between two equal
+# matches the data's more specific one ("gender identity") wins over the table's general one ("gender").
+# ---------------------------------------------------------------------------------------------------------------
+CONCEPTS_FILE = Path(__file__).resolve().parent / "reference" / "concepts.json"
+
+
+def _concept_data() -> dict:
+    try:
+        data = json.loads(CONCEPTS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+_DATA = _concept_data()
+DATA_CONCEPTS: dict[str, dict[str, Any]] = {name: spec for name, spec in (_DATA.get("concepts") or {}).items()
+                                            if isinstance(spec, dict) and spec.get("patterns")}
+for _name, _wordings in (_DATA.get("more_wordings") or {}).items():
+    if _name in CONCEPTS and isinstance(_wordings, list):
+        CONCEPTS[_name] = {**CONCEPTS[_name], "patterns": list(CONCEPTS[_name].get("patterns", [])) + _wordings}
+CONCEPTS = {**DATA_CONCEPTS, **{name: spec for name, spec in CONCEPTS.items() if name not in DATA_CONCEPTS}}
+
+PLACE_CONCEPTS = ("COUNTRY", "STATE_PROVINCE", "CITY", "CITY_STATE", "POSTAL_CODE", "RESIDES_IN")
 
 
 def match_concept(
@@ -395,7 +450,7 @@ def match_concept(
         return None
 
     # Step 1: Specific pattern checks with negative guardrails
-    candidates: list[tuple[int, str, bool]] = []   # (score, concept, matched in the question itself)
+    candidates: list[tuple[int, str, bool, int]] = []   # (score, concept, matched in the question, where in it)
 
     for concept_name, defn in CONCEPTS.items():
         patterns = defn.get("patterns", [])
@@ -422,25 +477,62 @@ def match_concept(
                 # (e.g., name="Title" in container="Work Experience")
                 if container_boost and re.search(container_boost, clean_c, re.IGNORECASE):
                     score += 20
-                candidates.append((score, concept_name, bool(match_q)))
+                candidates.append((score, concept_name, bool(match_q),
+                                   (match_q.end() - match_q.start(), -match_q.start()) if match_q else (0, -10_000)))
 
     # A place named inside a question that asks something else is where the
     # question applies, not what it asks: "Are you legally authorized to work
     # in the country ...?" was answered "United States" because COUNTRY tied
     # WORK_AUTHORIZATION and came first in the table (Writer, 28 September).
-    if any(in_q and concept not in PLACE_CONCEPTS for _s, concept, in_q in candidates):
+    if any(in_q and concept not in PLACE_CONCEPTS for _s, concept, in_q, _p in candidates):
         candidates = [c for c in candidates if c[1] not in PLACE_CONCEPTS]
 
+    # A question put as Yes/No ("Would you like to receive communications via SMS and email?", "Do you have a
+    # disability ... that limits one or more of your major life activities?") is never answered with a fact such
+    # as an email address or a field of study: Lucid (Greenhouse, 29 September) got the owner's email for the first
+    # and "Computer Technology" for the second, from the words "email" and "major".
+    if _YES_NO_QUESTION.match(clean_q) and not _REQUEST.match(clean_q):
+        candidates = [c for c in candidates if c[1] not in VALUE_CONCEPTS]
+
     best_concept, best_score = None, 0
-    for score, concept_name, _in_q in candidates:     # table order breaks a tie, as before
+    for score, concept_name, _in_q, _span in candidates:     # table order breaks a tie, as before
         if score > best_score:
             best_score, best_concept = score, concept_name
     return best_concept
 
 
+# Voluntary self-identification: who the owner is. Only the owner's own answer (the profile, their saved or earlier
+# answers) is ever given; the AI never answers it. Lucid (Greenhouse), 30 September: with nothing in the profile, the
+# AI chose "I prefer to self-describe" for gender identity and typed the owner's name into "Please specify", and
+# "Heterosexual" for sexual orientation.
+_SELF_IDENTIFICATION = re.compile(r"\bgender\b|sexual orientation|transgender|\bpronouns?\b|\bsex\b|\blgbt|\brace\b|"
+                                  r"racial|ethnic|hispanic|latin[oax]\b|disabilit|veteran|armed forces|"
+                                  r"military status", re.IGNORECASE)
+
+
+def is_self_identification(text: str) -> bool:
+    return bool(_SELF_IDENTIFICATION.search(text or ""))
+
+
+# How a Yes/No question opens -- and the requests that open the same way but want a value ("Can you provide your
+# phone number?").
+_YES_NO_QUESTION = re.compile(r"^(?:do|does|did|are|is|was|were|have|has|had|will|would|can|could|should|may|"
+                              r"might)\s+(?:you|your)\b")
+_REQUEST = re.compile(r"^(?:can|could|would|will)\s+you\s+(?:please\s+)?(?:provide|share|enter|list|give|tell|"
+                      r"describe|explain|specify|state|confirm\s+your)\b")
+# Concepts answered with a fact of the owner's (a name, an address, a date, a school) rather than Yes/No or a choice.
+VALUE_CONCEPTS = frozenset({
+    "FIRST_NAME", "LAST_NAME", "MIDDLE_NAME", "FULL_NAME", "EMAIL", "PHONE_MOBILE", "PHONE_COUNTRY_CODE",
+    "STREET_ADDRESS", "CITY_STATE", "CITY", "COUNTRY", "STATE_PROVINCE", "POSTAL_CODE", "CURRENT_JOB_TITLE",
+    "CURRENT_EMPLOYER", "SCHOOL_UNIVERSITY", "DEGREE_LEVEL", "MAJOR_FIELD_OF_STUDY", "GRADUATION_YEAR",
+    "LINKEDIN_URL", "WORK_START_DATE", "EDUCATION_END_DATE", "TODAYS_DATE", "DESIRED_SALARY", "NOTICE_PERIOD",
+    "HOW_DID_YOU_HEAR",
+}) | frozenset(name for name, spec in DATA_CONCEPTS.items() if spec.get("value"))
+
+
 # Questions about where the owner lives. The options on offer can correct the
 # label: "Region of Residence" over a list of countries asks for a country.
-RESIDENCE_CONCEPTS = ("COUNTRY", "STATE_PROVINCE")
+RESIDENCE_CONCEPTS = ("COUNTRY", "STATE_PROVINCE", "CITY_STATE")
 
 
 def confirm_concept(concept: Optional[str], options: Optional[list[str]]) -> Optional[str]:
@@ -452,6 +544,10 @@ def confirm_concept(concept: Optional[str], options: Optional[list[str]]) -> Opt
     concepts are ever redirected -- a country list under "Country of
     Citizenship" is a citizenship question, and it is left as the label said.
     """
+    real = [o for o in (options or []) if o and not re.match(r"^\s*(choose|select|--)", o, re.IGNORECASE)]
+    if concept == "ETHNICITY_RACE" and real and all(re.search(r"hispanic|latin", o, re.IGNORECASE) for o in real):
+        # "Ethnic Origin" offering only Hispanic/Latino and Not Hispanic/Latino (UKG, 30 September).
+        return "HISPANIC_OR_LATINO"
     if concept not in RESIDENCE_CONCEPTS or not options:
         return concept
     domain = geo_reference.option_domain(options)
@@ -564,6 +660,7 @@ def resolve_profile_value(
     concept: str,
     profile: Any,
     options: Optional[list[str]] = None,
+    question: str = "",
 ) -> tuple[str, str]:
     """Retrieve the value and source for a given concept from the user profile.
 
@@ -605,6 +702,27 @@ def resolve_profile_value(
     elif concept == "STATE_PROVINCE":
         val = str(getattr(profile, "state", "") or "").strip()
         src = "profile.state"
+    elif concept == "CITY_STATE":
+        city = str(getattr(profile, "city", "") or "").strip()
+        state = str(getattr(profile, "state", "") or "").strip()
+        if city and state:
+            val, src = f"{city}, {state}", "profile.city+state"
+    elif concept == "RESIDES_IN":
+        # The places the question names against where the profile says the owner lives: a country against the
+        # country, a US state against the state. Yes when any of them is home; No only when every one could be
+        # checked and none is; otherwise no answer.
+        country = str(getattr(profile, "country", "") or "").strip()
+        state = str(getattr(profile, "state", "") or "").strip()
+        verdicts = []
+        for place in geo_reference.places_named_in(question):
+            is_state = bool(geo_reference.us_state_code(place)) and not geo_reference.country_code(place)
+            home = state if is_state else country
+            verdicts.append(None if not home else
+                            (geo_reference.same_us_state if is_state else geo_reference.same_country)(place, home))
+        if any(verdicts):
+            val, src = "Yes", "profile.country/state"
+        elif verdicts and all(v is False for v in verdicts):
+            val, src = "No", "profile.country/state"
     elif concept == "POSTAL_CODE":
         val = str(getattr(profile, "postal_code", "") or "").strip()
         src = "profile.postal_code"
@@ -708,7 +826,7 @@ def resolve_profile_value(
             val = str(minimum)
         src = "profile.salary"
     elif concept == "HOW_DID_YOU_HEAR":
-        val = str(getattr(profile, "how_did_you_hear", "") or "LinkedIn").strip()
+        val = str(getattr(profile, "how_did_you_hear", "") or "").strip()
         src = "profile.how_did_you_hear"
     elif concept == "APPLIED_BEFORE":
         val = "Yes" if _is_yes(getattr(profile, "applied_here_before", False), default=False) else "No"
@@ -726,7 +844,7 @@ def resolve_profile_value(
         val = "Yes" if _is_yes(getattr(profile, "bound_by_non_compete", False), default=False) else "No"
         src = "profile.bound_by_non_compete"
     elif concept == "PREFERRED_CONTACT":
-        val = str(getattr(profile, "preferred_contact_method", "Email") or "Email").strip()
+        val = str(getattr(profile, "preferred_contact_method", "") or "").strip()
         src = "profile.preferred_contact_method"
     elif concept == "LINKEDIN_URL":
         val = str(getattr(profile, "linkedin_url", "") or "").strip()
@@ -736,10 +854,10 @@ def resolve_profile_value(
         src = "profile.current_job"
     elif concept == "WORK_START_DATE":
         dates = str(getattr(profile, "current_employment_dates", "") or "").strip()
-        val = dates.split("-")[0].strip() if "-" in dates else (dates or "February 2025")
+        val = dates.split("-")[0].strip() if "-" in dates else dates
         src = "profile.current_employment_dates"
     elif concept == "WORK_REASON_FOR_LEAVING":
-        val = str(getattr(profile, "reason_for_leaving", "") or "Contract ending").strip()
+        val = str(getattr(profile, "reason_for_leaving", "") or "").strip()
         src = "profile.reason_for_leaving"
     elif concept == "EDUCATION_END_DATE":
         ed_dates = getattr(profile, "education_dates", ()) or ()
@@ -747,11 +865,35 @@ def resolve_profile_value(
             val = ed_dates[0][2]
             src = "profile.education_dates"
         else:
-            val = "December 2022"
-            src = "profile.education.end_date"
+            src = "profile.education_dates"
     elif concept == "TODAYS_DATE":
         val = date.today().isoformat()
         src = "profile.application_date"
+
+    if concept in DATA_CONCEPTS:
+        spec = DATA_CONCEPTS[concept]
+        field_name = str(spec.get("profile_field") or "")
+        raw = getattr(profile, field_name, "") if field_name else ""
+        if spec.get("resolver") == "skill_level":
+            val = _skill_level(raw, question)
+        elif spec.get("resolver") == "yes_if_matches":
+            # A Yes/No question about one kind of a stated fact: "Are you in OPT status?" is answered by the
+            # work authorization the profile states (H-1B -> No), never guessed.
+            raw = str(raw or "").strip()
+            val = ("Yes" if re.search(str(spec.get("pattern") or "$^"), raw, re.IGNORECASE) else "No") if raw else ""
+        else:
+            if isinstance(raw, (list, tuple)):
+                raw = "; ".join(str(item).strip() for item in raw if str(item).strip())
+            val = "" if raw in (None, 0) else str(raw).strip()
+            if not val and spec.get("fallback_field"):
+                field_name = str(spec["fallback_field"])
+                val = str(getattr(profile, field_name, "") or "").strip()
+        src = f"profile.{field_name}"
+
+    # One part of a date ("Date available to start work - Month", "End date year"): that part, not the whole date.
+    part = _DATE_PART.search(clean_text(question)) if (val and question and concept in _DATE_CONCEPTS) else None
+    if part:
+        val = _date_part(val, part.group(1), options) or val
 
     if val and options:
         matched_opt = best_option_match(val, options)
@@ -759,3 +901,40 @@ def resolve_profile_value(
             return matched_opt, src
 
     return val, src
+
+
+_DATE_CONCEPTS = frozenset({"NOTICE_PERIOD", "WORK_START_DATE", "EDUCATION_END_DATE", "TODAYS_DATE"})
+_DATE_PART = re.compile(r"\b(month|day|year)\s*$")
+
+
+def _date_part(value: str, part: str, options: Optional[list[str]] = None) -> str:
+    """The year, day or month of a date answer ("December 2022", "2 weeks", "2026-10-15"); the month as the list
+    writes it (December, Dec, 12) when a list is given, else its name."""
+    import form_fields
+    when = form_fields.resolve_date(value)
+    if not when:
+        return ""
+    year, month, day = when
+    if part == "year":
+        return str(year)
+    if part == "day":
+        return str(day)
+    spellings = {calendar.month_name[month].lower(), calendar.month_abbr[month].lower(), str(month), f"{month:02d}"}
+    for option in options or []:
+        if option.strip().lower().rstrip(".") in spellings:
+            return option
+    return calendar.month_name[month]
+
+
+def _skill_level(entries, question: str) -> str:
+    """"Rate your skill with Cisco/Meraki (1-5)" from the profile's "Cisco: 5": the level of the skill the question
+    names (the longest name found in it), or nothing."""
+    words = f" {clean_text(question)} "
+    best, level = "", ""
+    for entry in entries or ():
+        name, _sep, rated = str(entry).partition(":")
+        name = clean_text(name)
+        digit = re.search(r"\d", rated)
+        if name and digit and f" {name} " in words and len(name) > len(best):
+            best, level = name, digit.group(0)
+    return level

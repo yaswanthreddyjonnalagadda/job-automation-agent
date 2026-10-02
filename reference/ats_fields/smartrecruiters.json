@@ -1,0 +1,22 @@
+{
+  "portal": "SmartRecruiters (jobs.smartrecruiters.com/oneclick-ui/company/<co>/publication/<id>)",
+  "studied": "2026-09-29",
+  "sample": "https://jobs.smartrecruiters.com/oneclick-ui/company/Experian/publication/936889e1-ddab-464f-af3b-dc7268708236",
+  "single_page": false,
+  "opens_with": "the posting's 'I'm interested' link opens 'Easy apply' (personal details first, screening questions after)",
+  "fields": {
+    "shadow_dom": "every field sits inside open Shadow DOM web components (spl-input, spl-autocomplete, spl-phone-field, spl-dropzone, spl-textarea, spl-select): document.querySelectorAll does not see them -- search each shadowRoot (Playwright locators and aria snapshots do pierce open shadow roots)",
+    "text": "First name*, Last name*, Email*, Confirm your email* (the same email twice), LinkedIn, Facebook, X, Website",
+    "city": {
+      "widget": "input role=combobox aria-haspopup=listbox aria-autocomplete=list inside spl-autocomplete; listbox hidden until typing",
+      "pick": "type the city, wait for the listbox, click the option that matches"
+    },
+    "phone": {
+      "widget": "spl-phone-field: a 'Country code' button role=combobox (aria-autocomplete=none) opening a listbox with its own search input ('Search by country/region or code'), plus input type=tel",
+      "pick": "open the code list, type the country, click it; then type the national number"
+    },
+    "file": "input type=file inside spl-dropzone ('Choose a file or drop it here'); a separate hidden input is the profile photo -- never put the resume there",
+    "long_answer": "textarea 'Let the company know about your interest working there' (cover note)",
+    "screening": "later step: questions per job (radio, select, text)"
+  }
+}

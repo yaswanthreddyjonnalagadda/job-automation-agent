@@ -1,0 +1,19 @@
+{
+  "id": "f088",
+  "date": "2026-10-01",
+  "class": "Resume trusted what it reopened, and an action whose result nobody saw could be taken again",
+  "symptom": "Found in the architecture review of 1 October, after KBI (28 September): the resume check took any visible input on a reopened page as the application, and when the page could not be read it carried on as if it were. Nothing recorded that Submit or Create Account had been pressed, so a run cut off between the press and the result would, on the next run, simply go on -- and could submit twice or make a second account.",
+  "site": "Every portal",
+  "root_cause": "The application's state lived only in the tracker's last page address and in the running process. There was no record of the application's identity (host, title) to check a page against, and no record of an action in flight; shows_the_application judged by 'a form is visible' and returned True on any error.",
+  "why_tests_missed": "The resume tests used one careers home and one form; none showed an unrelated form on the same site, an unreadable page, or a run that ended between a press and its result.",
+  "fix": "checkpoint.py: one JSON per application in data/checkpoints/ with its identity, the last verified page (with the code version), a pending action and a short history. reconcile() requires the application's host and then the posting, the job title, a step counter, or the last verified page with its form; an unreadable page is UNREADABLE and the run starts from the posting. apply_flow writes 'submit' as pending before the verified Submit and clears it with the result; a pending Submit found at the start of a run stops it with what to check, and only the owner's Continue closes it. login_guard records Create Account before the press (creation_pending), clears it when the next page is read, and may_create_account holds the next attempt while one is pending; Continue clears it. shows_the_application is removed.",
+  "tests": [
+    "tests/test_resume_point.py",
+    "tests/test_resume_point.py::test_an_unrelated_form_on_the_same_site_is_not_the_application",
+    "tests/test_resume_point.py::test_a_page_that_cannot_be_read_is_never_taken_for_the_application",
+    "tests/test_resume_point.py::test_a_submit_whose_result_was_not_seen_stays_unresolved_until_the_owner_checks",
+    "tests/test_interrupted_account_creation.py",
+    "tests/test_interrupted_account_creation.py::test_a_press_whose_result_was_not_seen_holds_the_next_creation"
+  ],
+  "prevention": "Write an action that must not happen twice as pending before taking it and close it only with its observed result; resume from a checkpoint that names the application and reconcile it with the page, failing closed when the page cannot be read."
+}

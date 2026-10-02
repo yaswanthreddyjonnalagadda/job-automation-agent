@@ -1,0 +1,14 @@
+{
+  "id": "f065",
+  "date": "2026-09-29",
+  "class": "A reload refreshed a module but not the modules it newly depends on",
+  "symptom": "Found before it struck, 29 September: loading the refused-sign-in fix (f064) into Mutual of Enumclaw's waiting run with 'Reload code' would have given the new page agent the old account_state, which has no reset step -- an AttributeError in the sign-in step of a live application. The same class once killed a live Amazon application (a new browser_automation meeting an old site adapter).",
+  "site": "Every site (any run that is sent 'Reload code')",
+  "root_cause": "reload_browser_automation reloaded a hand-kept list -- config, safety, the site adapters, browser_automation -- and the run then reloaded page_agent. Every other project module the agents use (account_state, form_fields, option_match, geo_reference, login_guard, emailed_codes, interaction, perception ...) kept the version the run started with, and a list kept by hand falls behind each new module.",
+  "why_tests_missed": "No test covered the reload at all: it was only ever tried on live runs.",
+  "fix": "apply_flow.project_modules_used_by walks the project's own modules the agents use, directly or through each other, and orders each after the modules it uses; reload_browser_automation compile-checks all of them first (one syntax error keeps the whole running version) and reloads them in that order before the site adapters and browser_automation. Superseded on 1 October 2026 (f089): code is no longer reloaded into a running process at all; Resume ends the run and starts a new one on the same page, so new code never meets old helpers.",
+  "tests": [
+    "tests/test_dashboard.py::test_resume_ends_the_waiting_run_and_starts_a_new_one_on_its_page"
+  ],
+  "prevention": "What to reload is derived from the import graph, never kept as a list by hand; a hot reload is tested with importlib.reload recorded, so the order and the all-or-nothing rule are checked without disturbing the process."
+}

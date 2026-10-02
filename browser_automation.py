@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -32,7 +33,12 @@ from playwright.sync_api import BrowserContext, Page, sync_playwright
 import geo_reference
 import emailed_codes
 import login_guard
+import evidence
+import confirmation
 import provenance
+import account_state
+import form_fields
+import option_match
 import safety
 import visible_desktop
 from config import AppConfig, UserProfile, get_user_profile, resume_to_attach
@@ -228,6 +234,12 @@ class FramedPage:
         if hasattr(frame, name):
             return getattr(frame, name)
         return getattr(self.top, name)
+
+
+def waiting_note_for(signal_path: Path) -> Path:
+    """The note beside a signal file that says its run is waiting for the owner (_waiting_<name>.txt)."""
+    signal_path = Path(signal_path)
+    return signal_path.with_name(signal_path.name.replace("_signal_", "_waiting_", 1))
 
 
 class JobApplicationAssistant:
@@ -1172,8 +1184,7 @@ class JobApplicationAssistant:
                 typed = (box.input_value() or "").strip()
                 if typed and box.get_attribute("aria-expanded") == "true":
                     if not self._click_visible_suggestion(page, box, typed):
-                        box.press("ArrowDown")
-                        box.press("Enter")
+                        form_fields.pick_open_row(page, typed)      # never ArrowDown + Enter
                     page.wait_for_timeout(600)
 
             blanks = [b for b in self.find_required_blanks(page)["required_still_blank"]]
@@ -1296,7 +1307,7 @@ class JobApplicationAssistant:
              [g("address_line1")]),
             # A questionnaire's employment block. The narrow wordings come
             # first: a rule for the employer's name matched every one of these
-            # questions and wrote "Capital One" into all five.
+            # questions and wrote "the current employer" into all five.
             (r"type of business|industry|nature of business", [g("current_employer_type")]),
             (r"dates? of employment|employment dates|period of employment|from\s*/\s*to",
              [g("current_employment_dates")]),
@@ -1366,6 +1377,16 @@ class JobApplicationAssistant:
         disability and have not had one...'), then containing it. Short
         candidates ('Yes', 'Male') only match exactly -- 'male' is inside
         'female'."""
+        # The one matcher for every list first (option_match: same words, same place, the portal's own words, the
+        # whole answer then punctuation, a plain No in words). Lucid, 29 September: "Master's" was not taken for
+        # "Masters Degree", nor "No" for "Never been a contractor or an employee", because this older matcher was
+        # asked and the shared one never was. What follows stays for the answers only it knows (veteran and
+        # disability wordings).
+        for candidate in candidates:
+            index = option_match.best_option(list(options), candidate)
+            if index is not None:
+                return index
+
         def norm(s: str) -> str:
             s = re.sub(r"[^\w\s()+,'-]", " ", s)  # drops flag emoji etc.
             return re.sub(r"\s+", " ", s).strip().lower()
@@ -1995,7 +2016,8 @@ class JobApplicationAssistant:
             logger.info("LOOKED: a CAPTCHA is showing -- only you can complete it; the agent does nothing")
             return "captcha", False
         try:
-            shot = page.screenshot(full_page=False, timeout=15_000)
+            # Sent to the AI: every secret box painted over first.
+            shot = evidence.screenshot(page, None, full_page=False)
             seen = claude.read_page(shot, page.url, goal)
         except Exception as exc:
             logger.warning("LOOKED: could not read the page (%s)", str(exc).splitlines()[0][:100])
@@ -2119,7 +2141,7 @@ class JobApplicationAssistant:
                 logger.info("Answered Ant Design combobox %r with %r", control.get("question", "")[:40], candidates[0])
                 page.wait_for_timeout(500)
                 return
-        wants_dial_code = bool(re.search(r"country code|dial|phone|^\s*\*?\s*country",
+        wants_dial_code = bool(re.search(r"country code|dial|phone|^\s*\*?\s*country\b",
                                          control.get("question", ""), re.I))
         scope = page.locator(f"[id={json.dumps(control['listbox'])}]") if control["listbox"] else page
         if scope is not page and scope.count() == 0:
@@ -2823,8 +2845,7 @@ class JobApplicationAssistant:
         field.type(value, delay=40)
         page.wait_for_timeout(1_500)
         if not self._click_visible_suggestion(page, field, value):
-            field.press("ArrowDown")
-            field.press("Enter")
+            form_fields.pick_open_row(page, value)                  # never ArrowDown + Enter
         page.wait_for_timeout(800)
         committed = (field.input_value() or "").strip()
         logger.info("Type-ahead %r now holds %r", label_fragment, committed)
@@ -3532,16 +3553,12 @@ class JobApplicationAssistant:
                 return self.sign_in_to_existing_account(page, email)
             if candidate_state in ("registration", "registration_error"):
                 logger.info("ACCOUNT: Workday Candidate Home is in %s", candidate_state)
-                # An account already exists here and the page offers Sign In:
-                # sign in rather than registering again -- registration cannot
-                # succeed for an email that already has an account.
-                if self._read_ats_password() and self.account_on_record() and self._has_sign_in_affordance(page):
-                    logger.info("ACCOUNT: an account already exists here -- signing in instead of registering")
+                # Create first (owner, 1 October) -- except for an account the agent has signed in to before:
+                # creating it again cannot succeed and spends one of the day's creations.
+                if self._read_ats_password() and self.account_signed_in_before() and self._has_sign_in_affordance(page):
+                    logger.info("ACCOUNT: signed in to this account before -- signing in instead of registering")
                     if self._goto_login_page(page):
                         return self.attempt_auto_login(page, email, "", scope=self._sign_in_scope(page))
-                    scope = self._sign_in_scope(page)
-                    if scope is not None:
-                        return self.attempt_auto_login(page, email, "", scope=scope)
                 self._create_form_attempted = False
                 # Do not fall back to create_ats_account here: its legacy path
                 # can tick a terms checkbox that requires the candidate.
@@ -3573,8 +3590,6 @@ class JobApplicationAssistant:
             if not self._read_ats_password():
                 return False
             if pw_count >= 2:
-                if self.account_on_record():
-                    return False  # already have one here: two password-type boxes are something else (a passcode step)
                 self._create_form_attempted = False
                 if self.fill_create_account_form(page, email):
                     return True
@@ -4511,6 +4526,29 @@ class JobApplicationAssistant:
             logger.warning("Could not check the account record: %s", exc)
             return None
 
+    @staticmethod
+    def _page_asks_to_verify(page: Page) -> str:
+        """What the page after Create Account asks for: "code" (a box for an emailed code), "link" (verify the email
+        or account), or "" (nothing -- sign in). Decided by account_state's reading of the page."""
+        try:
+            snapshot = page.locator("body").aria_snapshot(mode="ai")
+        except Exception:
+            return ""
+        kind = account_state.read_state(snapshot).kind
+        return {account_state.CODE_ENTRY: "code", account_state.VERIFY_EMAIL: "link"}.get(kind, "")
+
+    def account_signed_in_before(self) -> bool:
+        """The agent has signed in to this employer's account before (its record is not 'created, not yet
+        verified'): creating it again cannot succeed, so the run signs straight in."""
+        tracker, employer = getattr(self, "tracker", None), (getattr(self, "employer", "") or "").strip()
+        if tracker is None or not employer or not hasattr(tracker, "get_ats_account"):
+            return False
+        try:
+            record = tracker.get_ats_account(employer)
+        except Exception:
+            return False
+        return bool(record) and "not yet verified" not in str(record.get("method") or "")
+
     def remember_account(self, page: Page, email: str, method: str) -> None:
         tracker, employer = getattr(self, "tracker", None), (getattr(self, "employer", "") or "").strip()
         if tracker is not None and employer and hasattr(tracker, "record_ats_account"):
@@ -4539,7 +4577,7 @@ class JobApplicationAssistant:
         if control is None:
             return False
         employer = getattr(self, "employer", "") or urlparse(page.url).netloc
-        logger.info("ACCOUNT: no %s account on record -- creating one instead of trying to sign in", employer)
+        logger.info("ACCOUNT: creating the %s account first -- if it exists the site will say so", employer)
         # A cookie banner over the link swallowed the click on IGT's page.
         self.dismiss_cookie_banner(page)
         control = self._create_account_control(page) or control
@@ -4550,20 +4588,38 @@ class JobApplicationAssistant:
             if not self._click_resiliently(control, timeout_ms=5_000):
                 logger.warning("ACCOUNT_CREATE_FAILED: couldn't click the Create an account link")
                 return False
-        try:
-            page.wait_for_function(
-                "() => [...document.querySelectorAll('input[type=password]')].filter(e => e.getClientRects().length).length >= 2",
-                timeout=20_000,
-            )
-        except Exception:
-            logger.warning("ACCOUNT_CREATE_FAILED: the Create Account form didn't appear (page: %s)", page.url[:100])
-            return False
+        # The form is there when it shows a password and its retype -- or one password box under a heading that
+        # says it creates an account (UKG, 30 September: waiting for two boxes, the agent gave up on a form it
+        # was looking at).
+        shown = "() => [...document.querySelectorAll('input[type=password]')].filter(e => e.getClientRects().length).length"
+        deadline = time.time() + 20
+        while True:
+            try:
+                boxes = int(page.evaluate(shown) or 0)
+            except Exception:
+                boxes = 0
+            if boxes >= 2 or (boxes == 1 and self._heading_says_create(page)):
+                break
+            if time.time() > deadline:
+                logger.warning("ACCOUNT_CREATE_FAILED: the Create Account form didn't appear (page: %s)", page.url[:100])
+                return False
+            page.wait_for_timeout(500)
         return self.fill_create_account_form(page, email)
+
+    @staticmethod
+    def _heading_says_create(page) -> bool:
+        """The page's headings say it makes a new account (account_state.says_create)."""
+        try:
+            headings = page.locator("h1, h2, h3, [role=heading]").all_inner_texts()[:12]
+        except Exception:
+            return False
+        return account_state.says_create(headings)
 
 
     @staticmethod
     def _password_pair_matches(values, password: str) -> bool:
-        return len(values) >= 2 and all(value == password for value in values[:2])
+        """The password (and its retype, where the form has one) holds what was typed."""
+        return bool(values) and all(value == password for value in values[:2])
 
     @staticmethod
     def _has_account_form_validation_error(error_texts) -> bool:
@@ -4587,7 +4643,7 @@ class JobApplicationAssistant:
             folder = Path("logs") / "account_failures"
             folder.mkdir(parents=True, exist_ok=True)
             stem = f"{re.sub(r'[^A-Za-z0-9.-]+', '_', site or 'site')}_{datetime.now():%Y%m%d_%H%M%S}"
-            page.screenshot(path=str(folder / f"{stem}.png"), full_page=True)
+            evidence.screenshot(page, folder / f"{stem}.png")
             (folder / f"{stem}.txt").write_text(hide_secrets(page.locator("body").aria_snapshot(mode="ai")),
                                                 encoding="utf-8")
             logger.warning("ACCOUNT_CREATE_FAILED: what the site showed is saved in %s", folder / stem)
@@ -4688,11 +4744,15 @@ class JobApplicationAssistant:
             return False
         visible = lambda loc: [loc.nth(i) for i in range(loc.count()) if loc.nth(i).is_visible()]
         pw_fields = visible(page.locator("input[type='password']"))
-        if len(pw_fields) < 2:
+        if len(pw_fields) < 2 and not (len(pw_fields) == 1 and self._heading_says_create(page)):
             return False  # not a Create Account form
         self._create_form_attempted = True
         site = urlparse(page.url).netloc.lower()
         held = login_guard.may_create_account(site, email)
+        if held and self.account_on_record() and not login_guard.may_sign_in(site, email):
+            # The day's creations are spent and the account is on record: it exists, so sign in to it.
+            logger.info("ACCOUNT: %s -- the account is on record, signing in to it", held)
+            return self.sign_in_to_existing_account(page, email)
         if held:
             self._login_paused = held
             logger.warning("ACCOUNT_HELD: %s -- leaving it to the user", held)
@@ -4845,18 +4905,27 @@ class JobApplicationAssistant:
                 "button", name=re.compile(r"^\s*(create (my )?account|register|sign up|submit)\s*$", re.IGNORECASE)
             )
             button = next((submit.nth(i) for i in range(submit.count()) if submit.nth(i).is_visible()), None)
+            if button is None and self._heading_says_create(page):
+                # A form whose heading says it creates the account names its button for the step, not the act:
+                # UKG's "Create your account" goes on with "Continue" (30 September).
+                onward = page.get_by_role("button", name=re.compile(r"^\s*(continue|next|get started|join)\s*$",
+                                                                    re.IGNORECASE))
+                button = next((onward.nth(i) for i in range(onward.count()) if onward.nth(i).is_visible()), None)
             if button is None:
                 button = page.locator("input[type='submit'][value*='Create' i]").first
                 if not button.count():
                     logger.warning("ACCOUNT_CREATE_FAILED: no Create Account button found")
                     return False
-            self._click_resiliently(button, timeout_ms=8_000)
+            # Written before the press: a run that ends between the press and reading the result leaves the
+            # attempt pending, and the next run asks the owner instead of making the account again.
             login_guard.record_account_attempt(site, email)
+            self._click_resiliently(button, timeout_ms=8_000)
             page.wait_for_timeout(5_000)
             try:
                 page.wait_for_load_state("domcontentloaded", timeout=15_000)
             except Exception:
                 pass
+            login_guard.account_creation_seen(site, email)
 
             still_on_form = len(visible(page.locator("input[type='password']"))) >= 2
             errors = self._visible_error_texts(page)
@@ -4874,21 +4943,45 @@ class JobApplicationAssistant:
                 self._save_account_failure(page, site)
                 return False
             if not self._account_creation_is_confirmed(page):
-                logger.warning(
-                    "ACCOUNT_UNVERIFIED: Workday left registration without Candidate Home or application evidence"
-                    " -- signing in with the email and password"
-                )
-                # The owner's decision (28 September): sign in once with the email and the password. A code
-                # the site then emails is read by the code step (emailed_codes.why_not decides); a rejection
-                # -- which may only mean the email is not verified yet -- is counted by login_guard and
-                # waits for the owner (Continue), as any rejected sign-in does.
+                logger.warning("ACCOUNT_UNVERIFIED: the site took the new-account form but shows no signed-in page")
+                # The site accepted the form, so the account exists: it is recorded now, and no later run tries to
+                # make it again. Then the agent gets itself in -- the owner's rule (1 October: "just tell the agent
+                # to do that"): it does not stop to ask.
+                #   1. The site's verification email, if it sent one: its link is opened from the applying address's
+                #      Gmail (the owner's decision of 30 September), then the sign-in.
+                #   2. No verification email: the site may not verify new accounts (Waystar went straight to Sign In),
+                #      so it signs in once (the owner's decision of 28 September).
+                #   3. That sign-in refused: the email may have been slow -- it looks once more, opens the link, and
+                #      signs in again. Only if that fails too is the owner needed.
+                self.remember_account(page, email, "password (created, not yet verified)")
+                # The mail is read only when the page asks for it (owner, 1 October: "it is not asking for OTP,
+                # why is it going and checking?" -- Crescent Energy spent two minutes in Gmail first). A page that
+                # asks for a code is the code step's (read again by the page agent); one that asks to verify gets
+                # its link opened; otherwise the agent signs in now, and the mail is read only if that is refused.
+                asks = self._page_asks_to_verify(page)
+                if asks == "code":
+                    logger.info("ACCOUNT: the site asks for an emailed code -- the code step takes it from here")
+                    return False
+                verified = asks == "link" and self.verify_account_by_email_link(page, wait_seconds=120)
+                logger.info("ACCOUNT_VERIFIED: the email link was opened -- signing in" if verified else
+                            "ACCOUNT: the page asks for nothing more -- signing in")
                 if not self._open_sign_in(page):
                     self._login_paused = (f"an account was just created on {site}, but no sign-in form was found: "
                                           f"sign in yourself, then press Continue")
                     logger.warning("ACCOUNT_HELD: %s", self._login_paused)
                     return False
-                return self.attempt_auto_login(page, email, password, scope=self._sign_in_scope(page),
-                                               create_if_missing=False)
+                if self.attempt_auto_login(page, email, password, scope=self._sign_in_scope(page),
+                                           create_if_missing=False):
+                    return True
+                if verified:
+                    return False                  # refused after verifying: the account needs the owner
+                logger.info("ACCOUNT: the sign-in was refused -- looking for a late verification email once more")
+                if self.verify_account_by_email_link(page, wait_seconds=180):
+                    self._login_paused = ""
+                    if self._open_sign_in(page) and self.attempt_auto_login(
+                            page, email, password, scope=self._sign_in_scope(page), create_if_missing=False):
+                        return True
+                return False
             logger.info("ACCOUNT_CREATED: new %s account for %s",
                         getattr(self, "employer", "") or urlparse(page.url).netloc, email)
             self.remember_account(page, email, "password")
@@ -4971,6 +5064,10 @@ class JobApplicationAssistant:
             logger.warning("LOGIN_HELD: a CAPTCHA is on the sign-in page -- only you can complete it")
             return False
         password = password or self._read_ats_password()
+        if len(self._visible_password_boxes(page)) >= 2:
+            # A new-account form (password and its retype), not a sign-in: nothing is typed or pressed here.
+            logger.warning("LOGIN_HELD: %s shows a new-account form, not a sign-in form -- not signing in", domain)
+            return False
         if not email or not password:
             logger.info("No ATS credentials configured; skipping auto-login")
             return False
@@ -5027,13 +5124,20 @@ class JobApplicationAssistant:
                         domain)
         else:
             # The email first, and checked: a password is never sent without it.
-            email_locator.fill(email)
+            fill_and_dispatch(email_locator, email)
             if not self._email_kept([email_locator], email):
                 self._type_email(page, email_locator, email)
             if not self._email_kept([email_locator], email):
                 logger.warning("LOGIN_HELD: the email box on %s did not keep the address -- not signing in", domain)
                 return False
-        pw_locator.fill(password)
+        # Typed as a person types it, then left (Tab), and checked -- as the Create Account form does. A value set
+        # in one go, with no events, can be dropped by a React form (Workday): the form then sends the password
+        # it last registered, and the site answers "wrong email address or password" (Waystar, Crescent Energy,
+        # 1 October -- the owner signed in by hand with the same password at once). A password the box did not
+        # keep is never submitted: that would spend one of the account's few attempts.
+        if not self._type_password(pw_locator, password):
+            logger.warning("LOGIN_HELD: the password box on %s did not keep the password -- not signing in", domain)
+            return False
 
         # Sign-in buttons are often duplicated (one hidden) or covered by a
         # cookie banner, so go through the same resilient click path that the
@@ -5058,6 +5162,22 @@ class JobApplicationAssistant:
         page.wait_for_timeout(3000)
         logger.info("Attempted auto-login on %s via Enter key", domain)
         return self._after_login_attempt(page, email, create_if_missing)
+
+    @staticmethod
+    def _type_password(box, password: str) -> bool:
+        """Types the password key by key into `box`, leaves the box, and says whether it holds exactly that."""
+        for _attempt in range(2):
+            try:
+                box.click(timeout=5_000)
+                box.press("Control+A")
+                box.press("Backspace")
+                box.press_sequentially(password, delay=25)
+                box.press("Tab")
+                if (box.input_value(timeout=3_000) or "") == password:
+                    return True
+            except Exception as exc:
+                logger.debug("Could not type the password: %s", str(exc).splitlines()[0][:100])
+        return False
 
     @staticmethod
     def _email_already_given(page: Page, email: str) -> bool:
@@ -5715,7 +5835,7 @@ class JobApplicationAssistant:
         Some widgets render their suggestions without role='option' or an
         aria-controls link back to the input, so neither the ARIA lookup nor
         ArrowDown+Enter reaches them -- but the suggestion is plainly visible
-        and clickable ('Fairfax, Virginia, United States'). Matching on the
+        and clickable ('Springfield, Illinois, United States'). Matching on the
         leading text keeps this from hitting an unrelated open list."""
         term = typed.split(",")[0].strip()
         if len(term) < 2:
@@ -5985,17 +6105,6 @@ class JobApplicationAssistant:
                            (": " + "; ".join(said)) if said else " and said nothing about why")
         return True
 
-    _CONFIRMATION_PHRASES = (
-        "thank you for applying", "application submitted", "thanks for applying",
-        "we have received your application", "your application has been submitted",
-        "submission received", "application received",
-        # Ashby / Lever wording
-        "application was successfully submitted", "successfully submitted your application",
-        "your application was submitted",
-        # SuccessFactors wording
-        "your application has been sent", "application has been sent", "application was sent",
-    )
-
     def submission_confirmed(self, page: Page, job_title: str = "") -> bool:
         """True when the human has submitted the application themselves:
         either the page shows an application-received confirmation with the
@@ -6004,8 +6113,14 @@ class JobApplicationAssistant:
         they jump straight to 'My applications'."""
         if self.find_submit_button(page) is not None:
             return False  # still on the form
-        body = (page.locator("body").inner_text(timeout=5_000) or "").lower()
-        if any(phrase in body for phrase in self._CONFIRMATION_PHRASES):
+        body = page.locator("body").inner_text(timeout=5_000) or ""
+        # One decision for every caller: the general wording and this site's own (Premier Health on Eightfold,
+        # 1 October: its words were only in the site adapter, which this wait never read).
+        try:
+            site_phrases = tuple(getattr(self.adapter(page), "confirmation_phrases", ()) or ())
+        except Exception:
+            site_phrases = ()
+        if confirmation.says_received(body, site_phrases):
             return True
         if not job_title:
             return False
@@ -6050,8 +6165,8 @@ class JobApplicationAssistant:
             return None
         tab = page.context.new_page()
         try:
-            query = quote(f"{company} newer_than:2d")
-            tab.goto(f"https://mail.google.com/mail/u/0/#search/{query}", wait_until="domcontentloaded", timeout=45_000)
+            query = quote(f"in:anywhere {company} newer_than:2d")
+            tab.goto(self._gmail_search_url(query), wait_until="domcontentloaded", timeout=45_000)
             try:
                 tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)
             except Exception:
@@ -6124,13 +6239,23 @@ class JobApplicationAssistant:
         With a length, only a code of exactly that length counts: the page says
         how long it is ("digit 1 of six"), and a number from elsewhere in the
         message was typed in and refused.
+
+        A code of that length may hold letters: Greenhouse's is 8 characters
+        ("EvPGU6Qy"), and looking only for 8 digits never found it (Lucid, 30
+        September). A run of letters counts only when it looks like a code -- a
+        digit in it, or a capital after its first letter -- never a word such as
+        "Security" or "password".
         """
         if length:
             near = re.search(r"(?:passcode|password|code|pin)\D{0,20}\b(\d{%d})\b" % length, text, re.IGNORECASE)
             if near:
                 return near.group(1)
             anywhere = re.findall(r"\b(\d{%d})\b" % length, text)
-            return anywhere[0] if anywhere else ""
+            if anywhere:
+                return anywhere[0]
+            coded = [token for token in re.findall(r"(?<![\w@.])([A-Za-z0-9]{%d})(?![\w@.])" % length, text)
+                     if re.search(r"\d", token) or re.search(r"[A-Z]", token[1:])]
+            return coded[0] if coded else ""
         m = re.search(r"(?:passcode|password|code|pin)\W{0,3}(?:is|:)?\W{0,3}\b([A-Za-z0-9]{4,10})\b", text, re.IGNORECASE)
         if m and re.search(r"\d", m.group(1)):
             return m.group(1)
@@ -6171,8 +6296,8 @@ class JobApplicationAssistant:
         try:
             deadline = time.time() + wait_seconds
             while time.time() < deadline:
-                query = quote("newer_than:1h (passcode OR \"one-time\" OR verification OR code)")
-                tab.goto(f"https://mail.google.com/mail/u/0/#search/{query}", wait_until="domcontentloaded", timeout=45_000)
+                query = quote("in:anywhere newer_than:1h (passcode OR \"one-time\" OR verification OR code)")
+                tab.goto(self._gmail_search_url(query), wait_until="domcontentloaded", timeout=45_000)
                 try:
                     tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)
                 except Exception:
@@ -6216,6 +6341,126 @@ class JobApplicationAssistant:
             except Exception:
                 pass
 
+    def _applying_email(self) -> str:
+        """The address applications are made with: ATS_EMAIL, else the profile's."""
+        return ((getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
+                or str(getattr(self._owner_profile(), "email", "") or "").strip())
+
+    def _gmail_search_url(self, query: str) -> str:
+        """A Gmail search in the inbox of the address the agent applies with.
+
+        It opened /mail/u/0/ -- the first Google account signed in to the browser, whichever that is. The agent's
+        browser holds two (1 October), so the verification email Waystar sent and Premier Health's confirmation were
+        looked for in the wrong inbox and 'not found'. authuser picks the account by its address."""
+        email = self._applying_email()
+        if not email:
+            return f"https://mail.google.com/mail/u/0/#search/{query}"
+        return f"https://mail.google.com/mail/u/?authuser={quote(email)}#search/{query}"
+
+    def verification_link_from_gmail(self, page: Page, wait_seconds: int = 150) -> str:
+        """The newest account-verification link (last 3 days) the site at `page` emailed the owner, read from the Gmail
+        this browser is signed in to, in a separate tab; "" when there is none or the owner's rule does not allow it.
+
+        Asked through emailed_codes.why_not (the owner's permission to read mail, an employer site, no CAPTCHA, the
+        account's limit) and verification_link_ok (a link back to the same site that verifies an account, never a
+        password reset). The link is never written to the log: it is the account's key."""
+        why = self.why_not_read_a_code(page)
+        if why:
+            logger.info("VERIFY_LINK: %s -- leaving it to the user", why)
+            return ""
+        site_url = page.url
+        tab = page.context.new_page()
+        try:
+            deadline = time.time() + wait_seconds
+            while time.time() < deadline:
+                # in:anywhere: a Gmail search leaves out Spam, where Workday's account emails often land (1 October).
+                query = quote("in:anywhere newer_than:3d (verify OR verification OR activate OR confirm)")
+                tab.goto(self._gmail_search_url(query), wait_until="domcontentloaded",
+                         timeout=45_000)
+                try:
+                    tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)
+                except Exception:
+                    pass
+                tab.wait_for_timeout(2_000)
+                if "mail.google.com" not in tab.url:
+                    logger.warning("VERIFY_LINK: this browser isn't signed in to Gmail")
+                    return ""
+                rows = tab.locator("tr.zA")
+                for i in range(min(rows.count(), 5)):          # newest first
+                    rows.nth(i).click()
+                    tab.wait_for_timeout(3_000)
+                    anchors = tab.locator("div.a3s a[href]")
+                    for j in range(min(anchors.count(), 60)):
+                        anchor = anchors.nth(j)
+                        href = anchor.get_attribute("href") or ""
+                        text = " ".join((anchor.inner_text() or "").split())
+                        if emailed_codes.verification_link_ok(href, text, site_url):
+                            logger.info("VERIFY_LINK: found the account-verification link from %s in Gmail",
+                                        urlparse(emailed_codes.unwrap(href)).netloc)
+                            login_guard.record_code_read(
+                                urlparse(site_url).netloc.lower(),
+                                (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
+                                or getattr(self._owner_profile(), "email", ""))
+                            return emailed_codes.unwrap(href)
+                    tab.go_back(wait_until="domcontentloaded", timeout=30_000)
+                    tab.wait_for_timeout(1_500)
+                    rows = tab.locator("tr.zA")
+                logger.info("VERIFY_LINK: no verification email from this site yet -- checking again in 15s")
+                tab.wait_for_timeout(15_000)
+            logger.warning("VERIFY_LINK: no verification email arrived within %ds", wait_seconds)
+            return ""
+        except Exception as exc:
+            logger.warning("VERIFY_LINK: Gmail read failed: %s", str(exc).splitlines()[0][:160])
+            return ""
+        finally:
+            try:
+                tab.close()
+                page.bring_to_front()
+            except Exception:
+                pass
+
+    _VERIFIED = re.compile(r"verified|activated|confirmed|success|thank you|you can now (sign|log) ?in|welcome",
+                           re.IGNORECASE)
+    _LINK_FAILED = re.compile(r"expired|invalid|no longer valid|already been used|could not (be )?verif|error",
+                              re.IGNORECASE)
+
+    def verify_account_by_email_link(self, page: Page, wait_seconds: int = 150) -> bool:
+        """The site has sent the owner a link to verify the account it just made: open that link from Gmail in a tab
+        of this browser, and say whether the site then shows the account verified (the owner's decision of 30
+        September 2026). On success the sign-in refused for the unverified account no longer holds it back."""
+        link = self.verification_link_from_gmail(page, wait_seconds=wait_seconds)
+        if not link:
+            return False
+        host = urlparse(page.url).netloc.lower()
+        tab = page.context.new_page()
+        try:
+            tab.goto(link, wait_until="domcontentloaded", timeout=45_000)
+            try:
+                tab.wait_for_load_state("networkidle", timeout=10_000)
+            except Exception:
+                tab.wait_for_timeout(3_000)
+            said = " ".join((tab.locator("body").inner_text(timeout=10_000) or "").split())[:2000]
+            if self._LINK_FAILED.search(said) and not self._VERIFIED.search(said):
+                self._login_paused = (f"the verification link {host} emailed you did not work (it may have expired): "
+                                      f"use 'Resend Account Verification' on the site, open the new email's link, then "
+                                      f"press Continue")
+                logger.warning("VERIFY_LINK: the site did not take the link")
+                return False
+            logger.info("VERIFY_LINK_OK: opened the verification link -- the account on %s is verified", host)
+            email = (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip() \
+                or getattr(self._owner_profile(), "email", "")
+            login_guard.account_verified(host, email)  # the refusals were for an unverified account
+            return True
+        except Exception as exc:
+            logger.warning("VERIFY_LINK: could not open the link: %s", str(exc).splitlines()[0][:120])
+            return False
+        finally:
+            try:
+                tab.close()
+                page.bring_to_front()
+            except Exception:
+                pass
+
     def complete_emailed_passcode(self, page: Page) -> bool:
         """On a 'we've sent a one-time password to your email' step of account
         setup or sign-in: read the code from Gmail, enter it, continue. The
@@ -6243,6 +6488,10 @@ class JobApplicationAssistant:
                 button = page.locator("input[type=submit][value*='Continue' i], input[type=submit][value*='Verify' i]").first
             if button is not None and button.count():
                 self._click_resiliently(button, timeout_ms=8_000)
+            elif self.find_submit_button(page) is not None:
+                # The code sits on the application itself (Greenhouse's security code): the next press is the
+                # application's Submit, and that is the owner's. Enter would be that press.
+                logger.info("CODE: entered -- the next press on this page is the application's Submit, which is yours")
             else:
                 field.press("Enter")
             page.wait_for_timeout(5_000)
@@ -6282,7 +6531,7 @@ class JobApplicationAssistant:
         r"submit|continue|verify|confirm|next)\s*$", re.IGNORECASE)
     _LINK_ONLY = re.compile(
         r"(?:reset|password) link|link (?:has been |was )?(?:sent|emailed)|click (?:on )?the link|"
-        r"emailed you a link", re.IGNORECASE)
+        r"emailed you a link|instructions to reset", re.IGNORECASE)
     _CODE_REFUSED = re.compile(r"invalid|incorrect|expired|didn'?t match|not valid|wrong code", re.IGNORECASE)
     _PASSWORD_REFUSED = re.compile(
         r"does not meet|must (?:contain|be|include|have)|too (?:short|weak|common)|cannot (?:be|reuse)|"
@@ -6347,7 +6596,10 @@ class JobApplicationAssistant:
     def _open_sign_in(self, page: Page) -> bool:
         """Gets to the sign-in form of the site the page is on."""
         def on_sign_in() -> bool:
-            return self._sign_in_scope(page) is not None or len(self._visible_password_boxes(page)) == 1
+            # One password box showing: a create form shows two (password and its retype), and Workday's create
+            # form also holds a 'Sign In' link, which made it look like a sign-in form (Waystar, 1 October: the
+            # sign-in was typed into the Create Account form).
+            return len(self._visible_password_boxes(page)) == 1
 
         if on_sign_in():
             return True
@@ -6406,9 +6658,48 @@ class JobApplicationAssistant:
             return False
         return self._reset_password_with_emailed_code(page, email, password)
 
+    def recover_rejected_sign_in(self, page: Page, email: str) -> bool:
+        """The site knows the owner's account but refused its password (whether it does is decided in
+        account_state, by the caller): the owner's rule for an existing account applies -- reset it to the same
+        ATS_PASSWORD with the code emailed to the owner, then sign in. Mutual of Enumclaw (iCIMS), 29 September:
+        the sign-in was refused and the run stopped with the username and password as questions for the owner,
+        although the rule says what to do.
+
+        The same limits as sign_in_to_existing_account: employer ATS sites only, once per site per run (in
+        _reset_password_with_emailed_code, whichever route asks), no CAPTCHA, the owner's permission to read the
+        mail and the account's limit (why_not_read_a_code), and never a generated or different password."""
+        domain = urlparse(page.url).netloc.lower()
+        if not safety.password_allowed(page.url):
+            return False
+        password = self._read_ats_password()
+        if not password or not email:
+            return False
+        if safety.captcha_visible(page):
+            logger.warning("RECOVERY: a CAPTCHA is showing on %s -- only you can complete it", domain)
+            return False
+        # A site refuses an account whose email is not verified yet with the same words as a wrong password
+        # ("wrong email address or password or your account might be locked"). The verification email comes
+        # first: opened from the applying address's Gmail, it is the cheaper and likelier fix, and it spends no
+        # password reset (Waystar, 1 October: the account made that morning had never been verified).
+        logger.info("RECOVERY: %s refused the sign-in -- looking first for the account's verification email",
+                    domain)
+        if self.verify_account_by_email_link(page, wait_seconds=60):
+            self._login_paused = ""
+            if self._open_sign_in(page) and self.attempt_auto_login(
+                    page, email, password, scope=self._sign_in_scope(page), create_if_missing=False):
+                return True
+        logger.info("RECOVERY: %s knows the account but refused the password -- resetting it to the same "
+                    "ATS password with the code emailed to you", domain)
+        return self._reset_password_with_emailed_code(page, email, password)
+
     def _reset_password_with_emailed_code(self, page: Page, email: str, password: str) -> bool:
         domain = urlparse(page.url).netloc.lower()
         if not safety.password_allowed(page.url) or safety.captcha_visible(page):
+            return False
+        # Once per site per run, whichever route asked for it (an 'account exists' form or a refused sign-in).
+        reset_on = self.__dict__.setdefault("_reset_requested_on", set())
+        if domain in reset_on:
+            logger.info("RECOVERY: a reset was already requested on %s this run -- leaving it to the user", domain)
             return False
         if getattr(self.adapter(page), "name", "") == "workday":
             # Workday resets by an emailed link that lasts about two hours and allows five requests in 24
@@ -6434,6 +6725,7 @@ class JobApplicationAssistant:
             return False
         logger.info("RECOVERY: %s rejected the password -- resetting it to the existing one with an emailed code",
                     domain)
+        reset_on.add(domain)
         self._click_resiliently(forgot, timeout_ms=5_000)
         page.wait_for_timeout(1_500)
         box = self._find_login_email_input(page)
@@ -6452,10 +6744,15 @@ class JobApplicationAssistant:
             if field is not None:
                 break
             if self._page_says(page, self._LINK_ONLY):
+                self._login_paused = (f"{domain} emailed you a link to reset the password, not a code: open it, set "
+                                      f"the password to the one in Settings, then press Continue")
                 logger.info("RECOVERY: %s sends a link, not a code -- leaving it to the user", domain)
                 return False
             page.wait_for_timeout(1_000)
         if field is None:
+            self._login_paused = (f"{domain} was asked to reset the password, but no box for an emailed code came up: "
+                                  f"look at the page (or the email it sent), set the password to the one in Settings, "
+                                  f"then press Continue")
             logger.info("RECOVERY: no code step appeared on %s -- leaving it to the user", domain)
             return False
 
@@ -6463,6 +6760,8 @@ class JobApplicationAssistant:
         for _attempt in (1, 2):
             code = self.passcode_from_gmail(page, previous=previous)
             if not code:
+                self._login_paused = (f"no reset code from {domain} arrived in your Gmail: find the email, enter its "
+                                      f"code with the password from Settings, then press Continue")
                 logger.info("RECOVERY: no code arrived in Gmail -- leaving it to the user")
                 return False
             field = self._passcode_field(page) or field
@@ -6843,11 +7142,10 @@ class JobApplicationAssistant:
         job_dir.mkdir(parents=True, exist_ok=True)
         screenshot_path = job_dir / "review_screenshot.png"
         self.accept_consent_dialog(page)
-        page.screenshot(path=str(screenshot_path), full_page=True)
-        try:  # the page's markup beside the screenshot, for diagnosing unfamiliar forms
-            (job_dir / "review_page.html").write_text(page.content(), encoding="utf-8")
-        except Exception:
-            pass
+        evidence.screenshot(page, screenshot_path)
+        content = evidence.html(page)       # the page's markup beside the screenshot, scripts and secrets removed
+        if content:
+            (job_dir / "review_page.html").write_text(content, encoding="utf-8")
         leftovers = self.find_required_blanks(page)
         for label in leftovers["required_still_blank"]:
             logger.warning("REQUIRED_BLANK: %s", " ".join(label.split()))
@@ -6959,15 +7257,29 @@ class JobApplicationAssistant:
 
     def wait_for_signal(
         self, signal_path: Path, poll_seconds: float = 2.0, timeout_seconds: float = 1800.0,
-        page: Optional[Page] = None, left_form_seconds: float = 600.0,
+        page: Optional[Page] = None, left_form_seconds: float = 600.0, for_captcha: bool = False,
+        for_blanks: bool = False,
     ) -> str:
         """Waits for the owner (see _wait_for_signal), with the page marked as
         the owner's turn, so every control they change is recorded as theirs."""
         if page is not None:
             provenance.set_agent_busy(page, False)
+        # The dashboard offers Continue for a run that is waiting, which it knows from this note. It showed
+        # Continue only for an answer already sent (the signal file), so a waiting run had no button at all
+        # (Rackspace, 29 September).
+        waiting = waiting_note_for(signal_path)
         try:
-            return self._wait_for_signal(signal_path, poll_seconds, timeout_seconds, page, left_form_seconds)
+            waiting.write_text(datetime.now().isoformat(timespec="seconds"), encoding="utf-8")
+        except OSError:
+            pass
+        try:
+            return self._wait_for_signal(signal_path, poll_seconds, timeout_seconds, page, left_form_seconds,
+                                         for_captcha=for_captcha, for_blanks=for_blanks)
         finally:
+            try:
+                waiting.unlink(missing_ok=True)
+            except OSError:
+                pass
             if page is not None:
                 try:
                     provenance.set_agent_busy(page, True)
@@ -6976,7 +7288,8 @@ class JobApplicationAssistant:
 
     def _wait_for_signal(
         self, signal_path: Path, poll_seconds: float = 2.0, timeout_seconds: float = 1800.0,
-        page: Optional[Page] = None, left_form_seconds: float = 600.0,
+        page: Optional[Page] = None, left_form_seconds: float = 600.0, for_captcha: bool = False,
+        for_blanks: bool = False,
     ) -> str:
         """Blocks (polling, not input()) until a signal file is written
         externally -- e.g. by a separate command once a human has reviewed
@@ -7008,14 +7321,25 @@ class JobApplicationAssistant:
         # Stopped for a CAPTCHA: once the user has completed it, carry on by
         # itself. On Schwab's sign-in the user solved the puzzle, the site moved
         # to its next step, and the run went on waiting for an instruction.
-        waiting_on_captcha = False
+        #
+        # for_captcha: the run stopped BECAUSE of a CAPTCHA. It is watched for the whole wait, not judged from one
+        # look as the wait begins: hCaptcha's picture puzzle redraws itself, one look two seconds after the stop
+        # missed it, and Mutual of Enumclaw's run (iCIMS, 29 September) waited for a Continue that never came.
+        # It carries on once the CAPTCHA has been seen and then seen gone.
+        waiting_on_captcha = for_captcha
+        captcha_seen = False
         captcha_gone_polls = 0
         waiting_on_signature = False
+        # for_blanks: the run stopped for required boxes only the owner can fill. Once none is blank and the page
+        # has stayed the same for a while (the owner has stopped typing), it carries on by itself -- the owner asked
+        # why they had to press Continue as well (30 September). Continue still works at any time.
+        blanks_checked_at, filled_since, last_look = 0.0, None, None
         if page is not None:
             try:
-                waiting_on_captcha = safety.captcha_visible(page)
+                captcha_seen = bool(safety.captcha_visible(page))
             except Exception:
-                waiting_on_captcha = False
+                captcha_seen = False
+            waiting_on_captcha = waiting_on_captcha or captcha_seen
             if waiting_on_captcha:
                 logger.info("Waiting for you to complete the CAPTCHA; the agent carries on once it is done")
             else:
@@ -7048,14 +7372,39 @@ class JobApplicationAssistant:
                     continue
                 if waiting_on_captcha:
                     try:
-                        captcha_gone_polls = 0 if safety.captcha_visible(page) else captcha_gone_polls + 1
+                        visible = bool(safety.captcha_visible(page))
                     except Exception:
-                        captcha_gone_polls = 0  # mid-navigation: look again next poll
-                    if captcha_gone_polls >= 2:
+                        visible = None      # mid-navigation: look again next poll
+                    if visible:
+                        captcha_seen, captcha_gone_polls = True, 0
+                    elif visible is False and captcha_seen:
+                        captcha_gone_polls += 1
+                    if captcha_seen and captcha_gone_polls >= 2:
                         logger.info("The CAPTCHA is done -- carrying on with the application")
                         page.wait_for_timeout(2_000)  # let the site's next step finish loading
                         return "refresh"
-                    continue
+                    if captcha_seen:
+                        continue
+                    # Not seen yet: the usual checks below still run, so nothing is carried on on a guess.
+                if for_blanks and waited - blanks_checked_at >= 5:
+                    blanks_checked_at = waited
+                    try:
+                        blank = [f for f in form_fields.blank_required(form_fields.inventory(page))
+                                 if re.search(r"[A-Za-z]{2}", f.question or f.label or "")]
+                        look = page.evaluate("() => [...document.querySelectorAll('input,select,textarea')]"
+                                             ".map(e => e.type === 'checkbox' || e.type === 'radio' ? e.checked"
+                                             " : e.value).join('|')")
+                    except Exception:
+                        blank, look = None, None
+                    if blank == [] and look is not None:
+                        if look != last_look:
+                            filled_since = waited      # still changing: the owner may be typing
+                        elif filled_since is not None and waited - filled_since >= 15:
+                            logger.info("Everything required is filled in -- carrying on with the application")
+                            return "refresh"
+                    else:
+                        filled_since = None
+                    last_look = look
                 try:
                     on_form = self.find_submit_button(page) is not None
                     if on_form:

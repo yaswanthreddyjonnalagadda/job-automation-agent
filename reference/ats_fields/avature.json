@@ -1,0 +1,22 @@
+{
+  "portal": "Avature (careers.<company>.com, e.g. Steelcase)",
+  "studied": "2026-09-29 (from the agent's recordings of two Steelcase runs)",
+  "single_page": false,
+  "steps": "Select your resume -> Personal info (one long page: contact, work experience, education, languages, attachments) -> Questionnaire",
+  "fields": {
+    "resume_step": "'Choose an option to apply': buttons Copy & Paste / Without Resume / From Device; 'From Device' reveals 'From Device *  No file selected  [Choose another file]' -- the box never says 'resume'",
+    "resume_reader": "the site parses the uploaded resume and pre-fills Work Experience and Education -- often wrongly (dates paired with the wrong jobs, wrong 'Is current position?'); these are the site's values, to be checked",
+    "text": "textbox named by a separate generic label ('First Name *'); a value typed into a box with a placeholder shows as a child 'text:' line",
+    "single_choice": "native-looking combobox with options 'Select an option', ...",
+    "search_and_pick": {
+      "widget": "combobox 'Institution' holding a child textbox named by the picked value plus a × button",
+      "value_shown": "the child textbox's name IS the chosen value ('Eastern Illinois University')"
+    },
+    "repeated_entries": "Work Experience (Company, Position title, Is current position?, Start date, End date, Remove / Add Another) and Education History (Type of Degree, Area of Study, Country of Institution, Institution, Status) repeat the same bare labels per entry -- see repeated_entries.py",
+    "dates": "native date inputs (value yyyy-mm-dd, shown mm/dd/yyyy)",
+    "multi_select": "Areas of Interest: a list box allowing several",
+    "degree_levels": "'Associate', 'Bachelor', 'Master', 'Ph.D.' -- 'Masters of Science' must map to 'Master'",
+    "languages": "Language / Written Level / Spoken Level with 'Native', 'Advanced', 'Intermediate', 'Beginner' ('Fluent' must map to one of these)",
+    "attachments": "a second Resume and Cover Letter file input at the bottom of Personal info, separate from the first step's upload"
+  }
+}

@@ -101,8 +101,19 @@ def may_sign_in(host: str, email: str) -> Optional[str]:
     return None
 
 
+def refused_before(host: str, email: str) -> bool:
+    """This account's last sign-in here was refused, and nothing has worked since (kept across runs until a
+    sign-in works or the owner presses Continue there)."""
+    return _entry(_load(), host, email).get("hold") == "rejected"
+
+
 def may_create_account(host: str, email: str) -> Optional[str]:
     entry = _entry(_load(), host, email)
+    if entry.get("creation_pending"):
+        # Create Account was pressed and the run ended before the result was seen (review, 1 October): the account
+        # may exist. Making it again could leave a second half-made account; the owner checks first.
+        return (f"an account was being created on {host} ({entry['creation_pending']} UTC) and the result was not "
+                f"seen -- check your email for a welcome or verification message from the site, then press Continue")
     made = _recent(entry.get("creations"), _now())
     if len(made) >= MAX_ACCOUNT_CREATIONS:
         return f"an account was already tried {len(made)} times on {host} in the last 24 hours"
@@ -149,11 +160,49 @@ def record_sign_in(host: str, email: str, ok: bool) -> None:
 
 
 def record_account_attempt(host: str, email: str) -> None:
+    """Create Account is about to be pressed: counted, and pending until account_creation_seen."""
     data = _load()
     entry = _entry(data, host, email)
     entry["creations"] = [*(entry.get("creations") or []), _stamp()][-10:]
+    entry["creation_pending"] = _stamp()
     data[_key(host, email)] = entry
     _save(data)
+
+
+def account_verified(host: str, email: str) -> None:
+    """The site's verification link was opened: the refusals before it were for an unverified account, not a wrong
+    password, so they no longer hold the next sign-in back (Waystar, 1 October: two refusals of a new, unverified
+    account blocked every sign-in for a day)."""
+    data = _load()
+    entry = _entry(data, host, email)
+    entry.pop("failed_sign_ins", None)
+    entry.pop("hold", None)
+    entry.pop("hold_reason", None)
+    data[_key(host, email)] = entry
+    _save(data)
+
+
+def hold_for_verification(host: str, email: str) -> None:
+    """An account was just made here and is not shown signed in: the site may want its email verified first. No
+    sign-in is tried until the owner has looked (Continue) -- a sign-in to an unverified account is refused and
+    counts towards a lock (Waystar, 1 October)."""
+    data = _load()
+    entry = _entry(data, host, email)
+    entry["hold"] = "new_account"
+    entry["hold_reason"] = (f"an account was just created on {host} and the site did not sign it in: it may need its "
+                            f"email verified. Open the verification email it sent you, click its link, then press "
+                            f"Continue -- the agent then signs in")
+    data[_key(host, email)] = entry
+    _save(data)
+
+
+def account_creation_seen(host: str, email: str) -> None:
+    """The page after Create Account was read: whatever it said, the result is known."""
+    data = _load()
+    entry = _entry(data, host, email)
+    if entry.pop("creation_pending", None) is not None:
+        data[_key(host, email)] = entry
+        _save(data)
 
 
 def record_code_read(host: str, email: str) -> None:
@@ -190,9 +239,11 @@ def owner_resumed(host: str) -> None:
     data = _load()
     changed = False
     for key, entry in data.items():
-        if key.split("|", 1)[0] == host and isinstance(entry, dict) and entry.get("hold"):
+        if key.split("|", 1)[0] == host and isinstance(entry, dict) and (entry.get("hold")
+                                                                       or entry.get("creation_pending")):
             entry.pop("hold", None)
             entry.pop("hold_reason", None)
+            entry.pop("creation_pending", None)     # the owner has looked at what the last Create Account did
             changed = True
     if changed:
         _save(data)
