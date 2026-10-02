@@ -256,3 +256,25 @@ def test_only_calls_and_texts_about_the_application_ride_along_with_account_cons
     import safety
     assert safety.is_account_creation_consent(f"{ACCOUNT} {contact}") is allowed
     assert safety.is_account_creation_consent(contact) is False        # never on their own: account consent only
+
+
+def test_the_servers_reply_to_create_account_is_logged_without_secrets(page, monkeypatch, caplog):
+    """Marathon and Waystar, 2 October: Create Account went to a bare Sign In page; only the server's reply says why."""
+    import json as _json
+    send = "fetch('/api/create', {method: 'POST', body: 'x'}).then(() => { document.body.innerHTML = ''; })"
+    serve(page, create_page(EMAIL_BOXES["workday"], after_create="''") .replace(
+        "document.body.innerHTML = '';", send + ";", 1))
+    page.route(  # after serve(): the newest route answers first
+        "https://tenant.wd1.myworkdayjobs.com/api/create", lambda route: route.fulfill(
+        status=400, content_type="application/json",
+        body=_json.dumps({"errorCode": "ACCOUNT_REJECTED", "message": "Request blocked", "sessionToken": "abc123",
+                          "echo": "s3cret-ATS"})))
+    a = assistant_for(monkeypatch, WorkdayAdapter())
+    recorded(a, monkeypatch)
+    caplog.set_level("INFO")
+    a.fill_create_account_form(page, EMAIL)
+    server = [r.getMessage() for r in caplog.records if "ACCOUNT_SERVER" in r.getMessage()]
+    assert any("POST /api/create -> 400" in s and "Request blocked" in s for s in server), server
+    assert not any("abc123" in s or "s3cret-ATS" in s for s in server)
+    saved = list(browser_automation.ACCOUNT_STEPS.glob("*_create.txt"))
+    assert saved and "Request blocked" in saved[0].read_text(encoding="utf-8")

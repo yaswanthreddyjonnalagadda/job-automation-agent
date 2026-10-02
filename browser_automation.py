@@ -4688,11 +4688,77 @@ class JobApplicationAssistant:
             folder.mkdir(parents=True, exist_ok=True)
             stem = f"{re.sub(r'[^A-Za-z0-9.-]+', '_', site or 'site')}_{datetime.now():%Y%m%d_%H%M%S}_{action}"
             evidence.screenshot(page, folder / f"{stem}.png")
-            (folder / f"{stem}.txt").write_text(f"{page.url}\n{action} -> {state}\nsays: {said}\n\n"
+            server = "\n".join(getattr(self, "_last_server_replies", None) or ["(not recorded)"])
+            self._last_server_replies = None
+            (folder / f"{stem}.txt").write_text(f"{page.url}\n{action} -> {state}\nsays: {said}\nserver:\n{server}\n\n"
                                                 + hide_secrets(snapshot), encoding="utf-8")
         except Exception as exc:
             logger.debug("Could not save the account result: %s", str(exc).splitlines()[0][:100])
         return state
+
+    _SECRET_KEYS = re.compile(r"token|session|csrf|xsrf|password|secret|cookie|auth|jwt|key", re.IGNORECASE)
+
+    @staticmethod
+    def _listen_for_server_replies(page: Page) -> list:
+        """Starts keeping the site's replies to what the page sends (not plain page loads) until _log_server_replies:
+        what the server answered an account press, which the page itself may not show (Marathon and Waystar on
+        Workday, 2 October: Create Account went to a bare Sign In page with no message at all)."""
+        replies = []
+
+        def keep(response):
+            try:
+                if response.request.method != "GET":
+                    replies.append(response)
+            except Exception:
+                pass
+        replies.append(keep)
+        try:
+            page.on("response", keep)
+        except Exception:
+            return []
+        return replies
+
+    def _log_server_replies(self, page: Page, replies: list, action: str, password: str = "") -> None:
+        """Logs each reply: the address path, the status, and the reply's text with every secret-looking value
+        (tokens, sessions, passwords) taken out. Kept for the account step's saved page (_account_click_result)."""
+        if not replies:
+            return
+        keep, replies = replies[0], replies[1:]
+        try:
+            page.remove_listener("response", keep)
+        except Exception:
+            pass
+
+        def scrub(value):
+            if isinstance(value, dict):
+                return {k: ("***" if self._SECRET_KEYS.search(str(k)) else scrub(v)) for k, v in value.items()}
+            if isinstance(value, list):
+                return [scrub(v) for v in value[:20]]
+            return value
+
+        lines = []
+        for response in replies[:15]:
+            try:
+                body = ""
+                try:
+                    text = response.text()
+                    try:
+                        body = json.dumps(scrub(json.loads(text)))[:600]
+                    except ValueError:
+                        kind = response.headers.get("content-type") or ""
+                        body = "(a page)" if "html" in kind else " ".join(text.split())[:300]
+                except Exception:
+                    body = "(no text)"
+                if password:
+                    body = body.replace(password, "***")
+                lines.append(f"{response.request.method} {urlparse(response.url).path} -> {response.status} {body}")
+            except Exception:
+                continue
+        for line in lines:
+            logger.info("ACCOUNT_SERVER: %s: %s", action, line[:400])
+        if not lines:
+            logger.info("ACCOUNT_SERVER: %s: the page sent nothing to the server", action)
+        self._last_server_replies = lines
 
     @staticmethod
     def _account_page_left(page: Page) -> bool:
@@ -5016,8 +5082,10 @@ class JobApplicationAssistant:
             # Written before the press: a run that ends between the press and reading the result leaves the
             # attempt pending, and the next run asks the owner instead of making the account again.
             login_guard.record_account_attempt(site, email)
+            replies = self._listen_for_server_replies(page)
             self._click_resiliently(button, timeout_ms=8_000)
             page.wait_for_timeout(5_000)
+            self._log_server_replies(page, replies, "create", password)
             try:
                 page.wait_for_load_state("domcontentloaded", timeout=15_000)
             except Exception:
@@ -5263,16 +5331,23 @@ class JobApplicationAssistant:
             "button:has-text('Log in')",
             "button[type='submit']",
         ):
-            if root.locator(selector).count() and self._click_resiliently(root.locator(selector).first):
+            if root.locator(selector).count():
+                replies = self._listen_for_server_replies(page)
+                if not self._click_resiliently(root.locator(selector).first):
+                    self._log_server_replies(page, replies, "sign_in", password)
+                    continue
                 page.wait_for_load_state("domcontentloaded", timeout=15000)
                 page.wait_for_timeout(3000)
+                self._log_server_replies(page, replies, "sign_in", password)
                 logger.info("Attempted auto-login on %s", domain)
                 return self._after_login_attempt(page, email, create_if_missing)
 
         # Some ATS login forms submit on Enter even when no button matches.
+        replies = self._listen_for_server_replies(page)
         pw_locator.press("Enter")
         page.wait_for_load_state("domcontentloaded", timeout=15000)
         page.wait_for_timeout(3000)
+        self._log_server_replies(page, replies, "sign_in", password)
         logger.info("Attempted auto-login on %s via Enter key", domain)
         return self._after_login_attempt(page, email, create_if_missing)
 
