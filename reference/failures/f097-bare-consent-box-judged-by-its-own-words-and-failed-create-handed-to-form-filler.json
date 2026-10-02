@@ -8,7 +8,7 @@
   "why_tests_missed": "Every consent fixture put the full sentence in the box's own label; none had a bare 'Yes, I consent' under a paragraph. No test covered what happens on the page after a create attempt that failed without a reason.",
   "fix": "A bare consent label is judged with the text it stands under (_consent_text_of); safety.py decides on that text, unchanged. A required consent the agent may not give holds the form before Create Account is pressed, and the stop names the box and the words it agrees to. A create attempt that leaves the new-account form showing stops the run with what the site said (ACCOUNT_RESULT now falls back to the form error read from the page), never the form-filler.",
   "tests": [
-    "tests/test_account_loop.py::test_a_consent_that_also_agrees_to_calls_and_texts_is_left_for_the_owner_before_create",
+    "tests/test_account_loop.py::test_a_consent_that_also_agrees_to_marketing_is_left_for_the_owner_before_create",
     "tests/test_account_loop.py::test_a_consent_only_to_creating_the_account_is_ticked",
     "tests/test_account_loop.py::test_a_create_form_still_showing_after_the_attempt_stops_the_run_not_the_form_filler"
   ],

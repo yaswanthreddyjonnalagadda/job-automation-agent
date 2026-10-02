@@ -1067,25 +1067,10 @@ class PageAgent:
                             return True
                     except Exception as exc:
                         logger.warning("LOGIN: could not open Create Account (%s)", str(exc).splitlines()[0][:100])
-            # Held back on purpose (login_guard) for an account on record: before the owner is asked, the agent tries
-            # the one thing that needs no sign-in -- the site's verification email. Refusals of an unverified account
-            # are what held it (Waystar, 1 October); opening the link lifts them (login_guard.account_verified), and
-            # the sign-in is tried once more.
+            # A sign-in held back (login_guard) is not a reason to read the mail: only a page that asks to verify is
+            # (account_state's VERIFY_EMAIL, handled above). Owner, 2 October: "why is the agent going to Gmail for
+            # verification with the page showing" -- it searched for three minutes beside a plain Sign In form.
             reason = str(getattr(self.assistant, "_login_paused", "") or "")
-            if reason and not making_account and host not in self._verify_asked and \
-                    (memory.account_exists or host in self._account_known) and \
-                    login_guard.may_sign_in(host, email) and hasattr(self.assistant, "verify_account_by_email_link"):
-                self._verify_asked.add(host)
-                logger.info("LOGIN: sign-in is held on %s -- opening the account's verification email first", host)
-                if self.assistant.verify_account_by_email_link(tab, wait_seconds=60) and \
-                        login_guard.may_sign_in(host, email) is None:
-                    self.assistant._login_paused = ""
-                    try:
-                        if self.assistant.handle_auth_gate(tab, email):
-                            return True
-                    except Exception as exc:
-                        logger.warning("LOGIN: %s", str(exc).splitlines()[0][:120])
-                    reason = str(getattr(self.assistant, "_login_paused", "") or "")
             form_held = str(getattr(self.assistant, "_account_form_held", "") or "")
             if form_held and not reason:
                 self.account_blocker = form_held

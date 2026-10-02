@@ -198,33 +198,45 @@ def test_a_new_account_with_no_verification_email_is_signed_in_by_the_agent(page
     assert page.evaluate("window.signins") == 1
 
 
-def test_a_refused_sign_in_looks_for_a_late_verification_email_and_signs_in_again(page, monkeypatch):
-    """The page asked for nothing, so the agent signed in at once; the refusal sends it to the mail, once, for the
-    verification email (owner, 1 October: no Gmail before the site asks)."""
-    accept_second = ("if (window.signins >= 2) { document.body.innerHTML = '<h1>Candidate Home</h1>'; } else {"
-                     " document.getElementById('alert').textContent = 'You may have entered the wrong email address"
-                     " or password or your account might be locked.'; }")
+def test_a_refused_sign_in_on_a_page_that_asks_nothing_does_not_go_to_the_mail(page, monkeypatch):
+    """Owner, 2 October: "why is the agent going to Gmail for verification with the page showing" -- after Create
+    Account the page was a plain Sign In form; the sign-in was refused, and the agent searched the mail for three
+    minutes for a verification email the site never mentioned (the account already existed). A refusal is not a
+    request to verify: the mail is read only when the page asks."""
+    refuse = ("document.getElementById('alert').textContent = 'You may have entered the wrong email address"
+              " or password or your account might be locked.';")
     body = create_page(EMAIL_BOXES["workday"], after_create=SIGN_IN_AFTER_CREATE,
-                       extra=WIRE_SIGN_IN.replace("ON_SIGN_IN", accept_second))
+                       extra=WIRE_SIGN_IN.replace("ON_SIGN_IN", refuse))
+    serve(page, body)
+    a = assistant_for(monkeypatch, WorkdayAdapter())
+    looks = []
+    monkeypatch.setattr(a, "verify_account_by_email_link", lambda page, wait_seconds=150: looks.append(1) or False)
+    assert a.fill_create_account_form(page, EMAIL) is False
+    assert page.evaluate("window.signins") == 1 and looks == []
+
+
+def test_a_refused_sign_in_that_says_verify_opens_the_link_then_signs_in(page, monkeypatch):
+    """The same refusal, on a page that says the account must be verified: the link is opened, then the sign-in."""
+    refuse = ("if (window.signins >= 2) { document.body.innerHTML = '<h1>Candidate Home</h1>'; } else {"
+              " document.body.insertAdjacentHTML('afterbegin', '<h2>Verify your account</h2><p>Verify your email"
+              " address before you sign in.</p>'); }")
+    body = create_page(EMAIL_BOXES["workday"], after_create=SIGN_IN_AFTER_CREATE,
+                       extra=WIRE_SIGN_IN.replace("ON_SIGN_IN", refuse))
     serve(page, body)
     a = assistant_for(monkeypatch, WorkdayAdapter())
     looks = []
 
     def verify(page, wait_seconds=150):
         looks.append(wait_seconds)
-        if len(looks) == 1:
-            login_guard.clear_hold(HOST, EMAIL)        # what opening the link does
-            return True
-        return False
+        login_guard.clear_hold(HOST, EMAIL)        # what opening the link does
+        return True
     monkeypatch.setattr(a, "verify_account_by_email_link", verify)
     a.fill_create_account_form(page, EMAIL)
-    assert len(looks) == 1 and page.evaluate("window.signins") == 2
+    assert looks and page.evaluate("window.signins") == 2
 
 
-def test_a_refused_sign_in_opens_the_verification_email_before_any_password_reset(page, monkeypatch):
-    """Waystar, 1 October: the account made that morning was refused at sign-in; the agent went straight to a
-    password reset (which Workday does by link, so it stopped for the owner). An unverified account is refused in
-    the same words as a wrong password: the verification email is looked for first."""
+def test_a_refused_sign_in_goes_to_the_reset_not_the_mail_when_the_page_asks_nothing(page, monkeypatch):
+    """recover_rejected_sign_in: the verification email first only when the page says to verify."""
     serve(page, sign_in_page(EMAIL_BOXES["workday"]))
     a = assistant_for(monkeypatch, WorkdayAdapter())
     steps = []
@@ -232,8 +244,8 @@ def test_a_refused_sign_in_opens_the_verification_email_before_any_password_rese
     monkeypatch.setattr(a, "_open_sign_in", lambda page: True)
     monkeypatch.setattr(a, "attempt_auto_login", lambda *args, **kw: steps.append("sign in") or True)
     monkeypatch.setattr(a, "_reset_password_with_emailed_code", lambda *args: steps.append("reset") or False)
-    assert a.recover_rejected_sign_in(page, EMAIL) is True
-    assert steps == ["verify", "sign in"]
+    assert a.recover_rejected_sign_in(page, EMAIL) is False
+    assert steps == ["reset"]
 
 
 @pytest.mark.parametrize("body, asks", [

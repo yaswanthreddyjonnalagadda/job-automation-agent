@@ -1,0 +1,17 @@
+{
+  "id": "f098",
+  "date": "2026-10-02",
+  "class": "An action taken on a guess about the page instead of what the page shows: reading the mail for a verification no page asked for",
+  "symptom": "Waystar (Workday), 2 October: after Create Account the page was a plain Sign In form with no message; the sign-in was held/refused and the agent searched the owner's Gmail for three minutes for a verification email, then stopped. The owner: 'why is the agent going to Gmail for verification with the page showing'. Marathon, the same day, showed the real cause: the account already existed and signing in worked.",
+  "site": "Workday, and any site whose refusal reads like a wrong password",
+  "root_cause": "Three places treated a refused or held sign-in as a likely unverified account and went to the mail: fill_create_account_form after a refused sign-in (180 s), recover_rejected_sign_in before a reset (60 s), and page_agent.sign_in_step when a sign-in was held (60 s). None asked whether the page said to verify; account_state already decides that (VERIFY_EMAIL) from the page.",
+  "why_tests_missed": "The tests were written for the guess: they asserted the mail WAS read after a refusal on a page that said nothing about verifying.",
+  "fix": "The mail is read for a verification link only when the page asks (account_state VERIFY_EMAIL / _page_asks_to_verify == 'link'). A refusal on a page that asks nothing goes to the existing-account handling (reset rule), not the mail; a held sign-in stops with its reason.",
+  "tests": [
+    "tests/test_account_email_first.py::test_a_refused_sign_in_on_a_page_that_asks_nothing_does_not_go_to_the_mail",
+    "tests/test_account_email_first.py::test_a_refused_sign_in_that_says_verify_opens_the_link_then_signs_in",
+    "tests/test_account_email_first.py::test_a_refused_sign_in_goes_to_the_reset_not_the_mail_when_the_page_asks_nothing",
+    "tests/test_account_email_first.py::test_the_mail_is_read_only_when_the_page_asks_for_it"
+  ],
+  "prevention": "One reading of the page decides every step; a step never runs because a different failure might explain what was seen. When two causes look alike (unverified, wrong password, existing account), act on what the page says, not on the likelier guess."
+}

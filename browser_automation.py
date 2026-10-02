@@ -5161,8 +5161,8 @@ class JobApplicationAssistant:
                 #      Gmail (the owner's decision of 30 September), then the sign-in.
                 #   2. No verification email: the site may not verify new accounts (Waystar went straight to Sign In),
                 #      so it signs in once (the owner's decision of 28 September).
-                #   3. That sign-in refused: the email may have been slow -- it looks once more, opens the link, and
-                #      signs in again. Only if that fails too is the owner needed.
+                #   3. That sign-in refused: the mail is read again only if the page now asks to verify; a refusal
+                #      alone is not a request to verify (owner, 2 October).
                 self.remember_account(page, email, "password (created, not yet verified)")
                 # The mail is read only when the page asks for it (owner, 1 October: "it is not asking for OTP,
                 # why is it going and checking?" -- Crescent Energy spent two minutes in Gmail first). A page that
@@ -5186,8 +5186,11 @@ class JobApplicationAssistant:
                     return True
                 if verified:
                     return False                  # refused after verifying: the account needs the owner
-                logger.info("ACCOUNT: the sign-in was refused -- looking for a late verification email once more")
-                if self.verify_account_by_email_link(page, wait_seconds=180):
+                # Refused, on a page that asked for nothing: the mail is read only if the page NOW asks to verify.
+                # A refusal alone is not a request to verify -- it is as likely an account that already existed
+                # with another password (Waystar, 2 October: three minutes in Gmail for an email never sent).
+                if self._page_asks_to_verify(page) == "link" and \
+                        self.verify_account_by_email_link(page, wait_seconds=180):
                     self._login_paused = ""
                     if self._open_sign_in(page) and self.attempt_auto_login(
                             page, email, password, scope=self._sign_in_scope(page), create_if_missing=False):
@@ -6923,13 +6926,10 @@ class JobApplicationAssistant:
         if safety.captcha_visible(page):
             logger.warning("RECOVERY: a CAPTCHA is showing on %s -- only you can complete it", domain)
             return False
-        # A site refuses an account whose email is not verified yet with the same words as a wrong password
-        # ("wrong email address or password or your account might be locked"). The verification email comes
-        # first: opened from the applying address's Gmail, it is the cheaper and likelier fix, and it spends no
-        # password reset (Waystar, 1 October: the account made that morning had never been verified).
-        logger.info("RECOVERY: %s refused the sign-in -- looking first for the account's verification email",
-                    domain)
-        if self.verify_account_by_email_link(page, wait_seconds=60):
+        # The verification email first only when the page itself says the account must be verified: a refusal in
+        # the words of a wrong password is not a request to verify (owner, 2 October: "why is the agent going to
+        # Gmail for verification with the page showing" -- a Sign In form that asked for nothing).
+        if self._page_asks_to_verify(page) == "link" and self.verify_account_by_email_link(page, wait_seconds=60):
             self._login_paused = ""
             if self._open_sign_in(page) and self.attempt_auto_login(
                     page, email, password, scope=self._sign_in_scope(page), create_if_missing=False):

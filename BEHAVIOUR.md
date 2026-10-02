@@ -468,7 +468,8 @@ creations. Then:
 2. If the site wants the account verified, it verifies it -- by the link or the code the
    site emailed, read from your Gmail -- and then signs in.
 3. If the site took the form and asks for nothing more, it signs in at once; it reads your
-   mail only if the site asks for a code or verification, or refuses that sign-in. Every
+   mail only if the page asks for a code or verification -- a refused sign-in alone is not a
+   reason to read your mail (2 October: it usually means the account already existed). Every
    mail search includes Spam, where these emails often land.
 It never resets a password by an emailed link. A code sent by text message (SMS) cannot be
 read yet: the agent has no access to your texts.
