@@ -5064,6 +5064,10 @@ class JobApplicationAssistant:
             logger.warning("LOGIN_HELD: a CAPTCHA is on the sign-in page -- only you can complete it")
             return False
         password = password or self._read_ats_password()
+        if len(self._visible_password_boxes(page)) >= 2:
+            # A new-account form (password and its retype), not a sign-in: nothing is typed or pressed here.
+            logger.warning("LOGIN_HELD: %s shows a new-account form, not a sign-in form -- not signing in", domain)
+            return False
         if not email or not password:
             logger.info("No ATS credentials configured; skipping auto-login")
             return False
@@ -6592,7 +6596,10 @@ class JobApplicationAssistant:
     def _open_sign_in(self, page: Page) -> bool:
         """Gets to the sign-in form of the site the page is on."""
         def on_sign_in() -> bool:
-            return self._sign_in_scope(page) is not None or len(self._visible_password_boxes(page)) == 1
+            # One password box showing: a create form shows two (password and its retype), and Workday's create
+            # form also holds a 'Sign In' link, which made it look like a sign-in form (Waystar, 1 October: the
+            # sign-in was typed into the Create Account form).
+            return len(self._visible_password_boxes(page)) == 1
 
         if on_sign_in():
             return True

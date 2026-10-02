@@ -277,3 +277,12 @@ def test_the_sign_in_password_is_typed_so_a_react_form_registers_it(page, monkey
     a = assistant_for(monkeypatch)
     assert a.attempt_auto_login(page, EMAIL, "Corr3ct!Horse#9", create_if_missing=False) is True
     assert page.evaluate("window.sent") == "Corr3ct!Horse#9"
+
+
+def test_the_sign_in_never_types_into_a_create_account_form(page, monkeypatch):
+    """Waystar, 1 October: the create form also holds an 'Already have an account? Sign In' link; read as a sign-in
+    form, it got the email and password typed in and its Sign In link pressed."""
+    serve(page, create_page(EMAIL_BOXES["workday"]))
+    a = assistant_for(monkeypatch, WorkdayAdapter())
+    assert a.attempt_auto_login(page, EMAIL, PASSWORD, create_if_missing=False) is False
+    assert page.evaluate("[...document.querySelectorAll('input[type=password]')].every(e => !e.value)")
