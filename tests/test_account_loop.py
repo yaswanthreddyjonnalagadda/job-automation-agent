@@ -185,20 +185,23 @@ def consent_box(paragraphs):
             '<div><input type="checkbox" id="c"><label for="c">Yes, I consent</label></div>')
 
 
+MARKETING_TEXTS = ("<p>I agree to creating this account to allow me to apply for positions with Example Co.</p>"
+                   "<p>I agree to receive marketing text messages and promotions about offers from Example Co and "
+                   "its partners.</p>")
 CALLS_AND_TEXTS = ("<p>I agree to creating this account to allow me to apply for positions with Example Co.</p>"
                    "<p>By providing my phone number on my application or during creation of this account, I agree to "
                    "receive recurring calls and text messages, including by automated means, regarding my "
                    "application.</p>")
 
 
-def test_a_consent_that_also_agrees_to_calls_and_texts_is_left_for_the_owner_before_create(page, monkeypatch):
-    serve(page, create_page(EMAIL_BOXES["workday"], extra=consent_box(CALLS_AND_TEXTS)))
+def test_a_consent_that_also_agrees_to_marketing_is_left_for_the_owner_before_create(page, monkeypatch):
+    serve(page, create_page(EMAIL_BOXES["workday"], extra=consent_box(MARKETING_TEXTS)))
     a = assistant_for(monkeypatch, WorkdayAdapter())
     recorded(a, monkeypatch)
     assert a.fill_create_account_form(page, EMAIL) is False
     assert page.evaluate("window.creates") == 0                  # no account attempt spent on a form it cannot finish
     assert page.locator("#c").is_checked() is False
-    assert "recurring calls and text messages" in a._account_form_held
+    assert "marketing text messages" in a._account_form_held
     assert not getattr(a, "_login_paused", "")                    # no hold on the rest of the run's account steps
     # The owner ticks it and presses Continue: the form goes through.
     page.locator("#c").check()
@@ -225,3 +228,31 @@ def test_a_create_form_still_showing_after_the_attempt_stops_the_run_not_the_for
     assert agent._create_still_showing(None) is True
     Assistant._last_account_result = ("create", acc.AccountState(acc.CODE_ENTRY), "")
     assert agent._create_still_showing(None) is False            # the code step is next, not a failure
+
+
+def test_calls_and_texts_about_the_application_inside_the_account_consent_are_agreed_to(page, monkeypatch):
+    """The owner's standing decision of 2 October 2026 (Marathon Petroleum's required consent)."""
+    serve(page, create_page(EMAIL_BOXES["workday"], extra=consent_box(CALLS_AND_TEXTS)))
+    a = assistant_for(monkeypatch, WorkdayAdapter())
+    recorded(a, monkeypatch)
+    a.fill_create_account_form(page, EMAIL)
+    assert page.evaluate("window.creates") == 1
+
+
+ACCOUNT = "I agree to creating this account to allow me to apply for positions with Example Co."
+
+
+@pytest.mark.parametrize("contact, allowed", [
+    ("I agree to receive recurring calls and text messages, including by automated means, regarding my application "
+     "or employment opportunities from Example Co and its partners, vendors, or affiliates.", True),
+    ("I consent to SMS about my application.", True),
+    ("I agree to receive text messages with marketing and promotions.", False),
+    ("I agree to receive calls about my application and to share my data with third parties.", False),
+    ("I agree to receive the newsletter.", False),
+    ("I accept the terms and conditions.", False),
+    ("I certify that my answers are true.", False),
+])
+def test_only_calls_and_texts_about_the_application_ride_along_with_account_consent(contact, allowed):
+    import safety
+    assert safety.is_account_creation_consent(f"{ACCOUNT} {contact}") is allowed
+    assert safety.is_account_creation_consent(contact) is False        # never on their own: account consent only

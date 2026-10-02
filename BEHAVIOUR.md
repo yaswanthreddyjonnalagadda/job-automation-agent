@@ -495,17 +495,23 @@ is reported as failed, with what the page showed. Before, Waystar's account was 
 
 **A consent box labelled only "Yes, I consent" (2 October).** Its meaning is the text above
 it, and that text is what the consent rule judges. If it agrees only to creating the account,
-the agent ticks it. If it also agrees to something else -- Marathon Petroleum's also agrees to
-recurring automated calls and texts -- the agent does not tick it and does not press Create
-Account (which would only use up one of the day's two attempts): it stops and shows you the
-words the box agrees to. If Create Account does go through and the site keeps the form open,
+the agent ticks it. Your standing decision of 2 October 2026: if the same required consent
+also agrees to calls and text messages *about your application* (Marathon Petroleum's: "recurring
+calls and text messages, including by automated means, regarding my application or employment
+opportunities"), the agent ticks it too. If it agrees to anything else -- marketing,
+promotions, newsletters, sharing or selling your data, terms and conditions, a declaration --
+the agent does not tick it and does not press Create Account (which would only use up one of
+the day's two attempts): it stops and shows you the words the box agrees to. This is only for
+the consent a site requires to create the account; a separate text-message box on an
+application still follows your preferred contact method. If Create Account does go through and the site keeps the form open,
 the run stops there with what the site said; the account form is never filled in as if it
 were the application (before, the form-filler pressed Create Account with the passwords empty).
 
 On an employer's create-account form the agent ticks two kinds of box and no
 others: a privacy notice, and consent to creating the very account you asked it
 to create ("I agree to creating this account to allow me to apply for positions
-with ..."; your decision of 25 September 2026, decided in `safety.py`). Terms and
+with ..."; your decision of 25 September 2026, decided in `safety.py`) -- including
+calls and texts about your application bundled into that consent (2 October 2026). Terms and
 conditions, declarations, signatures, marketing opt-ins and anything that shares
 your data stay unticked and are left for you. Some sites (Workday) draw the box
 under an overlay so a normal click ticks nothing: the agent then forces the tick,
