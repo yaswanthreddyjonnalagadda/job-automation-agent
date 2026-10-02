@@ -4717,8 +4717,16 @@ class PageAgent:
         # way. UKG, 30 September: the page fell back to the job board's home mid-application, the plan pressed the
         # header's "Find Opportunities", searched the board and opened another job's link. Once the form has been
         # seen, a page that offers only the menu is left for the job's own page, where the application is resumed.
-        if getattr(self, "_seen_form", False) and plan.next_kind != "open_application" \
-                and not re.search(r"\bapply\b", label, re.IGNORECASE) and self._in_site_menu(page, control):
+        # Before the form is seen the menu is not a step either: a page still drawing itself offers only the menu
+        # (Waystar's Workday, 2 October: read as "other" while loading, the plan chose the header's "Search for
+        # Jobs"). The page is read again instead; the run's tries still limit it.
+        menu = plan.next_kind != "open_application" and not re.search(r"\bapply\b", label, re.IGNORECASE) \
+            and self._in_site_menu(page, control)
+        if menu and not getattr(self, "_seen_form", False):
+            logger.info("NOT PRESSING %r: the site's own menu -- reading the page again", label)
+            self.settle(page, 3_000)
+            return "retry", page, f"{label!r} is the site's own menu, not a step of the application"
+        if menu:
             back = str(getattr(self.job, "url", "") or "")
             if not back:
                 return "stop", page, f"{label!r} is the site's own menu -- the page has left the application"

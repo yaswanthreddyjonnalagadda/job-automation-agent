@@ -1,0 +1,14 @@
+{
+  "id": "f099",
+  "date": "2026-10-02",
+  "class": "State learned by one run overwritten by the next run's start-up",
+  "symptom": "Waystar, 2 October: resuming from the Workday sign-in page, the check said 'waystar.wd1.myworkdayjobs.com is not where this application was (careers.waystar.com)' and started again from the posting.",
+  "site": "Any application whose posting and form are on different hosts (employer careers site + Workday)",
+  "root_cause": "checkpoint.note_application rewrote data['application'] at every run's start, dropping the 'hosts' list that checkpoint.verified had built from the pages the application was worked on.",
+  "why_tests_missed": "The resume tests noted the application and verified pages within one run; none started a second run before reconciling.",
+  "fix": "note_application keeps the hosts already verified for the application.",
+  "tests": [
+    "tests/test_resume_point.py::test_a_new_run_keeps_the_sites_the_application_was_already_worked_on"
+  ],
+  "prevention": "A start-up write merges into stored state; it never replaces what earlier runs learned."
+}

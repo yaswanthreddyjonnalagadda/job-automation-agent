@@ -122,3 +122,15 @@ def test_a_submit_seen_through_leaves_nothing_pending():
 def test_every_record_names_the_code_version_it_ran():
     checkpoint.verified("k", "https://jobs.example.com/acme/apply")
     assert checkpoint.load("k")["verified"]["code"] == checkpoint.code_version() != ""
+
+
+def test_a_new_run_keeps_the_sites_the_application_was_already_worked_on(page):
+    """Waystar, 2 October: each run's note_application overwrote the record, dropping the employer's Workday host the
+    last run had verified, and the resume called the Workday page "not where this application was"."""
+    key = "waystar-1"
+    checkpoint.note_application(key, JOB)
+    checkpoint.verified(key, "https://acme.wd1.myworkdayjobs.com/en-US/Acme/job/x/apply", "Create Account/Sign In")
+    checkpoint.note_application(key, JOB)                     # the next run starts
+    serve(page, "<h2>Network Engineer</h2><p>current step 1 of 6</p>",
+          url="https://acme.wd1.myworkdayjobs.com/en-US/Acme/job/x/apply")
+    assert checkpoint.reconcile(key, page, not_posting).verdict == checkpoint.SAME_APPLICATION

@@ -1587,3 +1587,17 @@ def test_the_last_submit_is_never_pressed_from_here_whatever_the_settings(page, 
         outcome = agent.run(page)
         assert handed_over(outcome), (settings, outcome.reasons)
         assert not page.url.endswith("/done")
+
+
+def test_the_sites_menu_is_never_pressed_while_the_application_page_is_still_arriving(page, resume_file):
+    """Waystar's Workday, 2 October: the page was read before it had drawn, as "other", and the plan's next step was
+    the header's "Search for Jobs" -- away from the application. Before the form is seen, the page is read again."""
+    page.set_content('<header><nav><button>Search for Jobs</button></nav></header><main></main>')
+    agent = make_agent(Planner(), resume_file)
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    menu = next(c for c in controls if c.name == "Search for Jobs")
+    plan = page_agent.PagePlan(page_kind="other", next_ref=menu.ref, next_label=menu.name, next_kind="next_step")
+    pressed = []
+    page.on("framenavigated", lambda frame: pressed.append(frame.url))
+    result, _page, why = agent.press_next(page, plan, controls)
+    assert result == "retry" and "menu" in why and pressed == []

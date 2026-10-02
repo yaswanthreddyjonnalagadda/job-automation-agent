@@ -1,0 +1,14 @@
+{
+  "id": "f100",
+  "date": "2026-10-02",
+  "class": "A site's own menu taken for a step of the application",
+  "symptom": "Waystar's Workday, 2 October: the apply page was read before it had drawn, as 'other', and the plan's next step was the header's 'Search for Jobs', which leaves the application.",
+  "site": "Workday and any site with a header/navigation menu",
+  "root_cause": "press_next refused the site's menu only after the application form had been seen (_seen_form); a page still arriving at the start of a run had no such guard.",
+  "why_tests_missed": "The menu test (UKG) covered a page reached mid-application, after the form; none covered the first page of a run.",
+  "fix": "A button in the site's header, navigation or footer is never pressed as a next step (apply buttons aside): before the form is seen the page is read again; after, the run goes back to the job's own page.",
+  "tests": [
+    "tests/test_page_agent.py::test_the_sites_menu_is_never_pressed_while_the_application_page_is_still_arriving"
+  ],
+  "prevention": "Rules about what may be pressed hold from the first page of a run, not from a later state."
+}

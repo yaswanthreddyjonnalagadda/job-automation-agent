@@ -80,9 +80,12 @@ def _save(key: str, data: dict) -> None:
 def note_application(key: str, job) -> None:
     data = load(key)
     url = str(getattr(job, "url", "") or "")
+    # The hosts the application was already worked on (verified) are kept: a new run used to overwrite them, and
+    # the next resume called the employer's Workday site "not where this application was" (Waystar, 2 October).
+    hosts = list((data.get("application") or {}).get("hosts") or [])
     data["application"] = {"key": key, "url": url, "title": str(getattr(job, "title", "") or ""),
                            "company": str(getattr(job, "company", "") or ""),
-                           "host": urlparse(url).netloc.lower()}
+                           "host": urlparse(url).netloc.lower(), "hosts": hosts}
     _save(key, data)
 
 
