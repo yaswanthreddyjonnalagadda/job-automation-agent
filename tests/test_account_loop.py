@@ -198,7 +198,12 @@ def test_a_consent_that_also_agrees_to_calls_and_texts_is_left_for_the_owner_bef
     assert a.fill_create_account_form(page, EMAIL) is False
     assert page.evaluate("window.creates") == 0                  # no account attempt spent on a form it cannot finish
     assert page.locator("#c").is_checked() is False
-    assert "recurring calls and text messages" in a._login_paused
+    assert "recurring calls and text messages" in a._account_form_held
+    assert not getattr(a, "_login_paused", "")                    # no hold on the rest of the run's account steps
+    # The owner ticks it and presses Continue: the form goes through.
+    page.locator("#c").check()
+    a.fill_create_account_form(page, EMAIL)
+    assert page.evaluate("window.creates") == 1 and a._account_form_held == ""
 
 
 def test_a_consent_only_to_creating_the_account_is_ticked(page, monkeypatch):

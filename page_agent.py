@@ -1086,7 +1086,13 @@ class PageAgent:
                     except Exception as exc:
                         logger.warning("LOGIN: %s", str(exc).splitlines()[0][:120])
                     reason = str(getattr(self.assistant, "_login_paused", "") or "")
-            if reason:
+            form_held = str(getattr(self.assistant, "_account_form_held", "") or "")
+            if form_held and not reason:
+                self.account_blocker = form_held
+                if form_held not in self.notes:
+                    self.notes.append(form_held)
+                    logger.info("LOGIN: %s", form_held[:200])
+            elif reason:
                 note = f"sign-in on {host} is paused to protect the account: {reason}"
                 if note not in self.notes:
                     self.notes.append(note)

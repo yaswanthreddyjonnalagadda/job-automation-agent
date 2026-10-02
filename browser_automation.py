@@ -4826,6 +4826,7 @@ class JobApplicationAssistant:
         if len(pw_fields) < 2 and not (len(pw_fields) == 1 and self._heading_says_create(page)):
             return False  # not a Create Account form
         self._create_form_attempted = True
+        self._account_form_held = ""
         site = urlparse(page.url).netloc.lower()
         held = login_guard.may_create_account(site, email)
         if held and self.account_on_record(page.url) and not login_guard.may_sign_in(site, email):
@@ -4961,8 +4962,10 @@ class JobApplicationAssistant:
             if needs_candidate_acknowledgment:
                 logger.warning("ACCOUNT_HELD: a terms or attestation checkbox needs the candidate")
                 if held_box:
-                    self._login_paused = (f"Create Account on {site} needs a consent box only you can give -- {held_box}. "
-                                          f"Tick it if you agree, then press Continue")
+                    # Not _login_paused: that one holds every later account step of the run; this one lasts only
+                    # until the box is ticked (the owner ticks it and presses Continue).
+                    self._account_form_held = (f"Create Account on {site} needs a consent box only you can give -- "
+                                               f"{held_box}. Tick it if you agree, then press Continue")
                 return False
 
             # Workday re-renders as the name, country and terms are filled,
