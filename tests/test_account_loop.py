@@ -176,3 +176,47 @@ def test_a_verify_message_after_create_opens_the_link_before_signing_in(page, mo
     a.fill_create_account_form(page, EMAIL)
     assert made == ["password (created, not yet verified)"]
     assert opened and opened[0] == 120            # asked straight away, not after a refused sign-in
+
+
+# --- a bare "Yes, I consent" means the text above it (Marathon Petroleum, 2 October) ------------------
+
+def consent_box(paragraphs):
+    return (f"<div><div>{paragraphs}</div><button type=button>Read More</button></div>"
+            '<div><input type="checkbox" id="c"><label for="c">Yes, I consent</label></div>')
+
+
+CALLS_AND_TEXTS = ("<p>I agree to creating this account to allow me to apply for positions with Example Co.</p>"
+                   "<p>By providing my phone number on my application or during creation of this account, I agree to "
+                   "receive recurring calls and text messages, including by automated means, regarding my "
+                   "application.</p>")
+
+
+def test_a_consent_that_also_agrees_to_calls_and_texts_is_left_for_the_owner_before_create(page, monkeypatch):
+    serve(page, create_page(EMAIL_BOXES["workday"], extra=consent_box(CALLS_AND_TEXTS)))
+    a = assistant_for(monkeypatch, WorkdayAdapter())
+    recorded(a, monkeypatch)
+    assert a.fill_create_account_form(page, EMAIL) is False
+    assert page.evaluate("window.creates") == 0                  # no account attempt spent on a form it cannot finish
+    assert page.locator("#c").is_checked() is False
+    assert "recurring calls and text messages" in a._login_paused
+
+
+def test_a_consent_only_to_creating_the_account_is_ticked(page, monkeypatch):
+    only_account = "<p>I agree to creating this account to allow me to apply for positions with Example Co.</p>"
+    serve(page, create_page(EMAIL_BOXES["workday"], extra=consent_box(only_account)))
+    a = assistant_for(monkeypatch, WorkdayAdapter())
+    recorded(a, monkeypatch)
+    a.fill_create_account_form(page, EMAIL)
+    assert page.evaluate("window.creates") == 1
+
+
+def test_a_create_form_still_showing_after_the_attempt_stops_the_run_not_the_form_filler():
+    import page_agent
+
+    class Assistant:
+        _last_account_result = ("create", acc.AccountState(acc.CREATE_FORM, form_error="Please check the box"), "x")
+    agent = page_agent.PageAgent.__new__(page_agent.PageAgent)
+    agent.assistant = Assistant()
+    assert agent._create_still_showing(None) is True
+    Assistant._last_account_result = ("create", acc.AccountState(acc.CODE_ENTRY), "")
+    assert agent._create_still_showing(None) is False            # the code step is next, not a failure

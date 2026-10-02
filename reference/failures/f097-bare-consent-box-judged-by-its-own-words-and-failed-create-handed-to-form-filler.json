@@ -1,0 +1,16 @@
+{
+  "id": "f097",
+  "date": "2026-10-02",
+  "class": "A checkbox judged by its own label when its meaning is in the text above it; and a failed account step handed to the application form-filler",
+  "symptom": "Marathon Petroleum (Workday), 2 October: Create Account was pressed with 'Yes, I consent' unticked and the site answered 'Please check the box to continue' (one of the day's two account attempts spent). The page agent then read the account form as an application page, ticked the box from its label alone -- although the paragraph above it agreed to recurring automated calls and texts -- and pressed Create Account itself with the password boxes empty. The owner saw the email typed and no password.",
+  "site": "Workday, and any form whose consent box is labelled only 'Yes, I consent' / 'I agree'",
+  "root_cause": "safety.is_account_creation_consent was asked about the label 'Yes, I consent', which says nothing, so the box was skipped silently and the form pressed anyway; the page agent's checkbox rule read its own (too narrow) context and ticked it as an agreement. When fill_create_account_form returned False with no pause reason, sign_in_step set no blocker, so the page fell through to the form-filler, which treats any button as a next step.",
+  "why_tests_missed": "Every consent fixture put the full sentence in the box's own label; none had a bare 'Yes, I consent' under a paragraph. No test covered what happens on the page after a create attempt that failed without a reason.",
+  "fix": "A bare consent label is judged with the text it stands under (_consent_text_of); safety.py decides on that text, unchanged. A required consent the agent may not give holds the form before Create Account is pressed, and the stop names the box and the words it agrees to. A create attempt that leaves the new-account form showing stops the run with what the site said (ACCOUNT_RESULT now falls back to the form error read from the page), never the form-filler.",
+  "tests": [
+    "tests/test_account_loop.py::test_a_consent_that_also_agrees_to_calls_and_texts_is_left_for_the_owner_before_create",
+    "tests/test_account_loop.py::test_a_consent_only_to_creating_the_account_is_ticked",
+    "tests/test_account_loop.py::test_a_create_form_still_showing_after_the_attempt_stops_the_run_not_the_form_filler"
+  ],
+  "prevention": "Judge a control by everything a person reads for it -- label, the text it stands under, folded 'Read More' text -- through one rule; and give every step that can fail an explicit stop, so a failure never falls through to a more general handler."
+}

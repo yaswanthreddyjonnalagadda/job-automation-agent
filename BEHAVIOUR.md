@@ -493,6 +493,15 @@ shows no account step, no message and no application is not recorded as an accou
 is reported as failed, with what the page showed. Before, Waystar's account was logged as
 "created" six times without anything showing that it had been.
 
+**A consent box labelled only "Yes, I consent" (2 October).** Its meaning is the text above
+it, and that text is what the consent rule judges. If it agrees only to creating the account,
+the agent ticks it. If it also agrees to something else -- Marathon Petroleum's also agrees to
+recurring automated calls and texts -- the agent does not tick it and does not press Create
+Account (which would only use up one of the day's two attempts): it stops and shows you the
+words the box agrees to. If Create Account does go through and the site keeps the form open,
+the run stops there with what the site said; the account form is never filled in as if it
+were the application (before, the form-filler pressed Create Account with the passwords empty).
+
 On an employer's create-account form the agent ticks two kinds of box and no
 others: a privacy notice, and consent to creating the very account you asked it
 to create ("I agree to creating this account to allow me to apply for positions

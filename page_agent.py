@@ -1041,6 +1041,7 @@ class PageAgent:
             logger.info("LOGIN: %s on %s", "creating the account" if making_account else "signing in", host)
             try:
                 self.assistant._last_login_rejected = False     # only a refusal of this attempt counts below
+                self.assistant._last_account_result = None      # only this attempt's result counts below
                 if self.assistant.handle_auth_gate(tab, email):
                     return True
             except Exception as exc:
@@ -1091,8 +1092,29 @@ class PageAgent:
                     self.notes.append(note)
                     logger.info("LOGIN: %s", note[:200])
                 self.account_blocker = note
+            elif making_account and self._create_still_showing(tab):
+                # The account form did not go through: the run stops on it with what the site said, and the form is
+                # never read as an application page -- that pressed Create Account again with the passwords empty
+                # (Marathon Petroleum, 2 October).
+                action, result, said = getattr(self.assistant, "_last_account_result", None) or ("", None, "")
+                self.account_blocker = (f"Create Account did not go through on {host}"
+                                        + (f': the site says "{said}"' if action == "create" and said else
+                                           ": look at the page") + ". Fix it there, then press Continue")
+                logger.info("LOGIN: %s", self.account_blocker[:200])
             return False
         return False
+
+    def _create_still_showing(self, tab) -> bool:
+        """After a create attempt that did not get in: is the new-account form still what the page shows? (A code
+        box, a verification message or a sign-in form is the next step's, not a failure.)"""
+        result = getattr(self.assistant, "_last_account_result", None)
+        if result:
+            return result[1].kind == account_state.CREATE_FORM
+        try:
+            state = account_state.read_state(self.snapshot(tab), password_boxes=self._password_boxes(tab))
+            return state.kind == account_state.CREATE_FORM
+        except Exception:
+            return False
 
     def _reset_refused_password(self, tab, host: str, email: str) -> bool:
         """Resets a refused password to the same ATS password with the code emailed to the owner, and signs in
