@@ -4751,7 +4751,15 @@ class JobApplicationAssistant:
                     body = "(no text)"
                 if password:
                     body = body.replace(password, "***")
-                lines.append(f"{response.request.method} {urlparse(response.url).path} -> {response.status} {body}")
+                # Where a redirect sends the page says what the server made of the press (Workday's /register
+                # answers 303 either way); the address is kept without its query values, which may hold a token.
+                went = ""
+                if 300 <= response.status < 400:
+                    location = urlparse(response.headers.get("location") or "")
+                    keys = ",".join(sorted({part.split("=", 1)[0] for part in location.query.split("&") if part}))
+                    went = f" to {location.path}" + (f" (with {keys})" if keys else "")
+                lines.append(f"{response.request.method} {urlparse(response.url).path} -> {response.status}{went} {body}"
+                             + self._sent_fields(response.request))
             except Exception:
                 continue
         for line in lines:
@@ -4759,6 +4767,30 @@ class JobApplicationAssistant:
         if not lines:
             logger.info("ACCOUNT_SERVER: %s: the page sent nothing to the server", action)
         self._last_server_replies = lines
+
+    @staticmethod
+    def _sent_fields(request) -> str:
+        """What a request carried, by field name only: each field filled (with its length) or empty -- never a value.
+        A form that sends the email empty, or a robots-only box filled, shows here."""
+        try:
+            data = request.post_data or ""
+        except Exception:
+            return ""
+        if not data:
+            return ""
+        fields = {}
+        try:
+            parsed = json.loads(data)
+            if isinstance(parsed, dict):
+                fields = {str(k): v for k, v in parsed.items()}
+        except ValueError:
+            from urllib.parse import parse_qsl
+            fields = dict(parse_qsl(data, keep_blank_values=True))
+        if not fields:
+            return f" | sent {len(data)} characters"
+        shown = [f"{k}={'empty' if v in ('', None) else ('yes' if v is True else 'no' if v is False else f'{len(str(v))} chars')}"
+                 for k, v in list(fields.items())[:20]]
+        return " | sent " + ", ".join(shown)
 
     @staticmethod
     def _account_page_left(page: Page) -> bool:
@@ -6492,8 +6524,10 @@ class JobApplicationAssistant:
                 except Exception:
                     pass
                 tab.wait_for_timeout(2_000)
-                if "mail.google.com" not in tab.url:
+                if urlparse(tab.url).netloc != "mail.google.com":   # the sign-in page carries continue=mail.google.com
                     logger.warning("PASSCODE: this browser isn't signed in to Gmail")
+                    return ""
+                if not self._gmail_shows_applying_inbox(tab, "PASSCODE"):
                     return ""
                 rows = tab.locator("tr.zA")
                 for i in range(min(rows.count(), 10)):  # newest first
@@ -6535,6 +6569,27 @@ class JobApplicationAssistant:
         return ((getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
                 or str(getattr(self._owner_profile(), "email", "") or "").strip())
 
+    def _gmail_shows_applying_inbox(self, tab, tag: str) -> bool:
+        """Whether the Gmail tab shows the inbox of the address the agent applies with. Gmail names the account in
+        the tab's title ("Search results - name@gmail.com - Gmail"); with authuser for an address the browser is
+        not signed in to, Gmail quietly shows another inbox -- and every search there finds nothing (Workday's
+        verification emails, 1-2 October). A title that names no address cannot tell, and is let through."""
+        email = self._applying_email().lower()
+        try:
+            title = (tab.title() or "").lower()
+        except Exception:
+            return True
+        shown = re.findall(r"[\w.+-]+@[\w-]+\.[\w.]+", title)
+        if not email or not shown or email in shown:
+            return True
+        logger.warning("%s: Gmail opened %s, not %s -- this browser is not signed in to the inbox the agent "
+                       "applies with; sign that address in to Gmail in the agent's browser", tag,
+                       re.sub(r"(?<=.{2})[^@]*(?=@)", "***", shown[0]), re.sub(r"(?<=.{2})[^@]*(?=@)", "***", email))
+        self._login_paused = (f"the agent's browser is not signed in to Gmail as {email}, the address it applies "
+                              f"with, so it cannot read the site's email: sign that address in to Gmail in the "
+                              f"agent's browser, then press Continue")
+        return False
+
     def _gmail_search_url(self, query: str) -> str:
         """A Gmail search in the inbox of the address the agent applies with.
 
@@ -6571,8 +6626,10 @@ class JobApplicationAssistant:
                 except Exception:
                     pass
                 tab.wait_for_timeout(2_000)
-                if "mail.google.com" not in tab.url:
+                if urlparse(tab.url).netloc != "mail.google.com":   # the sign-in page carries continue=mail.google.com
                     logger.warning("VERIFY_LINK: this browser isn't signed in to Gmail")
+                    return ""
+                if not self._gmail_shows_applying_inbox(tab, "VERIFY_LINK"):
                     return ""
                 rows = tab.locator("tr.zA")
                 for i in range(min(rows.count(), 5)):          # newest first

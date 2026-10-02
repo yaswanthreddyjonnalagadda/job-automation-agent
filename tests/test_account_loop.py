@@ -278,3 +278,34 @@ def test_the_servers_reply_to_create_account_is_logged_without_secrets(page, mon
     assert not any("abc123" in s or "s3cret-ATS" in s for s in server)
     saved = list(browser_automation.ACCOUNT_STEPS.glob("*_create.txt"))
     assert saved and "Request blocked" in saved[0].read_text(encoding="utf-8")
+
+
+# --- the site's email is looked for in the right inbox ------------------------------------------------
+
+class _Tab:
+    def __init__(self, title):
+        self._title = title
+
+    def title(self):
+        return self._title
+
+
+@pytest.mark.parametrize("title, ok", [
+    ("Search results - owner@example.com - Gmail", True),
+    ("Search results - someone.else@gmail.com - Gmail", False),       # the other Google account's inbox
+    ("Gmail", True),                                                  # names no address: cannot tell
+])
+def test_gmail_is_read_only_in_the_inbox_the_agent_applies_with(monkeypatch, title, ok):
+    a = assistant_for(monkeypatch)
+    monkeypatch.setattr(a, "_applying_email", lambda: EMAIL)
+    assert a._gmail_shows_applying_inbox(_Tab(title), "VERIFY_LINK") is ok
+    if not ok:
+        assert EMAIL in a._login_paused
+
+
+def test_what_a_request_sent_is_shown_by_field_name_never_value():
+    class Request:
+        post_data = '{"email": "owner@example.com", "password": "s3cret-ATS", "website": "", "agree": true}'
+    shown = browser_automation.JobApplicationAssistant._sent_fields(Request())
+    assert "email=17 chars" in shown and "website=empty" in shown and "agree=yes" in shown
+    assert "owner@example.com" not in shown and "s3cret-ATS" not in shown
