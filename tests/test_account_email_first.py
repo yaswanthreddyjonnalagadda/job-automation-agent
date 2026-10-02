@@ -199,7 +199,8 @@ def test_a_new_account_with_no_verification_email_is_signed_in_by_the_agent(page
 
 
 def test_a_refused_sign_in_looks_for_a_late_verification_email_and_signs_in_again(page, monkeypatch):
-    """The verification email can arrive after the first look: the refusal sends the agent back to the mail once."""
+    """The page asked for nothing, so the agent signed in at once; the refusal sends it to the mail, once, for the
+    verification email (owner, 1 October: no Gmail before the site asks)."""
     accept_second = ("if (window.signins >= 2) { document.body.innerHTML = '<h1>Candidate Home</h1>'; } else {"
                      " document.getElementById('alert').textContent = 'You may have entered the wrong email address"
                      " or password or your account might be locked.'; }")
@@ -211,13 +212,13 @@ def test_a_refused_sign_in_looks_for_a_late_verification_email_and_signs_in_agai
 
     def verify(page, wait_seconds=150):
         looks.append(wait_seconds)
-        if len(looks) == 2:
+        if len(looks) == 1:
             login_guard.clear_hold(HOST, EMAIL)        # what opening the link does
             return True
         return False
     monkeypatch.setattr(a, "verify_account_by_email_link", verify)
     a.fill_create_account_form(page, EMAIL)
-    assert len(looks) == 2 and page.evaluate("window.signins") == 2
+    assert len(looks) == 1 and page.evaluate("window.signins") == 2
 
 
 def test_a_refused_sign_in_opens_the_verification_email_before_any_password_reset(page, monkeypatch):
@@ -233,3 +234,18 @@ def test_a_refused_sign_in_opens_the_verification_email_before_any_password_rese
     monkeypatch.setattr(a, "_reset_password_with_emailed_code", lambda *args: steps.append("reset") or False)
     assert a.recover_rejected_sign_in(page, EMAIL) is True
     assert steps == ["verify", "sign in"]
+
+
+@pytest.mark.parametrize("body, asks", [
+    ('<h2>Sign In</h2><label>Email Address <input type=text></label><label>Password <input type=password></label>'
+     '<button>Sign In</button>', ""),
+    ("<h2>Verify your account</h2><p>We have sent you an email. Verify your email address before you sign in.</p>",
+     "link"),
+    ('<h2>Enter the verification code</h2><p>We sent a verification code to your email.</p>'
+     '<label>Verification code <input type=text></label><button>Verify</button>', "code"),
+])
+def test_the_mail_is_read_only_when_the_page_asks_for_it(page, body, asks):
+    """Crescent Energy, 1 October: the page asked for nothing and the agent spent two minutes in Gmail first."""
+    from browser_automation import JobApplicationAssistant
+    page.set_content(f"<html><body>{body}</body></html>")
+    assert JobApplicationAssistant._page_asks_to_verify(page) == asks

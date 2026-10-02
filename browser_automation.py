@@ -4526,6 +4526,17 @@ class JobApplicationAssistant:
             logger.warning("Could not check the account record: %s", exc)
             return None
 
+    @staticmethod
+    def _page_asks_to_verify(page: Page) -> str:
+        """What the page after Create Account asks for: "code" (a box for an emailed code), "link" (verify the email
+        or account), or "" (nothing -- sign in). Decided by account_state's reading of the page."""
+        try:
+            snapshot = page.locator("body").aria_snapshot(mode="ai")
+        except Exception:
+            return ""
+        kind = account_state.read_state(snapshot).kind
+        return {account_state.CODE_ENTRY: "code", account_state.VERIFY_EMAIL: "link"}.get(kind, "")
+
     def account_signed_in_before(self) -> bool:
         """The agent has signed in to this employer's account before (its record is not 'created, not yet
         verified'): creating it again cannot succeed, so the run signs straight in."""
@@ -4943,10 +4954,17 @@ class JobApplicationAssistant:
                 #   3. That sign-in refused: the email may have been slow -- it looks once more, opens the link, and
                 #      signs in again. Only if that fails too is the owner needed.
                 self.remember_account(page, email, "password (created, not yet verified)")
-                verified = self.verify_account_by_email_link(page, wait_seconds=60)
+                # The mail is read only when the page asks for it (owner, 1 October: "it is not asking for OTP,
+                # why is it going and checking?" -- Crescent Energy spent two minutes in Gmail first). A page that
+                # asks for a code is the code step's (read again by the page agent); one that asks to verify gets
+                # its link opened; otherwise the agent signs in now, and the mail is read only if that is refused.
+                asks = self._page_asks_to_verify(page)
+                if asks == "code":
+                    logger.info("ACCOUNT: the site asks for an emailed code -- the code step takes it from here")
+                    return False
+                verified = asks == "link" and self.verify_account_by_email_link(page, wait_seconds=120)
                 logger.info("ACCOUNT_VERIFIED: the email link was opened -- signing in" if verified else
-                            "ACCOUNT: no verification email within 60s -- the site may not verify new accounts: "
-                            "signing in")
+                            "ACCOUNT: the page asks for nothing more -- signing in")
                 if not self._open_sign_in(page):
                     self._login_paused = (f"an account was just created on {site}, but no sign-in form was found: "
                                           f"sign in yourself, then press Continue")
@@ -6120,7 +6138,7 @@ class JobApplicationAssistant:
             return None
         tab = page.context.new_page()
         try:
-            query = quote(f"{company} newer_than:2d")
+            query = quote(f"in:anywhere {company} newer_than:2d")
             tab.goto(self._gmail_search_url(query), wait_until="domcontentloaded", timeout=45_000)
             try:
                 tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)
@@ -6251,7 +6269,7 @@ class JobApplicationAssistant:
         try:
             deadline = time.time() + wait_seconds
             while time.time() < deadline:
-                query = quote("newer_than:1h (passcode OR \"one-time\" OR verification OR code)")
+                query = quote("in:anywhere newer_than:1h (passcode OR \"one-time\" OR verification OR code)")
                 tab.goto(self._gmail_search_url(query), wait_until="domcontentloaded", timeout=45_000)
                 try:
                     tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)
@@ -6328,7 +6346,8 @@ class JobApplicationAssistant:
         try:
             deadline = time.time() + wait_seconds
             while time.time() < deadline:
-                query = quote("newer_than:3d (verify OR verification OR activate OR confirm)")  # an account made earlier today too
+                # in:anywhere: a Gmail search leaves out Spam, where Workday's account emails often land (1 October).
+                query = quote("in:anywhere newer_than:3d (verify OR verification OR activate OR confirm)")
                 tab.goto(self._gmail_search_url(query), wait_until="domcontentloaded",
                          timeout=45_000)
                 try:
