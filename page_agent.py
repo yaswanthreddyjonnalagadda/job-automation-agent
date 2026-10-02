@@ -49,6 +49,7 @@ import answer_bank
 from claude_integration import JOB_POSTING_CHARS, is_non_answer
 import employment_history
 import form_fields
+from field_requirements import account_password_fields
 import location_choice
 import option_match
 import repeated_entries
@@ -1487,6 +1488,15 @@ class PageAgent:
             held=str(getattr(self.assistant, "_login_paused", "") or ""))
         step = account_state.next_step(state, memory)
         self._note_account_state(page, host, state, step)
+
+        # The account helpers select credentials across the page. Until they
+        # can target a specific form, do not let a mixed page fill the optional
+        # account's password while trying to complete a required sign-in.
+        if state.password_boxes and step.action in (account_state.CREATE, account_state.SIGN_IN,
+                                                    account_state.RESET_PASSWORD) \
+                and any(field.optional_account for field in account_password_fields(snapshot)):
+            self.account_blocker = "Complete the required sign-in section; the optional account will stay blank."
+            return False
 
         # Never an account on a job board, with Google or a password: the owner applies on the employer's own site
         # (job_sources.job_board). Adzuna, 30 September: its easy-apply sat behind an Adzuna login.
@@ -5111,17 +5121,28 @@ class PageAgent:
                 if note not in self.notes:
                     self.notes.append(note)
         try:
-            optional_account = bool(account_state._OPTIONAL_ACCOUNT.search(self.snapshot(page) or ""))
+            password_fields = account_password_fields(self.snapshot(page) or "")
+            password_refs = {field.ref for field in password_fields if field.ref}
+            optional_passwords = {field.ref for field in password_fields if field.optional_account and field.ref}
         except Exception:
-            optional_account = False
+            password_refs = set()
+            optional_passwords = set()
         for item in plan.for_owner:
             question = str(item.get("question") or "")
-            if optional_account and re.search(r"pass ?word|pass ?code|one[- ]time code", question, re.IGNORECASE):
-                # The password of an account the page calls optional stays empty: it is not the owner's to answer
-                # either (Meta, 30 September: "needs your answer: Password" stopped a finished application).
+            # Require a field identity, not merely a password word on a page
+            # containing an optional heading. Duplicate labels without a ref
+            # qualify only if every matching field is in the optional section.
+            matching = [c for c in controls if c.role in ANSWER_ROLES and _plain(c.question) == _plain(question)]
+            if item.get("ref"):
+                matching = [c for c in matching if c.ref == str(item["ref"])]
+            if matching and all(c.ref in optional_passwords for c in matching):
                 continue
             required = bool(item.get("required")) or "*" in question
+            # One answered copy cannot satisfy a different blank field bearing
+            # the same label. Unresolved/mismatched references remain blockers.
             still_blank = not any(c.question == question and c.answer for c in controls)
+            if item.get("ref") or any(c.ref in password_refs for c in matching):
+                still_blank = any(not c.answer for c in matching) if matching else True
             if required and still_blank:
                 note = f"needs your answer: {question[:90]} ({item.get('reason', '')})"
                 self.record_unanswered(question, str(item.get("reason", "")), controls)

@@ -411,6 +411,15 @@ account (optional)" at the foot of Meta's form) is part of the application, not 
 step: the agent does not make that account, leaves its password boxes empty, and goes on
 with the form (Meta, 30 September).
 
+The exception belongs to that section's password fields only. A following section,
+a sibling group, or a separate required sign-in keeps its own requirements.
+An AI request with an ambiguous password label is kept for review unless every
+matching field is optional; a field reference must also match the question.
+Verification codes never inherit the optional-password exception. If required and
+optional password forms share a page, the agent asks you to complete the required
+sign-in rather than risk typing into the optional account. Unknown password fields
+also retain the normal account checks.
+
 Before it does anything on an account page, the agent reads which step the page is
 at: a new-account form, a sign-in form, a sign-in that asks for the email first, a
 choice of ways in, a page still loading, a box for an emailed code, a message saying
