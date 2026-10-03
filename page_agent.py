@@ -3923,8 +3923,11 @@ class PageAgent:
                 identifier = loc.get_attribute("id") or ""
                 if not identifier:
                     return False  # Identified as a picker: plain typing is never an answer.
+                from browser_automation import FramedPage
+                frame = loc.element_handle().owner_frame()
+                target = FramedPage(tab, frame) if frame != tab.main_frame else tab
                 return WorkdayAdapter().select_from_searchable_input(
-                    self.assistant, tab, identifier, [answer.value], keyboard=False)
+                    self.assistant, target, identifier, [answer.value], keyboard=False)
         if control.holds_choices and answer.action in ("choose", "check", "fill"):
             # The choices have no reference of their own: click the one that
             # says what the answer says, inside the group.

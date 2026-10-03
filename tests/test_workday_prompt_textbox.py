@@ -53,14 +53,20 @@ def widget(marker, offered="Referral network"):
 
 @pytest.mark.parametrize("marker", ['data-uxi-widget-type="selectinput"', 'data-automation-id="searchBox"'])
 @pytest.mark.parametrize("action", ["fill", "choose"])
-def test_textbox_shaped_prompt_commits_the_matching_option(page, marker, action):
-    page.set_content(widget(marker))
+@pytest.mark.parametrize("embedded", [False, True])
+def test_textbox_shaped_prompt_commits_the_matching_option(page, marker, action, embedded):
+    if embedded:
+        page.set_content('<iframe title="Application form"></iframe>')
+        target = page.frames[1]
+    else:
+        target = page
+    target.set_content(widget(marker))
     a = agent()
     control = next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.role == "textbox")
     assert a.do(page, page_agent.Answer(control.ref, control.question, action, "Referral network", "profile"), control)
-    assert page.locator('[data-automation-id=selectedItem]').inner_text() == "Referral network"
-    assert page.locator("input").input_value() == ""
-    assert page.evaluate("document.body.dataset.enter") is None
+    assert target.locator('[data-automation-id=selectedItem]').inner_text() == "Referral network"
+    assert target.locator("input").input_value() == ""
+    assert target.evaluate("document.body.dataset.enter") is None
 
 
 def test_prompt_without_the_requested_option_is_not_filled_with_search_text(page):
