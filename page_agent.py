@@ -3917,6 +3917,17 @@ class PageAgent:
                             if identity is not None:
                                 self._mark_recipe_failed(identity)
         loc = self.locate(page, control.ref)
+        if control.role in ("textbox", "searchbox") and answer.action in ("fill", "choose"):
+            from sites.workday import WorkdayAdapter
+            if WorkdayAdapter.is_searchable_input(loc):
+                identifier = loc.get_attribute("id") or ""
+                if not identifier:
+                    return False  # Identified as a picker: plain typing is never an answer.
+                from browser_automation import FramedPage
+                frame = loc.element_handle().owner_frame()
+                target = FramedPage(tab, frame) if frame != tab.main_frame else tab
+                return WorkdayAdapter().select_from_searchable_input(
+                    self.assistant, target, identifier, [answer.value], keyboard=False)
         if control.holds_choices and answer.action in ("choose", "check", "fill"):
             # The choices have no reference of their own: click the one that
             # says what the answer says, inside the group.
