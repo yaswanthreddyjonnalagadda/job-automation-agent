@@ -1,0 +1,15 @@
+{
+  "id": "f091",
+  "date": "2026-10-02",
+  "class": "Fuzzy option matching substitutes a different locality",
+  "symptom": "A dropdown without the requested town accepted another town sharing part of its name.",
+  "site": "Searchable location dropdowns",
+  "root_cause": "Portal option selectors bypassed the shared matcher, geographic alias lookup treated a town plus state as the state alone, and locality answers could fall through to word overlap.",
+  "why_tests_missed": "The existing browser regression failed on the base branch; matching coverage emphasized accepted aliases rather than absent localities.",
+  "fix": "Match localities before country/state aliases in the shared option matcher, use that matcher for portal choices, and prohibit fuzzy fallback for locality answers.",
+  "tests": [
+    "tests/test_places_and_commit_check.py::test_a_different_town_is_never_left_in_the_box_when_the_list_does_not_have_the_right_one",
+    "tests/test_places_and_commit_check.py::test_locality_choices_never_fall_back_to_shared_words"
+  ],
+  "prevention": "Test absent as well as present choices across geographic reference data and every interaction route."
+}

@@ -966,6 +966,17 @@ or run `python web_ui.py` in a terminal you opened.
 
 ## Operational detail
 
+* **Declarations are signed last** — profile filling leaves declarations for the
+  signing step. That step checks the current required fields, including answers
+  that disappeared after filling, before signing on the owner's behalf.
+* **Locations must match** — a town and region must identify the requested place;
+  shared words never justify selecting a different town from a dropdown.
+* **Early uploads** — resume uploads work before the main page loop starts, with
+  upload and entry state initialized separately for every agent.
+* **Custom checkboxes** — when a page exposes only the checkbox's adjacent label,
+  the agent resolves the checkbox by its name and verifies its actual checked state.
+* **Employer names** — domain-shaped page metadata must agree with the employer
+  address or ATS tenant. Unrelated copied branding is ignored.
 * **Retries** — flaky page actions are retried (`with_retries`, `action_retries`).
 * **Progress is saved** — the form's own Save button is clicked before handing
   over, so a part-finished application survives a reload.

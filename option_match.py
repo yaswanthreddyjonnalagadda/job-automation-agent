@@ -97,6 +97,11 @@ def _best_option(options: list[str], answer: str) -> Optional[int]:
         return None
     real = [(i, o) for i, o in enumerate(options) if o and not is_placeholder(o)]
 
+    # A locality contains a region, but is not interchangeable with that region
+    # or another town in it. Resolve it before country/state alias matching.
+    if geo_reference.same_locality(answer, answer):
+        return _only_one([i for i, o in real if geo_reference.same_locality(answer, o)])
+
     # 1. the same words
     hit = _only_one([i for i, o in real if plain(o) == want])
     if hit is not None:

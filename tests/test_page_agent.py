@@ -390,12 +390,44 @@ def test_without_the_owners_permission_nothing_is_signed(page, resume_file):
     assert page.url.endswith("/apply/2")
 
 
+def test_an_unnamed_declaration_is_deferred_using_its_nearby_words(resume_file):
+    agent = make_agent(Planner(), resume_file)
+    box = page_agent.Control(ref="e1", role="checkbox", container="Application questions",
+                             context="By checking this box I agree to the terms that apply where I reside.")
+    assert agent.known_answer(box) == ("", "")
+    plan = agent.profile_plan([box], set(), [], "")
+    assert len(plan.answers) == 1
+    assert plan.answers[0].source == "profile.sign_attestations"
+    assert agent._is_signature(plan.answers[0], box)
+
+
 def test_nothing_is_signed_on_a_page_with_an_answer_that_did_not_stay(page, resume_file):
     broken = STEP_2.replace("onclick=\"shown.textContent='Virginia'; list.hidden = true\"", "")
     serve(page, step2=broken, certify=CERT)
     outcome = make_agent(cert_planner(), resume_file).run(page)
     assert outcome.kind == "owner_needed"
     assert not page.locator("#cert").is_checked()
+
+
+@pytest.mark.parametrize("label,attribute,filled,expected", [
+    ("Reference", "required", "", False),
+    ("Reference *", "", "", False),
+    ("Reference", "required", "Provided", True),
+    ("Reference", "", "", True),
+])
+def test_signing_checks_current_required_fields_not_written_history(page, resume_file, label, attribute,
+                                                                  filled, expected):
+    page.set_content(f'<label>{label}<input id="ordinary" {attribute}></label>' + CERT)
+    page.locator("#ordinary").fill(filled)
+    agent = make_agent(Planner(), resume_file)
+    agent.written[label] = "Old value that did not stay"
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    declaration = next(c for c in controls if c.role == "checkbox")
+    answer = page_agent.Answer(declaration.ref, declaration.question, "check", "checked", "profile.sign_attestations")
+    plan = page_agent.PagePlan()
+    assert bool(agent.sign(page, plan, [answer])) is expected
+    assert page.locator("#cert").is_checked() is expected
+    assert bool(plan.for_owner) is not expected
 
 
 # --- what is refused, whatever Claude proposes -------------------------------------------
@@ -1073,9 +1105,11 @@ def test_an_add_button_is_not_pressed_over_and_over(page, resume_file):
     planner = SimpleNamespace(plan_page=lambda s, f, fb="": {
         "page_kind": "application_form", "answers": [],
         "next": {"ref": ref_of(s, "button", "Add Experience"), "label": "Add Experience", "kind": "next_step"}})
-    outcome = make_agent(planner, resume_file).run(page)
+    agent = make_agent(planner, resume_file)
+    agent.history = {"experience": [{"company": "Example", "title": "Engineer"}]}
+    outcome = agent.run(page)
     assert outcome.kind == "owner_needed"          # it stops rather than pressing forever
-    assert int(page.evaluate("document.body.dataset.n")) <= 4   # enough for three jobs, then it stops
+    assert 1 <= int(page.evaluate("document.body.dataset.n")) <= 4
 
 
 def test_a_tick_box_is_clicked_by_the_label_beside_it(page, resume_file):
@@ -1085,13 +1119,47 @@ def test_a_tick_box_is_clicked_by_the_label_beside_it(page, resume_file):
     page.set_content(
         '<div><span role="checkbox" aria-checked="false" aria-label="Current Job"></span>'
         '<div role="status" style="cursor:pointer" '
-        'onclick="document.body.dataset.ticked = 1">Current Job</div></div>')
+        'onclick="document.body.dataset.ticked = 1; '
+        'this.previousElementSibling.setAttribute(\'aria-checked\', \'true\')">Current Job</div></div>')
     agent = make_agent(Planner(), resume_file)
     controls = page_agent.parse_snapshot(agent.snapshot(page))
     box = next(c for c in controls if c.name == "Current Job")
     assert box.role == "checkbox"
     assert agent.do(page, page_agent.Answer(box.ref, "Current Job", "check", "Yes", "resume"), box)
     assert page.evaluate("document.body.dataset.ticked") == "1"
+    assert page.get_by_role("checkbox").get_attribute("aria-checked") == "true"
+
+
+def test_a_checkbox_click_without_a_state_change_is_not_an_answer(page, resume_file):
+    page.set_content('<div><span role="checkbox" aria-checked="false" aria-label="Current Job"></span>'
+                     '<div onclick="document.body.dataset.clicked = 1">Current Job</div></div>')
+    agent = make_agent(Planner(), resume_file)
+    box = next(c for c in page_agent.parse_snapshot(agent.snapshot(page)) if c.role == "checkbox")
+    assert not agent.do(page, page_agent.Answer(box.ref, box.question, "check", "Yes", "resume"), box)
+    assert page.evaluate("document.body.dataset.clicked") == "1"
+    assert page.get_by_role("checkbox").get_attribute("aria-checked") == "false"
+
+
+def test_a_new_agent_has_isolated_upload_and_entry_state(resume_file):
+    first = make_agent(Planner(), resume_file)
+    second = make_agent(Planner(), resume_file)
+    first._attached_here.add(("/application", "resume"))
+    first._entries["sample"] = "entry"
+    first._ensure_state()
+    assert first._attached_here == {("/application", "resume")}
+    assert second._attached_here == set()
+    assert second._entries == {}
+
+
+def test_an_add_button_is_not_pressed_without_owned_history(page, resume_file):
+    page.set_content('<button onclick="document.body.dataset.clicked = 1">Add Experience</button>')
+    agent = make_agent(Planner(), resume_file)
+    agent.history = {}
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    button = next(c for c in controls if c.role == "button")
+    plan = page_agent.PagePlan(next_ref=button.ref, next_label=button.name, next_kind="next_step")
+    agent.press_next(page, plan, controls)
+    assert page.evaluate("document.body.dataset.clicked") is None
 
 
 def test_a_button_that_opens_a_file_dialog_is_given_the_resume(page, resume_file):

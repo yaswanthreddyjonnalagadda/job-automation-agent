@@ -8,9 +8,15 @@ import json
 import threading
 import time
 from pathlib import Path
+from bs4 import BeautifulSoup
 
 import web_ui
 from browser_automation import JobApplicationAssistant, waiting_note_for
+
+
+def _continue_button(page):
+    return BeautifulSoup(page, "html.parser").select_one(
+        'form[action="/signal/_signal_Acme_Engineer.txt"] button[name="decision"][value="continue"]')
 
 
 def test_a_waiting_note_sits_beside_the_signal_file():
@@ -63,7 +69,7 @@ def test_the_card_on_the_page_carries_a_continue_button(tmp_path, monkeypatch):
     web_ui.app.config["TESTING"] = True
     page = web_ui.app.test_client().get("/").data.decode()
     assert "Network Engineer at Acme" in page and 'action="/signal/_signal_Acme_Engineer.txt"' in page
-    assert 'value="continue">Continue</button>' in page
+    assert _continue_button(page).get_text(strip=True) == "Continue"
 
 
 # --- Aristocrat, 29 September: the run was stopped while it waited; its note stayed, and the dashboard went on
@@ -84,13 +90,13 @@ def _dashboard(tmp_path, monkeypatch, live=""):
 
 def test_a_note_left_by_a_run_that_is_gone_shows_no_continue_and_is_cleared(tmp_path, monkeypatch):
     page = _dashboard(tmp_path, monkeypatch, live="").get("/").data.decode()
-    assert "Paused in the browser" not in page and 'value="continue">Continue</button>' not in page
+    assert "Paused in the browser" not in page and _continue_button(page) is None
     assert not list(tmp_path.glob("_waiting_*")) and not list(tmp_path.glob("_signal_*"))
 
 
 def test_a_live_run_keeps_its_continue(tmp_path, monkeypatch):
     page = _dashboard(tmp_path, monkeypatch, live="https://jobs.example.com/acme").get("/").data.decode()
-    assert 'value="continue">Continue</button>' in page
+    assert _continue_button(page).get_text(strip=True) == "Continue"
     assert (tmp_path / "_waiting_Acme_Engineer.txt").exists()
 
 

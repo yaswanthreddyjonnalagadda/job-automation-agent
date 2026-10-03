@@ -657,6 +657,15 @@ def page_identity(page_html: str, text: str, url: str) -> tuple[str, str]:
                           html.unescape(" ".join(tag.group(1).split())) if tag else "") if t]
     title = next((_clean_page_title(t) for t in titles if _clean_page_title(t)), "")
     site = _meta(page_html, "og:site_name") or next((_title_parts(t)[1] for t in titles if _title_parts(t)[1]), "")
+    # A domain-shaped brand must agree with the page address (or its ATS tenant).
+    # Otherwise copied page metadata can misattribute the employer.
+    if re.fullmatch(r"(?:[\w-]+\.)+[a-zA-Z]{2,}", site.strip()):
+        site_host = site.strip().lower()
+        host = (urlparse(url).hostname or "").lower()
+        named = _company_from_url("https://" + site_host)
+        tenant = _company_from_url(url)
+        site = named if (host == site_host or host.endswith("." + site_host)
+                         or named.casefold() == tenant.casefold()) else ""
     company = _company_from_site_name(site) or _employer_named_in(text) or _company_from_url(url)
     return title, company
 

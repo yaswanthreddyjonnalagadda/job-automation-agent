@@ -63,6 +63,16 @@ def test_a_plain_host_is_still_read_as_the_company():
     assert job_sources._company_from_url("https://careers.example-corp.com/jobs/7") == "Example Corp"
 
 
+def test_domain_shaped_metadata_requires_matching_employer_evidence():
+    for metadata in ('<title>Engineer | acme.jobs</title>',
+                     '<meta property="og:site_name" content="acme.jobs">'):
+        assert job_sources.page_identity(metadata, "", "https://careers.other.com/job/1")[1] == "Other"
+        assert job_sources.page_identity(metadata, "", "https://www.acme.jobs/job/1")[1] == "Acme"
+        assert job_sources.page_identity(metadata, "", "https://acme.wd1.myworkdayjobs.com/job/1")[1] == "Acme"
+    assert job_sources.page_identity('<meta property="og:site_name" content="Acme Careers">',
+                                     "", "https://ats.rippling.com/acme/jobs/1")[1] == "Acme"
+
+
 def test_a_page_title_is_reduced_to_a_job_title():
     assert job_sources._clean_page_title(
         "Support Engineer, Leo - Job ID: 10539098 | Amazon.jobs") == "Support Engineer, Leo"
