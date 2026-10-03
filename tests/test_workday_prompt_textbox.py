@@ -84,3 +84,28 @@ def test_plain_search_textbox_is_still_a_text_field(page):
     control = next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.role == "textbox")
     assert a.do(page, page_agent.Answer(control.ref, control.question, "fill", "Referral network", "profile"), control)
     assert page.locator("input").input_value() == "Referral network"
+
+
+@pytest.mark.parametrize("offered", ["Referral network", "Other source"])
+def test_hierarchical_prompt_searches_branches_without_selecting_categories(page, offered):
+    page.set_content(widget('data-uxi-widget-type="selectinput"', offered="Unused"))
+    page.evaluate("""offered => {
+      const choices=document.getElementById('choices');
+      choices.setAttribute('data-automation-id','responsiveMonikerPrompt');
+      choices.setAttribute('data-associated-widget','picker-1');
+      window.root=()=>{choices.innerHTML='<div data-uxi-multiselectlistitem-type="2"><div data-automation-id="promptOption" data-automation-label="Category" onclick="window.children()">Category</div></div>';};
+      window.children=()=>{
+        choices.innerHTML='<button data-automation-id="backButton">Back</button><div data-uxi-multiselectlistitem-type="1"><div data-automation-id="promptOption"></div></div>';
+        choices.querySelector('button').onclick=window.root;
+        const leaf=choices.querySelector('[data-automation-id=promptOption]');
+        leaf.textContent=offered; leaf.setAttribute('data-automation-label',offered);
+        leaf.onclick=()=>{document.querySelector('[data-automation-id=selectedItem]').textContent=offered;document.querySelector('input').value='';choices.hidden=true;};
+      };
+      window.root();
+    }""", offered)
+    a=agent()
+    control=next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.role=="textbox")
+    committed=a.do(page,page_agent.Answer(control.ref,control.question,"fill","Referral network","profile"),control)
+    assert committed == (offered=="Referral network")
+    assert page.locator('[data-automation-id=selectedItem]').inner_text()==("Referral network" if committed else "")
+    assert page.evaluate("document.body.dataset.enter") is None

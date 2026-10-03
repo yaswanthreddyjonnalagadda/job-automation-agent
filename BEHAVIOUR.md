@@ -998,3 +998,5 @@ or run `python web_ui.py` in a terminal you opened.
 * **Dashboard** — each application's page shows progress, what is still
   outstanding, the field-by-field comparison, evidence links and the full event
   history. It is served on 127.0.0.1 only.
+
+Workday hierarchical prompts: explore only marked category nodes (bounded depth and visits), select a matching offered leaf, and verify its committed value. A category is never accepted as the answer.

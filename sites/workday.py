@@ -592,7 +592,14 @@ class WorkdayAdapter(SiteAdapter):
                         import option_match
                         rows = assistant._visible_option_texts(page)
                         k = option_match.best_option(rows, cand)
-                        if k is None:
+                        if k is None or page.locator(
+                                f'[data-automation-id="responsiveMonikerPrompt"][data-associated-widget={json.dumps(multiselect_id)}] '
+                                '[data-uxi-multiselectlistitem-type="2"]').count():
+                            chosen = self._choose_nested_prompt(assistant, page, multiselect_id, cand)
+                            if chosen and self._searchable_value_committed(
+                                    assistant, page, id_suffix, chosen, multiselect_id, index):
+                                logger.info("Selected %r in %s (nested prompt)", chosen, id_suffix)
+                                return True
                             continue
                         row = page.locator(f"[data-automation-id='promptOption']"
                                            f"[data-automation-label={json.dumps(rows[k])}]")
@@ -650,6 +657,54 @@ class WorkdayAdapter(SiteAdapter):
         except Exception as exc:
             logger.warning("Searchable selection failed for %s: %s", id_suffix, exc)
             return False
+
+    @staticmethod
+    def _choose_nested_prompt(assistant, page, multiselect_id: str, wanted: str):
+        """Explore marked category nodes; commit only a matching offered leaf."""
+        import option_match
+        prompt = page.locator(
+            f'[data-automation-id="responsiveMonikerPrompt"][data-associated-widget={json.dumps(multiselect_id)}]')
+        if not prompt.count():
+            return None
+        budget = [20]
+
+        def visit(depth):
+            if depth > 4 or budget[0] <= 0:
+                return None
+            rows = prompt.locator('[data-automation-id="promptOption"]')
+            leaves, branches = [], []
+            for i in range(min(rows.count(), 80)):
+                row = rows.nth(i)
+                if not row.is_visible():
+                    continue
+                label = row.get_attribute('data-automation-label') or row.inner_text()
+                kind = row.evaluate("e => e.closest('[data-uxi-multiselectlistitem-type]')?.getAttribute('data-uxi-multiselectlistitem-type')")
+                (branches if kind == '2' else leaves).append(label)
+            hit = option_match.best_option(leaves, wanted)
+            if hit is not None:
+                label = leaves[hit]
+                row = prompt.locator(f'[data-automation-id="promptOption"][data-automation-label={json.dumps(label)}]')
+                if row.count() and assistant._click_resiliently(row.first):
+                    page.wait_for_timeout(800)
+                    return label
+            for label in branches:
+                if budget[0] <= 0:
+                    break
+                budget[0] -= 1
+                row = prompt.locator(f'[data-automation-id="promptOption"][data-automation-label={json.dumps(label)}]')
+                if not row.count() or not assistant._click_resiliently(row.first):
+                    continue
+                page.wait_for_timeout(500)
+                chosen = visit(depth + 1)
+                if chosen:
+                    return chosen
+                back = prompt.locator('[data-automation-id="backButton"]')
+                if not back.count() or not assistant._click_resiliently(back.first):
+                    return None
+                page.wait_for_timeout(300)
+            return None
+
+        return visit(0)
 
     def _open_prompt(self, assistant, page: Page, field, multiselect_id: str) -> None:
         """Opens a Workday multiselect's option list. Clicking the input
