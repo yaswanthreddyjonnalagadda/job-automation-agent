@@ -534,6 +534,15 @@ class WorkdayAdapter(SiteAdapter):
         except Exception:
             return False
 
+    @staticmethod
+    def is_searchable_input(field) -> bool:
+        """A Workday prompt can expose a textbox role while requiring a selected row."""
+        return bool(field.evaluate("""e => e.tagName === 'INPUT' && (
+            e.getAttribute('data-uxi-widget-type') === 'selectinput' ||
+            (e.getAttribute('data-automation-id') === 'searchBox' &&
+             e.closest('[data-automation-id="monikerSearchBox"]')))
+        """))
+
     def select_from_searchable_input(
         self, assistant, page: Page, id_suffix: str, candidates: list[str], index: int = 0,
         keyboard: bool = True,

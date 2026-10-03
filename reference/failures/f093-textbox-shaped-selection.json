@@ -1,0 +1,16 @@
+{
+  "id": "f093",
+  "date": "2026-10-03",
+  "class": "A selection widget's textbox accessibility role hides its commit requirement",
+  "symptom": "Waystar stayed on step 1 after Save and Continue because How Did You Hear About Us held typed LinkedIn search text but no selected value.",
+  "site": "Workday searchable prompts exposed as textboxes",
+  "root_cause": "The page agent chose plain fill from the accessibility role and ignored the portal's selectinput and monikerSearchBox evidence. Workday requires a clicked option rather than the input's search text.",
+  "why_tests_missed": "Earlier coverage tested plain textboxes and combobox-role prompts, not a textbox-role input backed by a selection widget. Saved interpretation replay cannot verify selection commitment.",
+  "fix": "Recognize selection evidence in the Workday adapter and route fill or choose actions through its existing exact-option selection path with keyboard fallback disabled.",
+  "tests": [
+    "tests/test_workday_prompt_textbox.py::test_textbox_shaped_prompt_commits_the_matching_option",
+    "tests/test_workday_prompt_textbox.py::test_prompt_without_the_requested_option_is_not_filled_with_search_text",
+    "tests/test_workday_prompt_textbox.py::test_plain_search_textbox_is_still_a_text_field"
+  ],
+  "prevention": "Use portal widget semantics alongside accessibility roles, and verify committed selections in browser tests rather than counting typed search text as a successful answer."
+}

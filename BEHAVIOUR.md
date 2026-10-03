@@ -966,6 +966,9 @@ or run `python web_ui.py` in a terminal you opened.
 
 ## Operational detail
 
+* **Searchable prompts** — a Workday selection widget can appear as a text box.
+  The agent opens its picker and clicks the matching option; typing search text
+  alone does not count as an answer. A missing choice remains unresolved.
 * **Declarations are signed last** — profile filling leaves declarations for the
   signing step. That step checks the current required fields, including answers
   that disappeared after filling, before signing on the owner's behalf.
