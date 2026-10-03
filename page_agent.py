@@ -49,6 +49,7 @@ import answer_bank
 from claude_integration import JOB_POSTING_CHARS, is_non_answer
 import employment_history
 import form_fields
+from field_requirements import account_password_fields
 import location_choice
 import option_match
 import repeated_entries
@@ -1298,6 +1299,7 @@ class PageAgent:
         self._chosen_instead: dict[str, str] = {}     # ref -> the owner-approved alternative chosen in place of the value
         self._reused_recipes: dict[str, tuple[str, str, str, str, str]] = {}
         self._current_host = ""
+        self._ensure_state()
 
     @staticmethod
     def fill_and_dispatch(locator, value: str, timeout: Optional[float] = None, **kwargs):
@@ -1487,6 +1489,15 @@ class PageAgent:
             held=str(getattr(self.assistant, "_login_paused", "") or ""))
         step = account_state.next_step(state, memory)
         self._note_account_state(page, host, state, step)
+
+        # The account helpers select credentials across the page. Until they
+        # can target a specific form, do not let a mixed page fill the optional
+        # account's password while trying to complete a required sign-in.
+        if state.password_boxes and step.action in (account_state.CREATE, account_state.SIGN_IN,
+                                                    account_state.RESET_PASSWORD) \
+                and any(field.optional_account for field in account_password_fields(snapshot)):
+            self.account_blocker = "Complete the required sign-in section; the optional account will stay blank."
+            return False
 
         # Never an account on a job board, with Google or a password: the owner applies on the employer's own site
         # (job_sources.job_board). Adzuna, 30 September: its easy-apply sat behind an Adzuna login.
@@ -2000,13 +2011,17 @@ class PageAgent:
             return str(value or "").strip()
         return ""
 
+    @staticmethod
+    def _attestation_text(control: Control) -> str:
+        return f"{control.question} {control.name} {control.container} {control.context}".strip()
+
     def _attestation_answer(self, control: Control) -> tuple[str, str]:
         """The globally authorised consent/signature answer for a control.
 
         These are kept out of ``known_answer`` so ``sign()`` can still apply
         declarations last, after every ordinary field on the page is filled.
         """
-        question = f"{control.question} {control.name}".strip()
+        question = self._attestation_text(control)
         if safety.is_privacy_consent(question) and getattr(self.profile, "accept_application_privacy_prompts", False):
             return "checked", "profile.accept_application_privacy_prompts"
         if not safety.is_attestation(question) or not getattr(self.profile, "sign_attestations", False):
@@ -2138,15 +2153,14 @@ class PageAgent:
         # unless the owner's preferred contact is text. Text messages are looked at first: "I agree to receive
         # text messages" is not an agreement to tick.
         if control.role in ("checkbox", "switch"):
-            said = f"{control.question} {control.name} {control.container} {control.context}"
+            said = self._attestation_text(control)
             if _TEXT_MESSAGES.search(said):
                 prefers = str(getattr(self.profile, "preferred_contact_method", "") or "").strip().lower()
                 return ("checked" if prefers in ("sms", "text", "text message") else "unchecked"), \
                     "profile.preferred_contact_method"
             if _AGREEMENT.search(said):
                 if safety.is_attestation(said):
-                    if getattr(self.profile, "sign_attestations", False):
-                        return "checked", "profile.sign_attestations"
+                    return "", ""  # Declarations are handled last by sign().
                 elif getattr(self.profile, "accept_application_privacy_prompts", False):
                     return "checked", "profile.accept_application_privacy_prompts"
         if not question or safety.is_attestation(question):
@@ -2900,8 +2914,8 @@ class PageAgent:
                 return Outcome("owner_needed", page, ["the site says this application was already sent"])
 
             given = (self.correct_from_profile(page, plan, controls)
-                     + self.apply_answers(page, plan, controls)
-                     + self.attach_documents(page, snapshot, controls))
+                     + self.attach_documents(page, snapshot, controls)
+                     + self.apply_answers(page, plan, controls))
 
             # Read back what is on the page now, whoever filled it, and check
             # every answer the agent gave is really there.
@@ -3140,7 +3154,7 @@ class PageAgent:
 
     @staticmethod
     def _is_signature(answer: Answer, control: Optional[Control]) -> bool:
-        texts = [answer.question] + ([control.question, control.name] if control else [])
+        texts = [answer.question] + ([PageAgent._attestation_text(control)] if control else [])
         return any(safety.is_attestation(t) and not safety.is_privacy_consent(t) for t in texts if t)
 
     def sign(self, page, plan: PagePlan, signing: list[Answer],
@@ -3153,17 +3167,42 @@ class PageAgent:
                 plan.for_owner.append({"question": answer.question, "reason": reason, "required": True})
             return []
 
+        if not signing:
+            return []
         if not getattr(self.profile, "sign_attestations", False):
             return leave("a declaration or signature -- you haven't allowed the agent to give it")
         self.settle(page, 800)
-        now = parse_snapshot(self.snapshot(page))
+        snapshot = self.snapshot(page)
+        now = parse_snapshot(snapshot)
         # Every answer given on this page must be showing before anything is signed.
         problems = list(getattr(self, "failed", [])) + self.not_stuck(list(given_here), now)
         problems += safety.legal_answer_conflicts(answered_fields(now), self.profile)
+        required = required_questions(snapshot)
+        for control in now:
+            if control.disabled or safety.is_attestation(self._attestation_text(control)):
+                continue
+            if control.question not in required and not _REQUIRED_STAR.search(control.question):
+                continue
+            if control.role not in ("textbox", "searchbox", "combobox", "radio", "checkbox", "switch", "spinbutton", "radiogroup"):
+                continue
+            # File attachments are checked by the submission gate; snapshots can
+            # expose a file chooser as a textbox without its uploaded filename.
+            if self.locate(page, control.ref).evaluate("e => e.tagName === 'INPUT' && e.type === 'file'"):
+                continue
+            answered = bool(control.answer)
+            if control.role in ("radio", "checkbox", "radiogroup"):
+                answered = answered or any(c.checked and _same_question(c.question, control.question) for c in now)
+            if not answered:
+                problems.append(f"{control.question[:60]} is still unanswered")
+        fields = form_fields.inventory(self.tab(page))
+        for field in form_fields.blank_required(fields):
+            if not safety.is_attestation(f"{field.question} {field.label}"):
+                problems.append(f"{field.question[:60]} is still unanswered")
         for item in plan.for_owner:
             question = str(item.get("question") or "")
             if (bool(item.get("required")) or "*" in question) and not any(
-                    _same_question(c.question, question) and c.answer for c in now):
+                    _same_question(c.question, question) and c.answer for c in now) and not any(
+                    f.kind == "file" and f.value and _same_question(f.question or f.label, question) for f in fields):
                 problems.append(f"{question[:60]} is still unanswered")
         if problems:
             return leave("not signed while something on the page is wrong or missing: " + "; ".join(problems)[:200])
@@ -3979,6 +4018,14 @@ class PageAgent:
                     pass
             return True
         if answer.action in ("check", "uncheck"):
+            # Unreferenced ARIA checkboxes can inherit the adjacent label's ref.
+            # Resolve the actual box before checking its state or clicking its label.
+            if control.role in ("checkbox", "switch", "radio") and not loc.evaluate(
+                    "e => ['checkbox', 'radio'].includes(e.type) || ['checkbox', 'switch', 'radio'].includes(e.getAttribute('role'))"):
+                box = tab.get_by_role(control.role, name=control.name, exact=True)
+                if box.count() != 1:
+                    return False
+                loc = box
             # A tick box drawn as a hidden input behind a styled label (ADP's "Yes, I agree to sign electronically.",
             # SK AX USA, 30 September) refuses set_checked and a click on the input: its label is clicked, then the
             # input's own click() is dispatched. Done only when the box then shows the state asked for.
@@ -4410,9 +4457,7 @@ class PageAgent:
                             except Exception:
                                 labels.append("")
                         if any(labels):
-                            pick = self.assistant._best_option(labels, [val])
-                            if pick is None:
-                                pick = closest_choice(labels, val)
+                            pick = self._pick_label(labels, val)
                             if pick is not None:
                                 try:
                                     portal_opts.nth(pick).click(timeout=3_000)
@@ -4461,9 +4506,7 @@ class PageAgent:
                         labels.append(" ".join((prompts.nth(i).inner_text(timeout=500) or "").split()))
                     except Exception:
                         labels.append("")
-                pick = self.assistant._best_option(labels, [value]) if any(labels) else None
-                if pick is None and any(labels):
-                    pick = closest_choice(labels, value)
+                pick = self._pick_label(labels, value) if any(labels) else None
                 if pick is not None:
                     prompts.nth(pick).click(timeout=5_000)
                     tab.wait_for_timeout(500)
@@ -4826,6 +4869,8 @@ class PageAgent:
         names = [text for _ref, text in offered]
         if not names:
             return None
+        if geo_reference.same_locality(value, value):
+            return next((i for i, name in enumerate(names) if geo_reference.same_locality(value, name)), None)
         # A dialling code ("+1") is offered by several countries: take the one
         # the profile names. With no country in the profile, nothing is assumed.
         if re.fullmatch(r"\+?\d{1,4}", value.strip()):
@@ -4849,6 +4894,8 @@ class PageAgent:
         follows the page agent's usual rules (_pick)."""
         if not str(value or "").strip():
             return None
+        if geo_reference.same_locality(value, value):
+            return self._pick([(str(i), label) for i, label in enumerate(labels)], value)
         if geo_reference.country_code(value) or geo_reference.us_state_code(value):
             return next((i for i, label in enumerate(labels)
                          if label.strip() and (geo_reference.same_place(label, value)
@@ -5111,17 +5158,28 @@ class PageAgent:
                 if note not in self.notes:
                     self.notes.append(note)
         try:
-            optional_account = bool(account_state._OPTIONAL_ACCOUNT.search(self.snapshot(page) or ""))
+            password_fields = account_password_fields(self.snapshot(page) or "")
+            password_refs = {field.ref for field in password_fields if field.ref}
+            optional_passwords = {field.ref for field in password_fields if field.optional_account and field.ref}
         except Exception:
-            optional_account = False
+            password_refs = set()
+            optional_passwords = set()
         for item in plan.for_owner:
             question = str(item.get("question") or "")
-            if optional_account and re.search(r"pass ?word|pass ?code|one[- ]time code", question, re.IGNORECASE):
-                # The password of an account the page calls optional stays empty: it is not the owner's to answer
-                # either (Meta, 30 September: "needs your answer: Password" stopped a finished application).
+            # Require a field identity, not merely a password word on a page
+            # containing an optional heading. Duplicate labels without a ref
+            # qualify only if every matching field is in the optional section.
+            matching = [c for c in controls if c.role in ANSWER_ROLES and _plain(c.question) == _plain(question)]
+            if item.get("ref"):
+                matching = [c for c in matching if c.ref == str(item["ref"])]
+            if matching and all(c.ref in optional_passwords for c in matching):
                 continue
             required = bool(item.get("required")) or "*" in question
+            # One answered copy cannot satisfy a different blank field bearing
+            # the same label. Unresolved/mismatched references remain blockers.
             still_blank = not any(c.question == question and c.answer for c in controls)
+            if item.get("ref") or any(c.ref in password_refs for c in matching):
+                still_blank = any(not c.answer for c in matching) if matching else True
             if required and still_blank:
                 note = f"needs your answer: {question[:90]} ({item.get('reason', '')})"
                 self.record_unanswered(question, str(item.get("reason", "")), controls)

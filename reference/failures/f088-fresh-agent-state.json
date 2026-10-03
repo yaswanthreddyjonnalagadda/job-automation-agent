@@ -1,0 +1,15 @@
+{
+  "id": "f088",
+  "date": "2026-10-02",
+  "class": "State initialized only by the main run loop",
+  "symptom": "Uploading a resume before run raised AttributeError.",
+  "site": "Direct upload entry points",
+  "root_cause": "Upload and entry state existed only after _ensure_state in run.",
+  "why_tests_missed": "The existing direct-upload tests failed on the base branch and were not enforced before later changes.",
+  "fix": "Initialize shared state at construction while preserving reload state.",
+  "tests": [
+    "tests/test_page_agent.py::test_a_new_agent_has_isolated_upload_and_entry_state",
+    "tests/test_profile_only_pages.py::test_a_plain_file_box_named_by_its_label_is_the_resume_upload"
+  ],
+  "prevention": "Every public entry point must work on a freshly constructed agent."
+}

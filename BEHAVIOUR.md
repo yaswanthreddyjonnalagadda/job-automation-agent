@@ -411,6 +411,15 @@ account (optional)" at the foot of Meta's form) is part of the application, not 
 step: the agent does not make that account, leaves its password boxes empty, and goes on
 with the form (Meta, 30 September).
 
+The exception belongs to that section's password fields only. A following section,
+a sibling group, or a separate required sign-in keeps its own requirements.
+An AI request with an ambiguous password label is kept for review unless every
+matching field is optional; a field reference must also match the question.
+Verification codes never inherit the optional-password exception. If required and
+optional password forms share a page, the agent asks you to complete the required
+sign-in rather than risk typing into the optional account. Unknown password fields
+also retain the normal account checks.
+
 Before it does anything on an account page, the agent reads which step the page is
 at: a new-account form, a sign-in form, a sign-in that asks for the email first, a
 choice of ways in, a page still loading, a box for an emailed code, a message saying
@@ -957,6 +966,17 @@ or run `python web_ui.py` in a terminal you opened.
 
 ## Operational detail
 
+* **Declarations are signed last** — profile filling leaves declarations for the
+  signing step. That step checks the current required fields, including answers
+  that disappeared after filling, before signing on the owner's behalf.
+* **Locations must match** — a town and region must identify the requested place;
+  shared words never justify selecting a different town from a dropdown.
+* **Early uploads** — resume uploads work before the main page loop starts, with
+  upload and entry state initialized separately for every agent.
+* **Custom checkboxes** — when a page exposes only the checkbox's adjacent label,
+  the agent resolves the checkbox by its name and verifies its actual checked state.
+* **Employer names** — domain-shaped page metadata must agree with the employer
+  address or ATS tenant. Unrelated copied branding is ignored.
 * **Retries** — flaky page actions are retried (`with_retries`, `action_retries`).
 * **Progress is saved** — the form's own Save button is clicked before handing
   over, so a part-finished application survives a reload.

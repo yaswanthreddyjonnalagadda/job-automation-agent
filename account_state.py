@@ -17,6 +17,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
+from field_requirements import account_password_fields, optional_account_section
+
 # What an account page can be.
 SIGNED_IN = "signed_in"             # past the account step: the application itself
 LOCKED = "locked"                   # the site says the account is locked or disabled
@@ -32,7 +34,6 @@ LOADING = "loading"                 # the account step, still drawing itself
 NONE = "none"                       # not an account page at all
 
 _TEXT = re.compile(r'"((?:[^"\\]|\\.)*)"|:\s+(.+)$')
-_PASSWORD_BOX = re.compile(r'- textbox "[^"]*pass ?word[^"]*"', re.IGNORECASE)
 _EMAIL_BOX = re.compile(r'- textbox "[^"]*(e-?mail|user ?name)[^"]*"', re.IGNORECASE)
 _STEP = re.compile(r"current step (\d+) of (\d+)", re.IGNORECASE)
 
@@ -61,9 +62,6 @@ _UNVERIFIED = re.compile(
     r"(email|e-mail|link)|(account|email|e-mail)( address)? (is |has )?(not|n't) (been |yet )*(verified|activated|"
     r"confirmed)|unverified (account|email)|account (may |might )?needs? (to be )?(verified|verification|activated)",
     re.IGNORECASE)
-# A heading that says the account it offers is optional.
-_OPTIONAL_ACCOUNT = re.compile(r"- heading[^\n]*\baccount\b[^\n]*\boptional\b|- heading[^\n]*\boptional\b[^\n]*\baccount\b",
-                               re.IGNORECASE)
 _CREATE = re.compile(r"\bcreate (an |your )?account\b|\bregister\b|\bsign ?up\b", re.IGNORECASE)
 _SIGN_IN = re.compile(r"\bsign ?in\b|\blog ?in\b", re.IGNORECASE)
 _WAYS_IN = re.compile(r"(?:sign|log)[\s-]?(?:in|on|up) (?:with|using|via) (google|email|linkedin|apple|microsoft|"
@@ -119,7 +117,11 @@ def read_state(snapshot: str, password_boxes: Optional[int] = None) -> AccountSt
     `password_boxes` is the count the page itself gives, when known: a password box with no label is not
     named as one in the snapshot."""
     texts = _texts(snapshot)
-    passwords = max(len(_PASSWORD_BOX.findall(snapshot or "")), password_boxes or 0)
+    fields = account_password_fields(snapshot)
+    optional_fields = [field for field in fields if field.optional_account]
+    # Any DOM password we could not identify in the snapshot remains an account
+    # requirement. A heading elsewhere cannot make an unnamed field optional.
+    passwords = max(len(fields), password_boxes or 0) - len(optional_fields)
     form_error = _first(_FORM_ERROR, texts)
     google = bool(_first(_GOOGLE, texts))
     step = _STEP.search(snapshot or "")
@@ -154,12 +156,12 @@ def read_state(snapshot: str, password_boxes: Optional[int] = None) -> AccountSt
     # (optional)" below Meta's Resume upload and Self ID; "the system will create your account after you submit"):
     # the page is the application, not an account step. Read as a new-account form, Meta's run tried to make the
     # account, then stopped for the owner twice, "the new-account form is still showing" (30 September).
-    optional = _OPTIONAL_ACCOUNT.search(snapshot or "")
-    if passwords and optional:
-        return state(NONE, optional.group(0).split(":")[-1].strip()[:80])
+    if optional_fields and not passwords:
+        return state(NONE, optional_fields[0].section[:80])
     if passwords >= 2:
         return state(CREATE_FORM, _first(_CREATE, texts))
-    headings = [_unescape(h) for h in re.findall(r'- heading "((?:[^"\\]|\\.)*)"', snapshot or "")]
+    headings = [_unescape(h) for h in re.findall(r'- heading "((?:[^"\\]|\\.)*)"', snapshot or "")
+                if not optional_account_section(_unescape(h))]
     if passwords == 1 and says_create(headings):
         # One password box, no retype -- UKG's "Create your account" (30 September): the heading says what it is.
         return state(CREATE_FORM, next(h for h in headings if _CREATE.search(h)))

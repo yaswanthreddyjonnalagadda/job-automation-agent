@@ -5,6 +5,10 @@ hypothesis>=6.100
 # Runs the suite in parallel: python -m pytest -n auto (about 10 minutes instead of 40).
 pytest-xdist>=3.6
 
+# Imported directly to construct HTTP responses in provider regression tests.
+# Do not rely on an SDK to install it as a transitive dependency.
+httpx>=0.27.0
+
 # ISO 3166 names: regenerates reference/geo.json (reference/build_geo.py) and
 # lets tests/test_no_place_literals.py recognise any province or region.
 # Pinned: geo.json is generated from this version; bump the two together.
