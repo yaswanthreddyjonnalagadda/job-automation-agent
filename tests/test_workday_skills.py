@@ -68,3 +68,22 @@ def test_layout_group_cannot_select_an_unrelated_checkbox(page):
     group=next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.role=='group')
     assert not a.do(page,page_agent.Answer(group.ref,'Skills','choose','AWS','profile'),group)
     assert not page.get_by_role('checkbox').is_checked()
+
+
+def test_empty_open_menu_is_not_a_second_form_field():
+    snapshot='''- textbox "Type to Add Skills" [ref=k1]:
+- listbox "Options Expanded" [ref=k2]:
+  - option "No Items." [ref=k3]'''
+    controls=page_agent.parse_snapshot(snapshot)
+    assert not any(c.ref=='k2' for c in controls)
+    assert any(c.ref=='k1' for c in controls)
+
+
+def test_empty_skills_menu_is_dismissed_when_escape_is_ignored(page):
+    html=widget().replace("if(e.key==='Escape') document.getElementById('popup').hidden=true;","")
+    page.set_content('<h4 onclick="document.getElementById(\'popup\').hidden=true">Skills</h4>'+html)
+    a=agent()
+    control=next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.name=='Type to Add Skills')
+    assert a.do(page,page_agent.Answer(control.ref,control.question,'fill','Missing','profile'),control)
+    assert not page.locator('#popup').is_visible()
+    assert control.ref in a._entry_blank

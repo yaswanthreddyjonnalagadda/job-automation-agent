@@ -641,6 +641,10 @@ class WorkdayAdapter(SiteAdapter):
                 missing.append(value)
             field.fill("")
             page.keyboard.press("Escape")
+            if popup.count() and popup.is_visible():
+                heading = page.get_by_role("heading", name="Skills", exact=True)
+                if heading.count() == 1:
+                    heading.click(timeout=3_000)
         return selected(), missing
 
     def select_from_searchable_input(

@@ -409,7 +409,8 @@ def parse_snapshot(snapshot: str) -> list[Control]:
                 box.value = chip.group(1).strip()
             stack.append((indent, "", None))
             continue
-        if ref_m and role == "listbox" and _TAG_LIST.fullmatch((name or "").strip()):
+        if ref_m and role == "listbox" and (_TAG_LIST.fullmatch((name or "").strip())
+                or re.fullmatch(r"Options? (?:Expanded|Collapsed)", (name or "").strip(), re.IGNORECASE)):
             # The list of chosen tags ("items selected") belongs to the box before it; it is not a question.
             stack.append((indent, "", None))
             continue
@@ -2838,7 +2839,8 @@ class PageAgent:
                             snapshot = self.read_when_loaded(page)
                             controls = parse_snapshot(snapshot)
                             still_open = [q for q in still_open
-                                          if not any(_same_question(c.question, q) and c.answer for c in controls)]
+                                          if not any(_same_question(c.question, q) and (
+                                              c.answer or c.ref in self._entry_blank) for c in controls)]
                             self._commit_learned_memory(controls)
 
                     if not still_open:
@@ -3957,6 +3959,8 @@ class PageAgent:
                             self.notes.append(note)
                         logger.info("SKILLS: %s", note)
                     required = loc.get_attribute("aria-required") == "true" or loc.get_attribute("required") is not None
+                    if missing and not chosen and not required:
+                        self._entry_blank.add(control.ref)
                     return bool(chosen) or not required
                 return WorkdayAdapter().select_from_searchable_input(
                     self.assistant, target, identifier, [answer.value] + self._alternatives_for(answer.value), keyboard=False)
