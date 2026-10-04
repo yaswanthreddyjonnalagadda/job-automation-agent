@@ -4146,7 +4146,9 @@ class PageAgent:
                 self._resume_went_on(path)
             self.settle(page, 1_500)
             return True
-        if answer.action == "choose" and control.role in ("textbox", "searchbox", "spinbutton"):
+        if answer.action == "choose" and control.role == "spinbutton":
+            return self.put_in_a_spinbutton(page, loc, answer.value)
+        if answer.action == "choose" and control.role in ("textbox", "searchbox"):
             fill_and_dispatch(loc, answer.value, timeout=8_000)     # a plain box, whatever the plan called it
             return True
         if answer.action in ("choose", "check") and control.role in ("radio", "checkbox", "switch", "group", "radiogroup"):

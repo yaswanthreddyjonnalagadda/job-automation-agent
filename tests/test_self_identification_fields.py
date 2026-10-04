@@ -1,6 +1,7 @@
 from test_workday_prompt_textbox import agent, browser, page
 import page_agent
 import concept_matcher
+import pytest
 
 
 def test_bare_name_is_personal_outside_an_education_entry():
@@ -27,7 +28,8 @@ def test_numeric_spinbutton_answer_uses_numeric_entry_even_when_plan_says_choose
 
 
 
-def test_composite_date_segment_keeps_neighboring_parts(page):
+@pytest.mark.parametrize('action', ['fill', 'choose'])
+def test_composite_date_segment_keeps_neighboring_parts(page, action):
     page.set_content('<div id="date">'+''.join(
         f'<input aria-label="{part}" role="spinbutton" data-automation-id="dateSection{part}-input" value="{value}">'
         for part,value in (("Month","6"),("Day","3"),("Year","2026")))+'</div>')
@@ -50,5 +52,5 @@ def test_composite_date_segment_keeps_neighboring_parts(page):
     }""")
     a=agent()
     control=next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.name=="Month")
-    assert a.do(page,page_agent.Answer(control.ref,control.question,"fill","10","job"),control)
+    assert a.do(page,page_agent.Answer(control.ref,control.question,action,"10","job"),control)
     assert page.locator('input').evaluate_all('(es)=>es.map(e=>e.value)')==["10","3","2026"]
