@@ -24,3 +24,29 @@ def test_numeric_spinbutton_answer_uses_numeric_entry_even_when_plan_says_choose
     c=next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.role=="spinbutton")
     assert a.do(page,page_agent.Answer(c.ref,c.question,"choose","10","job"),c)
     assert page.locator('input').input_value()=="10"
+
+
+
+def test_composite_date_segment_keeps_neighboring_parts(page):
+    page.set_content('<div id="date">'+''.join(
+        f'<input aria-label="{part}" role="spinbutton" data-automation-id="dateSection{part}-input" value="{value}">'
+        for part,value in (("Month","6"),("Day","3"),("Year","2026")))+'</div>')
+    page.evaluate(r"""() => {
+      const fields=[...document.querySelectorAll('input')];
+      fields.forEach((field,index)=>{
+        field.dataset.stored=field.value;
+        field.oninput=()=>field.value=field.dataset.stored;
+        field.onkeydown=e=>{
+          if(e.ctrlKey && e.key.toLowerCase()==='a'){
+            e.preventDefault(); fields.forEach(f=>{f.value='';f.dataset.stored='';});
+          } else if(/^\d$/.test(e.key)){
+            e.preventDefault(); field.value+=e.key;field.dataset.stored=field.value;
+            if(field.value.length===(index===2?4:2) && fields[index+1])fields[index+1].focus();
+          }
+        };
+      });
+    }""")
+    a=agent()
+    control=next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.name=="Month")
+    assert a.do(page,page_agent.Answer(control.ref,control.question,"fill","10","job"),control)
+    assert page.locator('input').evaluate_all('(es)=>es.map(e=>e.value)')==["10","03","2026"]

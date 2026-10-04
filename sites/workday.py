@@ -351,6 +351,44 @@ class WorkdayAdapter(SiteAdapter):
                 return False
         return False
 
+    @staticmethod
+    def fill_date_segment(page, field, value: str):
+        """Write the composite digit stream, preserving its other segments."""
+        marker = field.get_attribute("data-automation-id") or ""
+        parts = ("Month", "Day", "Year")
+        chosen = next((part for part in parts if marker == f"dateSection{part}-input"), None)
+        if chosen is None:
+            return None
+        if not str(value).isdigit():
+            return False
+        group = field.locator(
+            'xpath=ancestor::*[count(.//input[starts-with(@data-automation-id,"dateSection")]) > 1][1]')
+        if not group.count():
+            return None
+        segments, expected = [], []
+        for part in parts:
+            segment = group.locator(f'input[data-automation-id="dateSection{part}-input"]')
+            if not segment.count():
+                continue
+            wanted = str(value) if part == chosen else segment.first.input_value().strip()
+            if wanted and not wanted.isdigit():
+                return False
+            segments.append(segment.first)
+            expected.append(wanted.zfill(4 if part == "Year" else 2) if wanted else "")
+        occupied = [i for i, v in enumerate(expected) if v]
+        if not occupied or any(not expected[i] for i in range(occupied[0], occupied[-1] + 1)):
+            return False  # An internal gap cannot be represented by a digit stream.
+        stream = "".join(expected[occupied[0]:occupied[-1] + 1])
+        for _ in range(3):
+            segments[occupied[0]].focus(timeout=3_000)
+            page.keyboard.press("Control+a")
+            page.keyboard.type(stream, delay=120)
+            page.wait_for_timeout(400)
+            actual = [segment.input_value().strip() for segment in segments]
+            if all(got.lstrip("0") == want.lstrip("0") for got, want in zip(actual, expected)):
+                return True
+        return False
+
     def fill_date_spinner(self, assistant, page: Page, section_key: str, date_key: str, index: int, month: str = "", year: str = ""
     ) -> bool:
         """Fills a Workday-style split-spinbutton date widget -- NOT a

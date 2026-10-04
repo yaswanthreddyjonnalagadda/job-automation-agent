@@ -4706,6 +4706,11 @@ class PageAgent:
         """Get a value into a box that keeps its own count, and check it took."""
         tab = self.tab(page)
 
+        from sites.workday import WorkdayAdapter
+        composite = WorkdayAdapter.fill_date_segment(tab, loc, value)
+        if composite is not None:
+            return composite
+
         def holds_it() -> bool:
             try:
                 return (loc.input_value(timeout=2_000) or "").strip().lstrip("0") == value.strip().lstrip("0")
