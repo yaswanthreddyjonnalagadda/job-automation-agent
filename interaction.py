@@ -670,9 +670,13 @@ def sweep_modals_and_policies(page_or_tab: Any, profile: Any = None) -> bool:
                 if not modal.is_visible():
                     continue
 
-                # Safety: Skip authentication dialogs (password inputs present) or file inputs
+                # Entry dialogs belong to the form-filling path. The policy
+                # sweep must not advance them before their fields are verified.
                 has_password = modal.evaluate("""el => {
-                    return Boolean(el.querySelector('input[type="password"]'));
+                    return Boolean(el.querySelector('input[type="password"], input[type="file"]')) ||
+                        [...el.querySelectorAll('input,textarea,select,[contenteditable="true"]')].some(e =>
+                            e.getBoundingClientRect().width > 0 &&
+                            !['hidden','checkbox','radio','button','submit'].includes(e.type));
                 }""")
                 if has_password:
                     continue
@@ -762,7 +766,6 @@ def sweep_modals_and_policies(page_or_tab: Any, profile: Any = None) -> bool:
                                 continue
                             if click_resiliently(c_btn, timeout_ms=3_000):
                                 confirm_clicked = True
-                                logger.info("Modal & Policy Interceptor: confirmed modal with %r", label)
                                 break
                     except Exception:
                         continue
@@ -790,7 +793,9 @@ def sweep_modals_and_policies(page_or_tab: Any, profile: Any = None) -> bool:
                         except Exception:
                             pass
 
-                    dismissed_any = True
+                    if not modal.is_visible():
+                        dismissed_any = True
+                        logger.info("Modal & Policy Interceptor: dismissed modal with %r", label)
         except Exception as exc:
             logger.debug("sweep_modals_and_policies encountered: %s", exc)
 

@@ -271,6 +271,9 @@ def parse_snapshot(snapshot: str) -> list[Control]:
     toggle_row: list[tuple[Control, bool]] = []       # buttons side by side that may be one question's choices
     toggle_indent, toggle_question = -1, ""
     inside_choice: list[int] = []   # indents of the list options (and open lists) the current line sits inside
+    paragraph_scopes: list[int] = []
+    paragraph_questions: dict[int, str] = {}
+    textbox_wrappers: set[str] = set()
     for raw in (snapshot or "").splitlines():
         # A line whose text holds a colon comes wrapped in quotes:
         #   - 'heading "Apply: Network Engineer" [level=1] [ref=e2]'
@@ -282,6 +285,10 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         if not m:
             continue
         indent, role = len(m.group("indent")), m.group("role")
+        while paragraph_scopes and paragraph_scopes[-1] >= indent:
+            paragraph_questions.pop(paragraph_scopes.pop(), None)
+        if role == 'paragraph':
+            paragraph_scopes.append(indent)
         name = _unquote(m.group("name") or "")
         attrs = m.group("attrs") or ""
         value = _unquote(m.group("value") or "")
@@ -316,6 +323,11 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         # every pass and reported "could not set". The first such child is its value.
         if entry_box is not None and indent <= entry_box[0]:
             entry_box = None
+        if entry_box is not None and role == 'text' and value and not entry_box[1].name \
+                and re.search(r'\b(?:phone|mobile|telephone)\b', value, re.I) \
+                and not re.search(r'\d', value):
+            entry_box[1].context = value
+            entry_box = None  # A composite widget's heading, not its value.
         if entry_box is not None and role == "text" and value and not entry_box[1].value:
             entry_box[1].value = value
             continue
@@ -334,6 +346,18 @@ def parse_snapshot(snapshot: str) -> list[Control]:
 
         if role in ("text", "paragraph", "heading", "strong", "emphasis", "generic") and (value or name):
             candidate_text = (value or name).strip()[:200]
+            if paragraph_scopes:
+                scope_indent = paragraph_scopes[-1]
+                if re.match(r'^(?:do|does|are|is|have|has|will|would|can|did)\b', candidate_text, re.I):
+                    paragraph_questions.setdefault(scope_indent, candidate_text)
+                candidate_text = paragraph_questions.get(scope_indent, candidate_text)
+            if owner is not None and owner.role == 'textbox' and not owner.name \
+                    and re.search(r'\b(?:phone|mobile|telephone)\b', candidate_text, re.I):
+                owner.context = candidate_text
+            # The dial-code button inside a phone widget is not its field label.
+            if re.fullmatch(r'\+\d{1,4}', candidate_text) and owner is not None \
+                    and owner.role == 'textbox' and re.search(r'phone|mobile|telephone', owner.question, re.I):
+                continue
             # Workday's search-and-pick boxes show the choice as a tag beside an empty search box:
             # "1 item selected, United States of America (+1)". That is the box's answer, not a label.
             # Read as empty, Rackspace's Country Phone Code was "corrected" four times and the run stopped
@@ -354,7 +378,7 @@ def parse_snapshot(snapshot: str) -> list[Control]:
             # their own: each is followed by its text ("I AM NOT A PROTECTED
             # VETERAN"). That text is the button's name.
             if controls and not controls[-1].name and controls[-1].role in ("radio", "checkbox", "switch") \
-                    and not controls[-1].value and (role == "text" or (role == "generic" and indent == last_control_indent)):
+                    and not controls[-1].value and (role == "text" or (role in ('generic', 'paragraph') and indent == last_control_indent)):
                 # Meta draws each choice as a radio and then its word in a box beside it ("radio" / "generic: Male"):
                 # that word, right after the radio at its own level, is the radio's name. Left nameless, "Male" was
                 # matched to nothing and the Female button was the one clicked (30 September).
@@ -466,6 +490,11 @@ def parse_snapshot(snapshot: str) -> list[Control]:
                     clickable_generic or not name or Control.GENERIC_NAMES.match(name.strip())
                     or re.fullmatch(r"(?:yes|no|select one) required", name.strip(), re.IGNORECASE))
                 else "")
+            if role in ('textbox', 'searchbox') and owner is not None and owner.role == 'textbox' \
+                    and (not owner.name or _same_question(owner.name, name)):
+                textbox_wrappers.add(owner.ref)
+                if not name and re.search(r'phone|mobile|telephone', owner.question, re.I):
+                    control.context = owner.question
             if control.role in ("textbox", "searchbox") and is_honeypot(control.name):
                 # A decoy for robots: not a question, never answered, never "still blank".
                 stack.append((indent, "", None))
@@ -493,7 +522,7 @@ def parse_snapshot(snapshot: str) -> list[Control]:
     for control in controls:
         if control.role == "group" and not control.name and not control.holds_choices:
             control.context = ""  # A layout wrapper cannot inherit the preceding field's question.
-    return [c for c in controls if not is_bot_trap(c)]
+    return [c for c in controls if c.ref not in textbox_wrappers and not is_bot_trap(c)]
 
 
 def _group_tick_boxes(controls: list[Control], runs: dict[int, tuple[int, str]]) -> None:

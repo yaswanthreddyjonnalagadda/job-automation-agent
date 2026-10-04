@@ -1019,3 +1019,9 @@ Numeric/date spinbuttons always use verified spinner entry, including when the p
 # Dependent location pickers
 
 The address sweep commits SuccessFactors country and state choices through their own offered menu rows and verifies the selected value. A location control that remains disabled is deferred without clearing it, force-enabling it, or recording a successful answer. This prevents an uncommitted country from crashing the run on its dependent State field.
+
+## Field reading, modals, and runtime identity
+
+Composite phone widgets produce one number question: the actual child textbox retains the phone heading and the dial-code button does not become its label. Questions in paragraphs retain their wording across embedded terms/privacy links, and radio captions drawn as adjacent paragraphs are read as choices. Policy sweeps leave dialogs containing entry fields to the normal filling and validation flow, and report dismissal only when the dialog hides. The existing page fingerprint breaker still bounds genuine repeated navigation without progress.
+
+Start Dashboard uses the checkout's local Python runtime and one canonical dashboard port. The dashboard exposes its loaded directory and source identity at /runtime; startup reuses only the same unchanged checkout, and refuses an old or different server rather than silently starting with stale code. Deployment redirects the owner's old dashboard entry point and old bookmarks to the corrected canonical runtime.

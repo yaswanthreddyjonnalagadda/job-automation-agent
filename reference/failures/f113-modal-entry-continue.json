@@ -1,0 +1,10 @@
+{
+  "id": "f113", "date": "2026-10-04", "site": "AVFUEL Paycom",
+  "class": "Policy sweep advances unfinished application entry dialogs",
+  "symptom": "The policy interceptor repeatedly clicked Continue To Application while the modal's fields were still being filled and reported confirmation without dismissal.",
+  "root_cause": "Only password dialogs were excluded; plain application entry dialogs were treated as policies and unsuccessful clicks were logged as dismissal.",
+  "why_tests_missed": "Modal checks covered a policy and a password login, but not a non-password application entry dialog.",
+  "fix": "Defer dialogs containing visible entry fields or file/password controls to the form-filling path; count dismissal only when the modal actually hides.",
+  "tests": ["tests/test_phase3_features.py::test_modal_interceptor_never_advances_a_data_entry_dialog"],
+  "prevention": "Verify no policy sweep clicks occur across repeated passes on a data entry dialog."
+}

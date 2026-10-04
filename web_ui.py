@@ -38,6 +38,10 @@ from tracking import open_tracker as get_tracker
 BASE_DIR = Path(__file__).resolve().parent
 app = Flask(__name__)
 
+from launch_dashboard import source_id
+RUNTIME_INFO = {'directory': str(BASE_DIR), 'source_id': source_id(BASE_DIR),
+                'interpreter': sys.executable}
+
 import web_guard  # noqa: E402
 
 web_guard.install(app)
@@ -48,6 +52,11 @@ from web_setup import setup_pages  # noqa: E402  (the pages import web_ui back, 
 app.register_blueprint(setup_pages)
 from web_progress import progress_pages  # noqa: E402
 app.register_blueprint(progress_pages)
+
+@app.get('/runtime')
+def runtime_info():
+    """The loaded source identity, so startup can refuse a stale dashboard."""
+    return RUNTIME_INFO
 
 # Applications launched from this UI, so their progress can be shown. Keyed by
 # the URL that started them, and written to disk so restarting this server --
