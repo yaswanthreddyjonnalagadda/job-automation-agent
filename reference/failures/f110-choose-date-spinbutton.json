@@ -5,7 +5,8 @@
   "class": "Planner choose action bypasses verified date entry",
   "symptom": "Self Identify date segments failed to commit and became corrupted while the application attempted to enter today's date.",
   "root_cause": "The fill action used verified composite-date handling, but choose used plain fill_and_dispatch even for spinbuttons. The planner selected choose on the live form.",
+  "why_tests_missed": "Composite-date preservation was tested only with fill, while choose was tested only on a plain numeric input. The choose variant failed before correction.",
   "fix": "Route choose on spinbuttons through the same verified numeric/date handler as fill.",
   "tests": ["tests/test_self_identification_fields.py::test_composite_date_segment_keeps_neighboring_parts", "tests/test_self_identification_fields.py::test_numeric_spinbutton_answer_uses_numeric_entry_even_when_plan_says_choose"],
-  "reproduction": "The choose variant of the composite-date regression failed before the fix while fill passed."
+  "prevention": "Exercise both planner actions against composite date controls and verify all neighboring segments after entry."
 }

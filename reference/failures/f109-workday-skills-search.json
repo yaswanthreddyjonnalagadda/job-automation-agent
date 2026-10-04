@@ -5,7 +5,9 @@
   "site": "Everfox Workday",
   "symptom": "The experience page searched the entire skills list and exposed an empty Options Expanded popup, delaying progression.",
   "root_cause": "Textbox-shaped prompts used the single-selection path for a multi-value skills answer. An unnamed following layout group also inherited the Skills label and was treated as a second choice question.",
+  "why_tests_missed": "Single-value picker tests did not cover multi-value skills, empty menu status listboxes, or unnamed layout wrappers following a skills input.",
   "fix": "Search skills individually within the associated widget popup, verify selected tags, preserve existing tags, and leave unsupported optional skills blank with a note and closed menu. Clear inherited context from unnamed layout groups without choices and reject attempts to answer those wrappers.",
+  "prevention": "Verify separate committed skill tags, empty optional catalogues, ignored Escape, and that layout/menu status nodes never become additional questions.",
   "tests": [
     "tests/test_workday_skills.py::test_skills_use_separate_scoped_verified_rows",
     "tests/test_workday_skills.py::test_resumed_skills_keep_existing_selections_without_duplicates",
