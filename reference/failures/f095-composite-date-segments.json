@@ -6,7 +6,7 @@
   "site": "Workday split date spinbuttons",
   "root_cause": "PageAgent handled date segments as independent inputs even though Workday consumes a digit stream and advances focus between segments.",
   "why_tests_missed": "Numeric input coverage lacked a composite widget that clears and auto-advances between segments.",
-  "fix": "Recognize Workday date segment metadata, write the contiguous composite digit stream, and verify all segment values while preserving neighbors.",
+  "fix": "Recognize Workday date metadata, use bounded spin controls to adjust a segment, retain composite digit-stream fallback, and verify all segment values while preserving neighbors.",
   "tests": [
     "tests/test_self_identification_fields.py::test_composite_date_segment_keeps_neighboring_parts"
   ],

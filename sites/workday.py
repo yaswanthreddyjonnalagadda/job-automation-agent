@@ -353,7 +353,7 @@ class WorkdayAdapter(SiteAdapter):
 
     @staticmethod
     def fill_date_segment(page, field, value: str):
-        """Write the composite digit stream, preserving its other segments."""
+        """Update one segment while preserving and verifying its composite date."""
         marker = field.get_attribute("data-automation-id") or ""
         parts = ("Month", "Day", "Year")
         chosen = next((part for part in parts if marker == f"dateSection{part}-input"), None)
@@ -375,6 +375,24 @@ class WorkdayAdapter(SiteAdapter):
                 return False
             segments.append(segment.first)
             expected.append(wanted.zfill(4 if part == "Year" else 2) if wanted else "")
+        # Three-part variants can advance focus differently from MM/YYYY.
+        # Their bounded spin controls change one segment without typing into
+        # the neighboring segment. Verify every part after the adjustment.
+        current = field.input_value().strip()
+        target = int(value)
+        if not current:
+            field.press("ArrowUp")
+            page.wait_for_timeout(100)
+            current = field.input_value().strip()
+        if current.isdigit() and abs(int(current) - target) <= 60:
+            for _ in range(abs(int(current) - target)):
+                field.press("ArrowUp" if int(current) < target else "ArrowDown")
+                current = field.input_value().strip()
+                if not current.isdigit():
+                    break
+            actual = [segment.input_value().strip() for segment in segments]
+            if all(got.lstrip("0") == want.lstrip("0") for got, want in zip(actual, expected)):
+                return True
         occupied = [i for i, v in enumerate(expected) if v]
         if not occupied or any(not expected[i] for i in range(occupied[0], occupied[-1] + 1)):
             return False  # An internal gap cannot be represented by a digit stream.

@@ -1003,4 +1003,4 @@ Workday hierarchical prompts: explore only marked category nodes (bounded depth 
 
 Generic field labels: bare Name denotes the applicant outside an education container. Unqualified Month/Day/Year spinbuttons never reuse answer-library or historical values; dates inside work/education entries still use their own record.
 
-Workday split date controls: changing a segment writes the composite digit stream and checks every segment, preserving neighboring values. Internal gaps remain unresolved rather than being filled with invented dates.
+Workday split date controls: changing a segment uses bounded spin controls when possible, then a composite digit stream when needed, and checks every segment while preserving neighboring values. Internal gaps remain unresolved rather than being filled with invented dates.

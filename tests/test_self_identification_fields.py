@@ -39,6 +39,8 @@ def test_composite_date_segment_keeps_neighboring_parts(page):
         field.onkeydown=e=>{
           if(e.ctrlKey && e.key.toLowerCase()==='a'){
             e.preventDefault(); fields.forEach(f=>{f.value='';f.dataset.stored='';});
+          } else if(e.key==='ArrowUp'||e.key==='ArrowDown'){
+            e.preventDefault();field.value=String(Number(field.value)+(e.key==='ArrowUp'?1:-1));field.dataset.stored=field.value;
           } else if(/^\d$/.test(e.key)){
             e.preventDefault(); field.value+=e.key;field.dataset.stored=field.value;
             if(field.value.length===(index===2?4:2) && fields[index+1])fields[index+1].focus();
@@ -49,4 +51,4 @@ def test_composite_date_segment_keeps_neighboring_parts(page):
     a=agent()
     control=next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.name=="Month")
     assert a.do(page,page_agent.Answer(control.ref,control.question,"fill","10","job"),control)
-    assert page.locator('input').evaluate_all('(es)=>es.map(e=>e.value)')==["10","03","2026"]
+    assert page.locator('input').evaluate_all('(es)=>es.map(e=>e.value)')==["10","3","2026"]
