@@ -1,0 +1,14 @@
+{
+  "id": "f107",
+  "date": "2026-10-04",
+  "class": "Signal file consumed before its writer finishes",
+  "symptom": "The Continue waiter returned an empty decision in PR CI.",
+  "site": "Dashboard",
+  "root_cause": "File existence became true before write_text wrote the answer, so the waiter read and deleted an empty file.",
+  "why_tests_missed": "The existing threaded test depended on scheduling and usually passed locally.",
+  "fix": "Poll for nonempty content, preserve a pending empty file, and use the same observed content as the decision.",
+  "tests": [
+    "tests/test_continue_button.py::test_an_empty_signal_waits_until_the_writer_finishes"
+  ],
+  "prevention": "Exercise the intermediate empty-file state deterministically."
+}

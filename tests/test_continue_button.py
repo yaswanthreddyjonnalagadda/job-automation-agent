@@ -105,3 +105,36 @@ def test_stopping_clears_the_waiting_note(tmp_path, monkeypatch):
     monkeypatch.setattr(web_ui, "_end_any_run", lambda: 1)
     client.post("/stop", data={"url": "https://jobs.example.com/acme"})
     assert not list(tmp_path.glob("_waiting_*")) and not list(tmp_path.glob("_signal_*"))
+
+
+def test_an_empty_signal_waits_until_the_writer_finishes(tmp_path, monkeypatch):
+    """File creation alone is not an answer: the writer still has to put its text in it."""
+    signal = tmp_path / "_signal_Acme_Engineer.txt"
+    signal.write_text("", encoding="utf-8")
+    empty_read = threading.Event()
+    original_read = Path.read_text
+
+    def observe_read(path, *args, **kwargs):
+        value = original_read(path, *args, **kwargs)
+        if path == signal and not value.strip():
+            empty_read.set()
+        return value
+
+    monkeypatch.setattr(Path, "read_text", observe_read)
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    result = {}
+    thread = threading.Thread(target=lambda: result.update(
+        decision=assistant.wait_for_signal(signal, poll_seconds=0.01, timeout_seconds=2)))
+    thread.start()
+    try:
+        assert empty_read.wait(1)
+        assert thread.is_alive(), "The empty file must not end the wait"
+        assert signal.exists(), "The reader must not delete a pending answer"
+        signal.write_text("continue", encoding="utf-8")
+        thread.join(3)
+        assert result["decision"] == "continue"
+        assert not signal.exists() and not waiting_note_for(signal).exists()
+    finally:
+        if thread.is_alive():
+            signal.write_text("continue", encoding="utf-8")
+            thread.join(3)

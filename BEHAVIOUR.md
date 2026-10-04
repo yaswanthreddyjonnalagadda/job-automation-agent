@@ -1007,3 +1007,5 @@ Workday split date controls: changing a segment uses bounded spin controls when 
 
 Education subjects: select only the recorded subject or an owner-approved substitute, by clicking its actual option and verifying the committed label. Workday prompts stay tied to the same education row when the input moves, and scroll their own virtual list to inspect later options. Structured profile subjects override older resume extraction for an unambiguously matched school.
 Resume uploads on a resumed form check for the already listed filename in the upload field's frame before adding a file; an empty file input beside a saved attachment is not evidence that a new upload is needed.
+
+A Continue signal is consumed only after its file contains a nonempty answer. An empty file created by a writer still in progress leaves the agent waiting, with its normal timeout and browser checks.

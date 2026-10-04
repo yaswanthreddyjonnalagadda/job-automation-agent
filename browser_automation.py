@@ -7248,7 +7248,16 @@ class JobApplicationAssistant:
                     waiting_on_signature = False
                 if waiting_on_signature:
                     logger.info("Waiting for your signature; the agent carries on once you have given it")
-        while not signal_path.exists():
+        while True:
+            # A writer creates the file before writing its answer. Do not consume
+            # or delete that intermediate empty file; keep waiting for its text.
+            # utf-8-sig accepts the BOM PowerShell may write with a signal.
+            try:
+                raw = signal_path.read_text(encoding="utf-8-sig").strip().strip("\ufeff")
+            except OSError:
+                raw = ""
+            if raw:
+                break
             time.sleep(poll_seconds)
             waited += poll_seconds
             # Checked first: the page checks below can `continue`, and a skipped
@@ -7340,10 +7349,6 @@ class JobApplicationAssistant:
                     if page.is_closed() or "closed" in str(exc).lower():
                         return "browser_closed"
                     # Mid-navigation (the confirmation page loading) -- try again next poll.
-        # utf-8-sig, not utf-8: PowerShell's Set-Content -Encoding utf8 writes
-        # a BOM, and a leading BOM made 'reload_code' miss every branch and
-        # fall through to "skip", silently abandoning a live application.
-        raw = signal_path.read_text(encoding="utf-8-sig").strip().strip("﻿")
         # "goto:<url>" keeps its capitals: an Amazon application path is
         # /en-US/..., and lowercasing it leads somewhere else.
         decision = raw if raw.lower().startswith("goto:") else raw.lower()
