@@ -95,6 +95,25 @@ class SuccessFactorsAdapter(SiteAdapter):
         except Exception:
             return False
 
+    def choose_location(self, page, field, wanted: str, same) -> bool:
+        """Commit a location row through SAP's own picker, never by typing alone."""
+        control = {'id': field.get_attribute('id'),
+                   'listbox': field.get_attribute('aria-owns') or ''}
+        if not control['listbox'] or not self.open_picker(page, control):
+            return False
+        rows = page.locator(f'[id="{control["listbox"]}"] li:visible')
+        try:
+            labels = rows.all_inner_texts()
+            matches = [i for i, label in enumerate(labels) if same(label.strip(), wanted)]
+            if len(matches) != 1:
+                page.keyboard.press('Escape')
+                return False
+            rows.nth(matches[0]).click(timeout=4_000)
+            page.wait_for_timeout(300)
+            return same(field.input_value(), wanted)
+        except Exception:
+            return False
+
     def set_date(self, assistant, page, label_pattern: str, value: str) -> Optional[bool]:
         """SAP UI5 date picker: the real input is inside the component."""
         pickers = page.locator("[ui5-date-picker], ui5-date-picker, [data-testid=datePicker]")

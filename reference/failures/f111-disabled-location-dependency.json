@@ -1,0 +1,12 @@
+{
+  "id": "f111",
+  "date": "2026-10-04",
+  "site": "Scandinavian Tobacco Group SuccessFactors",
+  "class": "Uncommitted country leaves dependent state disabled",
+  "symptom": "After resume upload the location sweep tried clearing a disabled State input, timed out, and closed the application browser.",
+  "root_cause": "The sweep typed into SAP's country picker instead of committing its offered row, then attempted to fill State without checking whether it was enabled.",
+  "why_tests_missed": "Location tests covered native cascading selects and Ant widgets, but not SAP's arrow-opened picker with a disabled dependent input.",
+  "fix": "Select SAP location rows through the platform picker and verify the committed value. Defer controls that remain disabled without clearing them or recording success.",
+  "tests": ["tests/test_location_sweep.py::test_disabled_state_is_deferred_without_clearing_or_recording", "tests/test_location_sweep.py::test_sap_country_row_enables_state_before_selection"],
+  "prevention": "Exercise dependent custom pickers and assert their committed values, enabling transition, and absence of false success records."
+}

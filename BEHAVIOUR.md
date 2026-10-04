@@ -1016,3 +1016,6 @@ Workday skills prompts search one approved skill at a time, click a matching row
 Unnamed layout groups without their own choices do not inherit the preceding field's question and cannot be used to select unrelated checkboxes elsewhere on the page.
 The Workday menu status "Options Expanded/Collapsed" is not a second form question. Empty skills menus are dismissed by clicking the section heading when Escape is ignored; unsupported optional skills are retained as intentionally blank for that page.
 Numeric/date spinbuttons always use verified spinner entry, including when the planner calls the action "choose". Composite dates preserve their neighboring segments under either action.
+# Dependent location pickers
+
+The address sweep commits SuccessFactors country and state choices through their own offered menu rows and verifies the selected value. A location control that remains disabled is deferred without clearing it, force-enabling it, or recording a successful answer. This prevents an uncommitted country from crashing the run on its dependent State field.

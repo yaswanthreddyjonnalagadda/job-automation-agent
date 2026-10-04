@@ -479,6 +479,14 @@ def wipe_and_enforce_location_sweep(
 
     def choose(field: dict, wanted: str, same) -> None:
         loc = locate(field)
+        # Dependent controls may remain disabled until a country is committed.
+        # Never attempt to clear or force-enable them.
+        from playwright.sync_api import expect
+        try:
+            expect(loc).to_be_enabled(timeout=3_000)
+        except Exception:
+            logger.info("LOCATION_SWEEP: %s is disabled -- deferred", field['id'])
+            return
         if field["tagName"] == "select":
             texts = []
             try:
@@ -495,6 +503,10 @@ def wipe_and_enforce_location_sweep(
                 el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
                 el.dispatchEvent(new Event('blur', { bubbles: true, cancelable: true }));
             }""")
+        elif 'rcmpaginatedselectinput' in (loc.get_attribute('class') or ''):
+            from sites.successfactors import SuccessFactorsAdapter
+            if not SuccessFactorsAdapter().choose_location(page, loc, wanted, same):
+                return
         elif is_ant_single_select(loc):
             # Read whole, chosen by label, confirmed -- never typed and
             # Entered, which takes the list's first row.
