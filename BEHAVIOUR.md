@@ -1011,3 +1011,5 @@ Resume uploads on a resumed form check for the already listed filename in the up
 A Continue signal is consumed only after its file contains a nonempty answer. An empty file created by a writer still in progress leaves the agent waiting, with its normal timeout and browser checks.
 
 Each repeated job’s current-employment checkbox takes that job’s own yes/no value, even when its surrounding heading is read as a choice group. A contradictory site-filled current flag is corrected under the existing provenance policy; owner-entered choices remain protected. From/To groups qualify split Month/Year controls so former jobs receive their own end dates. The Workday entry filler sets each row’s current flag before locating its end-date controls.
+
+Workday skills prompts search one approved skill at a time, click a matching row only inside that widget's popup, and verify the committed tag. Existing tags remain in place. Unavailable skills are noted, the search text is cleared, and the menu is closed; an optional empty skills catalogue does not block progression.

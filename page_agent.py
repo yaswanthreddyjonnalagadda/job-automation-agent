@@ -3943,6 +3943,16 @@ class PageAgent:
                 from browser_automation import FramedPage
                 frame = loc.element_handle().owner_frame()
                 target = FramedPage(tab, frame) if frame != tab.main_frame else tab
+                if re.fullmatch(r"(?:type to add )?skills", control.question.strip(), re.IGNORECASE):
+                    chosen, missing = WorkdayAdapter().select_skills(
+                        self.assistant, target, loc, re.split(r"[,;\n]+", answer.value))
+                    if missing:
+                        note = "Skills unavailable in the site's list: " + ", ".join(missing)
+                        if note not in self.notes:
+                            self.notes.append(note)
+                        logger.info("SKILLS: %s", note)
+                    required = loc.get_attribute("aria-required") == "true" or loc.get_attribute("required") is not None
+                    return bool(chosen) or not required
                 return WorkdayAdapter().select_from_searchable_input(
                     self.assistant, target, identifier, [answer.value] + self._alternatives_for(answer.value), keyboard=False)
         if control.holds_choices and answer.action in ("choose", "check", "fill"):

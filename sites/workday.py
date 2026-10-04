@@ -614,6 +614,35 @@ class WorkdayAdapter(SiteAdapter):
              e.closest('[data-automation-id="monikerSearchBox"]')))
         """))
 
+    def select_skills(self, assistant, page, field, values: list[str]) -> tuple[list[str], list[str]]:
+        """Search each supported skill separately and verify its committed tag."""
+        import option_match
+        identifier = field.get_attribute("id") or ""
+        widget = field.get_attribute("data-uxi-multiselect-id") or ""
+        field = page.locator(f"input[id={json.dumps(identifier)}]")
+        container = field.locator('xpath=ancestor::*[@data-automation-id="multiSelectContainer"][1]')
+        selected = lambda: container.locator('[data-automation-id="selectedItem"]').all_text_contents()
+        missing = []
+        for value in dict.fromkeys(v.strip() for v in values if v.strip()):
+            if option_match.best_option(selected(), value) is not None:
+                continue
+            self._open_prompt(assistant, page, field, widget)
+            field.fill("")
+            field.type(value, delay=10)
+            page.wait_for_timeout(700)
+            popup = page.locator(f'[data-automation-id="responsiveMonikerPrompt"][data-associated-widget={json.dumps(widget)}]')
+            rows = popup.locator('[data-automation-id="promptOption"]')
+            labels = rows.all_text_contents()
+            index = option_match.best_option(labels, value)
+            if index is not None:
+                rows.nth(index).click(timeout=3_000)
+                page.wait_for_timeout(300)
+            if option_match.best_option(selected(), value) is None:
+                missing.append(value)
+            field.fill("")
+            page.keyboard.press("Escape")
+        return selected(), missing
+
     def select_from_searchable_input(
         self, assistant, page: Page, id_suffix: str, candidates: list[str], index: int = 0,
         keyboard: bool = True,
