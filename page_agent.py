@@ -2193,6 +2193,11 @@ class PageAgent:
                 if control.role in ("checkbox", "switch"):
                     return "checked", "profile.accept_application_privacy_prompts"
 
+        if control.role == "spinbutton" and _plain(question) in {"month", "day", "year"}:
+            # Repeated-entry dates were resolved above. A component label alone
+            # cannot identify today's date, a birth date, or any historical date.
+            return "", ""
+
         # 1. Saved exact answer library (e.g. from data/profile_answers.json) takes priority
         explicit = self.library_answer(question, exact_only=True)
         if explicit:

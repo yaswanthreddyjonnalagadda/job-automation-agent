@@ -1000,3 +1000,5 @@ or run `python web_ui.py` in a terminal you opened.
   history. It is served on 127.0.0.1 only.
 
 Workday hierarchical prompts: explore only marked category nodes (bounded depth and visits), select a matching offered leaf, and verify its committed value. A category is never accepted as the answer.
+
+Generic field labels: bare Name denotes the applicant outside an education container. Unqualified Month/Day/Year spinbuttons never reuse answer-library or historical values; dates inside work/education entries still use their own record.

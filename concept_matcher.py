@@ -89,6 +89,7 @@ CONCEPTS: dict[str, dict[str, Any]] = {
     },
     "FULL_NAME": {
         "patterns": [
+            r"^\W*name\W*$",
             r"^\W*(?:full|legal|complete|applicant|candidate)\s*(?:legal\s*)?name\b",
             r"^\W*your\s*name\b",
             r"^\W*name\s*\(\s*first\s+and\s+last\s*\)\b",
@@ -456,6 +457,10 @@ def match_concept(
         patterns = defn.get("patterns", [])
         negative = defn.get("negative")
         container_boost = defn.get("container_boost")
+
+        if concept_name == "SCHOOL_UNIVERSITY" and clean_q == "name" and not re.search(
+                r"education|academic|school|university|college|institution|degree", clean_c, re.IGNORECASE):
+            continue  # A bare Name is not evidence of an education entry.
 
         # Check negative guardrails first against combined text
         if negative and re.search(negative, combined, re.IGNORECASE):
