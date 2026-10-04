@@ -1004,3 +1004,6 @@ Workday hierarchical prompts: explore only marked category nodes (bounded depth 
 Generic field labels: bare Name denotes the applicant outside an education container. Unqualified Month/Day/Year spinbuttons never reuse answer-library or historical values; dates inside work/education entries still use their own record.
 
 Workday split date controls: changing a segment uses bounded spin controls when possible, then a composite digit stream when needed, and checks every segment while preserving neighboring values. Internal gaps remain unresolved rather than being filled with invented dates.
+
+Education subjects: select only the recorded subject or an owner-approved substitute, by clicking its actual option and verifying the committed label. Workday prompts stay tied to the same education row when the input moves, and scroll their own virtual list to inspect later options. Structured profile subjects override older resume extraction for an unambiguously matched school.
+Resume uploads on a resumed form check for the already listed filename in the upload field's frame before adding a file; an empty file input beside a saved attachment is not evidence that a new upload is needed.

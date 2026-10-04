@@ -3251,6 +3251,12 @@ class PageAgent:
             logger.debug("Field inventory failed: %s", exc)
             return False
         target = form_fields.resume_input(fields)
+        if target is not None:
+            from browser_automation import JobApplicationAssistant
+            if JobApplicationAssistant._file_already_attached(target.frame, Path(self.resume_file).name):
+                self.resume_uploaded = True
+                self.resume_seen = True
+                return False  # A resumed run sees an empty input beside the saved attachment.
         here = (urlparse(getattr(tab, "url", "")).path, target.name or target.label) if target else None
         if target is None or target.value or here in self._attached_here:
             return False
@@ -3932,7 +3938,7 @@ class PageAgent:
                 frame = loc.element_handle().owner_frame()
                 target = FramedPage(tab, frame) if frame != tab.main_frame else tab
                 return WorkdayAdapter().select_from_searchable_input(
-                    self.assistant, target, identifier, [answer.value], keyboard=False)
+                    self.assistant, target, identifier, [answer.value] + self._alternatives_for(answer.value), keyboard=False)
         if control.holds_choices and answer.action in ("choose", "check", "fill"):
             # The choices have no reference of their own: click the one that
             # says what the answer says, inside the group.

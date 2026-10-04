@@ -149,18 +149,22 @@ def _identifies(shown: str, name: str) -> bool:
 
 
 def with_profile(history: dict, profile) -> dict:
-    """The work history, with each degree's dates completed from the profile's education dates.
+    """The work history, with explicit profile subjects and missing education dates applied.
 
     The resume reader keeps only a degree's end; the owner's profile holds both ends ("JNTU Hyderabad, August
     2015, April 2019"). UKG's degree entries asked From and To, the history had no start, and the run stopped for
     the owner to type dates the profile already held (30 September). A date the history has is kept."""
     history = dict(history or {})
     dated = [tuple(d) for d in (getattr(profile, "education_dates", ()) or ()) if d and len(d) >= 3]
-    if not dated:
-        return history
+    profile_degrees = [tuple(row) for row in (getattr(profile, "education", ()) or ()) if row and len(row) >= 3]
     degrees = []
     for record in history.get("education") or []:
         record = dict(record)
+        candidates = [row for row in profile_degrees if _identifies(str(row[2]), str(record.get("school") or ""))]
+        if len(candidates) > 1:
+            candidates = [row for row in candidates if _identifies(str(row[0]), str(record.get("degree") or ""))]
+        if len(candidates) == 1 and str(candidates[0][1]).strip():
+            record["field"] = str(candidates[0][1]).strip()
         for school, start, end in (d[:3] for d in dated):
             if _identifies(str(school or ""), str(record.get("school") or "")):
                 record["start"] = record.get("start") or start
