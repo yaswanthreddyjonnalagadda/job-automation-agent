@@ -199,9 +199,11 @@ class WorkdayAdapter(SiteAdapter):
             # never run on a work entry (it wrote the owner's home into each).
             start_month, start_year = _split_month_year(job.get("start", ""))
             self.fill_date_spinner(assistant, page, "workExperience", "startDate", i, start_month, start_year)
-            if job.get("current"):
-                assistant.check_first_matching(page, ["currently work here"])
-            else:
+            # A repeated checkbox belongs to this job, even when the site
+            # starts every entry checked. Clear former jobs before locating To.
+            current = page.locator('input[id$="--currentlyWorkHere"]').nth(i)
+            current.set_checked(bool(job.get("current")), timeout=5_000)
+            if not job.get("current"):
                 end_month, end_year = _split_month_year(job.get("end", ""))
                 # 'To' only renders for non-current entries, so index among
                 # those, not the overall job index.

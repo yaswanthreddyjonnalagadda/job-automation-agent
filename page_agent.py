@@ -2462,7 +2462,8 @@ class PageAgent:
                     and option_match.best_option([control.name], value) is None:
                 continue
             if control.role in ("checkbox", "switch") and (
-                    not control.group or value.strip().lower() in ("checked", "true", "unchecked", "false")):
+                    not control.group or value.strip().lower() in ("checked", "true", "unchecked", "false")
+                    or (control.ref in getattr(self, "_entries", {}) and value.strip().lower() in ("yes", "no"))):
                 action = "check" if value.strip().lower() not in ("no", "false", "0", "unchecked") else "uncheck"
             try:
                 answer = Answer(control.ref, control.question, action, value, source)
@@ -3753,10 +3754,14 @@ class PageAgent:
             if entry is None or control.disabled or not shown or option_match.is_placeholder(shown):
                 continue
             value, source, blank = repeated_entries.answer(entry, getattr(self, "history", {}) or {})
-            # Only a date is put right from the record: a school's or degree's name has many right spellings
+            # Dates and each job's current flag are put right from the record. A school's or degree's name has many right spellings
             # ("Jawaharlal Nehru Technological University" is "JNTU"), and a label like "Role Description" is not
             # the job's title -- replayed on every saved page, those would have overwritten right answers.
-            if value and not repeated_entries.is_date(value):
+            current_box = control.role in ("checkbox", "switch") and entry.section == "work" \
+                and value.lower() in ("yes", "no")
+            if value and not repeated_entries.is_date(value) and not current_box:
+                continue
+            if current_box and control.checked == (value.lower() == "yes"):
                 continue
             written = str((self.written or {}).get(control.question) or "").strip()
             if value:
@@ -3775,7 +3780,8 @@ class PageAgent:
                 continue
             try:
                 if value:
-                    action = "choose" if control.role in ("combobox", "listbox") else "fill"
+                    action = ("check" if value.lower() == "yes" else "uncheck") if current_box else (
+                        "choose" if control.role in ("combobox", "listbox") else "fill")
                     answer = Answer(control.ref, control.question, action, value, source)
                     done = self.do(page, answer, control)
                 else:

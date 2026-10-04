@@ -1009,3 +1009,5 @@ Education subjects: select only the recorded subject or an owner-approved substi
 Resume uploads on a resumed form check for the already listed filename in the upload field's frame before adding a file; an empty file input beside a saved attachment is not evidence that a new upload is needed.
 
 A Continue signal is consumed only after its file contains a nonempty answer. An empty file created by a writer still in progress leaves the agent waiting, with its normal timeout and browser checks.
+
+Each repeated job’s current-employment checkbox takes that job’s own yes/no value, even when its surrounding heading is read as a choice group. A contradictory site-filled current flag is corrected under the existing provenance policy; owner-entered choices remain protected. From/To groups qualify split Month/Year controls so former jobs receive their own end dates. The Workday entry filler sets each row’s current flag before locating its end-date controls.

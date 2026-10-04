@@ -54,6 +54,7 @@ def entry_map(snapshot: str) -> dict[str, Entry]:
     section_indent = -1                              # where the entry's own title is drawn
     current: dict = {}
     peers: dict[str, list] = {"work": [], "education": []}
+    date_groups: list[tuple[int, str]] = []
     last_box: Optional[tuple[int, str]] = None      # (indent, label) of the last box, whose value may follow
     for raw in (snapshot or "").splitlines():
         m = _LINE.match(raw)
@@ -62,6 +63,10 @@ def entry_map(snapshot: str) -> dict[str, Entry]:
         role, name, attrs, value = m.group(2), (m.group(3) or ""), m.group(4) or "", (m.group(5) or "").strip()
         ref = re.search(r"\[ref=([\w-]+)\]", attrs)
         indent = len(m.group(1))
+        while date_groups and indent <= date_groups[-1][0]:
+            date_groups.pop()
+        if role == "group" and re.fullmatch(r"From|To|Start(?: date)?|End(?: date)?", name, re.IGNORECASE):
+            date_groups.append((indent, name))
         # A text box with a placeholder shows what it holds as a child line ("- text: Capital One").
         if last_box is not None and indent > last_box[0] and role == "text" and value and section:
             if not current.get(last_box[1].lower()):
@@ -93,6 +98,8 @@ def entry_map(snapshot: str) -> dict[str, Entry]:
         if role == "button" and re.search(r"\b(remove|delete|add|save|cancel)\b", name, re.IGNORECASE):
             continue
         label = " ".join(name.split())
+        if role == "spinbutton" and date_groups and re.fullmatch(r"Month|Day|Year", label, re.IGNORECASE):
+            label = f"{date_groups[-1][1]} {label}"
         if first_label is None or first_label == "":
             if first_label is None:
                 index += 1
