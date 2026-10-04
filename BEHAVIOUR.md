@@ -1024,4 +1024,8 @@ The address sweep commits SuccessFactors country and state choices through their
 
 Composite phone widgets produce one number question: the actual child textbox retains the phone heading and the dial-code button does not become its label. Questions in paragraphs retain their wording across embedded terms/privacy links, and radio captions drawn as adjacent paragraphs are read as choices. Policy sweeps leave dialogs containing entry fields to the normal filling and validation flow, and report dismissal only when the dialog hides. The existing page fingerprint breaker still bounds genuine repeated navigation without progress.
 
+Text-message consent in a Yes/No picker or radio group follows the same contact-preference policy as a checkbox, preserving an exact approved saved answer when present. Mentioning a mobile number inside a consent question does not make it a phone-number field.
+
 Start Dashboard uses the checkout's local Python runtime and one canonical dashboard port. The dashboard exposes its loaded directory and source identity at /runtime; startup reuses only the same unchanged checkout, and refuses an old or different server rather than silently starting with stale code. Deployment redirects the owner's old dashboard entry point and old bookmarks to the corrected canonical runtime.
+
+Source identity includes the runtime modules and portal adapters. A dashboard whose code changed since it loaded refuses to start or resume a worker until restarted. Each application log records the runtime directory, interpreter, and source identity used to launch it.

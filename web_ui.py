@@ -58,6 +58,9 @@ def runtime_info():
     """The loaded source identity, so startup can refuse a stale dashboard."""
     return RUNTIME_INFO
 
+def runtime_matches_source():
+    return RUNTIME_INFO['source_id'] == source_id(BASE_DIR)
+
 # Applications launched from this UI, so their progress can be shown. Keyed by
 # the URL that started them, and written to disk so restarting this server --
 # or letting it reload after a code change -- doesn't lose track of a run that
@@ -144,7 +147,11 @@ def _run_apply(url: str, open_url: str = "") -> None:
         _save_runs()
 
     try:
+        if not runtime_matches_source():
+            raise RuntimeError('Dashboard code changed; restart the dashboard before starting another application.')
         with open(log_path, "w", encoding="utf-8") as fh:
+            fh.write('Application runtime: '+json.dumps(RUNTIME_INFO)+'\n')
+            fh.flush()
             # Popen rather than run() so /stop can reach the process. On POSIX
             # it gets its own session so the whole group can be signalled.
             command = [sys.executable, "apply.py", url]
@@ -203,6 +210,8 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 
 @app.post("/apply")
 def start_apply():
+    if not runtime_matches_source():
+        return redirect(url_for('index', error='Dashboard code changed. Restart the dashboard to use the corrected version.'))
     url = (request.form.get("url") or "").strip()
     if not url:
         return redirect(url_for("index"))
@@ -452,6 +461,8 @@ def resume_application(app_id: int):
     employer's form are left alone, and a job that is already submitted is
     refused as a duplicate.
     """
+    if not runtime_matches_source():
+        return redirect(url_for('index', error='Dashboard code changed. Restart the dashboard to use the corrected version.'))
     tracker = get_tracker()
     record = next((a for a in tracker.list_all() if a.id == app_id), None)
     if not record or not record.url:

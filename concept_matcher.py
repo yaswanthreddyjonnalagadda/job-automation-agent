@@ -110,7 +110,7 @@ CONCEPTS: dict[str, dict[str, Any]] = {
             r"\b(?:mobile|cell|cellphone|primary\s*phone|contact\s*number|phone\s*number|telephone)\b",
             r"^\W*phone\W*$",
         ],
-        "negative": r"home\s*phone|work\s*phone|employer\s*phone|office\s*phone|supervisor|emergency|fax",
+        "negative": r"home\s*phone|work\s*phone|employer\s*phone|office\s*phone|supervisor|emergency|fax|\bconsent\b|\bsms\b|text\s+(?:message|communication)",
     },
     "PHONE_COUNTRY_CODE": {
         "patterns": [

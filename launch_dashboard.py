@@ -7,8 +7,6 @@ import urllib.request
 ROOT = Path(__file__).resolve().parent
 
 def main():
-    os.chdir(ROOT)
-    sys.path.insert(0, str(ROOT))
     import visible_desktop
     visible_desktop.refuse_if_invisible()
     try:
@@ -23,6 +21,8 @@ def main():
         raise RuntimeError('An unversioned dashboard is already using port 5000. Stop it before starting this checkout.') from exc
     except (OSError, urllib.error.URLError):
         pass
+    os.chdir(ROOT)
+    sys.path.insert(0, str(ROOT))
     import web_ui
     print(f'Dashboard runtime: {ROOT} ({web_ui.RUNTIME_INFO["source_id"]})', flush=True)
     web_ui.app.run(host='127.0.0.1', port=5000, debug=False, use_reloader=False)
@@ -30,9 +30,12 @@ def main():
 def source_id(root):
     import hashlib
     digest = hashlib.sha256()
-    for name in ('web_ui.py','apply.py','apply_flow.py','page_agent.py','interaction.py'):
-        digest.update(name.encode())
-        digest.update((root/name).read_bytes())
+    sources = list(root.glob('*.py'))
+    for package in ('sites', 'tracking', 'confirmation'):
+        sources.extend((root/package).glob('*.py'))
+    for path in sorted(sources):
+        digest.update(path.relative_to(root).as_posix().encode())
+        digest.update(path.read_bytes())
     return digest.hexdigest()[:16]
 
 if __name__ == '__main__':

@@ -2180,6 +2180,15 @@ class PageAgent:
         supervisor is answered this way: those belong to one entry, not to him.
         """
         question = control.question
+        if control.role in ('radio', 'radiogroup', 'group', 'combobox', 'listbox') \
+                and _TEXT_MESSAGES.search(question) \
+                and re.search(r'consent|agree|receiv|opt.?in|send', question, re.I):
+            explicit = self.library_answer(question, exact_only=True)
+            if explicit:
+                return explicit, 'profile.answer_library'
+            prefers = str(getattr(self.profile, 'preferred_contact_method', '') or '').strip().lower()
+            return ('Yes' if prefers in ('sms', 'text', 'text message') else 'No'), \
+                'profile.preferred_contact_method'
         # Tick boxes of the owner's standing decision (30 September): agreements and acknowledgements are ticked
         # ("I have read and agree", "I acknowledge", "By checking this box", terms, privacy) -- a declaration only
         # with sign_attestations, the rest with accept_application_privacy_prompts; a text-message consent never,
@@ -2314,7 +2323,7 @@ class PageAgent:
             value = str(getattr(self.profile, "country", "") or "").strip()
             if value:
                 return value, "profile.country"
-        if re.search(r"mobile|cell|phone number", question, re.IGNORECASE) and not re.search(
+        if not _TEXT_MESSAGES.search(question) and re.search(r"mobile|cell|phone number", question, re.IGNORECASE) and not re.search(
                 r"home|work|employer", question, re.IGNORECASE):
             value = str(getattr(self.profile, "phone_mobile", "") or getattr(self.profile, "phone", "") or "").strip()
             if value:
