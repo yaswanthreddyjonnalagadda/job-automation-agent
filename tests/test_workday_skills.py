@@ -50,3 +50,21 @@ def test_resumed_skills_keep_existing_selections_without_duplicates(page):
     control=next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.name=='Type to Add Skills')
     a.do(page,page_agent.Answer(control.ref,control.question,'fill','AWS, BGP','profile'),control)
     assert page.locator('[data-automation-id="selectedItem"]').all_text_contents()==['AWS','BGP']
+
+
+def test_layout_group_does_not_inherit_the_preceding_skills_question():
+    snapshot='''- generic [ref=s1]: Type to Add Skills
+- textbox "Type to Add Skills" [ref=s2]:
+- group [ref=s3]:
+  - heading "Resume/CV" [level=4] [ref=s4]
+  - button "Select files" [ref=s5]'''
+    group=next(c for c in page_agent.parse_snapshot(snapshot) if c.ref=='s3')
+    assert group.question==''
+
+
+def test_layout_group_cannot_select_an_unrelated_checkbox(page):
+    page.set_content('<div role="group"><h4>Resume/CV</h4></div><input type="checkbox" aria-label="AWS">')
+    a=agent()
+    group=next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.role=='group')
+    assert not a.do(page,page_agent.Answer(group.ref,'Skills','choose','AWS','profile'),group)
+    assert not page.get_by_role('checkbox').is_checked()

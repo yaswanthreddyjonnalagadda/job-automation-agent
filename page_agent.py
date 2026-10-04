@@ -489,6 +489,9 @@ def parse_snapshot(snapshot: str) -> list[Control]:
     if toggle_row:
         _settle_toggle_row(toggle_row, toggle_question)
     _group_tick_boxes(controls, checkbox_runs)
+    for control in controls:
+        if control.role == "group" and not control.name and not control.holds_choices:
+            control.context = ""  # A layout wrapper cannot inherit the preceding field's question.
     return [c for c in controls if not is_bot_trap(c)]
 
 
@@ -3891,6 +3894,8 @@ class PageAgent:
 
     def do(self, page, answer: Answer, control: Control) -> bool:
         tab = self.tab(page)
+        if control.role == "group" and not control.name and not control.holds_choices:
+            return False  # A layout wrapper is not a page-wide choice group.
         # Only typed text: a choice can only ever take one of the list's own options, and "N/A" or "None" is
         # often the right one -- even when the list shows its options only once it is opened.
         if answer.action == "fill" and (answer.value or "").strip() and _WEB_ADDRESS_BOX.search(control.question or "") \

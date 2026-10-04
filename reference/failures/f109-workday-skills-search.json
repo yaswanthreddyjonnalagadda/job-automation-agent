@@ -4,10 +4,12 @@
   "class": "Comma-separated skills treated as one searchable selection",
   "site": "Everfox Workday",
   "symptom": "The experience page searched the entire skills list and exposed an empty Options Expanded popup, delaying progression.",
-  "root_cause": "Textbox-shaped prompts used the single-selection path for a multi-value skills answer. No offered skill could equal the combined list.",
-  "fix": "Search skills individually within the associated widget popup, verify selected tags, preserve existing tags, and leave unsupported optional skills blank with a note and closed menu.",
+  "root_cause": "Textbox-shaped prompts used the single-selection path for a multi-value skills answer. An unnamed following layout group also inherited the Skills label and was treated as a second choice question.",
+  "fix": "Search skills individually within the associated widget popup, verify selected tags, preserve existing tags, and leave unsupported optional skills blank with a note and closed menu. Clear inherited context from unnamed layout groups without choices and reject attempts to answer those wrappers.",
   "tests": [
     "tests/test_workday_skills.py::test_skills_use_separate_scoped_verified_rows",
-    "tests/test_workday_skills.py::test_resumed_skills_keep_existing_selections_without_duplicates"
+    "tests/test_workday_skills.py::test_resumed_skills_keep_existing_selections_without_duplicates",
+    "tests/test_workday_skills.py::test_layout_group_does_not_inherit_the_preceding_skills_question",
+    "tests/test_workday_skills.py::test_layout_group_cannot_select_an_unrelated_checkbox"
   ]
 }
