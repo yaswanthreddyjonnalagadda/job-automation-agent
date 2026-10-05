@@ -569,6 +569,10 @@ def best_option_match(desired: str, options: list[str]) -> Optional[str]:
         return None
     desired_clean = clean_text(desired)
     desired_lower = desired.strip().lower()
+    import option_match
+    shared = option_match.best_option(options, desired)
+    if shared is not None:
+        return options[shared]
 
     # Exact or stripped match
     for opt in options:

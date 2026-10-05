@@ -1,0 +1,10 @@
+{
+  "id": "f118", "date": "2026-10-05", "site": "5C Data Centers",
+  "class": "Identity verification channel mistaken for contact data",
+  "symptom": "An email-or-phone verification choice received a phone number, then an unrelated AI paragraph, rather than an offered channel.",
+  "root_cause": "Contact-data recognition ran before recognizing the identity verification channel options.",
+  "why_tests_missed": "Verification tests focused on code entry and did not cover channel questions mentioning phone number.",
+  "fix": "When both email and phone channels are offered for identity verification, select the uniquely matching saved contact preference before contact-fact matching. Code and credential gates remain unchanged.",
+  "tests": ["tests/test_application_question_categories.py::test_identity_channel_selects_preference_instead_of_contact_fact"],
+  "prevention": "Check semantic answer type against offered choices before interpreting contact keywords."
+}

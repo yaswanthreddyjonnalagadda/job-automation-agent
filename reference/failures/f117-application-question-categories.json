@@ -1,0 +1,10 @@
+{
+  "id": "f117", "date": "2026-10-05", "site": "AIG / Corebridge Workday",
+  "class": "Supported profile facts rejected by broad application categories",
+  "symptom": "Application Questions repeatedly rejected Master's Degree and Immediately despite offering Post-Graduate Degree and Not Applicable for notice period.",
+  "root_cause": "Shared option matching lacked one-way completed-degree categories; immediate availability had no context-bound no-notice fallback.",
+  "why_tests_missed": "Degree matching fixtures used exact degree labels and availability fixtures did not combine a notice question with an N/A duration menu.",
+  "fix": "Completed degrees can match broader completed categories, never the reverse or incomplete studies; immediate availability can match Not Applicable only for notice-period questions.",
+  "tests": ["tests/test_application_question_categories.py::test_completed_degree_matches_completed_category", "tests/test_application_question_categories.py::test_general_postgraduate_category_never_invents_specific_degree", "tests/test_application_question_categories.py::test_notice_period_uses_no_notice_category_only_in_notice_question", "tests/test_application_question_categories.py::test_real_selects_commit_profile_categories"],
+  "prevention": "Test offered category semantics and actual committed selections using a synthetic profile."
+}

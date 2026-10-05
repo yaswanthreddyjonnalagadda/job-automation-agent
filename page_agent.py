@@ -2185,6 +2185,15 @@ class PageAgent:
         supervisor is answered this way: those belong to one entry, not to him.
         """
         question = control.question
+        if re.search(r'verify.*identity|identity.*verif', question, re.I) and control.options:
+            channels = {channel: [label for label in control.options
+                                  if re.search(rf'\b{channel}\b', label, re.I)]
+                        for channel in ('email', 'phone')}
+            if channels['email'] and channels['phone']:
+                preferred = str(getattr(self.profile, 'preferred_contact_method', '') or '').lower()
+                channel = 'phone' if preferred in ('phone', 'sms', 'text', 'text message') else 'email'
+                if len(channels[channel]) == 1:
+                    return channels[channel][0], 'profile.preferred_contact_method'
         if control.role in ('radio', 'radiogroup', 'group', 'combobox', 'listbox') \
                 and _TEXT_MESSAGES.search(question) \
                 and re.search(r'consent|agree|receiv|opt.?in|send', question, re.I):
@@ -4411,6 +4420,13 @@ class PageAgent:
         says when one was used."""
         if self._choose_exact(page, control, value, controls):
             return True
+        # Immediate availability means no notice to serve, only for a notice
+        # duration question. Do not reinterpret N/A on unrelated questions.
+        if re.search(r'\bnotice\s+period\b', control.question, re.I) and re.fullmatch(
+                r'immediate(?:ly)?|no notice(?: period)?|zero(?: days)?|0(?: days)?', value.strip(), re.I):
+            if self._choose_exact(page, control, 'Not Applicable', controls):
+                self._chosen_instead[control.ref] = 'Not Applicable'
+                return True
         for alternative in self._alternatives_for(value):
             if self._choose_exact(page, control, alternative, controls):
                 self._chosen_instead[control.ref] = alternative
