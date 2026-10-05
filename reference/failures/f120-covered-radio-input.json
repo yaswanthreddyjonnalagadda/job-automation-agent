@@ -1,0 +1,10 @@
+{
+  "id": "f120", "date": "2026-10-05", "site": "Hospital for Special Surgery Workday",
+  "class": "Decorative radio overlay blocks native input",
+  "symptom": "The previously-worked question timed out despite a supported No answer.",
+  "root_cause": "Native set_checked failed on a covered input; the fallback clicked that same covered input and raised before reaching any recovery.",
+  "why_tests_missed": "Radio fixtures exposed native inputs without the decorative layers present in Workday.",
+  "fix": "Use the input's own associated label after native set_checked fails; do not search unrelated labels or click twice.",
+  "tests": ["tests/test_form_progress_fingerprint.py::test_covered_radio_uses_its_associated_label"],
+  "prevention": "Verify the actual checked state and untouched adjacent choices with a covered-input browser fixture."
+}

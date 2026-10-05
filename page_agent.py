@@ -4274,14 +4274,12 @@ class PageAgent:
             try:
                 target.set_checked(True, timeout=5_000)
             except Exception:
-                target.click(timeout=5_000)
-                try:
-                    target.click(timeout=3_000)
-                except Exception:
-                    try:
-                        target.click(force=True, timeout=2_000)
-                    except Exception:
-                        target.evaluate("e => e.click()")
+                handle = target.evaluate_handle('e => e.labels && e.labels[0]')
+                label = handle.as_element()
+                if label is not None:
+                    label.click(timeout=5_000)
+                else:
+                    target.click(timeout=5_000)
             return True
         if answer.action == "choose":
             return self.choose(page, control, answer.value, self._page_controls(page))

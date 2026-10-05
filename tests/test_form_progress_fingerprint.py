@@ -34,3 +34,29 @@ def test_preferred_name_toggle_uses_boolean_not_name(preferred, expected):
     agent.profile = SimpleNamespace(preferred_name=preferred)
     control = page_agent.Control('e1', 'checkbox', name='I have a preferred name')
     assert agent.known_answer(control) == (expected, 'profile.preferred_name')
+
+
+def test_covered_radio_uses_its_associated_label(tmp_path):
+    from playwright.sync_api import sync_playwright
+    from test_page_agent import make_agent
+    import config
+    resume = tmp_path / 'resume.pdf'
+    resume.write_bytes(b'%PDF-1.4 fixture')
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.set_content('''<fieldset><legend>Previously worked here?</legend>
+          <label for="yes">Yes</label><input id="yes" type="radio" name="worked">
+          <span style="position:relative;display:inline-block;width:20px;height:20px">
+            <input id="no" type="radio" name="worked" style="position:absolute;inset:0;margin:0">
+            <span style="position:absolute;inset:0;background:white"></span>
+          </span><label for="no">No</label></fieldset>
+          <input type="checkbox" id="other"><label for="other">Unrelated choice</label>''')
+        agent = make_agent(SimpleNamespace(), resume, profile=config.UserProfile())
+        controls = page_agent.parse_snapshot(agent.snapshot(page))
+        control = next(c for c in controls if c.role == 'radio' and c.name == 'No')
+        assert agent.do(page, page_agent.Answer(control.ref, control.question, 'choose', 'No', 'profile'), control)
+        assert page.locator('#no').is_checked()
+        assert not page.locator('#yes').is_checked()
+        assert not page.locator('#other').is_checked()
+        browser.close()
