@@ -1,0 +1,10 @@
+{
+  "id": "f116", "date": "2026-10-05", "site": "AVFUEL Paycom",
+  "class": "Background posting action selected behind active dialog",
+  "symptom": "After the owner completed CAPTCHA, the agent clicked the covered posting Apply button and timed out.",
+  "root_cause": "The whole-body accessibility snapshot included both the entry dialog and background posting; deterministic forward priority chose Apply before the dialog Continue.",
+  "why_tests_missed": "Entry-form tests lacked a simultaneously visible background Apply button after a human challenge disappeared.",
+  "fix": "Read the last visible dialog as the active interaction scope, returning to body only after it closes.",
+  "tests": ["tests/test_active_dialog_recovery.py::test_completed_captcha_continues_active_form_not_background_posting", "tests/test_active_dialog_recovery.py::test_hidden_dialog_does_not_hide_current_page"],
+  "prevention": "Verify the actual continuation action and resulting dialog transition, not just challenge disappearance."
+}

@@ -726,7 +726,7 @@ _STANDING_ANSWERS: tuple[tuple[re.Pattern, str], ...] = (
 
 # What a button that moves an application on is called, and what is never
 # pressed on the agent's own initiative.
-FORWARD_LABEL = re.compile(r"^(apply|apply now|start application|begin application|apply manually|create account|next|continue|save and continue|save & continue|save and next|next step|"
+FORWARD_LABEL = re.compile(r"^(apply|apply now|start application|begin application|apply manually|create account|next|continue|continue to application|continue application|save and continue|save & continue|save and next|next step|"
                            r"submit|submit application|review|review and submit|proceed|"
                            r"save and proceed|begin)$", re.IGNORECASE)
 
@@ -1432,7 +1432,12 @@ class PageAgent:
     def snapshot(self, page) -> str:
         # The one place the page is read: a secret box's value never leaves it (it is saved to disk
         # and handed to the planner from here).
-        return hide_secrets(self.tab(page).locator("body").aria_snapshot(mode="ai", timeout=20_000))
+        tab = self.tab(page)
+        # An open dialog owns the interaction. Background posting controls may
+        # remain in the accessibility tree even though its overlay blocks them.
+        dialogs = tab.locator('[role="dialog"]:visible, dialog[open]:visible')
+        scope = dialogs.last if dialogs.count() else tab.locator("body")
+        return hide_secrets(scope.aria_snapshot(mode="ai", timeout=20_000))
 
     def locate(self, page, ref: str):
         return self.tab(page).locator(f"aria-ref={ref}")
