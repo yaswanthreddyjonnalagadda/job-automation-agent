@@ -83,8 +83,23 @@ def compute_state_fingerprint(page) -> tuple[str, dict[str, Any]]:
     except Exception as exc:
         logger.debug("Could not count visible inputs: %s", exc)
 
+    # Changes to committed answers are progress even on the same wizard step.
+    # Keep only a digest in diagnostics, never the personal field values.
+    answer_digest = ''
+    try:
+        answers = page.evaluate("""() => {
+            const shown = e => !!e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
+            return [...document.querySelectorAll('input,select,textarea,[role=checkbox],[role=radio],[role=listbox],[data-automation-id=selectedItem],[data-automation-id=moniker],[aria-haspopup=listbox]')]
+                .filter(e => shown(e) && e.type !== 'hidden' && e.type !== 'password')
+                .map(e => [e.id || e.name || e.getAttribute('data-automation-id') || e.tagName,
+                           e.value || '', e.checked || e.getAttribute('aria-checked') || '',
+                           e.tagName === 'INPUT' || e.tagName === 'TEXTAREA' ? '' : (e.textContent || '').trim()]);
+        }""")
+        answer_digest = hashlib.sha256(json.dumps(answers, sort_keys=True).encode()).hexdigest()
+    except Exception as exc:
+        logger.debug("Could not fingerprint committed answers: %s", type(exc).__name__)
     # Compute SHA-256 fingerprint
-    raw_key = f"{url.strip().lower()}|{step_indicator.strip().lower()}|{visible_inputs}"
+    raw_key = f"{url.strip().lower()}|{step_indicator.strip().lower()}|{visible_inputs}|{answer_digest}"
     hash_str = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
     meta = {

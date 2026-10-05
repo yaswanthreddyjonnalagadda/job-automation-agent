@@ -2185,6 +2185,10 @@ class PageAgent:
         supervisor is answered this way: those belong to one entry, not to him.
         """
         question = control.question
+        if control.role in ('checkbox', 'switch') and re.search(
+                r'\b(?:i have|use|have a)\b.*\bpreferred name\b', question, re.I):
+            preferred = str(getattr(self.profile, 'preferred_name', '') or '').strip()
+            return ('checked' if preferred else 'unchecked'), 'profile.preferred_name'
         if re.search(r'verify.*identity|identity.*verif', question, re.I) and control.options:
             channels = {channel: [label for label in control.options
                                   if re.search(rf'\b{channel}\b', label, re.I)]

@@ -1031,6 +1031,8 @@ Start Dashboard uses the checkout's local Python runtime and one canonical dashb
 Source identity includes the runtime modules and portal adapters. A dashboard whose code changed since it loaded refuses to start or resume a worker until restarted. Each application log records the runtime directory, interpreter, and source identity used to launch it.
 # Active dialog recovery
 
+The navigation loop guard recognizes changes to visible field values and committed selections on the same wizard step. Its diagnostics store a digest rather than personal answer values; passwords are excluded. An unchanged form still trips the existing loop limit. Preferred-name presence checkboxes use a boolean derived from the profile rather than the name text.
+
 Completed degrees can match broader completed education categories when the exact degree is absent: a master's or doctorate can use Post-Graduate Degree, and a bachelor's can use College/University Graduate. A broad category never selects a specific degree, and incomplete studies do not stand in for a completed degree. Immediate availability can use Not Applicable specifically for a notice-period menu when Immediate is absent. Identity verification offering email and phone chooses the saved contact preference; this does not bypass verification-code, credential, or CAPTCHA policy.
 
 While a visible dialog is open, the page reader focuses on that dialog and excludes background posting controls. After an owner completes CAPTCHA, the existing form's Continue remains the next action; a covered background Apply cannot take priority. Once the dialog closes, the reader returns to the page.
