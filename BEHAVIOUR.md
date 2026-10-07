@@ -1,9 +1,9 @@
 # What the assistant does, and what it never does
 
 The agent prepares a job application end to end and then **stops before the
-final Submit button**. Clicking Submit is the user's — unless the user turns on
-verified auto-submit (below), which is off by default and refuses on any
-uncertainty.
+final Submit button**. Only the verified auto-submit gateway may click it,
+which is off by default and refuses on any uncertainty. Otherwise the visible
+browser is handed to the user, who can submit manually.
 
 ## What it may do
 
@@ -16,7 +16,7 @@ the result, and hand the finished application over.
 
 | Rule | Where it is enforced | Test |
 |---|---|---|
-| Never clicks Submit | `browser_automation.py` has no `click_submit`; `refuse_to_submit()` answers a `submit` signal; wizard navigation skips any submit-labelled button; the web UI has no Submit button | `test_the_agent_has_no_way_to_click_submit`, `test_wizard_navigation_never_presses_a_submit_button` |
+| Ordinary automation cannot click a final Submit | `SubmissionGuardV0` intercepts recognized submit-capable clicks, forced/event/JavaScript clicks, Enter, and form submission; structurally associated submit buttons are also held unless clearly labeled Next/Continue. Only the verified gateway can authorize an automated final click. Handoff parks automation and records it before the guard is relaxed; failed persistence keeps the guard armed | `tests/test_submission_firewall.py`, `tests/test_submission_effect_state.py`, `test_the_agent_has_no_way_to_click_submit`, `test_wizard_navigation_never_presses_a_submit_button` |
 | Signs attestations and e-signatures only when the owner allows it (`sign_attestations` in the profile; the owner's decision of 2026-09-17), last on the page and only when every other answer came from the profile | `safety.is_attestation()` finds them; `page_agent.PageAgent.sign()` signs or leaves them; pending ones are listed for the user | `test_signature_fields_are_left_for_the_user`, `test_attestation_checkboxes_are_left_for_the_user` |
 | Never guesses | answers come from `UserProfile` or the posting; an empty profile field means the question is left for the user; a dropdown answer must match an offered option, found in the whole list (a long list is scrolled through, not judged by its first rows), and counts as given only once the list shows it | `test_people_managed_is_left_blank_when_the_profile_is_silent`, `test_field_of_study_is_never_swapped_for_another_subject`, `test_the_country_far_down_the_list_is_the_one_chosen`, `test_an_answer_the_list_does_not_offer_is_left_for_the_owner` |
 | Never overwrites the user | `safety.AgentValues` records what the agent wrote and `provenance.py` observes what a person typed or chose; a value the owner entered is never changed. A value the *site* filled in is left alone too, except the owner's own details (name, country, state, city, and the sponsorship/authorization answers) where they contradict the profile -- see "Values the site filled in" below. `safety.may_overrule()` is the only place this is decided | `test_a_users_answer_is_never_overwritten`, `test_site_prefilled_values_count_as_the_users`, `test_the_owners_own_choice_is_never_overwritten`, `test_a_country_the_owner_typed_is_never_corrected`, `test_one_rule_decides_who_may_be_overruled` |
@@ -288,9 +288,11 @@ language picker -- nothing on a posting is yours to answer. A field a site hides
 to catch programs ("This input is for robots only") is never filled and never
 sent to the AI. The page still goes to the AI when there is no
 plain Next/Continue to press (for example only "Add Experience"), or when a
-dropdown still shows "Choose an option" or "Select". The agent reads the page's
-step counter itself ("Step 1 of 2"), so a "Submit" button on a step with more
-to come only saves that step. It reads only the step the page is *on*: a progress
+dropdown still shows "Choose an option" or "Select". A step counter is context,
+not permission to press a submit-capable control: when a button is recognized
+as a final-submit control, even an intermediate "Submit" is left for you to
+handle rather than being clicked based on the counter. Ordinary "Next" and
+"Continue" navigation remains available. It reads only the step the page is *on*: a progress
 bar that lists finished steps ("completed step 1 of 5 ... current step 5 of 5")
 is read as step 5 of 5, and when the page does not make clear which step it is
 on, a "Submit" is treated as the last one and the agent stops for you. On a step
@@ -785,16 +787,16 @@ that had not got past account creation.
 
 ## Verified auto-submit (opt in, off by default)
 
-The agent that works the pages never presses an application's last Submit, whatever
-`.env` says: the old `AUTO_SUBMIT` setting is ignored everywhere (on 29 September it
-still let the page agent press Secunetics' 'Submit Application' itself). At the last
-step it stops and hands the application to you; only the verified check below, run at
-that hand-over, may ever send it. If a run stops on an error while the page already
+The ordinary page agent never presses an application's last Submit, whatever
+`.env` says: the old `AUTO_SUBMIT` setting is ignored everywhere. At the last
+step it stops and hands the application to you; only the verified gateway below
+may send it automatically. If a run stops on an error while the page already
 says the application was received, it is recorded as submitted by you.
 
 Set `AUTO_SUBMIT_VERIFIED_ONLY=true` in `.env` to allow it. Even then, the
 agent submits only when `safety.evaluate_auto_submit()` returns an eligible
-`AutoSubmitDecision`, which requires **all** of:
+`AutoSubmitDecision`, accepted by `SubmissionGuardV0` only with its structured
+evidence and required-field comparisons valid, which requires **all** of:
 
 * the job title, company and canonical URL match the tracked application
   (tracking parameters are not a difference);
@@ -814,6 +816,68 @@ report and every reason), and an audit row in `application_events`. The click
 itself is re-checked for a CAPTCHA or attestation that appeared in between.
 Afterwards the application is recorded **submitted** only once a confirmation
 page, portal entry or confirmation email is found — clicking is not evidence.
+A confirmation page is recognized by a heading or alert region whose own text
+essentially is a known confirmation phrase, not by that wording merely
+appearing anywhere on the page: an unrelated FAQ or error page that happens
+to mention "application received" or "previously submitted application" in
+an ordinary sentence is not read as confirming this run. A real confirmation
+this does not recognize is left **needs_user_review**, not guessed at --
+never the other way around.
+
+Immediately before the click, a local SQLite transaction writes the durable
+`DISPATCHED` state and append-only authorization/dispatch safety events. The
+state uses a separate canonical effect key derived from the application URL:
+known tracking parameters, fragments, query ordering, trailing slashes, host
+case, and HTTP-to-HTTPS variation do not create a fresh effect identity.
+Existing application keys for an equivalent normalized URL and the prior raw
+URL key are checked as legacy aliases. A host or path the browser actually
+visits while working a bound application -- a login page, an ATS redirect, a
+review step -- is durably remembered as that same effect identity, so a later
+invocation started from that host or path finds the same history instead of a
+fresh one; it cannot create a new submission authority merely because its own
+URL hashes to a different key. Two identities are never merged on a guess: a
+URL that already has its own independent dispatch history, or that has no
+provable relationship (by normalization or a remembered redirect) to an
+existing bound application, is treated as its own separate identity, never
+folded into another one. The state survives new processes,
+browser contexts and tabs, including when the normal application tracker uses
+PostgreSQL. URLs that do not identify a specific posting fail closed. If the
+dispatch transaction cannot commit, no click is attempted. A confirmed result
+becomes `CONFIRMED`; an ambiguous result becomes `UNCERTAIN`. Either state,
+and an unresolved `DISPATCHED` state found
+after restart, blocks another automated submission until reconciliation --
+including when that state is only reachable through a remembered redirect
+alias rather than the literal key on hand, at any chain depth (a redirect of
+a redirect, or an identity discovered to be the same one after the fact):
+every member of a merged identity resolves to, and is checked against, the
+exact same durable record, never a copy of it. A URL that LinkedIn, Facebook,
+Google, Microsoft, or Twitter's own click-tracking parameters decorate
+(`trk`, `fbclid`, `gclid`, `msclkid`, `twclid`, and the like) does not create
+a fresh identity either, nor does a login/SSO host visited along the way --
+both are tied to the one bound identity the same as any other redirect.
+Reconciliation can read page/status/confirmation evidence through the
+read-only probe, but that probe has no submit operation.
+
+Human handoff parks execution and appends `MANUAL_HANDOFF_STARTED` before
+relaxing the browser guard. If durable handoff recording fails, automation
+remains parked and the guard stays armed; the person must not treat that as a
+successful handoff.
+
+Submission safety events accept only known event types and allowlisted
+metadata fields and values; arbitrary payload objects are rejected.
+
+Final-control recognition starts from the centralized submit-label
+vocabulary plus deterministic form-submit semantics, and now also denies by
+default a labelled, enabled, form-associated control whose own label is
+neither a known submit word nor a known non-final one (add/remove/edit/
+cancel/back/save-for-later/a dropdown opener/...) when it is the only such
+control left in its form -- a custom "Confirm & Send"/"Finalize"-style
+button with no native submit type is covered without needing its exact
+wording known in advance. An icon-only or otherwise unlabeled control
+remains a limitation. This is still not a universal semantic or
+network-effects firewall. The browser containment guard is active on every
+tab and popup in the browser context automatically, including ones opened
+after the browser session starts, not only pages the agent explicitly reads.
 
 Every decision, eligible or not, is written to the audit trail and shown on the
 dashboard with its reasons.
