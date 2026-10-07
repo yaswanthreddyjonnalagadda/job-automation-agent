@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re
+import threading
 from datetime import datetime
 import subprocess
 import time
@@ -38,6 +39,7 @@ import account_state
 import form_fields
 import option_match
 import safety
+from submission_guard import SubmissionGuardV0
 import visible_desktop
 from config import AppConfig, UserProfile, get_user_profile, resume_to_attach
 from interaction import (
@@ -248,6 +250,9 @@ class JobApplicationAssistant:
         self._config = config
         self._playwright = None
         self._context: Optional[BrowserContext] = None
+        self._submission_guard: Optional[SubmissionGuardV0] = None
+        self._submission_execution_lock = threading.RLock()
+        self._submission_execution_state = "active"
         # Every value the agent puts on a page, so it never overwrites the user.
         self.values = safety.AgentValues()
 
@@ -318,7 +323,76 @@ class JobApplicationAssistant:
         # Record which form controls a person changes, so a value the site put
         # there is never mistaken for the owner's answer (provenance.py).
         provenance.install(self._context)
+        self._submission_guard = SubmissionGuardV0(self._context)
         return self
+
+    def _ensure_submission_guard(self, page: Page) -> SubmissionGuardV0:
+        guard = getattr(self, "_submission_guard", None)
+        if guard is None:
+            guard = SubmissionGuardV0(page.context)
+            self._submission_guard = guard
+        return guard
+
+    def protect_submission(self, page: Page) -> None:
+        """Arm final-submit containment outside pages identified as postings."""
+        if getattr(self, "_submission_execution_state", "active") != "active":
+            return
+        if not self.on_job_description(page):
+            guard = self._ensure_submission_guard(page)
+            tracker = getattr(self, "submission_state_store", getattr(self, "tracker", None))
+            key = getattr(self, "application_key", "")
+            if tracker is not None and key:
+                guard.bind_application(tracker, key)
+            guard.activate(page)
+
+    def human_handoff(self, page: Page) -> None:
+        """Park automation durably before allowing owner-controlled submission."""
+        with self._execution_lock():
+            self._submission_execution_state = "parking"
+            tracker = getattr(self, "submission_state_store", getattr(self, "tracker", None))
+            key = getattr(self, "application_key", "")
+            try:
+                if tracker is None or not key:
+                    raise RuntimeError("Cannot hand off without a persisted application identity")
+                guard = getattr(self, "_submission_guard", None)
+                if guard is not None:
+                    guard.bind_application(tracker, key)
+                tracker.record_submission_safety_event(
+                    key, "MANUAL_HANDOFF_STARTED", {"execution_state": "parked"}
+                )
+            except Exception:
+                self._submission_execution_state = "parked"
+                logger.exception("Manual handoff could not be durably recorded; submission guard remains armed")
+                raise
+            self._submission_execution_state = "parked"
+            guard = getattr(self, "_submission_guard", None)
+            if guard is not None:
+                guard.deactivate(page)
+
+    def _execution_lock(self):
+        lock = getattr(self, "_submission_execution_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._submission_execution_lock = lock
+        return lock
+
+    def _record_submission_event(self, kind: str, reason: str) -> None:
+        tracker = getattr(self, "submission_state_store", getattr(self, "tracker", None))
+        key = getattr(self, "application_key", "")
+        if tracker is None or not key:
+            return
+        try:
+            tracker.record_submission_safety_event(key, kind, {"reason": reason})
+        except Exception:
+            logger.exception("%s could not be durably recorded", kind)
+
+    def resume_automation(self, page: Page) -> None:
+        """Re-arm containment before any automation resumes after a handoff."""
+        with self._execution_lock():
+            guard = getattr(self, "_submission_guard", None)
+            if guard is not None:
+                guard.activate(page)
+            self._submission_execution_state = "active"
 
     def _choose_channel(self) -> str:
         """Selects the browser channel.
@@ -1997,6 +2071,13 @@ class JobApplicationAssistant:
         return True
 
     def look_and_act(self, page: Page, claude, goal: str) -> tuple[str, bool]:
+        with self._execution_lock():
+            if getattr(self, "_submission_execution_state", "active") != "active":
+                logger.warning("LOOKED: automation is parked for human handoff")
+                return "", False
+            return self._look_and_act_locked(page, claude, goal)
+
+    def _look_and_act_locked(self, page: Page, claude, goal: str) -> tuple[str, bool]:
         """Looks at the page the way a person would and takes the next step.
 
         Used when the usual reading finds nothing to fill and nothing to press.
@@ -2013,6 +2094,7 @@ class JobApplicationAssistant:
         if safety.captcha_visible(page):
             logger.info("LOOKED: a CAPTCHA is showing -- only you can complete it; the agent does nothing")
             return "captcha", False
+        self.protect_submission(page)
         try:
             shot = page.screenshot(full_page=False, timeout=15_000)
             seen = claude.read_page(shot, page.url, goal)
@@ -2054,7 +2136,13 @@ class JobApplicationAssistant:
                             logger.info("LOOKED: a CAPTCHA appeared -- only you can complete it; not clicking")
                             return "captcha", False
                         el.scroll_into_view_if_needed(timeout=3_000)
+                        guard = getattr(self, "_submission_guard", None)
+                        denials_before = guard.denial_count(page) if guard is not None else None
                         el.click(timeout=5_000)
+                        if guard is not None and denials_before is not None \
+                                and guard.denial_count(page) > denials_before:
+                            logger.error("SUBMISSION_GUARD_V0_DENIED: vision-selected submit control was blocked")
+                            return kind, False
                         page.wait_for_timeout(2_500)
                         try:
                             page.wait_for_load_state("networkidle", timeout=10_000)
@@ -4486,6 +4574,10 @@ class JobApplicationAssistant:
         topmost thing at its coordinates, which fails when an overlay or
         decorative element sits on top; force=True skips that check, and
         dispatch_event fires the handler directly as a last resort."""
+        try:
+            denial_count = SubmissionGuardV0.click_denial_count(locator)
+        except Exception:
+            denial_count = None
         for attempt, action in enumerate(
             (
                 lambda: locator.click(timeout=timeout_ms),
@@ -4496,8 +4588,14 @@ class JobApplicationAssistant:
         ):
             try:
                 action()
+                if SubmissionGuardV0.click_was_denied(locator, denial_count):
+                    logger.warning("SUBMISSION_GUARD_V0_DENIED: refusing click fallback")
+                    return False
                 return True
             except Exception as exc:
+                if SubmissionGuardV0.click_was_denied(locator, denial_count):
+                    logger.warning("SUBMISSION_GUARD_V0_DENIED: refusing click fallback")
+                    return False
                 logger.warning("Click strategy %d failed: %s", attempt, str(exc)[:120])
         return False
 
@@ -6027,15 +6125,31 @@ class JobApplicationAssistant:
                            (": " + "; ".join(said)) if said else " and said nothing about why")
         return True
 
-    _CONFIRMATION_PHRASES = (
-        "thank you for applying", "application submitted", "thanks for applying",
-        "we have received your application", "your application has been submitted",
-        "submission received", "application received",
-        # Ashby / Lever wording
-        "application was successfully submitted", "successfully submitted your application",
-        "your application was submitted",
-        # SuccessFactors wording
-        "your application has been sent", "application has been sent", "application was sent",
+    # Anchored at both ends (minor trailing punctuation aside): the whole heading/alert text must
+    # BE one of these short confirmations, not merely contain the words somewhere in a longer
+    # sentence. A loose "phrase in body" substring search over the entire page matched incidental
+    # text like "Application received after 5pm will be reviewed next day" on an unrelated FAQ/
+    # error page (the adversarial review's Finding 6, 7 October 2026) -- that sentence does not
+    # match this pattern, because it does not end where a real confirmation heading would.
+    _CONFIRMATION_HEADING_PHRASES = (
+        # "Thank you[, Name,] for applying[ to the X position[ at Y]]!" -- a short, bounded
+        # trailing mention of the role/company is allowed here (unlike the terser phrases below),
+        # since that is common real confirmation wording and does not carry the misleading-FAQ
+        # risk: unlike "application received after 5pm...", nothing starting "thank you ... for
+        # applying" is a plausible unrelated-policy sentence.
+        r"thank you(?:,\s*[^.!?]{0,60})?\s+for\s+(?:applying|your\s+application|your\s+interest)"
+        r"(?:\s+(?:to|for|at)\s+[^.!?]{0,60})?",
+        r"thanks\s+for\s+applying",
+        r"we(?:'ve| have)\s+received\s+your\s+application",
+        r"your\s+application\s+(?:has\s+been|was)\s+(?:submitted|sent|received)",
+        r"application\s+(?:submitted|received|has\s+been\s+sent|was\s+sent)",
+        r"submission\s+received",
+        r"(?:your\s+)?application\s+was\s+successfully\s+submitted",
+        r"successfully\s+submitted\s+your\s+application",
+    )
+    _CONFIRMATION_HEADING_RE = re.compile(
+        r"^\s*(?:" + "|".join(_CONFIRMATION_HEADING_PHRASES) + r")\s*[!.✔✓]{0,3}\s*$",
+        re.IGNORECASE,
     )
 
     def submission_confirmed(self, page: Page, job_title: str = "") -> bool:
@@ -6046,8 +6160,37 @@ class JobApplicationAssistant:
         they jump straight to 'My applications'."""
         if self.find_submit_button(page) is not None:
             return False  # still on the form
-        body = (page.locator("body").inner_text(timeout=5_000) or "").lower()
-        if any(phrase in body for phrase in self._CONFIRMATION_PHRASES):
+        try:
+            # innerText alone is not reliable evidence of visibility here: a heading with
+            # display:none measurably still returned its text in this runtime (verified, not
+            # assumed, during the owner's hardening review of 7 October 2026) -- exactly the
+            # shape of a conditionally-rendered SPA "success" template kept in the DOM ahead of
+            # time. A genuinely visible element is required: it must generate a layout box
+            # (rules out display:none on itself or any ancestor, via getClientRects -- the same
+            # check this file's own job-title card scan already uses below), and must not be
+            # hidden by visibility, the HTML hidden attribute (on itself or an ancestor), or full
+            # transparency. Off-screen positioning and zero-size-but-technically-displayed
+            # elements are deliberately NOT specially detected: those are rarer, more deliberate
+            # techniques than plain display:none/hidden/visibility toggling, and reliably
+            # detecting "off-screen" without false-negating legitimately positioned content (a
+            # fixed banner, a horizontally scrollable container) is not attempted here -- a
+            # documented limitation, not a silent gap.
+            headings = page.evaluate(
+                """() => [...document.querySelectorAll('h1, h2, h3, [role=alert], [role=status]')]
+                       .filter(e => {
+                           if (e.closest('[hidden]')) return false;
+                           if (!e.getClientRects().length) return false;
+                           const style = getComputedStyle(e);
+                           if (style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+                           if (parseFloat(style.opacity) === 0) return false;
+                           return true;
+                       })
+                       .map(e => (e.innerText || '').replace(/\\s+/g, ' ').trim())
+                       .filter(Boolean)"""
+            )
+        except Exception:
+            headings = []
+        if any(self._CONFIRMATION_HEADING_RE.match(text) for text in headings):
             return True
         if not job_title:
             return False
@@ -6726,7 +6869,23 @@ class JobApplicationAssistant:
                     continue
         return None
 
-    def click_verified_submit(self, page: Page) -> bool:
+    def click_verified_submit(
+        self,
+        page: Page,
+        authorization: Optional[safety.AutoSubmitDecision] = None,
+    ) -> bool:
+        with self._execution_lock():
+            if getattr(self, "_submission_execution_state", "active") != "active":
+                logger.error("SUBMISSION_BLOCKED: automation is parked for human handoff")
+                self._record_submission_event("SUBMISSION_BLOCKED", "automation_parked")
+                return False
+            return self._click_verified_submit_locked(page, authorization)
+
+    def _click_verified_submit_locked(
+        self,
+        page: Page,
+        authorization: Optional[safety.AutoSubmitDecision],
+    ) -> bool:
         """Clicks the application's Submit button.
 
         The ONLY caller is apply_flow.submit_verified(), and only on an
@@ -6738,22 +6897,37 @@ class JobApplicationAssistant:
         """
         if safety.captcha_visible(page):
             logger.error("SUBMIT_HELD: a CAPTCHA appeared -- not submitting")
+            self._record_submission_event("SUBMISSION_BLOCKED", "captcha_visible")
             return False
         if self.pending_attestations(page):
             logger.error("SUBMIT_HELD: an attestation/signature is outstanding -- not submitting")
+            self._record_submission_event("SUBMISSION_BLOCKED", "attestation_pending")
             return False
         # Checked again at the button itself, whatever decided to submit.
         conflicts = safety.legal_answer_conflicts(self.read_back_fields(page), getattr(self, "_profile", None))
         if conflicts:
             logger.error("SUBMIT_HELD: %s -- not submitting", conflicts[0])
+            self._record_submission_event("SUBMISSION_BLOCKED", "legal_answer_conflict")
             return False
         button = self.find_submit_button(page)
         if button is None:
             logger.error("SUBMIT_HELD: no Submit button on this page")
+            self._record_submission_event("SUBMISSION_BLOCKED", "submit_control_missing")
             return False
         label = (button.inner_text() or "").strip()
-        if not self._click_resiliently(button, timeout_ms=10_000):
-            logger.error("SUBMIT_HELD: the Submit button could not be clicked (covered or disabled)")
+        tracker = getattr(self, "submission_state_store", getattr(self, "tracker", None))
+        application_key = getattr(self, "application_key", "")
+        submission_key = getattr(self, "submission_key", application_key)
+        aliases = getattr(self, "submission_key_aliases", ())
+        if tracker is not None and submission_key:
+            self._ensure_submission_guard(page).bind_application(tracker, submission_key)
+        application_tracker = getattr(self, "tracker", None)
+        if not self._ensure_submission_guard(page).submit_verified(
+            page, button, authorization, tracker=tracker, dedup_key=submission_key,
+            application_tracker=application_tracker,
+            application_key=application_key, aliases=aliases,
+        ):
+            logger.error("SUBMIT_HELD: the SubmissionGuardV0 gateway refused the submit")
             return False
         logger.info("Clicked %r", label[:40])
         page.wait_for_timeout(5_000)
@@ -7371,4 +7545,3 @@ class JobApplicationAssistant:
                 logger.warning("Could not return to %s: %s", destination, exc)
             return "refresh"  # re-detect whatever is on the page now
         return decision
-
