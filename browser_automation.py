@@ -2052,97 +2052,6 @@ class JobApplicationAssistant:
             logger.debug("Frame check failed: %s", str(exc).splitlines()[0][:100])
         return page
 
-    # Never clicked on Claude's say-so, whatever it reads on the screen. The
-    # Apply that opens a form from a posting is allowed separately below.
-    _NEVER_CLICK = re.compile(
-        r"\bsubmit|send (my |your |the |this )?application|\bfinish\b|certify|attest|\bsignature\b|"
-        r"\be-?sign\b|sign (here|below)|agree to the terms|linked ?in|\bindeed\b|facebook|"
-        r"log ?out|sign ?out|withdraw|delete|remove",
-        re.IGNORECASE)
-
-    def safe_to_click_for_claude(self, page: Page, label: str) -> bool:
-        label = " ".join((label or "").split())
-        if not label or self._NEVER_CLICK.search(label) or safety.is_attestation(label):
-            return False
-        if safety.is_submit_label(label):
-            # "Apply" sends the application on some final pages; it only opens
-            # the form from a posting that has no form of its own.
-            return bool(re.match(r"^\s*apply\b", label, re.IGNORECASE)) and self.on_job_description(page)
-        return True
-
-    # Normalizes a vision-selected candidate to its nearest actionable
-    # ancestor (a <span>/icon inside a <button> must classify as the button,
-    # never as itself), then asks only two structural questions: is it a
-    # native or default-submit control (blocked unconditionally, regardless
-    # of label, "page" classification, or any other model-reported field),
-    # and -- if not -- does it positively carry one of a short list of
-    # low-risk opener/navigation signals. Anything else, including any
-    # custom-JavaScript-driven control, is default-denied: its own onclick
-    # content is never introspected, and the absence of type="submit" is
-    # never treated as proof of safety (the P0-B1 vision-fallback authority
-    # finding, 7 October 2026 -- the comprehensive final closure review
-    # found look_and_act() clicked a model-selected control with nothing
-    # but a label-text filter and the browser guard standing in front of it).
-    _VISION_CLICK_AUTHORITY_SCRIPT = r"""(leaf) => {
-        const ACTIONABLE = 'button, input, a, [role="button"], [role="tab"], [role="menuitem"], ' +
-            '[role="menuitemradio"], [role="menuitemcheckbox"], [role="combobox"], ' +
-            '[role="option"], [role="switch"]';
-        const target = leaf.closest(ACTIONABLE) || leaf;
-        const tag = (target.tagName || '').toLowerCase();
-        const role = (target.getAttribute('role') || '').toLowerCase();
-        const type = (target.getAttribute('type') || '').toLowerCase();
-
-        // Native submitters, unconditionally -- an explicit type="submit"/"image"
-        // is danger regardless of form association, label, or onclick content.
-        if (tag === 'input' && (type === 'submit' || type === 'image')) return 'BLOCK';
-        if (tag === 'button' && type === 'submit') return 'BLOCK';
-        // A <button> with no explicit type defaults to submit per the HTML spec
-        // when form-associated -- by nesting or by its own form="" attribute,
-        // both of which the element's own .form property already resolves.
-        const ownerForm = (tag === 'button' || tag === 'input') ? target.form : null;
-        if (tag === 'button' && !type && ownerForm) return 'BLOCK';
-
-        // Positive, structurally-recognized low-risk categories only. Text is
-        // never consulted here, by design -- safety comes from structure.
-        if (target.hasAttribute('aria-haspopup') || target.hasAttribute('aria-controls')
-                || target.hasAttribute('aria-expanded')) {
-            return 'ALLOW';
-        }
-        if (['tab', 'menuitem', 'menuitemradio', 'menuitemcheckbox', 'combobox', 'option', 'switch']
-                .includes(role)) {
-            return 'ALLOW';
-        }
-        if (tag === 'a') {
-            const href = target.getAttribute('href') || '';
-            return (href && !/^\s*javascript:/i.test(href)) ? 'ALLOW' : 'BLOCK';
-        }
-
-        // Everything else -- a bare button/[role=button]/input with no
-        // positively recognized opener or navigation semantics, including a
-        // custom type="button"/[role=button] control wired to submit via its
-        // own JavaScript (onclick="...requestSubmit()" and similar) -- is not
-        // positively established as low-risk. Default-deny.
-        return 'BLOCK';
-    }"""
-
-    def vision_click_is_safe(self, page: Page, locator) -> bool:
-        """True only when the resolved candidate's nearest actionable ancestor is
-        positively recognized as a low-risk opener/navigation control; False for
-        every native or default-submit control, every ambiguous generic button or
-        [role=button], and on any error (fail-closed).
-
-        This is the independent, Python-side, DOM-structural authority check that
-        look_and_act() requires before clicking a model-selected candidate --
-        consulted in addition to, never instead of, safe_to_click_for_claude()'s
-        own label-text filter (an AND, not an OR): the model's chosen label, its
-        "page" classification, and its "why" field are never authority over this
-        decision, which is why this takes a locator, never a label string."""
-        try:
-            result = locator.evaluate(self._VISION_CLICK_AUTHORITY_SCRIPT)
-            return result == "ALLOW"
-        except Exception:
-            return False
-
     def look_and_act(self, page: Page, claude, goal: str) -> tuple[str, bool]:
         with self._execution_lock():
             if getattr(self, "_submission_execution_state", "active") != "active":
@@ -2151,30 +2060,48 @@ class JobApplicationAssistant:
             return self._look_and_act_locked(page, claude, goal)
 
     def _look_and_act_locked(self, page: Page, claude, goal: str) -> tuple[str, bool]:
-        """Looks at the page the way a person would and takes the next step.
+        """Looks at the page the way a person would -- an observation step, never an
+        independent click authority.
 
         Used when the usual reading finds nothing to fill and nothing to press.
-        Claude names the control; the agent finds it on the page and clicks it
-        -- unless it submits, signs, certifies, deletes or uses a LinkedIn,
-        Indeed or Facebook sign-in, which is refused here whatever Claude says.
-        Returns (what kind of page it is, whether something was clicked).
+        Claude is shown a screenshot and names what kind of page it is and what
+        control looks relevant; this function logs and returns that observation,
+        but it never clicks the named control itself. Returns (what kind of page it
+        is, always False -- nothing is ever clicked here).
 
-        A CAPTCHA ends it: nothing is clicked while one is showing, and nothing
-        inside a CAPTCHA's frame is ever clicked. On Schwab's sign-in the
-        screenshot was read as a sign-in prompt and the puzzle's own "Skip"
-        was clicked before the usual CAPTCHA check had run.
+        A fifth closure review, 7 October 2026, found that the DOM-structural
+        allowlist this function used to consult (a recognized opener role,
+        aria-haspopup/aria-controls/aria-expanded, a real anchor href) was itself
+        still unsafe: every one of those signals can coexist with a custom onclick
+        handler that calls requestSubmit() on an unrelated form --
+        <button aria-haspopup="listbox" onclick="...requestSubmit()">, a
+        <div role="tab" onclick="...requestSubmit()">, and
+        <a href="/next" onclick="...requestSubmit()"> all describe harmless-looking
+        UI semantics while being exactly as irreversible as a bare submit button.
+        No generic, structure-only test can tell "this opens a dropdown" apart from
+        "this opens a dropdown and also submits the form" -- UI semantics are
+        useful for discovery, never for irreversible-action authority. Earlier
+        attempts (a label-text filter, then a DOM-structural allowlist) were each
+        found insufficient in turn; the only fix left is architectural: there is no
+        second click-authority system here at all any more.
 
-        Every resolved candidate is also independently classified by
-        vision_click_is_safe() -- a DOM-structural check, never the model's own
-        label, "page" kind, or "why" field -- before it is ever clicked. The
-        comprehensive P0-B1 closure review, 7 October 2026, found this function
-        clicking a model-selected control with nothing but safe_to_click_for_claude()'s
-        label-text filter and the browser-side SubmissionGuardV0's post-click
-        denial check standing in front of it -- an unrecognized label on a real
-        submit control had no independent, pre-click, Python-side authority at
-        all. This function never operates on the application's own submit-capable
-        step-navigation controls at all now: that decision stays with PageAgent,
-        the one authoritative place for it, via submission_step_finality().
+        The vision/model fallback is therefore purely an observer: it inspects,
+        classifies, and reports what it sees, never independently executing an
+        unverified, model-selected DOM click. The deterministic mechanisms this
+        project already has -- PageAgent's own control-matching and step-navigation
+        authority (submission_step_finality()), the field/dropdown helpers, and the
+        verified final-submit gateway -- remain the only paths that may ever act on
+        the page. When none of them can positively authorize an action on a page
+        this function is asked to look at, the application is left for normal
+        recovery or human handoff rather than guessed at here; for P0-B1 that cost
+        is accepted explicitly, per the owner's own instruction, rather than
+        inventing another generic allowlist to recover the old compatibility.
+
+        A CAPTCHA still ends it early: nothing is read or reported while one is
+        showing. On Schwab's sign-in the screenshot was once read as a sign-in
+        prompt and the puzzle's own "Skip" was clicked before the usual CAPTCHA
+        check had run -- a risk this redesign also removes outright, since nothing
+        here is ever clicked at all any more.
         """
         if safety.captcha_visible(page):
             logger.info("LOOKED: a CAPTCHA is showing -- only you can complete it; the agent does nothing")
@@ -2188,63 +2115,13 @@ class JobApplicationAssistant:
             return "", False
         kind, label, why = seen.get("page", ""), seen.get("click", ""), seen.get("why", "")
         logger.info("LOOKED: %s -- %s%s", kind.replace("_", " ") or "a page", why[:140],
-                    f" -> click {label[:40]!r}" if label else "")
+                    f" -- identified {label[:40]!r}; observation only, never a click" if label else "")
         if kind == "captcha" or safety.captcha_visible(page):
             logger.info("LOOKED: a CAPTCHA is showing -- only you can complete it; the agent does nothing")
             return "captcha", False
-        if not label:
-            return kind, False
-        if not self.safe_to_click_for_claude(page, label):
-            logger.info("LOOKED: not clicking %r -- the agent never presses that on its own", label[:40])
-            return kind, False
-        exact = re.compile(rf"^\s*{re.escape(label)}\s*$", re.IGNORECASE)
-        loose = re.compile(re.escape(label), re.IGNORECASE)
-        scopes = [page] + [f for f in page.frames[1:]
-                           if (f.url or "").startswith("http") and not safety.is_captcha_frame(f.url)]
-        before = self._page_fingerprint(page)
-        for scope in scopes:
-            candidates = [scope.get_by_role("button", name=exact), scope.get_by_role("link", name=exact),
-                          scope.get_by_role("button", name=loose), scope.get_by_role("link", name=loose),
-                          scope.get_by_role("menuitem", name=loose), scope.get_by_role("tab", name=loose),
-                          scope.get_by_text(exact), scope.get_by_label(exact)]
-            for candidate in candidates:
-                try:
-                    for i in range(min(candidate.count(), 4)):
-                        el = candidate.nth(i)
-                        if not el.is_visible():
-                            continue
-                        on_it = " ".join(((el.inner_text(timeout=1_000) or "") + " " +
-                                          (el.get_attribute("aria-label") or "")).split())
-                        if on_it and not self.safe_to_click_for_claude(page, on_it):
-                            continue
-                        if not self.vision_click_is_safe(page, el):
-                            logger.info("LOOKED: not clicking %r -- not a recognized low-risk control",
-                                        label[:40])
-                            continue
-                        if safety.captcha_visible(page):
-                            logger.info("LOOKED: a CAPTCHA appeared -- only you can complete it; not clicking")
-                            return "captcha", False
-                        el.scroll_into_view_if_needed(timeout=3_000)
-                        guard = getattr(self, "_submission_guard", None)
-                        denials_before = guard.denial_count(page) if guard is not None else None
-                        el.click(timeout=5_000)
-                        if guard is not None and denials_before is not None \
-                                and guard.denial_count(page) > denials_before:
-                            logger.error("SUBMISSION_GUARD_V0_DENIED: vision-selected submit control was blocked")
-                            return kind, False
-                        page.wait_for_timeout(2_500)
-                        try:
-                            page.wait_for_load_state("networkidle", timeout=10_000)
-                        except Exception:
-                            pass
-                        self.note_page_changed()
-                        moved = self._page_fingerprint(page) != before
-                        logger.info("LOOKED: clicked %r%s", label[:40], "" if moved else " (the page looks the same)")
-                        return kind, True
-                except Exception as exc:
-                    logger.debug("Vision click failed: %s", str(exc).splitlines()[0][:100])
-                    continue
-        logger.info("LOOKED: could not find %r on the page to click", label[:40])
+        # Observation ends here. No generic, model-selected candidate is ever
+        # clicked by this function, whatever structural signals it carries --
+        # that decision belongs to a deterministic mechanism, not to this one.
         return kind, False
 
     def open_picker_control(self, page: Page, field) -> bool:

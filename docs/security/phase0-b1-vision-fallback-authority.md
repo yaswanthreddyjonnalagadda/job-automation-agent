@@ -5,6 +5,19 @@
 **Finding closed:** the vision-fallback instance of Finding 6
 (`phase0-b1-comprehensive-final-closure-review.md`, Section 6b)
 
+> **Superseded, 7 October 2026.** The DOM-structural allowlist described
+> below (committed as `d3ce1fb`) was itself found insufficient by a further
+> closure review: `aria-haspopup`/`aria-controls`/`aria-expanded`, a
+> recognized opener role, and a real anchor `href` each describe UI
+> semantics, and none of them can prove the candidate's own `onclick`
+> handler does not also submit the application elsewhere on the page. The
+> fix is architectural, not another allowlist: the vision/model fallback no
+> longer clicks any generic, model-selected candidate at all. See "Round 2:
+> removing click authority outright" below, which is the current,
+> superseding state of the code. The content immediately below this notice
+> is kept as an accurate historical record of what the first round actually
+> did and why; it no longer describes the code as it stands.
+
 ## The original unsafe path
 
 `browser_automation._look_and_act_locked()` is used only when the ordinary
@@ -211,7 +224,7 @@ final step," exactly as the comprehensive review's Section 11 preferred.
   collection error compared by exact name against the established baseline:
   identical set, zero new regressions.
 
-## Finding 6 (vision-fallback instance): CLOSED
+## Finding 6 (vision-fallback instance): CLOSED -- as of this round, superseded by Round 2 below
 
 Model text cannot authorize a dangerous click; the model's `"page"`
 classification cannot either (`vision_click_is_safe()` never receives it).
@@ -230,3 +243,126 @@ submission gateway remains the one unchanged chain:
 the guard's own authorized click -- confirmed unaffected, since this fix
 does not touch `apply_flow.py`, `submission_guard.py`, `job_tracker.py`,
 `db.py`, or `safety.py` at all.
+
+---
+
+## Round 2: removing click authority outright
+
+**Commit under repair:** `d3ce1fb` (Round 1's `vision_click_is_safe()` gate)
+
+### Why Round 1's own allowlist was still too permissive
+
+A further closure review constructed:
+
+```html
+<form id="app" onsubmit="window.submitted=true; return false"></form>
+<button type="button" aria-haspopup="listbox"
+        onclick="document.getElementById('app').requestSubmit()">
+  Country
+</button>
+```
+
+and called `vision_click_is_safe()` directly against it. It returned
+`"ALLOW"`, because the element carries `aria-haspopup` -- Round 1's own
+positive signal for "this is a safe dropdown opener." But `aria-haspopup`
+is an accessibility *state*, declared by whoever wrote the page's markup;
+it says nothing at all about what the element's `onclick` handler actually
+does, and a real `requestSubmit()` call sitting right next to it is
+completely invisible to a check that only reads structural attributes.
+The identical problem reproduces for `aria-expanded`, `aria-controls`,
+`role="tab"`, `role="menuitem"`, `role="combobox"`, and a normal anchor
+`href` -- every one of Round 1's positive signals, without exception. No UI
+semantic -- however specific, however narrowly chosen -- can be made to
+imply "and this element's own JavaScript does not submit a form," because
+nothing stops a page's author from attaching exactly that JavaScript to an
+element that also happens to look, structurally, like a safe opener. This
+is not a gap in which attributes were chosen; it is a property of trying
+to infer "has no submission side effect" from "has this other, unrelated
+attribute" at all.
+
+### The fix: remove the click, not the allowlist
+
+There is no fourth or fifth list of attributes that closes this, because
+the problem is categorical, not enumerable. The fix removes
+`_look_and_act_locked()`'s ability to click a generic, model-selected
+candidate entirely:
+
+- `vision_click_is_safe()`, `_VISION_CLICK_AUTHORITY_SCRIPT`,
+  `safe_to_click_for_claude()`, and `_NEVER_CLICK` are deleted outright --
+  each existed solely to gate a click this function no longer performs, and
+  leaving any of them in place, unused, would read as ongoing authority
+  that no longer exists.
+- `_look_and_act_locked()` keeps exactly its observation half: CAPTCHA
+  checks, the screenshot, `claude.read_page()`, and logging/returning the
+  model's own `"page"` kind and `"click"` label. It always returns
+  `clicked=False`.
+- No candidate is resolved, normalized, scrolled to, or clicked. There is
+  nothing left in this function for a future attribute, role, or label to
+  be checked against, because there is no click decision left to gate.
+
+The deterministic mechanisms this project already has -- `PageAgent`'s own
+control-matching and `submission_step_finality()`-governed step-navigation
+authority, the field/dropdown helpers, and the verified final-submit
+gateway -- remain the only paths that may ever act on the page. Per
+instruction, this round does not build a new routing mechanism to hand a
+vision-identified candidate to those deterministic paths; for P0-B1, when
+the vision fallback is reached at all (meaning the deterministic reading
+already found nothing to fill or press), it now simply reports what it
+saw and takes no action, leaving the page for normal recovery or human
+handoff. Restoring the lost compatibility for a specific, real control
+shape is left to a future, individually-vetted ATS/UI-specific
+deterministic adapter -- never another generic heuristic.
+
+### Tests
+
+See `docs/security/phase0-b1-finding6-closure-tightening.md`'s Round 5 for
+the full test inventory. In summary: a single 17-case parametrized matrix
+in `tests/test_submission_firewall.py` now covers Round 1's original
+native/default/custom-submit shapes together with the new
+semantics-plus-hidden-submit shapes this round's review named
+(`aria-haspopup`, `aria-expanded`, `aria-controls`, `role="tab"`,
+`role="menuitem"`, `role="combobox"`, and a normal `href`, each paired
+with an `onclick` that calls `requestSubmit()`), every case proving the
+control is genuinely dangerous via a direct click first, then proving
+`look_and_act()` refuses it with `_submission_guard = None`. A second
+matrix (11 labels, both final-sounding and innocuous-sounding) proves the
+refusal is architectural, not vocabulary-based -- it does not matter what
+the label says, because nothing is ever clicked regardless. A new positive
+test proves the fallback still reads, classifies, and reports -- using a
+fixture whose own side effect is deliberately harmless, so a pass proves
+the point even for a candidate that really would have been safe to click.
+Tests that existed only to validate the now-deleted
+`safe_to_click_for_claude()` directly were removed, not weakened --
+`tests/test_finding_the_way.py::test_looking_clicks_what_claude_points_at`
+is rewritten to assert the new contract (observed and identified, never
+clicked) rather than preserving the old "vision directly clicks it"
+expectation the task explicitly authorized changing.
+
+### Validation
+
+- `tests/test_submission_firewall.py` + `tests/test_finding_the_way.py`:
+  **125 passed** in 138.01s.
+- `tests/test_authority_boundary.py`: **17 passed** in 19.57s -- unaffected,
+  confirming `submission_step_finality()` was untouched by this round too.
+- Original P0-B1 targeted suite: **227 passed** in 235.72s (a net `+7`,
+  intentional, from the matrix growing and three now-invalid "may still
+  click" tests being removed).
+- PageAgent/review-step/navigation suites: **73 passed** in 142.52s (down
+  from 92 by exactly the 19 tests that validated the deleted
+  `safe_to_click_for_claude()` directly -- an intentional, accounted-for
+  reduction).
+- Full suite, cache cleared first: **`18 failed, 2034 passed, 3 skipped, 1
+  error`** in 838.44s (0:13:58). All 18 failing node IDs plus the 1
+  collection error compared by exact name against the established
+  baseline: identical set, zero new regressions.
+
+## Finding 6 (vision-fallback instance): CLOSED (architecturally, not by allowlist)
+
+`browser_automation._look_and_act_locked()` can no longer directly invoke a
+generic, model-selected `el.click()` under any circumstance. There is
+exactly one model/vision click entry point in the repository (confirmed by
+repository-wide search, unchanged from Round 1's audit), and it no longer
+clicks anything. `PageAgent.press_next()`'s step-navigation authority and
+the verified final-submit gateway remain the only two paths that may ever
+act on an irreversible application control -- neither was touched by this
+round.

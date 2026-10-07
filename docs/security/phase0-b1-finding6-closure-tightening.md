@@ -439,7 +439,7 @@ now agree before any click.
   the 1 collection error compared by exact name against the established
   baseline: identical set, zero new regressions.
 
-## Finding 6: CLOSED (narrowed to the one vetted structural signal, across both the PageAgent step-navigation path and the vision/model click-fallback path)
+## Finding 6: CLOSED (narrowed to the one vetted structural signal, across both the PageAgent step-navigation path and the vision/model click-fallback path) -- as of Round 4, superseded for the vision path by Round 5 below
 
 Both of the two distinct paths this engagement found capable of performing a
 potentially final application action now require positive, independently
@@ -450,3 +450,125 @@ fallback's candidate-click decision (Round 4, `vision_click_is_safe()`).
 Neither path's authority rests on the model's or the AI's own self-report,
 and browser-side containment is defense in depth for both, never the sole
 protection.
+
+---
+
+## Round 5: Round 4's own allowlist was still unsafe -- the fix is architectural
+
+**Commit under repair:** `d3ce1fb` (Round 4's `vision_click_is_safe()` gate)
+
+A fifth closure review found that Round 4's DOM-structural allowlist --
+`aria-haspopup`/`aria-controls`/`aria-expanded`, a recognized opener role
+(`tab`, `menuitem`, `combobox`, ...), a real non-`javascript:` anchor href
+-- was itself still insufficient, for a reason no additional allowlist entry
+could fix: every one of those signals describes *UI semantics*, and none of
+them can prove the candidate's own `onclick` handler does not also call
+`requestSubmit()` on an unrelated form. `<button type="button"
+aria-haspopup="listbox" onclick="document.getElementById('app').requestSubmit()">`
+is exactly as irreversible as a bare `<button type="submit">`, and Round
+4's own code returned `"ALLOW"` for it, because `aria-haspopup`'s presence
+was read as proof of safety. The same gap applies identically to
+`aria-expanded`, `aria-controls`, `role="tab"`, `role="menuitem"`,
+`role="combobox"`, and a normal anchor `href`. Generic page metadata is
+useful for discovery; it is not irreversible-action authority, and no
+third allowlist attempt -- narrower, broader, or differently shaped -- would
+close this the way the first two attempts (Rounds 1 and 2's progressbar
+heuristics, Round 4's opener-role heuristic) each failed to close their own
+version of the same problem.
+
+### The architectural correction
+
+Rather than add a fourth allowlist, the vision/model fallback's click
+authority is removed outright. `browser_automation._look_and_act_locked()`
+no longer resolves or clicks any candidate at all: it still takes the
+screenshot, calls `claude.read_page()`, and logs/returns the model's own
+`"page"` classification and `"click"` label -- the observation step -- but
+it always returns `clicked=False`. `vision_click_is_safe()`,
+`_VISION_CLICK_AUTHORITY_SCRIPT`, `safe_to_click_for_claude()`, and
+`_NEVER_CLICK` are removed entirely: each existed only to decide whether
+*this* function's own click should proceed, and that click no longer
+happens, so keeping any of them would be dead, misleadingly
+authority-shaped code. The deterministic mechanisms this project already
+has -- `PageAgent.press_next()`'s step-navigation authority
+(`submission_step_finality()`), the field/dropdown helpers, and the
+verified final-submit gateway -- remain the only paths that may ever act on
+the page. For P0-B1, the resulting compatibility cost (the vision fallback
+can no longer click anything it identifies, including controls that really
+are harmless) is accepted explicitly, per instruction, rather than invented
+around with another generic rule.
+
+### Tests
+
+`tests/test_submission_firewall.py`'s vision section was substantially
+rewritten, not incrementally patched: a single parametrized adversarial
+matrix now covers both Round 4's original shapes (native/default/custom
+submit controls, A-K) and the new "innocent-looking semantics plus a hidden
+submit" shapes this round's review named (`aria-haspopup`, `aria-expanded`,
+`aria-controls`, `role="tab"`, `role="menuitem"`, `role="combobox"`, and a
+normal anchor `href`, each paired with an `onclick` that calls
+`requestSubmit()` on an unrelated form) -- 17 cases in total, each proving
+the underlying control is genuinely dangerous via a direct click first, then
+proving `look_and_act()` refuses it with `_submission_guard = None`. A
+second parametrized test (11 labels, including both final-sounding and
+innocuous-sounding words) proves the refusal is architectural, not
+vocabulary-based. A new positive test proves the fallback still reads the
+page, calls the model, and returns its classification -- it is an observer,
+not disabled outright -- using a fixture whose own side effect is
+deliberately harmless, specifically to show that even a provably-safe
+control is still not clicked, because the decision no longer depends on
+evidence about the specific candidate at all.
+
+Three tests whose entire purpose was validating the now-removed
+`safe_to_click_for_claude()` directly
+(`test_never_clicked_on_claudes_say_so`, `test_ordinary_steps_are_allowed`,
+`test_apply_is_allowed_only_from_a_posting` in
+`tests/test_finding_the_way.py`) were removed, not weakened: the function
+they tested no longer exists, and the behavior they checked ("Apply only
+opens from a posting") is independently and unaffectedly enforced by
+`page_agent.py`'s own deterministic `posting_plan()`/`profile_forward()`,
+which never called `safe_to_click_for_claude()` in the first place. One
+assertion inside `test_update_profile_moves_on_and_finish_later_never_does`
+that also called the removed function directly was dropped, and the test
+renamed to `test_update_profile_moves_on` to match what it still checks.
+`test_looking_clicks_what_claude_points_at` (already once rewritten in
+Round 4 to use a real anchor) is rewritten again, per the task's own
+explicit permission, to
+`test_looking_identifies_what_claude_points_at_but_never_clicks_it` --
+asserting the model's `"page"` kind is still returned and the candidate is
+identified, but that it is never clicked, using the same deliberately
+harmless fixture to make the point unambiguous.
+
+### Validation
+
+- `tests/test_submission_firewall.py` + `tests/test_finding_the_way.py`
+  together: **125 passed** in 138.01s.
+- `tests/test_authority_boundary.py`: **17 passed** in 19.57s -- unaffected.
+- Original P0-B1 targeted suite: **227 passed** in 235.72s (a net `+7` over
+  the prior round's 220, from the matrix growing by 7 cases net and the
+  label list by 3, offset by 3 removed "may still click" tests -- the pass
+  count intentionally changed here, per instruction, rather than being held
+  to the old figure).
+- PageAgent/review-step/navigation suites: **73 passed** in 142.52s (down
+  from 92, by exactly the 19 tests removed for validating the now-deleted
+  `safe_to_click_for_claude()` -- an intentional, accounted-for reduction,
+  not a silent regression).
+- Full suite, cache cleared first: **`18 failed, 2034 passed, 3 skipped, 1
+  error`** in 838.44s (0:13:58). `2034 = 2046 - 19 + 7`: the 19 removed
+  `safe_to_click_for_claude()`-specific tests and the 7 net new
+  vision-matrix tests, both accounted for above. All 18 failing node IDs
+  plus the 1 collection error compared by exact name against the
+  established baseline: identical set, zero new regressions.
+
+## Finding 6: CLOSED (one authority model, not two)
+
+No second click-authority system remains anywhere in the repository.
+`browser_automation._look_and_act_locked()` can no longer directly invoke a
+generic, model-selected `el.click()` under any circumstance -- not for a
+native submitter, not for a default-submit button, not for a custom
+`requestSubmit()` control, and not for a control carrying any opener, tab,
+menu, combobox, or navigational-link semantic, however that control's own
+`onclick` is wired. `PageAgent.press_next()`'s step-navigation authority
+(`submission_step_finality()`) and the verified final-submit gateway
+(`apply_flow.submit_verified()` through `begin_submission_dispatch()`)
+remain the only two paths that may ever act on an irreversible application
+control, exactly as before this round -- this round touched neither of them.
