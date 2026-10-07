@@ -2661,15 +2661,28 @@ class PageAgent:
     # -- one page -----------------------------------------------------------------
     def run(self, page) -> Outcome:
         """Works through the application until it is submitted or needs the owner."""
+        lock_factory = getattr(self.assistant, "_execution_lock", None)
+        if callable(lock_factory):
+            with lock_factory():
+                if getattr(self.assistant, "_submission_execution_state", "active") != "active":
+                    return Outcome("needs_user", page, ["automation is parked for human handoff"])
+                return self._run_locked(page)
+        return self._run_locked(page)
+
+    def _run_locked(self, page) -> Outcome:
         self._ensure_state()
         tries = 0
         stick_tries = 0      # re-reads of one page because an answer did not stay
         last_fingerprint = ""
         feedback = ""
         for _ in range(MAX_PAGES * MAX_TRIES_PER_PAGE):
+            if getattr(self.assistant, "_submission_execution_state", "active") != "active":
+                return Outcome("needs_user", page, ["automation is parked for human handoff"])
             tab = self.tab(page)
             if tab.is_closed():
                 return Outcome("gave_up", page, ["the browser window was closed"])
+            if hasattr(self.assistant, "protect_submission"):
+                self.assistant.protect_submission(tab)
             self._current_host = urlparse(getattr(tab, "url", "")).netloc.lower()
             if not self._resume_autofill_attempted and self.resume_file \
                     and hasattr(self.assistant, "autofill_from_resume"):
@@ -2847,11 +2860,6 @@ class PageAgent:
                                 # asks beside the label ("max 150 words", "0/500").
                                 box = open_answers.read_box(self.locate(page, ctrl.ref)) \
                                     if ctrl.role in ("textbox", "searchbox") else {}
-                                # A box inside a job or degree entry is asked about with that entry named: "Country
-                                # of Institution" alone got one answer (India) for both degrees (Steelcase).
-                                entry = getattr(self, "_entries", {}).get(ctrl.ref)
-                                about = repeated_entries.describe(entry, getattr(self, "history", {}) or {}) \
-                                    if entry is not None else ""
                                 # A list is asked about with its choices: one that draws them only when opened
                                 # is opened and read first, or the AI writes an essay for a pick-one question.
                                 if not ctrl.options and ctrl.role in ("combobox", "listbox"):
@@ -2859,7 +2867,7 @@ class PageAgent:
                                     if field is not None:
                                         ctrl.options = form_fields.read_choices(field)
                                 val = self.claude.answer_single_question(
-                                    question=f"{ctrl.question} (for: {about})" if about else ctrl.question,
+                                    question=self._question_for(ctrl),
                                     options=ctrl.options,
                                     resume_text=self._resume_text_cache,
                                     profile=self.profile,
@@ -4285,6 +4293,13 @@ class PageAgent:
             return self.choose(page, control, answer.value, self._page_controls(page))
         return False
 
+    def _question_for(self, control: Control) -> str:
+        """The question text given to the AI for one unanswered control. A box inside a job or degree entry
+        names that entry -- "Country of Institution" alone got one answer for both degrees (Steelcase)."""
+        entry = getattr(self, "_entries", {}).get(control.ref)
+        about = repeated_entries.describe(entry, getattr(self, "history", {}) or {}) if entry is not None else ""
+        return f"{control.question} (for: {about})" if about else control.question
+
     def _optional_entry_box(self, control: Control, still_open) -> bool:
         """A box inside a job or degree entry that the form does not mark required."""
         if getattr(self, "_entries", {}).get(control.ref) is None:
@@ -5323,7 +5338,20 @@ class PageAgent:
 
     def press_next(self, page, plan: PagePlan, controls: list[Control]) -> tuple[str, object, str]:
         """("moved" | "submitted" | "retry" | "stop", page, what happened)."""
+        lock_factory = getattr(self.assistant, "_execution_lock", None)
+        if callable(lock_factory):
+            with lock_factory():
+                if getattr(self.assistant, "_submission_execution_state", "active") != "active":
+                    return "stop", page, "automation is parked for human handoff"
+                return self._press_next_locked(page, plan, controls)
+        return self._press_next_locked(page, plan, controls)
+
+    def _press_next_locked(self, page, plan: PagePlan, controls: list[Control]) -> tuple[str, object, str]:
+        if getattr(self.assistant, "_submission_execution_state", "active") != "active":
+            return "stop", page, "automation is parked for human handoff"
         tab = self.tab(page)
+        if hasattr(self.assistant, "protect_submission"):
+            self.assistant.protect_submission(tab)
 
         # Pre-navigation sweep: scan DOM for inline resume-parsed experience or
         # education cards stuck in active 'Edit' or 'Draft' modes. Autonomously
@@ -5473,9 +5501,9 @@ class PageAgent:
 
         before = re.sub(r"\[ref=[\w-]+\]|\[active\]", "", self.snapshot(page))
         tabs_before = len(tab.context.pages)
-        if submit_word:
-            self.final_pressed = True   # a confirmation after any Submit counts
         pressed_at = time.time()
+        guard = getattr(self.assistant, "_submission_guard", None)
+        denials_before = guard.denial_count(tab) if guard is not None else None
         if OPENS_A_FILE_DIALOG.search(label) and self.resume_file and Path(self.resume_file).is_file():
             try:
                 with tab.expect_file_chooser(timeout=6_000) as chooser:
@@ -5486,6 +5514,11 @@ class PageAgent:
                 pass          # no dialog came; the click itself still happened
         else:
             self.locate(page, control.ref).click(timeout=10_000)
+        if guard is not None and denials_before is not None and guard.denial_count(tab) > denials_before:
+            logger.error("SUBMISSION_GUARD_V0_DENIED: PageAgent stopped after an intercepted submit attempt")
+            return "stop", page, "final submission is only available through the verified gateway or human handoff"
+        if submit_word:
+            self.final_pressed = True   # a confirmation after an allowed intermediate Submit counts
         self.settle(page, 2_500)
         page = self.newest_tab(page, tabs_before)
         try:
