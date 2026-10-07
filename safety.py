@@ -142,7 +142,29 @@ def is_account_creation_consent(text: str) -> bool:
 # --------------------------------------------------------------------------
 SUBMIT_LABEL_RE = re.compile(
     r"^\s*(submit( my| your| this)?( application| profile| candidacy)?|apply( now| for this job)?|"
-    r"send application|save and submit|finish( and submit)?|complete application)\s*$",
+    r"send application|save and submit|finish( and submit)?|complete application|"
+    r"confirm( and| &)? send|review (and|&) send|finaliz(e|ation)|"
+    r"save (and|&) finish|proceed|postuler|bewerben|enviar( solicitud)?)\s*$",
+    re.IGNORECASE,
+)
+# "Complete" and "Done" alone are deliberately NOT here: both are also common labels for
+# committing a single inline card/entry (interaction.commit_draft_cards()'s own "Done" target,
+# a "Mark Complete" step) -- a completely different action from a final application submit, and
+# too ambiguous a single word to ever be a safe universal synonym for either meaning. A genuine
+# final use of either word is instead caught by the structural default-deny rule in
+# submission_guard.py (SAFE_UTILITY_LABEL_RE / soleRemainingAction), which does not depend on the
+# word at all.
+
+# Words that mean a control manages the FORM (adds/removes/edits/pauses/navigates backward)
+# rather than sending it anywhere -- the closed, small vocabulary side of the default-deny rule
+# below: an unrecognized label on an otherwise form-submitting-looking control is treated as a
+# possible final submit, UNLESS it matches something from this list (the adversarial review's
+# Finding 1, 7 October 2026: a label need not be a known SUBMIT_LABEL_RE synonym to be final).
+SAFE_UTILITY_LABEL_RE = re.compile(
+    r"^\s*(add|remove|delete|clear|upload|choose file|browse|replace( file)?|edit|change|"
+    r"show|hide|toggle|view|print|download|close|dismiss|expand|collapse|"
+    r"cancel|back|previous|skip|finish later|apply later|continue later|resume later|"
+    r"come back later|save( (for later|draft|and (continue|finish) later))?)\b",
     re.IGNORECASE,
 )
 
@@ -150,6 +172,12 @@ SUBMIT_LABEL_RE = re.compile(
 def is_submit_label(text: str) -> bool:
     """True when a button's label means 'send this application to the employer'."""
     return bool(SUBMIT_LABEL_RE.match(" ".join((text or "").split())))
+
+
+def is_safe_utility_label(text: str) -> bool:
+    """True when a button's label is a known non-final, form-managing action (add/remove/edit/
+    cancel/back/save-for-later/...), not a possible final submit."""
+    return bool(SAFE_UTILITY_LABEL_RE.match(" ".join((text or "").split())))
 
 
 # --------------------------------------------------------------------------

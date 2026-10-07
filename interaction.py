@@ -20,6 +20,7 @@ from playwright.sync_api import Page
 
 import safety
 from perception import is_ant_single_select
+from submission_guard import SubmissionGuardV0
 
 logger = logging.getLogger(__name__)
 
@@ -55,17 +56,39 @@ def fill_and_dispatch(locator: Any, value: str, timeout: Optional[float] = None,
 def click_resiliently(locator: Any, timeout_ms: int = 4_000) -> bool:
     """Clicks an element resiliently, trying normal click, forced click, and JS dispatch."""
     try:
+        denial_count = SubmissionGuardV0.click_denial_count(locator)
+    except Exception:
+        denial_count = None
+    try:
         locator.click(timeout=timeout_ms)
+        if SubmissionGuardV0.click_was_denied(locator, denial_count):
+            logger.warning("SUBMISSION_GUARD_V0_DENIED: refusing click fallback")
+            return False
         return True
     except Exception:
+        if SubmissionGuardV0.click_was_denied(locator, denial_count):
+            logger.warning("SUBMISSION_GUARD_V0_DENIED: refusing click fallback")
+            return False
         try:
             locator.click(force=True, timeout=min(timeout_ms, 2_000))
+            if SubmissionGuardV0.click_was_denied(locator, denial_count):
+                logger.warning("SUBMISSION_GUARD_V0_DENIED: refusing JavaScript click fallback")
+                return False
             return True
         except Exception:
+            if SubmissionGuardV0.click_was_denied(locator, denial_count):
+                logger.warning("SUBMISSION_GUARD_V0_DENIED: refusing JavaScript click fallback")
+                return False
             try:
                 locator.evaluate("el => el.click()")
+                if SubmissionGuardV0.click_was_denied(locator, denial_count):
+                    logger.warning("SUBMISSION_GUARD_V0_DENIED: JavaScript click was intercepted")
+                    return False
                 return True
             except Exception as exc:
+                if SubmissionGuardV0.click_was_denied(locator, denial_count):
+                    logger.warning("SUBMISSION_GUARD_V0_DENIED: JavaScript click was intercepted")
+                    return False
                 logger.debug("click_resiliently failed: %s", exc)
                 return False
 
