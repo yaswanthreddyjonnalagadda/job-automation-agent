@@ -3155,10 +3155,18 @@ class JobApplicationAssistant:
         // a real recorded production page -- read directly via a digit-only regex capture
         // (parseInt on \d+ groups can never be empty, negative, or NaN). A marker present
         // but not parseable this way is still checked for the literal word "Review"
-        // (756b77b's original, unchanged signal).
+        // (756b77b's original, unchanged signal). Selector deliberately does NOT also match
+        // the generic [aria-current='step'] state: a third closure review, 7 October 2026,
+        // found that an unrelated element anywhere on the page carrying that bare ARIA
+        // state (not tied to Workday's own vetted data-automation-id at all) could satisfy
+        // this selector and be misread as application-wizard evidence -- aria-current="step"
+        // is a generic, standards-based state any unrelated nested stepper can carry, and
+        // its presence alone does not establish that it belongs to THIS application's
+        // wizard/navigation flow. Only the one structure actually vetted against a real
+        // recorded production page is accepted.
         const stepRe = /\bstep\s+(\d+)\s+of\s+(\d+)\b/i;
         const markers = Array.from(document.querySelectorAll(
-            "[data-automation-id='progressBarActiveStep'], [aria-current='step']"
+            "[data-automation-id='progressBarActiveStep']"
         ));
         if (markers.length > 1) return "UNKNOWN";  // duplicated/ambiguous -- no positive evidence either way
         if (markers.length === 1) {
@@ -3212,23 +3220,27 @@ class JobApplicationAssistant:
         'current step 6 of 6' / 'completed step 5 of 6' -- a real, numeric, DOM-native step count,
         not the word 'Review' alone, so a final step under any other name is caught the same way.
 
-        No generic, non-Workday signal is accepted as NON_FINAL authority (removed, 7 October
-        2026, by a second closure review). Two successive attempts at a cross-ATS generic signal
-        were each found insufficient and reproduced as live defects: first, a bare
-        role='progressbar' whose accessible-name text merely mentioned the word 'step' (misfired
-        on an unrelated upload-progress indicator labeled 'Upload step 2 of 5', and let
-        aria-valuenow='' / aria-valuenow='-1' slip past a bare Number.isFinite() check via
-        JavaScript's own coercion quirks); then, requiring that same progressbar to also carry
+        No generic, non-Workday signal is accepted as NON_FINAL authority. Three successive
+        attempts at a cross-ATS generic signal were each found insufficient and reproduced as live
+        defects: first, a bare role='progressbar' whose accessible-name text merely mentioned the
+        word 'step' (misfired on an unrelated upload-progress indicator labeled 'Upload step 2 of
+        5', and let aria-valuenow='' / aria-valuenow='-1' slip past a bare Number.isFinite() check
+        via JavaScript's own coercion quirks); then, requiring that same progressbar to also carry
         aria-posinset/aria-setsize (the real ARIA "position in an ordered set" relationship), which
-        the next closure review found was still not sufficient -- that attribute pair is plain
-        set-position semantics for a set-item role, and its presence does not establish that the
-        element belongs to, or describes, this application's own wizard/navigation flow rather than
-        an unrelated upload, onboarding, or document sub-process. Positive NON_FINAL evidence is
-        therefore restricted to the one structure actually vetted against a real recorded production
-        page (Workday's own marker, above); any other ATS shape -- supported or not, however
-        convincing its text or ARIA attributes look -- resolves "UNKNOWN" here. A future
-        ATS-specific positive proof may be added later, but only after being individually validated
-        against that ATS's own real recorded markup, never as another generic, cross-ATS heuristic.
+        was still not sufficient -- that attribute pair is plain set-position semantics for a
+        set-item role, and its presence does not establish that the element belongs to this
+        application's own wizard/navigation flow rather than an unrelated upload, onboarding, or
+        document sub-process; then, the marker selector itself also matching the bare, generic
+        [aria-current='step'] ARIA state (7 October 2026, a third closure review) -- any unrelated
+        nested stepper elsewhere on the page can carry that same standards-based state without any
+        tie to this application at all, and the selector accepted it exactly as it accepted
+        Workday's own vetted marker. Positive NON_FINAL evidence is therefore restricted to the one
+        structure actually vetted against a real recorded production page
+        ([data-automation-id='progressBarActiveStep'] alone, above); any other ATS shape --
+        supported or not, however convincing its text or ARIA attributes look -- resolves "UNKNOWN"
+        here. A future ATS-specific positive proof may be added later, but only after being
+        individually validated against that ATS's own real recorded markup, never as another
+        generic, cross-ATS heuristic.
 
         Absence of a recognized structure, more than one conflicting marker, or a marker that is
         hidden/stale is "UNKNOWN", never "NON_FINAL": an unsupported ATS shape, or ambiguous

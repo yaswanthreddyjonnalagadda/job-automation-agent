@@ -117,6 +117,19 @@ WORKDAY_LEGITIMATE_INTERMEDIATE_STEP = """
   </form>
 """
 
+# A third closure review's own reproduction, 7 October 2026: a bare, generic
+# aria-current="step" element -- NOT Workday's own vetted data-automation-id marker, but the
+# plain, standards-based ARIA state any unrelated nested stepper elsewhere on the page can
+# carry -- used to be accepted by the same marker selector as Workday's vetted structure. Its
+# presence alone does not tie it to THIS application's own wizard/navigation flow.
+UNRELATED_ARIA_CURRENT_STEP_STEP = """
+  <div aria-current="step">current step 2 of 5</div>
+  <form onsubmit="window.submitted = true; return false">
+    <label>Answer <input id="answer"></label>
+    <button type="submit">Submit</button>
+  </form>
+"""
+
 # The second closure-review's own reproduction, 7 October 2026: role="progressbar" PLUS
 # aria-posinset/aria-setsize -- the prior fix's own stronger association attempt -- is still
 # not authority. aria-posinset/aria-setsize are plain set-position semantics for a set-item
@@ -304,6 +317,25 @@ def test_a_real_workday_intermediate_step_still_proceeds(page):
 
     assert kind == "moved"
     assert page.evaluate("window.submitted") is True
+
+
+def test_an_unrelated_aria_current_step_element_is_still_not_authority(page):
+    """A third closure review's own reproduction, 7 October 2026: the marker selector used
+    to also match the bare, generic aria-current="step" ARIA state -- not Workday's own
+    vetted data-automation-id marker -- so an unrelated nested stepper elsewhere on the
+    page, with misleading plan.step metadata, could be misread as proof this application's
+    own wizard has more steps remaining. Also proves the underlying Submit control is
+    genuinely dangerous via a direct click on fresh content, matching the same
+    browser-independence proof used throughout this file."""
+    page.set_content(f"<html><body>{UNRELATED_ARIA_CURRENT_STEP_STEP}</body></html>")
+    page.locator("button[type=submit]").click()
+    assert page.evaluate("window.submitted") is True  # the control is genuinely dangerous
+    page.evaluate("window.submitted = undefined")
+
+    kind, _page, reason = press_submit(page, UNRELATED_ARIA_CURRENT_STEP_STEP, step="2 of 5")
+
+    assert kind == "stop", reason
+    assert page.evaluate("window.submitted") is None
 
 
 def test_posinset_and_setsize_on_an_unrelated_role_is_still_not_authority(page):
