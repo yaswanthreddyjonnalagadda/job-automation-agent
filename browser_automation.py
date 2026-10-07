@@ -3149,19 +3149,6 @@ class JobApplicationAssistant:
 
     _STEP_FINALITY_SCRIPT = r"""() => {
         function visible(el) { return el.getClientRects().length > 0; }
-        // A raw attribute string is accepted only when it is entirely a number: this
-        // rejects "" (Number("") === 0, a real JS coercion trap), whitespace, "NaN",
-        // "Infinity", hex-looking strings, and any other non-numeric text outright,
-        // rather than trusting Number()'s own coercion (the P0-B1 Finding 6
-        // closure-review defect, 7 October 2026: aria-valuenow="" and aria-valuenow="-1"
-        // both passed the old Number.isFinite()-only check).
-        function strictNumber(raw) {
-            if (raw == null) return null;
-            const trimmed = String(raw).trim();
-            if (!/^-?\d+(\.\d+)?$/.test(trimmed)) return null;
-            const n = Number(trimmed);
-            return Number.isFinite(n) ? n : null;
-        }
 
         // Workday's own active-step marker: its own text carries a real, numeric
         // "current step N of M" (or "completed step N of M") phrase -- confirmed against
@@ -3189,32 +3176,21 @@ class JobApplicationAssistant:
             }
         }
 
-        // A generic, non-Workday step/wizard item. Evidence is required to be
-        // STRUCTURALLY associated with an application step sequence, never inferred from
-        // an arbitrary accessible-name text match: aria-posinset/aria-setsize is the real
-        // ARIA "position in an ordered/sized set" relationship (tabs, listitems, steps),
-        // combined with role="progressbar" and the valuenow/valuemax pair the task
-        // actually gates the click on. The P0-B1 Finding 6 closure-review defect, 7
-        // October 2026: a bare role="progressbar" whose label merely contained the word
-        // "step" (e.g. an unrelated file-upload indicator labeled "Upload step 2 of 5")
-        // was wrongly accepted as wizard evidence; requiring posinset/setsize as well is a
-        // real DOM relationship an unrelated progress bar would not plausibly also carry.
-        const setItems = Array.from(document.querySelectorAll(
-            "[role='progressbar'][aria-valuenow][aria-valuemax][aria-posinset][aria-setsize]"
-        ));
-        if (setItems.length > 1) return "UNKNOWN";
-        if (setItems.length === 1) {
-            const el = setItems[0];
-            const now = strictNumber(el.getAttribute('aria-valuenow'));
-            const max = strictNumber(el.getAttribute('aria-valuemax'));
-            if (now !== null && max !== null && now >= 0 && max > 0 && now <= max
-                    && now < max && visible(el)) {
-                return "NON_FINAL";
-            }
-            // malformed, negative, empty, or inconsistent (now > max) values fall through
-            // to UNKNOWN below -- never coerced into permission
-        }
-
+        // No generic, non-Workday signal is accepted as NON_FINAL authority. A second
+        // closure review, 7 October 2026, found that role="progressbar" combined with
+        // aria-posinset/aria-setsize (this file's own prior attempt at a stronger,
+        // non-text-based association) was still not sufficient: aria-posinset/aria-setsize
+        // are plain set-position semantics for a set-item role, and their mere presence
+        // alongside role="progressbar" does not establish that the element belongs to, or
+        // describes, THIS application's own wizard/navigation flow -- it can describe an
+        // unrelated upload, onboarding, or document sub-process just as easily, with or
+        // without application-looking label text. Positive NON_FINAL evidence is
+        // deliberately restricted to the one structure actually vetted against a real
+        // recorded production page (the Workday marker above); an unsupported ATS shape
+        // returns UNKNOWN here and fails closed, same as FINAL. A future ATS-specific
+        // positive proof may be added later, but only after being individually validated
+        // against that ATS's own real markup -- never as another generic, cross-ATS
+        // heuristic.
         return "UNKNOWN";
     }"""
 
@@ -3236,24 +3212,29 @@ class JobApplicationAssistant:
         'current step 6 of 6' / 'completed step 5 of 6' -- a real, numeric, DOM-native step count,
         not the word 'Review' alone, so a final step under any other name is caught the same way.
 
-        A second, generic signal covers non-Workday steppers: a role='progressbar' element that
-        ALSO carries aria-posinset/aria-setsize (the real ARIA "position in an ordered set"
-        relationship) -- never a bare progressbar whose accessible-name text merely mentions the
-        word 'step' (a follow-up closure review, 7 October 2026, found that heuristic misfired on
-        an unrelated upload-progress indicator labeled e.g. 'Upload step 2 of 5', and that
-        aria-valuenow='' / aria-valuenow='-1' both slipped past a bare Number.isFinite() check via
-        JavaScript's own numeric-coercion quirks). Both the association (posinset/setsize) and the
-        numeric values (valuenow/valuemax, strictly parsed: present, non-empty, finite, 0 <= now <=
-        max) must hold before this signal grants anything, and it is restricted to the NON_FINAL
-        direction only -- reaching 100% on a progress bar is not, on its own, proof that the
-        application itself is done.
+        No generic, non-Workday signal is accepted as NON_FINAL authority (removed, 7 October
+        2026, by a second closure review). Two successive attempts at a cross-ATS generic signal
+        were each found insufficient and reproduced as live defects: first, a bare
+        role='progressbar' whose accessible-name text merely mentioned the word 'step' (misfired
+        on an unrelated upload-progress indicator labeled 'Upload step 2 of 5', and let
+        aria-valuenow='' / aria-valuenow='-1' slip past a bare Number.isFinite() check via
+        JavaScript's own coercion quirks); then, requiring that same progressbar to also carry
+        aria-posinset/aria-setsize (the real ARIA "position in an ordered set" relationship), which
+        the next closure review found was still not sufficient -- that attribute pair is plain
+        set-position semantics for a set-item role, and its presence does not establish that the
+        element belongs to, or describes, this application's own wizard/navigation flow rather than
+        an unrelated upload, onboarding, or document sub-process. Positive NON_FINAL evidence is
+        therefore restricted to the one structure actually vetted against a real recorded production
+        page (Workday's own marker, above); any other ATS shape -- supported or not, however
+        convincing its text or ARIA attributes look -- resolves "UNKNOWN" here. A future
+        ATS-specific positive proof may be added later, but only after being individually validated
+        against that ATS's own real recorded markup, never as another generic, cross-ATS heuristic.
 
-        Absence of a recognized structure, more than one conflicting marker, a marker that is
-        hidden/stale, or any malformed/negative/inconsistent numeric value is "UNKNOWN", never
-        "NON_FINAL": an unsupported ATS shape, or ambiguous or untrustworthy evidence, is not
-        permission to proceed past a submit-labeled control outside the authoritative final-submit
-        gateway. Only "NON_FINAL" may authorize that ordinary click; both "FINAL" and "UNKNOWN"
-        must refuse it."""
+        Absence of a recognized structure, more than one conflicting marker, or a marker that is
+        hidden/stale is "UNKNOWN", never "NON_FINAL": an unsupported ATS shape, or ambiguous
+        evidence, is not permission to proceed past a submit-labeled control outside the
+        authoritative final-submit gateway. Only "NON_FINAL" may authorize that ordinary click;
+        both "FINAL" and "UNKNOWN" must refuse it."""
         try:
             result = page.evaluate(self._STEP_FINALITY_SCRIPT)
             return result if result in ("FINAL", "NON_FINAL", "UNKNOWN") else "UNKNOWN"

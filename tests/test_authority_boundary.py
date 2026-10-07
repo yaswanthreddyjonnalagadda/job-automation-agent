@@ -100,16 +100,45 @@ NO_INDEPENDENT_EVIDENCE_SUBMIT_STEP = """
   </form>
 """
 
-# The legitimate case this fix must not break: a non-Workday stepper that exposes its
-# progress through the standard ARIA progressbar pattern, combined with aria-posinset/
-# aria-setsize -- the real ARIA "position in an ordered set" relationship -- as structural
-# proof that this progressbar actually describes the application's own step sequence, not
-# just a label that happens to mention the word "step". Read directly by
-# submission_step_finality() as positive, independent NON_FINAL evidence, never from
-# plan.step.
-ARIA_PROGRESSBAR_NON_FINAL_STEP = """
+# The legitimate flow this fix must preserve: a real Workday-shaped application-step
+# structure (the active-step marker's own text carrying a numeric "current step N of M",
+# confirmed against a real recorded production page -- see submission_step_finality()'s own
+# docstring) proving another application step genuinely remains. This is the ONLY positive
+# NON_FINAL authority left after the second closure review, 7 October 2026 removed the
+# generic ARIA-progressbar signal entirely (two successive attempts at a cross-ATS generic
+# heuristic -- a bare "step"-labeled progressbar, then one also requiring aria-posinset/
+# aria-setsize -- were each independently reproduced as live defects; neither is a
+# deterministic proof that the element belongs to this application's own wizard).
+WORKDAY_LEGITIMATE_INTERMEDIATE_STEP = """
+  <div data-automation-id="progressBarActiveStep">current step 2 of 5</div>
+  <form onsubmit="window.submitted = true; return false">
+    <label>Answer <input id="answer"></label>
+    <button type="submit">Submit</button>
+  </form>
+"""
+
+# The second closure-review's own reproduction, 7 October 2026: role="progressbar" PLUS
+# aria-posinset/aria-setsize -- the prior fix's own stronger association attempt -- is still
+# not authority. aria-posinset/aria-setsize are plain set-position semantics for a set-item
+# role; their presence does not establish that this element belongs to the application's own
+# wizard rather than an unrelated upload/onboarding/document sub-process (the label here says
+# exactly that: "Upload progress").
+POSINSET_SETSIZE_UNRELATED_ROLE_STEP = """
   <div role="progressbar" aria-valuenow="2" aria-valuemax="5"
-       aria-posinset="2" aria-setsize="5" aria-label="Step 2 of 5"></div>
+       aria-posinset="1" aria-setsize="3" aria-label="Upload progress"></div>
+  <form onsubmit="window.submitted = true; return false">
+    <label>Answer <input id="answer"></label>
+    <button type="submit">Submit</button>
+  </form>
+"""
+
+# A deliberately convincing-looking generic progressbar -- application-looking label text,
+# plausible posinset/setsize, numerically consistent values -- that is still not inside any
+# specifically validated ATS application-wizard structure. Text and arbitrary ARIA attributes
+# alone are not authority, however application-like they read.
+MISLEADING_APPLICATION_LOOKING_PROGRESSBAR_STEP = """
+  <div role="progressbar" aria-valuenow="2" aria-valuemax="5"
+       aria-posinset="2" aria-setsize="5" aria-label="Application Step 2 of 5"></div>
   <form onsubmit="window.submitted = true; return false">
     <label>Answer <input id="answer"></label>
     <button type="submit">Submit</button>
@@ -119,8 +148,7 @@ ARIA_PROGRESSBAR_NON_FINAL_STEP = """
 # A follow-up closure-review defect, 7 October 2026: a bare role="progressbar" whose
 # accessible name merely contains the word "step" is NOT application-wizard evidence on its
 # own -- it must not be confused with an unrelated progress indicator (a file upload here)
-# that happens to be labeled with that word. No aria-posinset/aria-setsize is present, so
-# there is no structural proof this describes the application's own steps.
+# that happens to be labeled with that word.
 UNRELATED_UPLOAD_PROGRESSBAR_STEP = """
   <div role="progressbar" aria-valuenow="2" aria-valuemax="5" aria-label="Upload step 2 of 5"></div>
   <form onsubmit="window.submitted = true; return false">
@@ -131,8 +159,10 @@ UNRELATED_UPLOAD_PROGRESSBAR_STEP = """
 
 # A follow-up closure-review defect, 7 October 2026: aria-valuenow="" -- Number("") === 0 in
 # JavaScript, a real coercion trap that let an empty value pass a bare Number.isFinite()
-# check and grant NON_FINAL. Structural evidence (posinset/setsize) is present here so only
-# the numeric-validation fix is under test.
+# check and grant NON_FINAL. (These four fixtures now resolve UNKNOWN purely because the
+# generic progressbar path is gone entirely -- but they are kept, unchanged, as a permanent
+# regression guard against ever reintroducing that numeric coercion bug if a future,
+# individually-vetted ATS-specific signal is added.)
 EMPTY_VALUENOW_STEP = """
   <div role="progressbar" aria-valuenow="" aria-valuemax="5"
        aria-posinset="2" aria-setsize="5" aria-label="Step progress"></div>
@@ -264,15 +294,45 @@ def test_an_unsupported_ats_progress_shape_resolves_unknown_not_non_final(page):
     assert page.evaluate("window.submitted") is None
 
 
-def test_a_non_workday_stepper_with_real_aria_progress_evidence_still_proceeds(page):
-    """The legitimate flow this fix must preserve, generalized beyond Workday: a stepper
-    exposing the standard ARIA progressbar pattern, with an accessible name that mentions
-    'step' and a current value strictly below its max, is real independent evidence that
-    this is not the last step -- the click must still proceed."""
-    kind, _page, _reason = press_submit(page, ARIA_PROGRESSBAR_NON_FINAL_STEP)
+def test_a_real_workday_intermediate_step_still_proceeds(page):
+    """The legitimate flow this fix must preserve -- the only one left after the second
+    closure review removed the generic ARIA-progressbar signal entirely: a real
+    Workday-shaped active-step marker whose own text numerically proves another step
+    remains. This is genuine, independently-verified evidence (not plan.step, not the
+    control's own label) that the click must still proceed."""
+    kind, _page, _reason = press_submit(page, WORKDAY_LEGITIMATE_INTERMEDIATE_STEP)
 
     assert kind == "moved"
     assert page.evaluate("window.submitted") is True
+
+
+def test_posinset_and_setsize_on_an_unrelated_role_is_still_not_authority(page):
+    """Test 1 of the second Finding 6 closure-review follow-up, 7 October 2026: the prior
+    fix's own stronger-association attempt (role="progressbar" plus aria-posinset/
+    aria-setsize) is itself not sufficient -- that attribute pair is plain set-position
+    semantics for a set-item role and does not establish this element describes the
+    application's own steps rather than an unrelated upload. Also proves the underlying
+    Submit control is genuinely dangerous via a direct click on fresh content."""
+    page.set_content(f"<html><body>{POSINSET_SETSIZE_UNRELATED_ROLE_STEP}</body></html>")
+    page.locator("button[type=submit]").click()
+    assert page.evaluate("window.submitted") is True  # the control is genuinely dangerous
+    page.evaluate("window.submitted = undefined")
+
+    kind, _page, reason = press_submit(page, POSINSET_SETSIZE_UNRELATED_ROLE_STEP)
+
+    assert kind == "stop", reason
+    assert page.evaluate("window.submitted") is None
+
+
+def test_a_misleading_application_looking_progressbar_is_still_not_authority(page):
+    """Test 2: application-looking label text ("Application Step 2 of 5") combined with
+    numerically consistent, plausible posinset/setsize/valuenow/valuemax values is still
+    not a deterministic proof of association with the application's own wizard -- text and
+    arbitrary ARIA attributes alone are never authority, however convincing they read."""
+    kind, _page, reason = press_submit(page, MISLEADING_APPLICATION_LOOKING_PROGRESSBAR_STEP)
+
+    assert kind == "stop", reason
+    assert page.evaluate("window.submitted") is None
 
 
 def test_duplicate_conflicting_markers_resolve_unknown(page):
