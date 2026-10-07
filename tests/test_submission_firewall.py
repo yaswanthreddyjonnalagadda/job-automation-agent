@@ -193,7 +193,16 @@ def test_enter_inside_form_with_final_submitter_is_blocked(page):
 
 
 @pytest.mark.parametrize(("next_kind", "expected_denial"), [
-    ("next_step", "click"),
+    # "next_step" with no DOM evidence either way used to reach the browser guard -- Python's
+    # own gate (submit_gate(last_step=False)) trusted the AI-reported step counter alone and
+    # let the click through, and only the structural default-deny rule below caught it,
+    # logging a "click" denial. The P0-B1 general authority-boundary fix (7 October 2026)
+    # closed that gap in Python itself: submission_step_finality() can only answer UNKNOWN on
+    # this plain fixture (no wizard marker, no ARIA progressbar), and UNKNOWN now fails closed
+    # exactly like a recognized final control -- so Python refuses before ever attempting the
+    # click, and the browser guard (still armed here, unlike test_authority_boundary.py's
+    # no-op) never sees an attempt to deny.
+    ("next_step", None),
     ("final_submit", None),
 ])
 def test_page_agent_plan_does_not_authorize_submit(page, tmp_path, next_kind, expected_denial):

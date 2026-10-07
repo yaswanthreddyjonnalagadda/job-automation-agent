@@ -3131,13 +3131,100 @@ class JobApplicationAssistant:
         against a step counter that might itself be wrong (a hallucinated/misread 'step N of M',
         or an unrelated number the same pattern happened to match) -- the P0-B1 authority-boundary
         finding, 7 October 2026: trusting a step counter alone, with no second signal, to decide
-        that a submit-labeled control is safe to click without the hard final-step gate."""
+        that a submit-labeled control is safe to click without the hard final-step gate.
+
+        Superseded as PageAgent's actual gating signal by submission_step_finality() below (the
+        P0-B1 general authority-boundary follow-up, 7 October 2026: this method only ever answers
+        for the page that carries the marker at all -- a page with none, which the final
+        independent review found to be the common shape for ATSs that are not Workday-style
+        wizards, answered False here with nothing else standing between a wrong step count and a
+        real, uncontained submit). Left unchanged and still callable on its own: nothing below
+        depends on it, but removing it would be an unrelated regression for any other caller."""
         try:
             return page.locator(
                 "[aria-current='step']:has-text('Review'), [data-automation-id='progressBarActiveStep']:has-text('Review'), [class*='active']:has-text('Review')"
             ).count() > 0
         except Exception:
             return False
+
+    _STEP_FINALITY_SCRIPT = r"""() => {
+        function visible(el) { return el.getClientRects().length > 0; }
+        const stepRe = /\bstep\s+(\d+)\s+of\s+(\d+)\b/i;
+        const markers = Array.from(document.querySelectorAll(
+            "[data-automation-id='progressBarActiveStep'], [aria-current='step']"
+        ));
+        if (markers.length > 1) return "UNKNOWN";  // duplicated/ambiguous -- no positive evidence either way
+        if (markers.length === 1) {
+            const text = (markers[0].textContent || '').trim();
+            const m = stepRe.exec(text);
+            if (m) {
+                const current = parseInt(m[1], 10), total = parseInt(m[2], 10);
+                if (total > 0) {
+                    if (current >= total) return "FINAL";
+                    if (visible(markers[0])) return "NON_FINAL";
+                    // a hidden/stale marker claiming steps remain is not trusted as permission
+                }
+            }
+            if (/\breview\b/i.test(text)) return "FINAL";
+        }
+        const bars = Array.from(document.querySelectorAll(
+            "[role='progressbar'][aria-valuenow][aria-valuemax]"
+        ));
+        if (bars.length === 1) {
+            const bar = bars[0];
+            const now = Number(bar.getAttribute('aria-valuenow'));
+            const max = Number(bar.getAttribute('aria-valuemax'));
+            let name = bar.getAttribute('aria-label') || '';
+            const labelledby = bar.getAttribute('aria-labelledby');
+            if (!name && labelledby) {
+                name = labelledby.split(/\s+/).map(id => {
+                    const el = document.getElementById(id);
+                    return el ? (el.textContent || '') : '';
+                }).join(' ');
+            }
+            if (Number.isFinite(now) && Number.isFinite(max) && max > 0 && now < max
+                    && /\bstep/i.test(name) && visible(bar)) {
+                return "NON_FINAL";
+            }
+        }
+        return "UNKNOWN";
+    }"""
+
+    def submission_step_finality(self, page: Page) -> str:
+        """"FINAL", "NON_FINAL", or "UNKNOWN" -- whether the page's own DOM structure, read
+        directly and never from plan.step (an AI-reported field this code never verifies against
+        the page) or from the clicked control's own label, proves a submit-labeled control is the
+        application's last step, proves it is not, or proves neither.
+
+        The P0-B1 general authority-boundary finding, 7 October 2026: the prior fix (commit
+        756b77b) only cross-checked the step counter against a wizard marker when one was present
+        and read literally as 'Review'. The final independent review reproduced, through the real
+        production entry point with the browser-side guard entirely absent, a genuinely final
+        submit control on a page with no such marker and a wrong step count being clicked anyway --
+        proving the general case, not just the Workday-wizard-contradiction case, was still open.
+
+        Evidence actually used, confirmed against a real recorded Workday page (7 October 2026,
+        output/AIG_Technologies*/evidence_*/page.html): the active-step marker's own text reads
+        'current step 6 of 6' / 'completed step 5 of 6' -- a real, numeric, DOM-native step count,
+        not the word 'Review' alone, so a final step under any other name is caught the same way.
+        A second, generic signal -- an ARIA progressbar (role='progressbar' with numeric
+        aria-valuenow/aria-valuemax) whose accessible name itself contains 'step' -- covers
+        non-Workday steppers without guessing at framework-specific markup; it is deliberately
+        restricted to the NON_FINAL direction only (reaching 100% on a progress bar is not, on its
+        own, proof that the application itself is done), and to an accessible name that mentions
+        'step' at all, so an unrelated upload/loading progress bar is not mistaken for wizard
+        chrome.
+
+        Absence of a recognized structure, more than one conflicting marker, or a marker that is
+        hidden/stale is "UNKNOWN", never "NON_FINAL": an unsupported ATS shape, or ambiguous
+        evidence, is not permission to proceed past a submit-labeled control outside the
+        authoritative final-submit gateway. Only "NON_FINAL" may authorize that ordinary click;
+        both "FINAL" and "UNKNOWN" must refuse it."""
+        try:
+            result = page.evaluate(self._STEP_FINALITY_SCRIPT)
+            return result if result in ("FINAL", "NON_FINAL", "UNKNOWN") else "UNKNOWN"
+        except Exception:
+            return "UNKNOWN"
 
     _NEXT_SELECTORS = (
         "button:has-text('Save and Continue')",
