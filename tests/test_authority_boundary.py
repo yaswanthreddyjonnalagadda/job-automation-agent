@@ -101,12 +101,73 @@ NO_INDEPENDENT_EVIDENCE_SUBMIT_STEP = """
 """
 
 # The legitimate case this fix must not break: a non-Workday stepper that exposes its
-# progress through the standard ARIA progressbar pattern (role="progressbar" with numeric
-# aria-valuenow/aria-valuemax and an accessible name that mentions "step") -- read directly
-# by submission_step_finality() as positive, independent NON_FINAL evidence, never from
+# progress through the standard ARIA progressbar pattern, combined with aria-posinset/
+# aria-setsize -- the real ARIA "position in an ordered set" relationship -- as structural
+# proof that this progressbar actually describes the application's own step sequence, not
+# just a label that happens to mention the word "step". Read directly by
+# submission_step_finality() as positive, independent NON_FINAL evidence, never from
 # plan.step.
 ARIA_PROGRESSBAR_NON_FINAL_STEP = """
-  <div role="progressbar" aria-valuenow="2" aria-valuemax="5" aria-label="Step 2 of 5"></div>
+  <div role="progressbar" aria-valuenow="2" aria-valuemax="5"
+       aria-posinset="2" aria-setsize="5" aria-label="Step 2 of 5"></div>
+  <form onsubmit="window.submitted = true; return false">
+    <label>Answer <input id="answer"></label>
+    <button type="submit">Submit</button>
+  </form>
+"""
+
+# A follow-up closure-review defect, 7 October 2026: a bare role="progressbar" whose
+# accessible name merely contains the word "step" is NOT application-wizard evidence on its
+# own -- it must not be confused with an unrelated progress indicator (a file upload here)
+# that happens to be labeled with that word. No aria-posinset/aria-setsize is present, so
+# there is no structural proof this describes the application's own steps.
+UNRELATED_UPLOAD_PROGRESSBAR_STEP = """
+  <div role="progressbar" aria-valuenow="2" aria-valuemax="5" aria-label="Upload step 2 of 5"></div>
+  <form onsubmit="window.submitted = true; return false">
+    <label>Answer <input id="answer"></label>
+    <button type="submit">Submit</button>
+  </form>
+"""
+
+# A follow-up closure-review defect, 7 October 2026: aria-valuenow="" -- Number("") === 0 in
+# JavaScript, a real coercion trap that let an empty value pass a bare Number.isFinite()
+# check and grant NON_FINAL. Structural evidence (posinset/setsize) is present here so only
+# the numeric-validation fix is under test.
+EMPTY_VALUENOW_STEP = """
+  <div role="progressbar" aria-valuenow="" aria-valuemax="5"
+       aria-posinset="2" aria-setsize="5" aria-label="Step progress"></div>
+  <form onsubmit="window.submitted = true; return false">
+    <label>Answer <input id="answer"></label>
+    <button type="submit">Submit</button>
+  </form>
+"""
+
+# A follow-up closure-review defect, 7 October 2026: a negative current value must not be
+# accepted just because it is numerically less than the max.
+NEGATIVE_VALUENOW_STEP = """
+  <div role="progressbar" aria-valuenow="-1" aria-valuemax="5"
+       aria-posinset="2" aria-setsize="5" aria-label="Step progress"></div>
+  <form onsubmit="window.submitted = true; return false">
+    <label>Answer <input id="answer"></label>
+    <button type="submit">Submit</button>
+  </form>
+"""
+
+# A current value exceeding its own max is internally inconsistent -- it must not be read as
+# either FINAL or NON_FINAL, only UNKNOWN.
+VALUENOW_EXCEEDS_MAX_STEP = """
+  <div role="progressbar" aria-valuenow="9" aria-valuemax="5"
+       aria-posinset="2" aria-setsize="5" aria-label="Step progress"></div>
+  <form onsubmit="window.submitted = true; return false">
+    <label>Answer <input id="answer"></label>
+    <button type="submit">Submit</button>
+  </form>
+"""
+
+# A non-numeric string must not crash the check or be coerced into a number.
+MALFORMED_VALUENOW_STEP = """
+  <div role="progressbar" aria-valuenow="abc" aria-valuemax="5"
+       aria-posinset="2" aria-setsize="5" aria-label="Step progress"></div>
   <form onsubmit="window.submitted = true; return false">
     <label>Answer <input id="answer"></label>
     <button type="submit">Submit</button>
@@ -130,22 +191,6 @@ UNSUPPORTED_ATS_PROGRESS_STEP = """
 DUPLICATE_CONFLICTING_MARKERS_STEP = """
   <div data-automation-id="progressBarActiveStep">current step 2 of 5</div>
   <div data-automation-id="progressBarActiveStep" style="display:none">current step 5 of 5</div>
-  <form onsubmit="window.submitted = true; return false">
-    <label>Answer <input id="answer"></label>
-    <button type="submit">Submit</button>
-  </form>
-"""
-
-MALFORMED_PROGRESSBAR_STEP = """
-  <div role="progressbar" aria-valuenow="not-a-number" aria-valuemax="5" aria-label="Step progress"></div>
-  <form onsubmit="window.submitted = true; return false">
-    <label>Answer <input id="answer"></label>
-    <button type="submit">Submit</button>
-  </form>
-"""
-
-INCONSISTENT_PROGRESSBAR_STEP = """
-  <div role="progressbar" aria-valuenow="5" aria-valuemax="3" aria-label="Step progress"></div>
   <form onsubmit="window.submitted = true; return false">
     <label>Answer <input id="answer"></label>
     <button type="submit">Submit</button>
@@ -240,31 +285,65 @@ def test_duplicate_conflicting_markers_resolve_unknown(page):
     assert page.evaluate("window.submitted") is None
 
 
-def test_a_malformed_progressbar_value_resolves_unknown(page):
-    """Section F: aria-valuenow that isn't actually a number must not crash the check or be
-    coerced into either a FINAL or NON_FINAL answer."""
-    kind, _page, reason = press_submit(page, MALFORMED_PROGRESSBAR_STEP)
-
-    assert kind == "stop", reason
-    assert page.evaluate("window.submitted") is None
-
-
-def test_an_inconsistent_progressbar_value_resolves_unknown_not_final(page):
-    """Section F: aria-valuenow exceeding aria-valuemax is internally inconsistent. It must
-    not grant NON_FINAL (it plainly isn't "current < total"), and this check deliberately
-    never treats a progressbar's own high reading as proof of FINAL either, so this resolves
-    to UNKNOWN -- still a refusal, for the same fail-closed reason."""
-    kind, _page, reason = press_submit(page, INCONSISTENT_PROGRESSBAR_STEP)
-
-    assert kind == "stop", reason
-    assert page.evaluate("window.submitted") is None
-
-
 def test_a_hidden_stale_marker_claiming_steps_remain_is_not_trusted(page):
     """Section F: a progressBarActiveStep marker that is present in the DOM but not visible
     (display:none, the shape of a leftover node from a prior SPA state) must not be trusted
     as positive NON_FINAL evidence just because its stale text claims more steps remain."""
     kind, _page, reason = press_submit(page, HIDDEN_STALE_MARKER_STEP)
+
+    assert kind == "stop", reason
+    assert page.evaluate("window.submitted") is None
+
+
+def test_an_unrelated_upload_progressbar_labeled_with_the_word_step_is_not_evidence(page):
+    """Section A of the Finding 6 closure-review follow-up, 7 October 2026: a progressbar
+    whose accessible name merely mentions the word "step" (an unrelated file-upload
+    indicator, "Upload step 2 of 5") is not application-wizard evidence -- it carries no
+    aria-posinset/aria-setsize, so there is no structural proof it describes the
+    application's own steps. Also proves the underlying Submit control is genuinely
+    dangerous via a direct click on fresh content, matching Section 7's requirement."""
+    page.set_content(f"<html><body>{UNRELATED_UPLOAD_PROGRESSBAR_STEP}</body></html>")
+    page.locator("button[type=submit]").click()
+    assert page.evaluate("window.submitted") is True  # the control is genuinely dangerous
+    page.evaluate("window.submitted = undefined")
+
+    kind, _page, reason = press_submit(page, UNRELATED_UPLOAD_PROGRESSBAR_STEP)
+
+    assert kind == "stop", reason
+    assert page.evaluate("window.submitted") is None
+
+
+def test_an_empty_aria_valuenow_is_not_evidence(page):
+    """Section B: aria-valuenow="" must not be coerced by Number("") === 0 into a
+    passing, finite value."""
+    kind, _page, reason = press_submit(page, EMPTY_VALUENOW_STEP)
+
+    assert kind == "stop", reason
+    assert page.evaluate("window.submitted") is None
+
+
+def test_a_negative_aria_valuenow_is_not_evidence(page):
+    """Section C: a negative current value must not be accepted merely because it is
+    numerically less than the max."""
+    kind, _page, reason = press_submit(page, NEGATIVE_VALUENOW_STEP)
+
+    assert kind == "stop", reason
+    assert page.evaluate("window.submitted") is None
+
+
+def test_an_aria_valuenow_exceeding_its_max_is_not_evidence(page):
+    """Section D: now > max is internally inconsistent -- it must resolve to UNKNOWN, not
+    be read as FINAL or NON_FINAL."""
+    kind, _page, reason = press_submit(page, VALUENOW_EXCEEDS_MAX_STEP)
+
+    assert kind == "stop", reason
+    assert page.evaluate("window.submitted") is None
+
+
+def test_a_malformed_aria_valuenow_string_is_not_evidence(page):
+    """Section E: a non-numeric string must not crash the check or be coerced into a
+    number."""
+    kind, _page, reason = press_submit(page, MALFORMED_VALUENOW_STEP)
 
     assert kind == "stop", reason
     assert page.evaluate("window.submitted") is None

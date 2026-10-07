@@ -3149,6 +3149,26 @@ class JobApplicationAssistant:
 
     _STEP_FINALITY_SCRIPT = r"""() => {
         function visible(el) { return el.getClientRects().length > 0; }
+        // A raw attribute string is accepted only when it is entirely a number: this
+        // rejects "" (Number("") === 0, a real JS coercion trap), whitespace, "NaN",
+        // "Infinity", hex-looking strings, and any other non-numeric text outright,
+        // rather than trusting Number()'s own coercion (the P0-B1 Finding 6
+        // closure-review defect, 7 October 2026: aria-valuenow="" and aria-valuenow="-1"
+        // both passed the old Number.isFinite()-only check).
+        function strictNumber(raw) {
+            if (raw == null) return null;
+            const trimmed = String(raw).trim();
+            if (!/^-?\d+(\.\d+)?$/.test(trimmed)) return null;
+            const n = Number(trimmed);
+            return Number.isFinite(n) ? n : null;
+        }
+
+        // Workday's own active-step marker: its own text carries a real, numeric
+        // "current step N of M" (or "completed step N of M") phrase -- confirmed against
+        // a real recorded production page -- read directly via a digit-only regex capture
+        // (parseInt on \d+ groups can never be empty, negative, or NaN). A marker present
+        // but not parseable this way is still checked for the literal word "Review"
+        // (756b77b's original, unchanged signal).
         const stepRe = /\bstep\s+(\d+)\s+of\s+(\d+)\b/i;
         const markers = Array.from(document.querySelectorAll(
             "[data-automation-id='progressBarActiveStep'], [aria-current='step']"
@@ -3164,29 +3184,37 @@ class JobApplicationAssistant:
                     if (visible(markers[0])) return "NON_FINAL";
                     // a hidden/stale marker claiming steps remain is not trusted as permission
                 }
+            } else if (/\breview\b/i.test(text)) {
+                return "FINAL";
             }
-            if (/\breview\b/i.test(text)) return "FINAL";
         }
-        const bars = Array.from(document.querySelectorAll(
-            "[role='progressbar'][aria-valuenow][aria-valuemax]"
+
+        // A generic, non-Workday step/wizard item. Evidence is required to be
+        // STRUCTURALLY associated with an application step sequence, never inferred from
+        // an arbitrary accessible-name text match: aria-posinset/aria-setsize is the real
+        // ARIA "position in an ordered/sized set" relationship (tabs, listitems, steps),
+        // combined with role="progressbar" and the valuenow/valuemax pair the task
+        // actually gates the click on. The P0-B1 Finding 6 closure-review defect, 7
+        // October 2026: a bare role="progressbar" whose label merely contained the word
+        // "step" (e.g. an unrelated file-upload indicator labeled "Upload step 2 of 5")
+        // was wrongly accepted as wizard evidence; requiring posinset/setsize as well is a
+        // real DOM relationship an unrelated progress bar would not plausibly also carry.
+        const setItems = Array.from(document.querySelectorAll(
+            "[role='progressbar'][aria-valuenow][aria-valuemax][aria-posinset][aria-setsize]"
         ));
-        if (bars.length === 1) {
-            const bar = bars[0];
-            const now = Number(bar.getAttribute('aria-valuenow'));
-            const max = Number(bar.getAttribute('aria-valuemax'));
-            let name = bar.getAttribute('aria-label') || '';
-            const labelledby = bar.getAttribute('aria-labelledby');
-            if (!name && labelledby) {
-                name = labelledby.split(/\s+/).map(id => {
-                    const el = document.getElementById(id);
-                    return el ? (el.textContent || '') : '';
-                }).join(' ');
-            }
-            if (Number.isFinite(now) && Number.isFinite(max) && max > 0 && now < max
-                    && /\bstep/i.test(name) && visible(bar)) {
+        if (setItems.length > 1) return "UNKNOWN";
+        if (setItems.length === 1) {
+            const el = setItems[0];
+            const now = strictNumber(el.getAttribute('aria-valuenow'));
+            const max = strictNumber(el.getAttribute('aria-valuemax'));
+            if (now !== null && max !== null && now >= 0 && max > 0 && now <= max
+                    && now < max && visible(el)) {
                 return "NON_FINAL";
             }
+            // malformed, negative, empty, or inconsistent (now > max) values fall through
+            // to UNKNOWN below -- never coerced into permission
         }
+
         return "UNKNOWN";
     }"""
 
@@ -3207,19 +3235,25 @@ class JobApplicationAssistant:
         output/AIG_Technologies*/evidence_*/page.html): the active-step marker's own text reads
         'current step 6 of 6' / 'completed step 5 of 6' -- a real, numeric, DOM-native step count,
         not the word 'Review' alone, so a final step under any other name is caught the same way.
-        A second, generic signal -- an ARIA progressbar (role='progressbar' with numeric
-        aria-valuenow/aria-valuemax) whose accessible name itself contains 'step' -- covers
-        non-Workday steppers without guessing at framework-specific markup; it is deliberately
-        restricted to the NON_FINAL direction only (reaching 100% on a progress bar is not, on its
-        own, proof that the application itself is done), and to an accessible name that mentions
-        'step' at all, so an unrelated upload/loading progress bar is not mistaken for wizard
-        chrome.
 
-        Absence of a recognized structure, more than one conflicting marker, or a marker that is
-        hidden/stale is "UNKNOWN", never "NON_FINAL": an unsupported ATS shape, or ambiguous
-        evidence, is not permission to proceed past a submit-labeled control outside the
-        authoritative final-submit gateway. Only "NON_FINAL" may authorize that ordinary click;
-        both "FINAL" and "UNKNOWN" must refuse it."""
+        A second, generic signal covers non-Workday steppers: a role='progressbar' element that
+        ALSO carries aria-posinset/aria-setsize (the real ARIA "position in an ordered set"
+        relationship) -- never a bare progressbar whose accessible-name text merely mentions the
+        word 'step' (a follow-up closure review, 7 October 2026, found that heuristic misfired on
+        an unrelated upload-progress indicator labeled e.g. 'Upload step 2 of 5', and that
+        aria-valuenow='' / aria-valuenow='-1' both slipped past a bare Number.isFinite() check via
+        JavaScript's own numeric-coercion quirks). Both the association (posinset/setsize) and the
+        numeric values (valuenow/valuemax, strictly parsed: present, non-empty, finite, 0 <= now <=
+        max) must hold before this signal grants anything, and it is restricted to the NON_FINAL
+        direction only -- reaching 100% on a progress bar is not, on its own, proof that the
+        application itself is done.
+
+        Absence of a recognized structure, more than one conflicting marker, a marker that is
+        hidden/stale, or any malformed/negative/inconsistent numeric value is "UNKNOWN", never
+        "NON_FINAL": an unsupported ATS shape, or ambiguous or untrustworthy evidence, is not
+        permission to proceed past a submit-labeled control outside the authoritative final-submit
+        gateway. Only "NON_FINAL" may authorize that ordinary click; both "FINAL" and "UNKNOWN"
+        must refuse it."""
         try:
             result = page.evaluate(self._STEP_FINALITY_SCRIPT)
             return result if result in ("FINAL", "NON_FINAL", "UNKNOWN") else "UNKNOWN"
