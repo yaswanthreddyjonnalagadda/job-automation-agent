@@ -2070,6 +2070,79 @@ class JobApplicationAssistant:
             return bool(re.match(r"^\s*apply\b", label, re.IGNORECASE)) and self.on_job_description(page)
         return True
 
+    # Normalizes a vision-selected candidate to its nearest actionable
+    # ancestor (a <span>/icon inside a <button> must classify as the button,
+    # never as itself), then asks only two structural questions: is it a
+    # native or default-submit control (blocked unconditionally, regardless
+    # of label, "page" classification, or any other model-reported field),
+    # and -- if not -- does it positively carry one of a short list of
+    # low-risk opener/navigation signals. Anything else, including any
+    # custom-JavaScript-driven control, is default-denied: its own onclick
+    # content is never introspected, and the absence of type="submit" is
+    # never treated as proof of safety (the P0-B1 vision-fallback authority
+    # finding, 7 October 2026 -- the comprehensive final closure review
+    # found look_and_act() clicked a model-selected control with nothing
+    # but a label-text filter and the browser guard standing in front of it).
+    _VISION_CLICK_AUTHORITY_SCRIPT = r"""(leaf) => {
+        const ACTIONABLE = 'button, input, a, [role="button"], [role="tab"], [role="menuitem"], ' +
+            '[role="menuitemradio"], [role="menuitemcheckbox"], [role="combobox"], ' +
+            '[role="option"], [role="switch"]';
+        const target = leaf.closest(ACTIONABLE) || leaf;
+        const tag = (target.tagName || '').toLowerCase();
+        const role = (target.getAttribute('role') || '').toLowerCase();
+        const type = (target.getAttribute('type') || '').toLowerCase();
+
+        // Native submitters, unconditionally -- an explicit type="submit"/"image"
+        // is danger regardless of form association, label, or onclick content.
+        if (tag === 'input' && (type === 'submit' || type === 'image')) return 'BLOCK';
+        if (tag === 'button' && type === 'submit') return 'BLOCK';
+        // A <button> with no explicit type defaults to submit per the HTML spec
+        // when form-associated -- by nesting or by its own form="" attribute,
+        // both of which the element's own .form property already resolves.
+        const ownerForm = (tag === 'button' || tag === 'input') ? target.form : null;
+        if (tag === 'button' && !type && ownerForm) return 'BLOCK';
+
+        // Positive, structurally-recognized low-risk categories only. Text is
+        // never consulted here, by design -- safety comes from structure.
+        if (target.hasAttribute('aria-haspopup') || target.hasAttribute('aria-controls')
+                || target.hasAttribute('aria-expanded')) {
+            return 'ALLOW';
+        }
+        if (['tab', 'menuitem', 'menuitemradio', 'menuitemcheckbox', 'combobox', 'option', 'switch']
+                .includes(role)) {
+            return 'ALLOW';
+        }
+        if (tag === 'a') {
+            const href = target.getAttribute('href') || '';
+            return (href && !/^\s*javascript:/i.test(href)) ? 'ALLOW' : 'BLOCK';
+        }
+
+        // Everything else -- a bare button/[role=button]/input with no
+        // positively recognized opener or navigation semantics, including a
+        // custom type="button"/[role=button] control wired to submit via its
+        // own JavaScript (onclick="...requestSubmit()" and similar) -- is not
+        // positively established as low-risk. Default-deny.
+        return 'BLOCK';
+    }"""
+
+    def vision_click_is_safe(self, page: Page, locator) -> bool:
+        """True only when the resolved candidate's nearest actionable ancestor is
+        positively recognized as a low-risk opener/navigation control; False for
+        every native or default-submit control, every ambiguous generic button or
+        [role=button], and on any error (fail-closed).
+
+        This is the independent, Python-side, DOM-structural authority check that
+        look_and_act() requires before clicking a model-selected candidate --
+        consulted in addition to, never instead of, safe_to_click_for_claude()'s
+        own label-text filter (an AND, not an OR): the model's chosen label, its
+        "page" classification, and its "why" field are never authority over this
+        decision, which is why this takes a locator, never a label string."""
+        try:
+            result = locator.evaluate(self._VISION_CLICK_AUTHORITY_SCRIPT)
+            return result == "ALLOW"
+        except Exception:
+            return False
+
     def look_and_act(self, page: Page, claude, goal: str) -> tuple[str, bool]:
         with self._execution_lock():
             if getattr(self, "_submission_execution_state", "active") != "active":
@@ -2090,6 +2163,18 @@ class JobApplicationAssistant:
         inside a CAPTCHA's frame is ever clicked. On Schwab's sign-in the
         screenshot was read as a sign-in prompt and the puzzle's own "Skip"
         was clicked before the usual CAPTCHA check had run.
+
+        Every resolved candidate is also independently classified by
+        vision_click_is_safe() -- a DOM-structural check, never the model's own
+        label, "page" kind, or "why" field -- before it is ever clicked. The
+        comprehensive P0-B1 closure review, 7 October 2026, found this function
+        clicking a model-selected control with nothing but safe_to_click_for_claude()'s
+        label-text filter and the browser-side SubmissionGuardV0's post-click
+        denial check standing in front of it -- an unrecognized label on a real
+        submit control had no independent, pre-click, Python-side authority at
+        all. This function never operates on the application's own submit-capable
+        step-navigation controls at all now: that decision stays with PageAgent,
+        the one authoritative place for it, via submission_step_finality().
         """
         if safety.captcha_visible(page):
             logger.info("LOOKED: a CAPTCHA is showing -- only you can complete it; the agent does nothing")
@@ -2131,6 +2216,10 @@ class JobApplicationAssistant:
                         on_it = " ".join(((el.inner_text(timeout=1_000) or "") + " " +
                                           (el.get_attribute("aria-label") or "")).split())
                         if on_it and not self.safe_to_click_for_claude(page, on_it):
+                            continue
+                        if not self.vision_click_is_safe(page, el):
+                            logger.info("LOOKED: not clicking %r -- not a recognized low-risk control",
+                                        label[:40])
                             continue
                         if safety.captcha_visible(page):
                             logger.info("LOOKED: a CAPTCHA appeared -- only you can complete it; not clicking")

@@ -542,6 +542,14 @@ def test_direct_javascript_form_submission_is_blocked(page, method):
 
 
 def test_vision_selected_control_cannot_bypass_the_guard(page):
+    """The real, armed SubmissionGuardV0 remains defense in depth -- but with the P0-B1
+    vision-fallback authority fix (7 October 2026), Python's own vision_click_is_safe()
+    now refuses this exact control before the click is ever attempted, so no denial is
+    recorded by the guard at all. This mirrors the same, now-familiar shift seen earlier
+    in test_page_agent_plan_does_not_authorize_submit: refusal moved from the browser
+    layer to Python, which is strictly safer, not weaker. See
+    test_vision_authority_refuses_with_no_browser_guard_at_all below for the proof that
+    Python itself -- not this guard -- is what refuses it."""
     page.set_content("""
       <form onsubmit="window.submitted = true; return false">
         <button type="submit" aria-label="Continue">Submit Application</button>
@@ -558,7 +566,183 @@ def test_vision_selected_control_cannot_bypass_the_guard(page):
 
     assert kind == "application_form" and not clicked
     assert page.evaluate("window.submitted") is None
-    assert assistant._submission_guard.denials(page)[0]["kind"] == "click"
+    assert assistant._submission_guard.denials(page) == []
+
+
+def test_vision_authority_refuses_with_no_browser_guard_at_all(page):
+    """The P0-B1 vision-fallback authority finding, 7 October 2026 (comprehensive final
+    closure review): look_and_act() used to click a model-selected control with nothing
+    but safe_to_click_for_claude()'s label-text filter in front of it, relying on the
+    browser-side SubmissionGuardV0's post-click denial check as the only real protection.
+    This proves Python's own, independent, pre-click structural check (vision_click_is_safe())
+    refuses the exact same dangerous control with NO guard present at all -- no
+    SubmissionGuardV0 instance, no init script, no listeners, no denial counter."""
+    page.set_content("""
+      <form onsubmit="window.submitted = true; return false">
+        <button type="submit" aria-label="Continue">Submit Application</button>
+      </form>
+    """)
+    page.locator("button[type=submit]").click()
+    assert page.evaluate("window.submitted") is True  # the control is genuinely dangerous
+
+    # set_content() does not recreate `window` -- a plain property assigned on it, unlike
+    # a listener, survives -- so the flag above must be cleared explicitly, or a pass here
+    # would just be reading the first click's own leftover state.
+    page.evaluate("window.submitted = undefined")
+    page.set_content("""
+      <form onsubmit="window.submitted = true; return false">
+        <button type="submit" aria-label="Continue">Submit Application</button>
+      </form>
+    """)
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant._submission_guard = None
+    assistant.protect_submission = lambda _page: None
+    fake_vision = SimpleNamespace(read_page=lambda *_args: {
+        "page": "application_form", "click": "Continue", "why": "the next step"
+    })
+    assistant.safe_to_click_for_claude = lambda _page, _label: True
+
+    kind, clicked = assistant.look_and_act(page, fake_vision, "apply")
+
+    assert kind == "application_form" and clicked is False
+    assert page.evaluate("window.submitted") is None
+
+
+# Section 9's full adversarial matrix for the vision-fallback authority fix: every shape
+# proven dangerous by a direct click on fresh content, then refused by look_and_act() with
+# NO browser guard present at all (_submission_guard = None, protect_submission a no-op).
+_VISION_NO_GUARD_ADVERSARIAL_CASES = [
+    ("A_native_submit_misleading_label",
+     '<form onsubmit="window.submitted=true;return false">'
+     '<button type="submit" aria-label="Continue">Continue</button></form>'),
+    ("B_default_button_inside_form",
+     '<form onsubmit="window.submitted=true;return false"><button>Continue</button></form>'),
+    ("C_input_type_submit",
+     '<form onsubmit="window.submitted=true;return false">'
+     '<input type="submit" value="Continue"></form>'),
+    ("D_input_type_image",
+     '<form onsubmit="window.submitted=true;return false">'
+     '<input type="image" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></form>'),
+    ("E_external_form_attr_submit",
+     '<form id="application" onsubmit="window.submitted=true;return false"></form>'
+     '<button form="application" type="submit">Continue</button>'),
+    ("F_child_span_inside_submit_button",
+     '<form onsubmit="window.submitted=true;return false">'
+     '<button type="submit"><span>Continue</span></button></form>'),
+    ("G_type_button_custom_requestSubmit",
+     '<form id="f1" onsubmit="window.submitted=true;return false"></form>'
+     '<button type="button" onclick="document.getElementById(\'f1\').requestSubmit()">Continue</button>'),
+    ("H_role_button_custom_requestSubmit",
+     '<form id="f1" onsubmit="window.submitted=true;return false"></form>'
+     '<div role="button" onclick="document.getElementById(\'f1\').requestSubmit()">Continue</div>'),
+    ("I_detached_outside_form_custom_trigger",
+     '<form id="app" onsubmit="window.submitted=true;return false"></form>'
+     '<button type="button" onclick="document.getElementById(\'app\').requestSubmit()">Continue</button>'),
+    ("K_icon_leaf_inside_submit_button",
+     '<form onsubmit="window.submitted=true;return false">'
+     '<button type="submit"><svg viewBox="0 0 1 1"><circle r="1"/></svg></button></form>'),
+]
+
+
+@pytest.mark.parametrize(("case_id", "html"), _VISION_NO_GUARD_ADVERSARIAL_CASES)
+def test_vision_fallback_blocks_every_submission_capable_shape_with_no_guard(page, case_id, html):
+    page.set_content(f"<html><body>{html}</body></html>")
+    page.locator("button, input, [role=button]").first.click(force=True)
+    assert page.evaluate("window.submitted") is True, f"{case_id}: fixture is not actually dangerous"
+
+    # set_content() does not recreate `window`, so the flag above must be cleared explicitly
+    # before reloading the same fixture, or a pass below would just read leftover state.
+    page.evaluate("window.submitted = undefined")
+    page.set_content(f"<html><body>{html}</body></html>")
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant._submission_guard = None
+    assistant.protect_submission = lambda _page: None
+    fake_vision = SimpleNamespace(read_page=lambda *_args: {
+        "page": "application_form", "click": "Continue", "why": "the next step"
+    })
+    assistant.safe_to_click_for_claude = lambda _page, _label: True
+
+    kind, clicked = assistant.look_and_act(page, fake_vision, "apply")
+
+    assert clicked is False, case_id
+    assert page.evaluate("window.submitted") is None, case_id
+
+
+@pytest.mark.parametrize("label", [
+    "Finish", "Done", "Complete", "Proceed", "Confirm", "Continue", "Send", "Finalize",
+])
+def test_vision_fallback_structure_not_vocabulary_blocks_every_unusual_final_label(page, label):
+    """Section 9.J: safety must come from structure, not vocabulary -- every one of these
+    labels sits on the same genuinely final, type=submit control, with the browser guard
+    entirely absent; Python's own structural check must refuse all of them regardless of
+    wording."""
+    page.set_content(f"""
+      <form onsubmit="window.submitted = true; return false">
+        <button type="submit">{label}</button>
+      </form>
+    """)
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant._submission_guard = None
+    assistant.protect_submission = lambda _page: None
+    fake_vision = SimpleNamespace(read_page=lambda *_args: {
+        "page": "application_form", "click": label, "why": "the next step"
+    })
+    assistant.safe_to_click_for_claude = lambda _page, _label: True
+
+    kind, clicked = assistant.look_and_act(page, fake_vision, "apply")
+
+    assert clicked is False, label
+    assert page.evaluate("window.submitted") is None, label
+
+
+def test_vision_fallback_may_still_click_a_safe_dropdown_opener(page):
+    """Section 10: the vision fallback is not completely disabled -- a control that
+    positively carries opener semantics (aria-haspopup) may still be clicked."""
+    page.set_content('<button aria-haspopup="listbox" aria-expanded="false">Country</button>')
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant._submission_guard = None
+    assistant.protect_submission = lambda _page: None
+    fake_vision = SimpleNamespace(read_page=lambda *_args: {
+        "page": "application_form", "click": "Country", "why": "open the list"
+    })
+    assistant.safe_to_click_for_claude = lambda _page, _label: True
+
+    _kind, clicked = assistant.look_and_act(page, fake_vision, "apply")
+
+    assert clicked is True
+
+
+def test_vision_fallback_may_still_click_a_safe_tab(page):
+    """Section 10: a real role="tab" control, outside any form-submission authority, may
+    still be clicked."""
+    page.set_content('<button role="tab" aria-selected="false">Experience</button>')
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant._submission_guard = None
+    assistant.protect_submission = lambda _page: None
+    fake_vision = SimpleNamespace(read_page=lambda *_args: {
+        "page": "application_form", "click": "Experience", "why": "switch tab"
+    })
+    assistant.safe_to_click_for_claude = lambda _page, _label: True
+
+    _kind, clicked = assistant.look_and_act(page, fake_vision, "apply")
+
+    assert clicked is True
+
+
+def test_vision_fallback_may_still_click_a_safe_navigational_link(page):
+    """Section 10: a normal anchor with a real, non-JavaScript href may still be clicked."""
+    page.set_content('<a href="#jobs">View Jobs</a>')
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant._submission_guard = None
+    assistant.protect_submission = lambda _page: None
+    fake_vision = SimpleNamespace(read_page=lambda *_args: {
+        "page": "application_form", "click": "View Jobs", "why": "see other jobs"
+    })
+    assistant.safe_to_click_for_claude = lambda _page, _label: True
+
+    _kind, clicked = assistant.look_and_act(page, fake_vision, "apply")
+
+    assert clicked is True
 
 
 def test_plain_boolean_cannot_authorize_gateway_submission(page):

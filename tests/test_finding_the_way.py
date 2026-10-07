@@ -228,9 +228,15 @@ class FakeClaude:
 
 
 def test_looking_clicks_what_claude_points_at(page, agent):
+    # A real anchor, not a bare role="button" div: the P0-B1 vision-fallback authority fix,
+    # 7 October 2026, default-denies any generic button/[role=button] with a custom onclick
+    # and no positively-recognized opener/navigation signal, because that exact shape is
+    # structurally indistinguishable from a control that submits via its own JavaScript. A
+    # normal anchor with a real, non-JavaScript href is the one generic control this fixture
+    # can use and still be positively recognized as low-risk.
     page.set_content("""
       <html><body><h1>Welcome back</h1>
-        <div role="button" tabindex="0" onclick="document.body.dataset.went='yes'">Continue to application</div>
+        <a href="#apply" tabindex="0" onclick="document.body.dataset.went='yes'">Continue to application</a>
       </body></html>""")
     kind, clicked = agent.look_and_act(page, FakeClaude(
         {"page": "chooser", "click": "Continue to application", "why": "the only way on"}), "apply")

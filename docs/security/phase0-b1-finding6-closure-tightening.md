@@ -370,7 +370,7 @@ This documentation file itself, previously kept local-only per this
 project's usual convention for review/postmortem documents, is committed and
 pushed to the remote branch in this round, per explicit instruction.
 
-## Finding 6: CLOSED (one vetted signal, now actually isolated)
+## Finding 6: CLOSED (one vetted signal, now actually isolated) -- as of Round 3, Finding 6 reopened by Round 4 below for a separate path
 
 The marker selector authorizing `NON_FINAL` now matches only
 `[data-automation-id='progressBarActiveStep']` -- the one structure actually
@@ -379,3 +379,74 @@ text pattern, or attribute combination accepted alongside it. Every other
 page shape, including an unrelated element carrying a standards-based but
 application-unrelated ARIA state, resolves `UNKNOWN` and fails closed exactly
 like `FINAL`.
+
+---
+
+## Round 4: the vision/model click-fallback authority gap
+
+**Commit under repair:** `c32fedf` (Round 3's marker-selector fix) --
+**not** `submission_step_finality()` itself, which Round 4 does not touch.
+
+The comprehensive final closure review (`phase0-b1-comprehensive-final-closure-review.md`,
+Section 6b) audited every irreversible click path in the repository, not
+just `submission_step_finality()`'s own callers, and found a second,
+architecturally separate instance of "browser containment as sole
+authority": `browser_automation._look_and_act_locked()`, the vision/model
+click fallback used when the ordinary DOM reading finds nothing to fill or
+press. It clicked whatever control Claude's screenshot interpretation named,
+gated only by `safe_to_click_for_claude()` -- a label-text filter -- with no
+DOM-structural authority check at all; the browser-side `SubmissionGuardV0`'s
+post-click denial check was the only thing actually standing in front of an
+unrecognized-label final control. This path is reachable in the project's
+real default execution (`apply.py`'s `auto or True` makes `--auto`
+unconditional), not a rare opt-in, and predates every Round 1-3 commit --
+none of them touched it.
+
+Full detail -- the exact unsafe path, why label filtering alone is
+insufficient, the new `vision_click_is_safe()` structural authority gate,
+the positive low-risk whitelist, the blocked categories, and the adversarial
+matrix -- is in the dedicated implementation note,
+`docs/security/phase0-b1-vision-fallback-authority.md`. Summary: a new
+Python-side, DOM-structural pre-click gate (`vision_click_is_safe()`)
+normalizes the vision-selected candidate to its nearest actionable ancestor
+and default-denies anything not positively recognized as a low-risk
+opener/navigation control -- native and default-submit controls are blocked
+unconditionally, regardless of label, "page" classification, or "why"
+field; custom-JavaScript-driven controls are blocked by the same
+default-deny (their `onclick` content is never introspected, since its
+absence of `type="submit"` is not proof of safety). `safe_to_click_for_claude()`
+remains an additional filter, not a replacement for this gate -- both must
+now agree before any click.
+
+### Validation
+
+- `tests/test_submission_firewall.py` (including 22 new tests for this
+  round): **80 passed** in 104.02s.
+- `tests/test_authority_boundary.py`: **17 passed** in 23.53s -- unaffected,
+  confirming this round did not touch `submission_step_finality()`.
+- Original P0-B1 targeted suite (now including the 22 new vision-authority
+  tests): **220 passed** in 298.52s.
+- PageAgent/review-step/navigation suites (one pre-existing test,
+  `test_looking_clicks_what_claude_points_at`, updated -- its fixture used a
+  bare `role="button"` div with a custom `onclick`, a shape now structurally
+  indistinguishable from a dangerous custom-submit control and correctly
+  default-denied; the fixture was changed to a real anchor, which the
+  positive whitelist recognizes, preserving the test's original intent of
+  proving the click mechanism itself still works): **92 passed** in 174.79s.
+- Full suite, cache cleared first: **`18 failed, 2046 passed, 3 skipped, 1
+  error`** in 753.95s (0:12:33). The `+22` over the prior `2024 passed` is
+  exactly this round's new tests (0 removed). All 18 failing node IDs plus
+  the 1 collection error compared by exact name against the established
+  baseline: identical set, zero new regressions.
+
+## Finding 6: CLOSED (narrowed to the one vetted structural signal, across both the PageAgent step-navigation path and the vision/model click-fallback path)
+
+Both of the two distinct paths this engagement found capable of performing a
+potentially final application action now require positive, independently
+verified, DOM-structural evidence before clicking outside the verified
+final-submit gateway: `PageAgent.press_next()`'s step-navigation decision
+(Rounds 1-3, `submission_step_finality()`) and the vision/model click
+fallback's candidate-click decision (Round 4, `vision_click_is_safe()`).
+Neither path's authority rests on the model's or the AI's own self-report,
+and browser-side containment is defense in depth for both, never the sole
+protection.
