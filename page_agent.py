@@ -5451,8 +5451,22 @@ class PageAgent:
         # The review heuristic answers yes whenever a button reads "Submit",
         # so it must not outvote a step counter that shows more steps to come
         # (Schwab's step 2 of 5 is exactly that button).
+        # That step counter is itself unverified, AI-reported text (plan.step), not something
+        # read from the page by this code -- a misread or hallucinated "step N of M" must not be
+        # the only thing standing between a submit-labeled control and a real send, with no
+        # independent, Python-side check at all. A second, DOM-structural signal that does not
+        # depend on any button's own wording -- the page's own active wizard-progress chrome
+        # itself reading "Review" -- is cross-checked here. Schwab's step 2 of 5 carries no such
+        # marker, so it is unaffected; a page whose own wizard chrome contradicts the reported
+        # step count is treated as the final step rather than trusted (the P0-B1
+        # authority-boundary finding, 7 October 2026: without this, the browser containment
+        # guard was the only thing left standing between that contradiction and a real submit).
+        wizard_marks_review = bool(
+            getattr(self.assistant, "is_review_step_by_wizard_marker", lambda p: False)(tab)
+        )
         final = plan.next_kind == "final_submit" or (is_review and not steps_remain) \
-            or (submit_word and not (steps_remain and plan.next_kind == "next_step"))
+            or (submit_word and not (steps_remain and plan.next_kind == "next_step")) \
+            or (submit_word and wizard_marks_review)
         if plan.page_kind == "job_description" and plan.next_kind == "open_application":
             final = False
         if final:

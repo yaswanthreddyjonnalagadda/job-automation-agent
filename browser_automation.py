@@ -3114,8 +3114,25 @@ class JobApplicationAssistant:
         try:
             if page.locator("button:text-is('Submit'), [role='button']:text-is('Submit'), button:has-text('Submit Application')").count():
                 return True
-            # Workday marks the active wizard step; 'Review' being current is
-            # the same signal without depending on a button label.
+            return self.is_review_step_by_wizard_marker(page)
+        except Exception:
+            return False
+
+    def is_review_step_by_wizard_marker(self, page: Page) -> bool:
+        """True only on the DOM-structural signal half of is_review_step(): an active
+        wizard-progress indicator (Workday and similar) that itself reads 'Review'. Deliberately
+        does not also fire on a literal 'Submit'-labeled button the way is_review_step() does --
+        that shortcut is already known to fire on Schwab's own step 2 of 5 (its button reads
+        exactly 'Submit'), which is why PageAgent's own step-counter check must be able to
+        override is_review_step() for that case.
+
+        This narrower, independent signal exists so a caller can ask "does the page's own wizard
+        chrome -- not just a button's wording -- say this is the review step" as a cross-check
+        against a step counter that might itself be wrong (a hallucinated/misread 'step N of M',
+        or an unrelated number the same pattern happened to match) -- the P0-B1 authority-boundary
+        finding, 7 October 2026: trusting a step counter alone, with no second signal, to decide
+        that a submit-labeled control is safe to click without the hard final-step gate."""
+        try:
             return page.locator(
                 "[aria-current='step']:has-text('Review'), [data-automation-id='progressBarActiveStep']:has-text('Review'), [class*='active']:has-text('Review')"
             ).count() > 0
