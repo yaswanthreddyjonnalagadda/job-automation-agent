@@ -45,3 +45,8 @@ runs/
 data/*.log
 # Backups of the owner's own records.
 data/*.backup*.json
+
+# Local records and existing workspace preference.
+data/checkpoints/
+data/run_metrics.jsonl
+sandbox/

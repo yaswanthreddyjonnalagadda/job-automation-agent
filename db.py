@@ -37,6 +37,7 @@ from psycopg.types.json import Json
 from psycopg.rows import dict_row
 
 import application_status
+from jd_analyzer import is_tracking_query_param, submission_identity_url
 
 logger = logging.getLogger(__name__)
 
@@ -138,8 +139,7 @@ CREATE INDEX IF NOT EXISTS idx_learned_form_recipes_host
 def _strip_tracking(url: str) -> str:
     """A posting URL without tracking parameters or a trailing slash."""
     parsed = urlparse((url or "").strip().lower())
-    query = [(k, v) for k, v in parse_qsl(parsed.query) if not k.startswith(("utm_", "gh_src"))
-             and k not in {"src", "source", "ref", "referrer", "trackingid"}]
+    query = sorted((k, v) for k, v in parse_qsl(parsed.query) if not is_tracking_query_param(k))
     return urlunparse(parsed._replace(query=urlencode(query), path=parsed.path.rstrip("/"), fragment=""))
 
 
@@ -216,6 +216,31 @@ class PostgresTracker:
                 (app["id"], kind, message[:4000] if message else "", screenshot_path or None,
                  html_path or None, Json(payload) if payload is not None else None),
             )
+
+    def _local_submission_tracker(self):
+        from config import DB_PATH
+        from job_tracker import JobTracker
+        return JobTracker(DB_PATH)
+
+    def get_submission_effect_state(self, dedup_key: str) -> Optional[str]:
+        return self._local_submission_tracker().get_submission_effect_state(dedup_key)
+
+    def begin_submission_dispatch(self, dedup_key: str, aliases: tuple[str, ...] | list[str] = ()) -> str:
+        return self._local_submission_tracker().begin_submission_dispatch(dedup_key, aliases)
+
+    def finish_submission_effect(
+        self, dedup_key: str, state: str, *, reconciled: bool = False,
+        evidence_kind: Optional[str] = None,
+    ) -> None:
+        return self._local_submission_tracker().finish_submission_effect(
+            dedup_key, state, reconciled=reconciled, evidence_kind=evidence_kind
+        )
+
+    def record_submission_safety_event(self, dedup_key: str, kind: str, payload: Optional[dict] = None) -> None:
+        return self._local_submission_tracker().record_submission_safety_event(dedup_key, kind, payload)
+
+    def submission_safety_events(self, dedup_key: str) -> list[dict]:
+        return self._local_submission_tracker().submission_safety_events(dedup_key)
 
     def events(self, dedup_key: str, limit: int = 100) -> list[dict]:
         with self._connect() as conn:
@@ -311,6 +336,22 @@ class PostgresTracker:
                     and (record.title or "").strip().lower() == title.strip().lower():
                 return record
         return None
+
+    def submission_keys_for_url(self, url: str) -> list[str]:
+        """Existing application keys for canonical URL-equivalent postings."""
+        identity = submission_identity_url(url)
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT dedup_key, url FROM applications WHERE url IS NOT NULL AND url != ''"
+            ).fetchall()
+        matches = []
+        for row in rows:
+            try:
+                if submission_identity_url(row["url"]) == identity:
+                    matches.append(row["dedup_key"])
+            except ValueError:
+                continue
+        return matches
 
     def create(
         self,

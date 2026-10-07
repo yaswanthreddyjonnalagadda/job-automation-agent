@@ -13,6 +13,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 
@@ -54,6 +55,74 @@ def dedup_key_for_url(url: str) -> str:
     JobDescription exists -- lets us check for duplicates by URL alone,
     before asking the human to paste in JD text."""
     return hashlib.sha256(url.strip().lower().encode("utf-8")).hexdigest()
+
+
+# Known non-identity URL variation: ad/click/campaign trackers that vary between two copies of
+# the exact same posting link and never distinguish one posting or application from another.
+# Consolidated in this one place -- jd_analyzer.submission_identity_url, job_tracker._strip_tracking,
+# and db._strip_tracking used to each keep their own copy of a narrower list, which is exactly how a
+# platform-specific tracker (LinkedIn's `trk`, Google's/Meta's/Microsoft's/Twitter's `*clid` family)
+# went unstripped in all three places at once (the owner's finding of 7 October 2026).
+_TRACKING_QUERY_PREFIXES = ("utm_", "gh_src")
+_TRACKING_QUERY_SUFFIXES = ("clid",)   # gclid, fbclid, msclkid, twclid, dclid, yclid, ttclid, ...
+_TRACKING_QUERY_NAMES = {
+    "src", "source", "ref", "referrer", "trackingid",
+    "trk", "li_fat_id", "mc_cid", "mc_eid", "rb_clickid", "shared_id",
+    "msclkid",   # Microsoft's click id is spelled "clkid", not "clid" -- the suffix rule misses it
+}
+
+
+def is_tracking_query_param(key: str) -> bool:
+    """Whether a URL query parameter is known ad/click/campaign tracking noise, never a job or
+    application identifier, so it is safe to ignore for submission-identity and deduplication
+    purposes.
+
+    This is deliberately a narrow, explicit exclusion list, not a guess: an unrecognized parameter
+    is always kept, because a parameter this does not recognize may be exactly how one posting or
+    application is told apart from another (a requisition id, a job id, a step token). Only a
+    parameter known by name, or matching the `*clid` ad-click-id family, is ignored."""
+    key = (key or "").lower()
+    return key.startswith(_TRACKING_QUERY_PREFIXES) or key.endswith(_TRACKING_QUERY_SUFFIXES) \
+        or key in _TRACKING_QUERY_NAMES
+
+
+def submission_identity_url(url: str) -> str:
+    """Canonicalize only known non-identity URL variation for effect replay protection."""
+    value = (url or "").strip().lower()
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("A valid application URL is required for submission identity") from exc
+    if parsed.scheme not in {"http", "https"} or not hostname or parsed.username or parsed.password:
+        raise ValueError("A valid application URL is required for submission identity")
+
+    retained_query = sorted(
+        (key, item)
+        for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+        if not is_tracking_query_param(key)
+    )
+    path = parsed.path.rstrip("/")
+    if not path and not retained_query:
+        raise ValueError("Application URL does not identify a specific posting")
+
+    netloc = hostname
+    if ":" in hostname and not hostname.startswith("["):
+        netloc = f"[{hostname}]"
+    if port is not None and not (
+        parsed.scheme == "https" and port == 443
+        or parsed.scheme == "http" and port == 80
+    ):
+        netloc = f"{netloc}:{port}"
+    scheme = "https" if parsed.scheme in {"http", "https"} else parsed.scheme
+    return urlunsplit((scheme, netloc, path, urlencode(retained_query), ""))
+
+
+def submission_effect_key_for_url(url: str) -> str:
+    """Stable local replay identity, separate from the legacy application-row key."""
+    identity = submission_identity_url(url)
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
 def guess_source_site(url: str) -> str:
