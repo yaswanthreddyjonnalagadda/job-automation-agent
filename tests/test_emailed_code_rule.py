@@ -449,3 +449,74 @@ def test_contradictory_local_evidence_fails_closed_through_the_real_path(context
     assert outcome is False
     assert not gmail_called
     assert blocker
+
+
+# --- authentication MODE vs. delivery/completion MECHANISM (8 October 2026) ------------------
+#
+# "two-factor"/"2-step verification" name an authentication MODE ("a second factor is
+# required"), never a delivery MECHANISM ("how that factor reaches you") -- and a second factor
+# can legitimately be delivered by email, which this project is authorized to read. These words
+# were removed from NON_EMAIL_CHANNEL_CORE entirely rather than replaced with another generic
+# MFA-heading heuristic: only the actual mechanism (an authenticator app, TOTP, Authy, Google
+# Authenticator, a security key, a push approval, or SMS/phone delivery) determines whether the
+# agent has an authorized way to complete the step.
+
+@pytest.mark.parametrize("context, channel", [
+    ("Two-factor authentication. We sent a verification code to your email.", "EMAIL"),
+    ("2-step verification. Check your inbox for the code.", "EMAIL"),
+    ("Two-factor authentication. Enter the code from your authenticator app.", "NON_EMAIL"),
+    ("Two-factor authentication. We texted the code to your phone.", "NON_EMAIL"),
+    ("Two-factor authentication. Enter verification code.", "UNKNOWN"),
+])
+def test_authentication_mode_wording_alone_never_decides_the_channel(context, channel):
+    assert emailed_codes.code_channel(context) == channel
+
+
+def test_mode_wording_does_not_contribute_a_non_email_signal():
+    """"two-factor"/"2-step verification" must not even partially match NON_EMAIL_CHANNEL_CORE
+    -- confirmed directly against the compiled pattern, not just its net classification
+    effect, so a future, differently-shaped MFA phrase cannot reintroduce this by accident."""
+    assert not emailed_codes.NON_EMAIL_CHANNEL_CORE.search("Two-factor authentication")
+    assert not emailed_codes.NON_EMAIL_CHANNEL_CORE.search("2-step verification")
+
+
+@pytest.mark.parametrize(("case_id", "html"), [
+    ("A_two_factor_plus_email",
+     '<h2>Two-factor authentication</h2><p>We sent a verification code to your email.</p>'
+     '<label for="c">Verification Code</label><input id="c">'),
+    ("B_two_step_plus_inbox",
+     '<h2>2-step verification</h2><p>Check your inbox for the code.</p>'
+     '<label for="c">Verification Code</label><input id="c">'),
+])
+def test_email_second_factor_is_still_read_through_the_real_path(context, case_id, html):
+    outcome, gmail_called, blocker = _complete_code_through(context, html)
+    assert gmail_called, case_id       # Gmail IS called
+    assert not blocker, case_id
+
+
+@pytest.mark.parametrize(("case_id", "html"), [
+    ("C_two_factor_plus_authenticator_app",
+     '<h2>Two-factor authentication</h2><p>Enter the code from your authenticator app.</p>'
+     '<label for="c">Verification Code</label><input id="c">'),
+    ("D_two_factor_plus_sms",
+     '<h2>Two-factor authentication</h2><p>We texted a code to your phone.</p>'
+     '<label for="c">Verification Code</label><input id="c">'),
+    ("E_two_factor_plus_security_key",
+     '<h2>Two-factor authentication</h2><p>Insert your security key and enter the code it displays.</p>'
+     '<label for="c">Verification Code</label><input id="c">'),
+])
+def test_unsupported_second_factor_mechanisms_are_never_read_through_the_real_path(context, case_id, html):
+    outcome, gmail_called, blocker = _complete_code_through(context, html)
+    assert outcome is False, case_id
+    assert not gmail_called, case_id   # Gmail is NEVER called
+    assert blocker, case_id
+
+
+def test_two_factor_with_no_named_mechanism_preserves_the_existing_unknown_policy(context):
+    """F: generic MFA wording with no code-delivery mechanism named at all -- the existing,
+    already-established UNKNOWN policy (allowed) is preserved, not silently changed."""
+    html = ('<h2>Two-factor authentication</h2>'
+            '<label for="c">Verification code</label><input id="c">')
+    outcome, gmail_called, blocker = _complete_code_through(context, html)
+    assert gmail_called
+    assert not blocker

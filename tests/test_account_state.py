@@ -125,6 +125,54 @@ def test_phone_channel_wording_outranks_a_generic_code_box():
     assert state.kind != A.CODE_ENTRY
 
 
+# --- authentication MODE vs. delivery/completion MECHANISM (8 October 2026) -------------------
+#
+# "two-factor"/"2-step verification" name an authentication MODE, never a delivery MECHANISM --
+# a second factor can legitimately be delivered by email, which the agent is authorized to read.
+# MFA_REQUIRED means "the page positively identifies a second-factor MECHANISM the agent has no
+# authorized way to complete," never "the page uses the words 'two-factor' or '2-step'."
+
+def test_two_factor_heading_with_an_emailed_code_is_code_entry_not_mfa():
+    snapshot = ('- heading "Two-factor authentication" [ref=e1]\n'
+                '- text: We emailed your verification code.\n'
+                '- textbox "Verification Code" [ref=e2]\n- button "Submit" [ref=e3]')
+    state = A.read_state(snapshot)
+    assert state.kind == A.CODE_ENTRY
+    assert state.kind != A.MFA_REQUIRED
+
+
+def test_two_step_heading_with_an_inbox_code_is_code_entry_not_mfa():
+    snapshot = ('- heading "2-step verification" [ref=e1]\n'
+                '- text: Check your inbox for the code.\n'
+                '- textbox "Verification Code" [ref=e2]\n- button "Submit" [ref=e3]')
+    state = A.read_state(snapshot)
+    assert state.kind == A.CODE_ENTRY
+    assert state.kind != A.MFA_REQUIRED
+
+
+def test_two_factor_heading_with_an_authenticator_app_is_mfa_required():
+    snapshot = ('- heading "Two-factor authentication" [ref=e1]\n'
+                '- text: Enter the code from your authenticator app.\n'
+                '- textbox "Authentication Code" [ref=e2]\n- button "Submit" [ref=e3]')
+    assert A.read_state(snapshot).kind == A.MFA_REQUIRED
+
+
+def test_two_factor_heading_with_sms_is_mfa_required():
+    snapshot = ('- heading "Two-factor authentication" [ref=e1]\n'
+                '- text: We texted a code to your phone.\n'
+                '- textbox "One-time code" [ref=e2]\n- button "Submit" [ref=e3]')
+    assert A.read_state(snapshot).kind == A.MFA_REQUIRED
+
+
+def test_two_factor_heading_alone_with_no_mechanism_is_not_mfa_required():
+    """Generic MFA wording with no concrete, unsupported mechanism named must not invent one --
+    the existing no-channel-named default (CODE_ENTRY, if a code box is present at all) is
+    preserved rather than silently turned into a new reason to refuse."""
+    snapshot = ('- heading "Two-factor authentication" [ref=e1]\n'
+                '- textbox "Verification code" [ref=e2]\n- button "Submit" [ref=e3]')
+    assert A.read_state(snapshot).kind != A.MFA_REQUIRED
+
+
 def test_a_verify_message_beside_a_sign_in_form_is_the_sign_in_form():
     """'Verify your password' hint text on a sign-in form is not a verification email."""
     snapshot = form() + "\n- text: Verify your email address and password below."

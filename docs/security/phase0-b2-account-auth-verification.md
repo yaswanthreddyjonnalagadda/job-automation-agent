@@ -567,3 +567,130 @@ by `git diff --stat` showing changes confined to `emailed_codes.py`,
 `account_state.py` (one line: the `_MFA` pattern construction), and
 `page_agent.py` (`_nearby_code_text()` plus the one call-site change in
 `complete_account_code()`).
+
+---
+
+## Final correction: authentication mode is not a delivery mechanism
+
+**Commit under repair:** `e16fd82` (this phase's local-context channel fix)
+
+### The confirmed problem
+
+`NON_EMAIL_CHANNEL_CORE` included `\btwo[- ]?factor\b|2-step verification`.
+These words identify an **authentication mode** ("a second factor is
+required") -- they say nothing about **how that factor is delivered or
+completed**. A second factor can legitimately be delivered by email, which
+this project is authorized to read. Confirmed directly before fixing: both
+
+```python
+emailed_codes.code_channel("Two-factor authentication. We sent a verification "
+                            "code to your email.")
+emailed_codes.code_channel("2-step verification. Check your inbox for the code.")
+```
+
+returned `"UNKNOWN"` (the contradiction path -- "two-factor" itself counted
+as non-email evidence, colliding with the genuine email evidence in the
+same context) instead of `"EMAIL"`, and
+`account_state.read_state()` returned `MFA_REQUIRED` for a `"Two-factor
+authentication" + "We emailed your verification code."` snapshot instead
+of `CODE_ENTRY` -- exactly the two incorrect behaviors the task described,
+reproduced before any fix was written.
+
+### The fix: remove the mode words, not replace them
+
+`\btwo[- ]?factor\b|2-step verification` were deleted from
+`NON_EMAIL_CHANNEL_CORE` outright -- not replaced with another generic
+MFA-heading heuristic. The remaining vocabulary (`authenticator app`,
+`google authenticator`, `authy`, `totp`, `security key`, `hardware key`,
+`push notification`, `approve the sign-in/request on your...`) is entirely
+**mechanism**-based already, so no other change was needed: `account_state._MFA`
+already imports `NON_EMAIL_CHANNEL_CORE` directly (from the previous round's
+anti-drift fix), so removing the two phrases from the one shared vocabulary
+automatically and correctly stopped `MFA_REQUIRED` from firing on bare
+"two-factor"/"2-step" wording too, with no second edit required.
+
+### Verified distinction, mode vs. mechanism
+
+| Input | Channel | account_state kind |
+|---|---|---|
+| "Two-factor authentication. We sent a verification code to your email." | `EMAIL` | `CODE_ENTRY` |
+| "2-step verification. Check your inbox for the code." | `EMAIL` | `CODE_ENTRY` |
+| "Two-factor authentication. Enter the code from your authenticator app." | `NON_EMAIL` | `MFA_REQUIRED` |
+| "Two-factor authentication. We texted the code to your phone." | `NON_EMAIL` | `MFA_REQUIRED` |
+| "Two-factor authentication. Enter verification code." (no mechanism named) | `UNKNOWN` | preserved existing policy (not `MFA_REQUIRED`) |
+
+The last row's `UNKNOWN`-with-no-mechanism-named case was **not** changed
+by this correction: it already resolved to the existing, deliberate,
+previously-documented default (`code_channel_is_email()` returns `True`;
+`account_state` does not invent `MFA_REQUIRED` from bare mode wording alone)
+-- this correction only stopped the mode words themselves from being
+mistaken for mechanism evidence that could override a genuine email signal
+or manufacture a false `MFA_REQUIRED`.
+
+### Preserved, re-confirmed by a fresh saved-page audit
+
+- **Total snapshots**: 864 (116 `output/*/account/*.txt`, 417
+  `output/*/pages/*.txt`, 331 `runs/*/axtree_dump.json` -- 3 more `runs/`
+  entries than the prior audit, ordinary corpus growth between sessions,
+  not a methodology change).
+- **`account_state` kind distribution**: `none` 501, `create_form` 122,
+  `signed_in` 106, `sign_in_form` 65, `chooser` 30, `wrong_password` 11,
+  `code_entry` 9, `email_first` 7, `loading` 3, `verify_email` 1,
+  `mfa_required` 0 -- unchanged from both prior audits.
+  `mfa_required` remains at the proven-correct zero: no new false
+  positives, and no new false negatives either (nothing in the corpus
+  needed to become `MFA_REQUIRED` and now doesn't).
+- **Pages containing generic "two-factor"/"2-step verification" wording**:
+  0 across the entire corpus -- this project's saved real runs have not
+  yet encountered a page using that exact phrasing, so this specific
+  correction could not be exercised against real data; it is validated
+  against the task's own constructed scenarios and this phase's own
+  reproduction instead, recorded honestly rather than claimed otherwise.
+- **Classification changes from `e16fd82`**: none, anywhere in the corpus
+  (expected, since no real page uses the now-removed mode wording at all).
+- **The 3 Lucid Motors pages**: confirmed still `CODE_ENTRY`
+  (`output/Lucid_Motors_Sr._Network_Engineer/account/202609*_code_entry.txt`,
+  all three), unaffected by this correction.
+- **The original 39 false-`MFA_REQUIRED` pages**: confirmed still fixed
+  (0 `mfa_required` total, as above).
+
+### Tests added
+
+- `tests/test_emailed_code_rule.py`: `test_authentication_mode_wording_alone_never_decides_the_channel`
+  (5 parametrized cases, the exact mode/mechanism matrix above, against
+  `code_channel()` directly); `test_mode_wording_does_not_contribute_a_non_email_signal`
+  (asserts "two-factor"/"2-step verification" do not even partially match
+  `NON_EMAIL_CHANNEL_CORE`, not just that the net classification happens to
+  come out right); `test_email_second_factor_is_still_read_through_the_real_path`
+  (A/B, 2 parametrized cases) and `test_unsupported_second_factor_mechanisms_are_never_read_through_the_real_path`
+  (C/D/E, 3 parametrized cases) and `test_two_factor_with_no_named_mechanism_preserves_the_existing_unknown_policy`
+  (F) -- all through the real `PageAgent.complete_account_code()` with
+  `passcode_from_gmail` mocked, per instruction that no test should rely
+  only on helper-function output.
+- `tests/test_account_state.py`: `test_two_factor_heading_with_an_emailed_code_is_code_entry_not_mfa`,
+  `test_two_step_heading_with_an_inbox_code_is_code_entry_not_mfa`,
+  `test_two_factor_heading_with_an_authenticator_app_is_mfa_required`,
+  `test_two_factor_heading_with_sms_is_mfa_required`,
+  `test_two_factor_heading_alone_with_no_mechanism_is_not_mfa_required` --
+  against the real `account_state.read_state()`, not only `_MFA`'s own
+  regex match.
+
+### Validation
+
+- `tests/test_emailed_code_rule.py` + `tests/test_account_state.py`
+  together: **168 passed** in 156.91s (70 + 81 = 151 before this
+  correction, +17 new: 12 in the first file, 5 in the second).
+- Full account/auth/verification suite (10 files): **365 passed** in
+  673.64s (0:11:13) -- `348 + 17` new.
+- P0-B1 regression suite: **244 passed** in 257.85s -- zero impact,
+  unchanged from before this correction.
+- Full suite, cache cleared first: **`18 failed, 2097 passed, 3 skipped, 1
+  error`** in 784.68s (0:13:04). `2097 = 2080 + 17` new tests. All 18
+  failing node IDs plus the 1 collection error compared by exact name
+  against this phase's own prior baseline (`18 failed, 2080 passed, 3
+  skipped, 1 error`, captured at commit `e16fd82`): identical set, zero new
+  regressions. `test_a_code_asked_for_to_prove_a_human_is_never_entered`
+  (the one baseline failure that exercises `complete_account_code()`
+  directly) was re-confirmed unaffected by this specific correction too --
+  its fixture names an email address, not "two-factor"/"2-step" wording,
+  so this round's change has no bearing on it.

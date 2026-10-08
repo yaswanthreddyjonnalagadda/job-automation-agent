@@ -56,9 +56,19 @@ import safety
 # an ordinary consent question, not a second factor) -- they are matched only once evidence is
 # already scoped to a verification-code control's own local context, where that risk does not
 # apply the same way.
+#
+# A further correction, 8 October 2026: "two-factor"/"2-step verification" were removed from this
+# vocabulary entirely. They name an AUTHENTICATION MODE ("a second factor is required"), never a
+# DELIVERY/COMPLETION MECHANISM ("how that factor reaches you") -- and a second factor can
+# legitimately be delivered by email, which this project is authorized to read ("Two-factor
+# authentication. We emailed your verification code." must read EMAIL, not NON_EMAIL). Only the
+# actual mechanism -- an authenticator app, TOTP, Authy, Google Authenticator, a security key, a
+# push approval, or SMS/phone delivery (the broader, local-only vocabulary below) -- determines
+# whether the agent has an authorized way to complete the step; the mode name contributes nothing
+# to that question and is never matched here again.
 NON_EMAIL_CHANNEL_CORE = re.compile(
     r"\bauthenticator(?:\s+app)?\b|\bgoogle authenticator\b|\bauthy\b|\btotp\b|\bsecurity key\b|"
-    r"\bhardware key\b|\btwo[- ]?factor\b|2-step verification|\bpush notification\b|"
+    r"\bhardware key\b|\bpush notification\b|"
     r"approve (?:the )?(?:sign.?in|request) (?:on|in|from) your",
     re.IGNORECASE)
 _NON_EMAIL_CHANNEL_LOCAL_ONLY = re.compile(
