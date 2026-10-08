@@ -1928,6 +1928,41 @@ class PageAgent:
                 if c.role in ("textbox", "searchbox", "spinbutton") and not c.disabled
                 and self.ACCOUNT_CODE.search(f"{c.question} {c.container}")]
 
+    _NEARBY_CODE_CONTROL_ROLES = frozenset((
+        "textbox", "searchbox", "spinbutton", "combobox", "checkbox", "radio", "button", "link",
+    ))
+
+    @staticmethod
+    def _nearby_code_text(snapshot: str, ref: str, max_lines: int = 4) -> str:
+        """Up to `max_lines` of the plain explanatory text immediately preceding the box named
+        `ref` in the snapshot -- the sentence a verification-code step's own wording usually sits
+        in ("We sent a verification code to your email") when that is not already part of the
+        box's own accessible label. Stops at the first heading or other interactive control,
+        never crossing into an earlier, unrelated question's own text (a checkbox for an "SMS
+        updates?" consent question, for example) -- that boundary is what keeps this local to the
+        code step itself rather than scanning the whole page (the P0-B2 follow-up finding, 7
+        October 2026: the first version of this channel check used the entire snapshot, and an
+        unrelated SMS-consent checkbox anywhere on the same page as a genuinely email-delivered
+        code blocked a read that should have been allowed)."""
+        lines = (snapshot or "").splitlines()
+        idx = next((i for i, line in enumerate(lines) if f"[ref={ref}]" in line), None)
+        if idx is None:
+            return ""
+        collected: list[str] = []
+        i = idx - 1
+        while i >= 0 and len(collected) < max_lines:
+            stripped = lines[i].strip()
+            if not stripped:
+                break
+            role_match = re.match(r"^-\s*'?([\w-]+)", stripped)
+            role = (role_match.group(1) if role_match else "").lower()
+            if role == "heading" or role in PageAgent._NEARBY_CODE_CONTROL_ROLES:
+                break
+            collected.append(stripped)
+            i -= 1
+        collected.reverse()
+        return " ".join(collected)
+
     def complete_account_code(self, page, controls: list[Control], snapshot: str) -> bool:
         """Enters a one-time code emailed to the owner for their own account.
 
@@ -1945,7 +1980,9 @@ class PageAgent:
                  and self.ACCOUNT_CODE.search(f"{c.question} {c.container}")]
         if not boxes or self._code_tries >= 3:
             return False
-        if not emailed_codes.code_channel_is_email(snapshot):
+        local_context = f"{boxes[0].question} {boxes[0].container} " \
+                        f"{self._nearby_code_text(snapshot, boxes[0].ref)}"
+        if not emailed_codes.code_channel_is_email(local_context):
             note = ("a code is required, but the page says it is sent by SMS/text or must come from "
                     "an authenticator app -- the agent has no authorized way to read either: complete "
                     "it yourself, then press Continue")

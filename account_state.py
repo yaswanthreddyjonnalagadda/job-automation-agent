@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from field_requirements import account_password_fields, optional_account_section
+from emailed_codes import NON_EMAIL_CHANNEL_CORE
 
 # What an account page can be.
 SIGNED_IN = "signed_in"             # past the account step: the application itself
@@ -65,15 +66,17 @@ _CODE = re.compile(r"(verification|security|confirmation|one[- ]?time|access|sig
 # during the hiring process" are ordinary, extremely common application-form CONSENT questions
 # (confirmed across at least seven distinct real employers' saved pages), not MFA. A bare
 # "authenticator" match is also unsafe -- it matched inside "FortiAuthenticator" (a product name in
-# a job description's skills list) with no \b boundary. Every alternative below therefore either
-# requires a \b word boundary, or requires the SMS/phone wording to appear specifically alongside a
-# code being sent -- "texted ... a code" / "code ... sent/texted to your phone" -- never bare
-# "sms"/"text message" alone, which real saved pages prove is far more often an unrelated consent
-# checkbox than a second factor.
+# a job description's skills list) with no \b boundary. This page-wide check therefore reuses only
+# emailed_codes.NON_EMAIL_CHANNEL_CORE -- the vocabulary already proven safe at page scope, and the
+# one place this project keeps it, so this check and emailed_codes.code_channel()'s own local
+# check cannot define "non-email channel" differently again (the P0-B2 follow-up finding, 7
+# October 2026) -- plus the code-coupled phrases below, which require the SMS/phone wording to
+# appear specifically alongside a code being sent ("texted ... a code" / "code ... sent/texted to
+# your phone") and are therefore just as safe page-wide: real saved pages prove bare "sms"/"text
+# message" alone is far more often an unrelated consent checkbox than a second factor, but that
+# risk does not apply once "code" is also required in the same phrase.
 _MFA = re.compile(
-    r"\btwo[- ]?factor\b|2-step verification|\bauthenticator(?:\s+app)?\b|\bgoogle authenticator\b|"
-    r"\bauthy\b|\btotp\b|\bsecurity key\b|\bhardware key\b|"
-    r"approve (?:the )?(?:sign.?in|request) (?:on|in|from) your|push notification|"
+    NON_EMAIL_CHANNEL_CORE.pattern + r"|"
     r"texted (?:you |to )?(?:a )?(?:\d+[- ]?(?:digit|character) )?code|"
     r"code (?:that )?(?:was |has been )?(?:sent|texted) to your (?:phone|mobile|cell)|"
     r"phone number ending",

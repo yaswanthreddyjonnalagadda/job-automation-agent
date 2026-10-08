@@ -355,3 +355,215 @@ did not need to modify.
 - P0-B1 submission protections remain intact: **confirmed**, 244/244
   regression tests pass, zero file overlap.
 - Full validation shows no new regression: **confirmed** below.
+
+---
+
+## Follow-up: local, not page-wide, channel classification
+
+**Commit under repair:** `b6891d5` (this phase's own `code_channel_is_email()`)
+
+A further review found the channel check above, while safe, was itself
+over-broad in the *other* direction: `complete_account_code()` passed it
+the **entire page snapshot**, so an ordinary, unrelated "Would you like
+application updates via SMS?" consent checkbox anywhere on the same page as
+a genuinely email-delivered code blocked a read that should have been
+allowed. This is safe-direction overblocking, not an unsafe code-entry bug
+-- but it unnecessarily forces owner handoff on an automatable
+email-verification step, confirmed as a real, live issue by this phase's
+own saved-page audit (below), not merely a theoretical one.
+
+### The fix: evidence local to the matched code control, not the page
+
+`page_agent.py` gained `_nearby_code_text(snapshot, ref, max_lines=4)`: up
+to 4 lines of plain explanatory text immediately preceding the matched code
+box in the snapshot, stopping at the first heading or other interactive
+control (a checkbox, a link, another textbox) so the scan never crosses
+into an earlier, unrelated question's own text. `complete_account_code()`
+now builds its channel-check context from `f"{box.question} {box.container}
+{_nearby_code_text(...)}"` -- the box's own accessible label, its section,
+and its immediate explanatory sentence -- never the whole page.
+
+### A genuine three-way result
+
+`emailed_codes.code_channel(context) -> "EMAIL" | "NON_EMAIL" | "UNKNOWN"`
+reports the evidence honestly: `NON_EMAIL` when the local context names a
+non-email channel and does *not* also name email; `EMAIL` when it names
+email (or shows a masked/full email address) and does not also name a
+non-email channel; `UNKNOWN` in the two remaining cases -- no channel named
+at all, **or** both named at once (self-contradictory). `code_channel()`
+deliberately does not pick a side for `UNKNOWN`; the policy choice belongs
+to `code_channel_is_email()`, which:
+
+- treats a confirmed `NON_EMAIL` channel as refused (unchanged from before);
+- treats a confirmed `EMAIL` channel as allowed (unchanged from before);
+- treats `UNKNOWN` **with no channel named at all** as allowed -- the
+  project's existing, already-deliberate default for an unlabeled code step
+  (most real verification-code steps never state their channel, and the
+  overwhelming majority of those are email), explicitly preserved per
+  instruction rather than reinterpreted as a new reason to refuse;
+- treats `UNKNOWN` **because both an email and a non-email channel are
+  named in the same local context** as refused -- a new rule this follow-up
+  adds: a self-contradictory local context ("We emailed your verification
+  code. We also texted the code to your phone.") is never guessed, exactly
+  like a confirmed non-email channel.
+
+### Sharing the channel vocabulary, not tripling it
+
+`account_state._MFA` (the page-wide `MFA_REQUIRED` detector) now imports and
+reuses `emailed_codes.NON_EMAIL_CHANNEL_CORE` directly
+(`_MFA = re.compile(NON_EMAIL_CHANNEL_CORE.pattern + r"|" + <code-coupled
+phrases>, re.IGNORECASE)`) instead of maintaining its own, independent copy
+of the same words -- confirmed by a new test,
+`test_account_state_mfa_and_emailed_codes_channel_share_one_core_vocabulary`,
+that asserts the shared pattern string literally appears inside `_MFA`'s
+own compiled pattern. Two vocabularies exist, not three: `NON_EMAIL_CHANNEL_CORE`
+(authenticator/TOTP/Authy/security-key/two-factor/push-notification -- safe
+to match at *any* scope, including page-wide, since these words are specific
+and rare) and a second, broader set (bare `sms`/`text message`/`phone
+number`/`mobile phone`) that is matched **only** by `code_channel()`'s own
+local-context check, never page-wide -- preserving exactly the Round-1
+MFA false-positive fix (below) while still letting the local, narrowly-scoped
+channel check use the fuller, more permissive vocabulary that locality makes
+safe.
+
+A genuine regex bug was found and fixed while adding this: `_EMAIL_CHANNEL`
+was originally `\be-?mail\b|\binbox\b`, which does not match "emailed" --
+`\b` requires a word boundary immediately after "mail", and "emailed" has
+"ed" there, not a boundary. "We emailed your verification code" therefore
+failed to register as email evidence at all, silently breaking the very
+contradiction test this follow-up was built to support. Fixed to
+`\be-?mail\w*\b|\binbox\b`, matching "email," "emailed," "emailing," and
+"emails" alike; caught by the test suite itself (`test_code_channel_reports_the_evidence_honestly`
+and `test_contradictory_local_evidence_is_never_read_as_email` both failed
+before the fix), not shipped unnoticed.
+
+### Confirmed on real data, not only synthetic fixtures
+
+Re-running the saved-page audit (861 snapshots this time: 116 + 417 + 328,
+3 more `runs/*/axtree_dump.json` entries than the previous audit, reflecting
+ordinary corpus growth between runs, not a methodology change) found **3
+real saved pages** (`Lucid_Motors_Sr._Network_Engineer`, all three recorded
+instances of its code-entry step) that are a genuine, real-world instance
+of the exact false-negative this follow-up fixes: each carries "Would you
+like to receive communications via SMS and/or WhatsApp..." elsewhere on the
+same page as its genuinely email-delivered verification code. Independently
+re-checked what the *previous* (whole-snapshot) `code_channel_is_email()`
+would have returned for this exact saved page: it matches bare `SMS` from
+the unrelated consent question and would have returned `False` (blocked) --
+a real false negative, now fixed and confirmed via the new local-context
+classification returning `EMAIL` (allowed) for the same page.
+
+### Saved-page audit (full accounting)
+
+- **Total snapshots inspected**: 861 (116 `output/*/account/*.txt`, 417
+  `output/*/pages/*.txt`, 328 `runs/*/axtree_dump.json`).
+- **`account_state` kind distribution**: `none` 498, `create_form` 122,
+  `signed_in` 106, `sign_in_form` 65, `chooser` 30, `wrong_password` 11,
+  `code_entry` 9, `email_first` 7, `loading` 3, `verify_email` 1,
+  `mfa_required` 0 -- unchanged from the previous audit (confirming the
+  `_MFA` refactor is behaviorally identical, not merely passing its own
+  unit tests).
+- **Code-entry pages found**: 9 (by `account_state.read_state()`'s own,
+  independent, page-wide `CODE_ENTRY` detection).
+- **Channel classification among them**: `EMAIL` 8; 1 has no box matched by
+  `page_agent.ACCOUNT_CODE` at all when independently re-parsed (a
+  pre-existing discrepancy between `account_state`'s own, separate
+  page-wide code-phrase detection and `page_agent`'s box-level `ACCOUNT_CODE`
+  matching -- noted here as an observation, not fixed in this narrowly
+  scoped follow-up, since it predates this task and investigating it is a
+  different, unrelated question from "is channel classification local").
+  **Zero** `NON_EMAIL` classifications among real saved pages -- this
+  project's saved corpus still has not captured a genuine non-email-channel
+  code step (consistent with the original P0-B2 discovery's finding).
+- **Pages with code-entry evidence plus unrelated SMS/phone wording
+  elsewhere on the page**: 3 (the Lucid Motors pages above), all correctly
+  classified `EMAIL` by the new local-context check -- confirmed, not
+  assumed, to have been `NON_EMAIL` (incorrectly) under the prior,
+  whole-snapshot implementation.
+- **Classification changes from `b6891d5`**: the 3 Lucid Motors pages above
+  change from what the old implementation would have produced (`NON_EMAIL`,
+  blocked) to the new, correct result (`EMAIL`, allowed) -- this is the
+  fix working as intended, not a regression. No other page's classification
+  changed. The original 39-page `MFA_REQUIRED` false-positive fix from the
+  first P0-B2 round remains fully intact (confirmed: 0 `mfa_required`
+  classifications, identical to the previous audit).
+- **True `NON_EMAIL` examples in the corpus**: none. As with `MFA_REQUIRED`
+  itself, this project's real saved runs have not yet encountered a genuine
+  SMS/authenticator/security-key code step; the `NON_EMAIL` path remains
+  validated against constructed fixtures and the explicit adversarial
+  matrix (D-G, I) rather than a real positive example. Recorded honestly,
+  not concealed, exactly as the original P0-B2 audit was.
+
+### Tests added
+
+All in `tests/test_emailed_code_rule.py`:
+
+- `test_code_channel_reports_the_evidence_honestly` (7 parametrized cases)
+  -- the three-way `code_channel()` result directly, including both
+  `UNKNOWN` sub-cases (no evidence, and contradictory evidence).
+- `test_contradictory_local_evidence_is_never_read_as_email` (3 parametrized
+  contradictory contexts) and `test_unknown_with_no_channel_named_is_still_the_preserved_default`
+  -- proving the two `UNKNOWN` sub-cases resolve to opposite
+  `code_channel_is_email()` outcomes, as required.
+- `test_account_state_mfa_and_emailed_codes_channel_share_one_core_vocabulary`
+  -- the anti-drift requirement, checked directly against the compiled
+  pattern string.
+- `test_email_code_is_still_read_despite_unrelated_page_wide_noise` (3
+  parametrized cases, A/B/C) and `test_non_email_channels_are_never_read_through_the_real_path`
+  (4 parametrized cases, D/E/F/G), plus `test_unknown_channel_preserves_the_existing_default_through_the_real_path`
+  (H) and `test_contradictory_local_evidence_fails_closed_through_the_real_path`
+  (I) -- all nine required adversarial cases, every one through the real
+  `PageAgent.complete_account_code()`, with `passcode_from_gmail` mocked so
+  each test can prove directly whether Gmail would actually have been
+  opened, not merely whether a helper function returned the right boolean.
+
+The previously-existing `test_a_code_from_an_unauthorized_channel_is_never_read_from_mail`
+(SMS and authenticator-app cases, written in the first P0-B2 round) was
+kept unchanged and still passes under the new local-context implementation
+-- its fixtures already place the explanatory text immediately before the
+code box, which `_nearby_code_text()` correctly captures.
+
+### Validation
+
+- `tests/test_emailed_code_rule.py`: **70 passed** in 131.57s (49 before
+  this follow-up, +21 new).
+- `tests/test_account_state.py`: **81 passed** in 120.07s -- unchanged
+  count, confirming the `_MFA` vocabulary-sharing refactor is behaviorally
+  identical, not just independently correct.
+- Full account/auth/verification suite (10 files): **348 passed** in 787.42s
+  (0:13:07) -- `327 + 21` new.
+- P0-B1 regression suite (`test_authority_boundary.py`,
+  `test_submission_firewall.py`, `test_submission_effect_state.py`,
+  `test_auto_submit.py`, `test_safety_rules.py`, `test_repeated_entries.py`):
+  **244 passed** in 310.21s -- zero impact, unchanged from before this
+  follow-up.
+- Full suite, cache cleared first: **`18 failed, 2080 passed, 3 skipped, 1
+  error`** in 748.89s (0:12:28). `2080 = 2059 + 21` new tests. All 18
+  failing node IDs plus the 1 collection error compared by exact name
+  against the P0-B2 baseline (`18 failed, 2059 passed, 3 skipped, 1 error`,
+  captured at commit `b6891d5`): identical set, zero new failing IDs, zero
+  new error IDs. One of the 18 -- `test_a_code_asked_for_to_prove_a_human_is_never_entered`
+  -- exercises `complete_account_code()` directly and was independently
+  checked rather than assumed unaffected: its fixture's "A verification
+  code was sent to you@example.com" is correctly read as email evidence by
+  the new local-context classifier (`you@example.com` matches the masked/full
+  email pattern), which is consistent with, not a deviation from, this
+  project's own already-established policy that a "confirm you're human"
+  code with no CAPTCHA showing is entered (`tests/test_emailed_code_rule.py::test_a_code_the_site_says_confirms_a_human_is_read_when_no_captcha_is_showing`,
+  predating this follow-up). This test's own name is stale relative to that
+  policy -- a symptom of the pre-existing, unrelated, already-documented
+  stray local modification to `tests/test_page_agent.py` present since
+  before this entire engagement began, not something this follow-up
+  introduced.
+
+### Preserved, unchanged
+
+`MFA_REQUIRED` handoff semantics, login retry accounting (`login_guard`),
+password/credential sources, CAPTCHA handling, verification-link security
+rules (`verification_link_ok()`), P0-B1 submission authority, replay
+protection, durable dispatch, the final-submit gateway, and the vision
+observer-only architecture are all untouched by this follow-up -- confirmed
+by `git diff --stat` showing changes confined to `emailed_codes.py`,
+`account_state.py` (one line: the `_MFA` pattern construction), and
+`page_agent.py` (`_nearby_code_text()` plus the one call-site change in
+`complete_account_code()`).

@@ -39,21 +39,92 @@ import safety
 # "Enter the one-time code we texted to your phone" matched ACCOUNT_CODE's wording and would have
 # had passcode_from_gmail search an inbox the real code was never going to reach. Checked before
 # any such read, in the one place that already governs whether the agent may read a code at all.
-_NON_EMAIL_CHANNEL = re.compile(
-    r"\b(?:text message|sms|texted|phone number|mobile (?:phone|number|app)|"
-    r"authenticator(?:\s+app)?|google authenticator|authy|totp|security key|hardware key)\b",
+#
+# A follow-up, also 7 October 2026, found the first version of this check unsafe in the opposite
+# direction: it was given the WHOLE page snapshot, so an ordinary, unrelated "Would you like
+# application updates via SMS?" consent checkbox anywhere on the same page as a genuinely
+# email-delivered code blocked the read that should have been allowed. Every caller now passes
+# only the text local to the matched code control (its own label/container plus the explanatory
+# text immediately around it -- see page_agent._nearby_code_text()), never the full snapshot.
+#
+# Two vocabularies, not three: NON_EMAIL_CHANNEL_CORE is safe to match at ANY scope, including
+# page-wide (account_state.py's own MFA_REQUIRED detection imports and reuses it directly, so the
+# two paths cannot define this core vocabulary differently again) -- its words are specific and
+# rare enough that an unrelated application question is not mistaken for them. The broader, more
+# generic words below (bare "sms"/"text message"/"phone number") are NOT safe page-wide (confirmed
+# by the P0-B2 saved-page audit: 39 real pages across seven employers used exactly this wording as
+# an ordinary consent question, not a second factor) -- they are matched only once evidence is
+# already scoped to a verification-code control's own local context, where that risk does not
+# apply the same way.
+NON_EMAIL_CHANNEL_CORE = re.compile(
+    r"\bauthenticator(?:\s+app)?\b|\bgoogle authenticator\b|\bauthy\b|\btotp\b|\bsecurity key\b|"
+    r"\bhardware key\b|\btwo[- ]?factor\b|2-step verification|\bpush notification\b|"
+    r"approve (?:the )?(?:sign.?in|request) (?:on|in|from) your",
     re.IGNORECASE)
+_NON_EMAIL_CHANNEL_LOCAL_ONLY = re.compile(
+    r"\btext message\b|\bsms\b|\btexted\b|\bphone number\b|\bmobile (?:phone|number)\b",
+    re.IGNORECASE)
+_EMAIL_CHANNEL = re.compile(r"\be-?mail\w*\b|\binbox\b", re.IGNORECASE)
+# A masked or full email address shown beside the code ("j***@example.com", "jo***@x.com"):
+# positive evidence the code is tied to an email address, without ever needing the real one.
+_MASKED_EMAIL = re.compile(r"[\w.+\-*]{1,40}@[\w.\-]+\.\w{2,}")
+
+
+def code_channel(context: str) -> str:
+    """"EMAIL", "NON_EMAIL", or "UNKNOWN" -- a verification code's own delivery channel, decided
+    only from evidence local to the matched code control (its own label, container, and any
+    clearly related nearby text) -- never from unrelated wording elsewhere on the page.
+
+    "NON_EMAIL": the local context names SMS/phone/text delivery, or says the code must come from
+    an authenticator app, TOTP, Authy, Google Authenticator, a security key, or a push approval --
+    channels the agent has no authorized way to read -- AND no email evidence also appears in that
+    same local context.
+
+    "EMAIL": the local context says the code was emailed, sent to the owner's inbox, or shows a
+    (masked or full) email address, with no non-email channel also named.
+
+    "UNKNOWN": either the local context names no channel at all, or it names both an email and a
+    non-email channel at once (self-contradictory -- never guessed). code_channel_is_email() is
+    the policy layer that decides what to do about "UNKNOWN"; this function only reports the
+    evidence, honestly, without picking a side when the evidence does not support one."""
+    text = context or ""
+    non_email = bool(NON_EMAIL_CHANNEL_CORE.search(text)) or bool(_NON_EMAIL_CHANNEL_LOCAL_ONLY.search(text))
+    email = bool(_EMAIL_CHANNEL.search(text)) or bool(_MASKED_EMAIL.search(text))
+    if non_email and email:
+        return "UNKNOWN"
+    if non_email:
+        return "NON_EMAIL"
+    if email:
+        return "EMAIL"
+    return "UNKNOWN"
 
 
 def code_channel_is_email(context: str) -> bool:
-    """False when the code's own nearby wording says it is delivered by SMS/text/phone, or must
-    come from an authenticator app or security key -- channels the agent has no authorized way to
-    read. True otherwise: a page that names no channel, or says "email"/"inbox", is treated as the
-    one channel this project is actually authorized for (the owner's Gmail, gated by why_not()
-    below). The agent must never guess a verification code for a channel it cannot read -- never
-    an SMS code, never a TOTP/authenticator code, never a security-key approval -- consistent with
+    """False when code_channel(context) is "NON_EMAIL", or when it is "UNKNOWN" because the local
+    context names both an email and a non-email channel at once -- a self-contradictory context is
+    never read, the same as a confirmed non-email one; CLAUDE.md's existing policy against
+    guessing applies here too. True when code_channel(context) is "EMAIL", or when it is "UNKNOWN"
+    because the local context names no channel at all -- this project's existing, deliberate
+    default for an unlabeled code step (most real verification-code steps never state their
+    channel, and the overwhelming majority of those are email), preserved here unchanged rather
+    than treated as a new reason to refuse.
+
+    The agent must never guess a verification code for a channel it cannot read -- never an SMS
+    code, never a TOTP/authenticator code, never a security-key approval -- consistent with
     CLAUDE.md's existing policy against inventing credential-adjacent mechanisms."""
-    return not bool(_NON_EMAIL_CHANNEL.search(context or ""))
+    channel = code_channel(context)
+    if channel == "NON_EMAIL":
+        return False
+    if channel == "EMAIL":
+        return True
+    # UNKNOWN: distinguish "no channel named at all" (the preserved default -- allowed) from
+    # "both an email and a non-email channel named at once" (contradictory -- never guessed),
+    # since code_channel() deliberately collapses both into the same honest "no clear answer"
+    # report and leaves the policy choice to this function.
+    text = context or ""
+    non_email = bool(NON_EMAIL_CHANNEL_CORE.search(text)) or bool(_NON_EMAIL_CHANNEL_LOCAL_ONLY.search(text))
+    email = bool(_EMAIL_CHANNEL.search(text)) or bool(_MASKED_EMAIL.search(text))
+    return not (non_email and email)
 
 
 def why_not(profile, url: str, captcha: bool = False, email: str = "") -> Optional[str]:
