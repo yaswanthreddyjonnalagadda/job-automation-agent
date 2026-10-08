@@ -25,6 +25,7 @@ LOCKED = "locked"                   # the site says the account is locked or dis
 WRONG_PASSWORD = "wrong_password"   # the site refused the email and password
 ACCOUNT_EXISTS = "account_exists"   # creating one was refused: the email already has an account
 CODE_ENTRY = "code_entry"           # a box for a code the site emailed
+MFA_REQUIRED = "mfa_required"       # a second factor the agent has no authorized way to complete
 VERIFY_EMAIL = "verify_email"       # the site sent a link to click before the account can be used
 CREATE_FORM = "create_form"         # a new-account form: email, password, and the password again
 SIGN_IN_FORM = "sign_in_form"       # email (or not yet) and one password
@@ -49,6 +50,34 @@ _EXISTS = re.compile(
     r"already (have|has) an account (with|for) (this|that)|already registered", re.IGNORECASE)
 _CODE = re.compile(r"(verification|security|confirmation|one[- ]?time|access|sign.?in)\s*code|passcode|\botp\b",
                    re.IGNORECASE)
+# A second factor the agent has no authorized way to complete -- an authenticator-app code, a
+# push-notification approval, a security key, or a code the page itself says went by SMS/text. Code
+# emailed to the owner's mail is handled separately (CODE_ENTRY/complete_account_code -- that one
+# IS something the agent may read, once emailed_codes.why_not and the channel both allow it); this
+# pattern is deliberately kept apart from _CODE so a page's own channel wording can override an
+# otherwise-matching "verification code"/"one-time code" phrase (the P0-B2 finding, 7 October 2026:
+# complete_account_code's own ACCOUNT_CODE regex matched "one-time code" even when the same page
+# said it was texted to a phone, with nothing excluding that case before it read the owner's Gmail
+# for a code that was never going to arrive there).
+#
+# Confirmed by the saved-page corpus audit, 7 October 2026: a bare "sms"/"text message" match is
+# unsafe -- "SMS Opt-in", "Would you like to receive communications via SMS", "we may use SMS
+# during the hiring process" are ordinary, extremely common application-form CONSENT questions
+# (confirmed across at least seven distinct real employers' saved pages), not MFA. A bare
+# "authenticator" match is also unsafe -- it matched inside "FortiAuthenticator" (a product name in
+# a job description's skills list) with no \b boundary. Every alternative below therefore either
+# requires a \b word boundary, or requires the SMS/phone wording to appear specifically alongside a
+# code being sent -- "texted ... a code" / "code ... sent/texted to your phone" -- never bare
+# "sms"/"text message" alone, which real saved pages prove is far more often an unrelated consent
+# checkbox than a second factor.
+_MFA = re.compile(
+    r"\btwo[- ]?factor\b|2-step verification|\bauthenticator(?:\s+app)?\b|\bgoogle authenticator\b|"
+    r"\bauthy\b|\btotp\b|\bsecurity key\b|\bhardware key\b|"
+    r"approve (?:the )?(?:sign.?in|request) (?:on|in|from) your|push notification|"
+    r"texted (?:you |to )?(?:a )?(?:\d+[- ]?(?:digit|character) )?code|"
+    r"code (?:that )?(?:was |has been )?(?:sent|texted) to your (?:phone|mobile|cell)|"
+    r"phone number ending",
+    re.IGNORECASE)
 _VERIFY = re.compile(
     r"verify (your|the) (email|e-mail|account|address)|verification (email|e-mail|link)|check your (email|e-mail|inbox)|"
     r"we('ve| have)? sent (you )?(an? )?(email|e-mail|link|message)|activate your account|confirm your (email|account)",
@@ -145,6 +174,13 @@ def read_state(snapshot: str, password_boxes: Optional[int] = None) -> AccountSt
         said = _first(pattern, texts)
         if said and (passwords or on_account_step or _first(_SIGN_IN, texts) or _first(_CREATE, texts)):
             return state(kind, said)
+    # The page's own channel wording (an authenticator app, SMS/text, a security key) outranks a
+    # generic code box: the agent may read an emailed code (CODE_ENTRY below), never one that must
+    # come from a channel it has no authorized way to read.
+    mfa_said = _first(_MFA, texts)
+    if mfa_said and (passwords or on_account_step or _first(_SIGN_IN, texts) or _first(_CREATE, texts)
+                     or wants_code or code_box):
+        return state(MFA_REQUIRED, mfa_said)
     if wants_code:
         return state(CODE_ENTRY, _first(_CODE, texts))
     said = _first(_VERIFY, texts)
@@ -256,6 +292,15 @@ def next_step(state: AccountState, memory: Memory) -> Step:
         return Step(WAIT, "the account step has not drawn its form yet")
     if kind == LOCKED:
         return Step(FOR_OWNER, f"the site says: {state.why}. Unlock or reset it on the site, then press Continue")
+    if kind == MFA_REQUIRED:
+        # No authorized mechanism exists for SMS/authenticator-app/security-key approval (CLAUDE.md's
+        # existing policy against inventing credential-adjacent mechanisms; the architecture document's
+        # Sections 22-23: "use an explicitly authorized integration if the project supports one.
+        # Otherwise... hand off"). Never guessed, never retried automatically -- the owner completes it
+        # on the site, and the next read of the page (after Continue) picks up whatever state that
+        # leaves behind, same as every other FOR_OWNER hold.
+        return Step(FOR_OWNER, f"the site wants a second factor it has no authorized way to complete: "
+                               f"{state.why}. Complete it there, then press Continue")
     if kind == VERIFY_EMAIL:
         # The owner's decision of 30 September 2026: the agent opens the verification link the site emailed, from the
         # owner's Gmail, once per site per run (emailed_codes decides whether the mail may be read and which link).

@@ -32,6 +32,29 @@ from urllib.parse import parse_qs, urlparse
 import login_guard
 import safety
 
+# P0-B2, 7 October 2026: ACCOUNT_CODE (page_agent.complete_account_code) matched a code box by
+# words like "verification code"/"one-time code"/"otp" alone, with nothing excluding a code the
+# page itself says was sent by SMS/text or must come from an authenticator app -- channels
+# emailed_codes.why_not's own permission (the owner's mail) has nothing to do with. A page reading
+# "Enter the one-time code we texted to your phone" matched ACCOUNT_CODE's wording and would have
+# had passcode_from_gmail search an inbox the real code was never going to reach. Checked before
+# any such read, in the one place that already governs whether the agent may read a code at all.
+_NON_EMAIL_CHANNEL = re.compile(
+    r"\b(?:text message|sms|texted|phone number|mobile (?:phone|number|app)|"
+    r"authenticator(?:\s+app)?|google authenticator|authy|totp|security key|hardware key)\b",
+    re.IGNORECASE)
+
+
+def code_channel_is_email(context: str) -> bool:
+    """False when the code's own nearby wording says it is delivered by SMS/text/phone, or must
+    come from an authenticator app or security key -- channels the agent has no authorized way to
+    read. True otherwise: a page that names no channel, or says "email"/"inbox", is treated as the
+    one channel this project is actually authorized for (the owner's Gmail, gated by why_not()
+    below). The agent must never guess a verification code for a channel it cannot read -- never
+    an SMS code, never a TOTP/authenticator code, never a security-key approval -- consistent with
+    CLAUDE.md's existing policy against inventing credential-adjacent mechanisms."""
+    return not bool(_NON_EMAIL_CHANNEL.search(context or ""))
+
 
 def why_not(profile, url: str, captcha: bool = False, email: str = "") -> Optional[str]:
     """None when the agent may read a code from the owner's mail for this page; else why not, in words for

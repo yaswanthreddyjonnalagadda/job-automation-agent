@@ -216,6 +216,40 @@ def test_the_form_code_step_obeys_the_same_rule_on_a_site_it_may_not_enter_anyth
     assert page.locator("#c").input_value() == ""
 
 
+SMS_CODE_STEP = """<html><body><h2>Verify your identity</h2>
+<p>We texted a 6-digit code to your phone number ending in 1234.</p>
+<label for="c">Enter the 6-digit one-time code</label>
+<input id="c"><button>Submit</button></body></html>"""
+
+AUTHENTICATOR_CODE_STEP = """<html><body><h2>Two-factor authentication</h2>
+<p>Enter the one-time code from your authenticator app.</p>
+<label for="c">One-time code</label>
+<input id="c"><button>Verify</button></body></html>"""
+
+
+@pytest.mark.parametrize("body", [SMS_CODE_STEP, AUTHENTICATOR_CODE_STEP])
+def test_a_code_from_an_unauthorized_channel_is_never_read_from_mail(context, body):
+    """P0-B2, 7 October 2026: ACCOUNT_CODE's own wording match ("one-time code"/"authentication
+    code") is not enough on its own -- the page's own channel wording (texted to a phone, or an
+    authenticator app) must refuse before passcode_from_gmail is ever called, on an employer site
+    where the owner has allowed mail reads and no CAPTCHA is showing: every other condition that
+    would normally allow a read is satisfied here, isolating the channel check itself."""
+    import page_agent
+    page = employer_page(context, body)
+    assistant = assistant_for(ALLOWED)
+    called = []
+    assistant.passcode_from_gmail = lambda *a, **k: (called.append(1), "482913")[1]
+    agent = page_agent.PageAgent(assistant, SimpleNamespace(), SimpleNamespace(auto_submit=False, ats_email=""),
+                                 ALLOWED, SimpleNamespace(raw_text="x"),
+                                 SimpleNamespace(title="t", company="c", url=URL), resume_file=None)
+    snapshot = agent.snapshot(page)
+    controls = page_agent.parse_snapshot(snapshot)
+    assert agent.complete_account_code(page, controls, snapshot) is False
+    assert called == []                                    # the mail was never even opened
+    assert page.locator("#c").input_value() == ""
+    assert agent.account_blocker and "authoriz" in agent.account_blocker.lower()
+
+
 def test_no_step_refuses_a_code_for_how_the_site_words_it():
     """Read the sources: the words a site uses for its code step decide nothing anywhere (a CAPTCHA does,
     and safety.py's detection of one is the only place that knows its wording)."""
@@ -241,3 +275,38 @@ def test_no_step_refuses_a_code_for_how_the_site_words_it():
 def test_only_this_sites_own_verification_link_is_opened(link, text, ok):
     import emailed_codes
     assert emailed_codes.verification_link_ok(link, text, "https://ciena.wd5.myworkdayjobs.com/en-US/Ciena_Careers/login") is ok
+
+
+# --- the code's own delivery channel (P0-B2, 7 October 2026) --------------------------------------
+#
+# ACCOUNT_CODE (page_agent.complete_account_code) matched a box by words like "verification code"
+# or "one-time code" alone, with nothing excluding a code the page itself says was sent by SMS/text
+# or must come from an authenticator app -- channels why_not's own permission (the owner's Gmail)
+# has nothing to do with. A page reading "Enter the one-time code we texted to your phone" matched
+# that wording and would have had passcode_from_gmail search an inbox the real code was never going
+# to reach.
+
+@pytest.mark.parametrize("context", [
+    "We texted a 6-digit code to your phone number ending in 1234.",
+    "Enter the code we sent via SMS.",
+    "A verification code was sent to your mobile phone.",
+    "Enter the 6-digit code from your authenticator app.",
+    "Open Google Authenticator and enter the code shown there.",
+    "Enter your Authy code to continue.",
+    "Enter the TOTP code from your authenticator.",
+    "Insert your security key and press the button on it.",
+    "Tap your hardware key to verify.",
+])
+def test_a_non_email_channel_is_never_treated_as_readable_mail(context):
+    assert emailed_codes.code_channel_is_email(context) is False
+
+
+@pytest.mark.parametrize("context", [
+    "",
+    "We sent a verification code to your email. Check your inbox.",
+    "Enter the one-time code we emailed you.",
+    "A verification code was sent to j***@example.com",
+    "Enter the 8-character code to confirm you're a human.",
+])
+def test_an_email_or_unlabeled_channel_is_still_treated_as_readable_mail(context):
+    assert emailed_codes.code_channel_is_email(context) is True
