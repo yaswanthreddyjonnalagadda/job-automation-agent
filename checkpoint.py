@@ -52,6 +52,11 @@ class ApplicationCheckpoint:
     pending_action: str = ""
     uncertain_actions: tuple = ()
     handoff_reason: str = ""
+    handoff_category: str = ""        # Phase 0-B4: a handoff.py category, e.g. "SMS_MFA"
+    handoff_required_action: str = "" # Phase 0-B4: what the owner must do, kept apart from
+                                      # the composed `handoff_reason` so it can be rendered
+                                      # or compared on its own
+    handoff_resume_condition: str = "" # Phase 0-B4: how automation knows it can continue
     submission_effect_state: str = ""
     schema_version: int = SCHEMA_VERSION
 
@@ -99,7 +104,8 @@ def build(
     account_state: str = "", completed_controls: tuple = (),
     uploaded_documents: Optional[dict] = None, last_verified_action: str = "",
     pending_action: str = "", uncertain_actions: tuple = (), handoff_reason: str = "",
-    submission_effect_state: str = "",
+    handoff_category: str = "", handoff_required_action: str = "",
+    handoff_resume_condition: str = "", submission_effect_state: str = "",
 ) -> ApplicationCheckpoint:
     """Builds a fresh checkpoint with its own id/timestamp/code-version filled in, so call
     sites only ever state what changed."""
@@ -111,6 +117,8 @@ def build(
         completed_controls=tuple(completed_controls), uploaded_documents=dict(uploaded_documents or {}),
         last_verified_action=last_verified_action, pending_action=pending_action,
         uncertain_actions=tuple(uncertain_actions), handoff_reason=handoff_reason,
+        handoff_category=handoff_category, handoff_required_action=handoff_required_action,
+        handoff_resume_condition=handoff_resume_condition,
         submission_effect_state=submission_effect_state, schema_version=SCHEMA_VERSION,
     )
 
@@ -155,6 +163,9 @@ def parse(payload: Any) -> tuple[str, Optional[ApplicationCheckpoint]]:
             pending_action=str(payload.get("pending_action") or ""),
             uncertain_actions=tuple(payload.get("uncertain_actions") or ()),
             handoff_reason=str(payload.get("handoff_reason") or ""),
+            handoff_category=str(payload.get("handoff_category") or ""),
+            handoff_required_action=str(payload.get("handoff_required_action") or ""),
+            handoff_resume_condition=str(payload.get("handoff_resume_condition") or ""),
             submission_effect_state=str(payload.get("submission_effect_state") or ""),
             schema_version=SCHEMA_VERSION,
         )

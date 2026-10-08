@@ -451,6 +451,31 @@ class JobTracker:
             return None
         return data if isinstance(data, dict) else None
 
+    def read_checkpoint_by_dedup_key(self, dedup_key: str) -> Optional[dict]:
+        """The current checkpoint for whichever `application_key` was last written with this
+        `dedup_key` (the `applications` row's own identity), for a caller -- the dashboard --
+        that only has that key, never the P0-B1 submission-effect identity a checkpoint is
+        actually filed under (Phase 0-B4). `dedup_key` and `application_key` are deliberately
+        separate identity schemes (`docs/security/phase0-b3-discovery.md`); this is a plain,
+        non-canonicalizing lookup by the `dedup_key` column `write_checkpoint` already stores
+        and indexes, not an alias-graph resolution -- it finds the most recently updated
+        checkpoint recorded with this `dedup_key`, nothing more."""
+        if not dedup_key:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM application_checkpoints WHERE dedup_key = ? "
+                "ORDER BY updated_at DESC LIMIT 1", (dedup_key,)
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            data = json.loads(row["payload"])
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("Corrupted checkpoint payload for dedup_key %s -- treated as no checkpoint", dedup_key)
+            return None
+        return data if isinstance(data, dict) else None
+
     def get_submission_effect_state(self, dedup_key: str) -> Optional[str]:
         with self._connect() as conn:
             canonical = self._resolve_root(conn, dedup_key)

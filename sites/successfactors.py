@@ -71,8 +71,15 @@ class SuccessFactorsAdapter(SiteAdapter):
                     if not assistant.upload_in_dialog(page, file_path):
                         continue
                 page.wait_for_timeout(5_000)
-                logger.info("Uploaded %s through the %s attachment icon", Path(file_path).name, kind)
-                return True
+                # Verify the attachment actually shows as present (Phase 0-B4 closure) --
+                # a non-throwing chooser/dialog completion is not, by itself, evidence it
+                # landed. Reuses the existing attachment_is_empty() evidence this adapter
+                # already exposes as a pre-check, now also as a post-check, rather than
+                # inventing a new one.
+                if self.attachment_is_empty(page, kind) is False:
+                    logger.info("Uploaded %s through the %s attachment icon", Path(file_path).name, kind)
+                    return True
+                logger.warning("SuccessFactors attachment does not show as attached after the attempt (kind=%s)", kind)
             except Exception as exc:
                 logger.warning("SuccessFactors attachment upload failed: %s", str(exc).splitlines()[0][:120])
         return None
@@ -134,6 +141,21 @@ class SuccessFactorsAdapter(SiteAdapter):
                     " detail: {value: v, valid: true}})); }",
                     value,
                 )
+                # Verify the widget's own input actually committed something (Phase 0-B4
+                # closure) -- the fill+dispatch sequence not throwing is not, by itself,
+                # evidence it stuck. The widget may reformat the typed value, so this
+                # checks for digit overlap (day/month/year) rather than an exact string
+                # match, and treats a verification read failure as NOT verified.
+                try:
+                    shown = (inner.input_value(timeout=1_500) or "").strip()
+                except Exception:
+                    return False
+                if not shown:
+                    return False
+                digits_expected, digits_shown = re.sub(r"\D", "", value), re.sub(r"\D", "", shown)
+                if digits_expected and digits_shown and digits_expected not in digits_shown \
+                        and digits_shown not in digits_expected:
+                    return False
                 return True
             except Exception as exc:
                 logger.warning("Could not set the date widget: %s", str(exc).splitlines()[0][:100])

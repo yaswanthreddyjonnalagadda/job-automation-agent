@@ -251,6 +251,9 @@ class PostgresTracker:
     def read_checkpoint(self, application_key: str) -> Optional[dict]:
         return self._local_submission_tracker().read_checkpoint(application_key)
 
+    def read_checkpoint_by_dedup_key(self, dedup_key: str) -> Optional[dict]:
+        return self._local_submission_tracker().read_checkpoint_by_dedup_key(dedup_key)
+
     def events(self, dedup_key: str, limit: int = 100) -> list[dict]:
         with self._connect() as conn:
             conn.execute(self._EVENTS_DDL)
