@@ -45,8 +45,11 @@ from pathlib import Path
 
 import re
 
+import account_state
 import browser_automation
+import checkpoint
 import config as config_module
+import recovery
 from resume_pdf import build_letter_pdf, build_resume_pdf
 from browser_automation import BlockedLoginDomainError, JobApplicationAssistant
 from claude_integration import ClaudeClient, ClaudeIntegrationError
@@ -625,6 +628,99 @@ def shows_the_application(assistant, page) -> bool:
     return False
 
 
+def write_recovery_checkpoint(tracker, assistant, key: str, page, job, handoff_reason: str = "") -> None:
+    """Checkpoints where this application stands, at the same once-per-agent-pass boundary
+    `remember_progress` already writes `last_page_url` from (Phase 0-B3) -- not on every DOM
+    read inside that pass. Best-effort and purely advisory: nothing recorded here is ever
+    trusted back without fresh, independent verification on the next read --
+    `recovery.reconcile()`, `account_state.read_state()` (P0-B2), and
+    `SubmissionGuardV0`/`SubmissionProbe` (P0-B1) remain the sole authorities on account and
+    submission state. A failure to write is logged, never raised: a checkpoint speeds up a
+    resume, it is not required for the run itself to proceed.
+
+    Reads the existing checkpoint first and writes through `checkpoint.merge_update()` rather
+    than building a fresh one -- a generic progress write here must never silently blank an
+    unresolved `pending_action`/`uncertain_actions` a more specific lifecycle (account
+    creation; see `PageAgent._mark_account_creation_dispatched`) recorded and has not yet
+    resolved (Phase 0-B3 closure correction: this function originally built a brand-new
+    checkpoint on every call, erasing exactly that marker on the very next ordinary pass)."""
+    if tracker is None or not hasattr(tracker, "write_checkpoint"):
+        return
+    application_key = str(getattr(assistant, "submission_key", "") or key or "")
+    if not application_key:
+        return
+    existing = None
+    if hasattr(tracker, "read_checkpoint"):
+        try:
+            existing = tracker.read_checkpoint(application_key)
+        except Exception as exc:
+            logger.debug("Could not read the existing checkpoint before updating it: %s", exc)
+    try:
+        page_identity = recovery.compute_page_identity(page)
+    except Exception:
+        page_identity = recovery.PageIdentity()
+    submission_state = ""
+    if hasattr(tracker, "get_submission_effect_state"):
+        try:
+            submission_state = tracker.get_submission_effect_state(application_key) or ""
+        except Exception:
+            submission_state = ""
+    updated = checkpoint.merge_update(
+        existing, application_key=application_key, dedup_key=key or "",
+        employer=getattr(job, "company", "") or "",
+        page_url=str(getattr(page, "url", "") or ""),
+        page_identity=page_identity.to_dict(), verified_stage=page_identity.step_indicator,
+        handoff_reason=handoff_reason or "", submission_effect_state=submission_state,
+    )
+    try:
+        tracker.write_checkpoint(application_key, updated)
+    except Exception as exc:
+        logger.debug("Could not write a recovery checkpoint: %s", exc)
+
+
+def log_recovery_reconciliation(tracker, assistant, submission_key: str, key: str, page) -> None:
+    """Logs (never acts on) how a resumed page relates to its durable checkpoint, if any
+    (Phase 0-B3, task section 28). Purely diagnostic: the existing `shows_the_application`
+    fallback a few lines above this call site is what actually governs navigation, unchanged
+    by this function. Evidence is gathered fresh here -- a live page identity, a live
+    `account_state.read_state()` read, the live submission-effect state -- never taken from
+    the checkpoint, which is why this can run unconditionally without risk: at worst it logs
+    `OUTCOME_UNKNOWN` or fails silently."""
+    if tracker is None:
+        return
+    try:
+        stored = tracker.read_checkpoint(submission_key) if hasattr(tracker, "read_checkpoint") else None
+    except Exception:
+        stored = None
+    try:
+        live_identity = recovery.compute_page_identity(page)
+    except Exception:
+        live_identity = recovery.PageIdentity()
+    try:
+        live_snapshot = page.locator("body").aria_snapshot(mode="ai")
+        live_account_kind = account_state.read_state(live_snapshot).kind
+    except Exception:
+        live_account_kind = ""
+    try:
+        live_submission_state = tracker.get_submission_effect_state(submission_key) \
+            if hasattr(tracker, "get_submission_effect_state") else None
+    except Exception:
+        live_submission_state = None
+    try:
+        present = shows_the_application(assistant, page)
+    except Exception:
+        present = True
+    result = recovery.reconcile(
+        stored_payload=stored, live_identity=live_identity, live_account_state_kind=live_account_kind,
+        live_submission_effect_state=live_submission_state, application_present=present)
+    logger.info("RECOVERY_%s: %s", result.outcome, result.why)
+    if hasattr(tracker, "record_event"):
+        try:
+            tracker.record_event(key, "note", f"recovery: {result.outcome} -- {result.why}"[:400])
+        except Exception as exc:
+            logger.debug("Could not record the recovery reconciliation: %s", exc)
+
+
 def remember_progress(tracker, key: str, page, note: str = "", assistant=None) -> None:
     """Writes down where this application has got to.
 
@@ -955,6 +1051,9 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
 
         page = agent.tab(outcome.page)
         remember_progress(tracker, key, page, outcome.summary[:200], assistant=assistant)
+        write_recovery_checkpoint(
+            tracker, assistant, key, page, job,
+            handoff_reason="" if outcome.kind == "submitted" else outcome.summary[:400])
         notes = "; ".join(agent.notes[:5])
 
         if outcome.kind == "submitted":
@@ -1567,6 +1666,8 @@ def main() -> None:
                 page = assistant.click_apply_button(page)
                 page = assistant.dismiss_apply_chooser(page)
                 page = assistant.open_embedded_form(page)
+            if resume_at:
+                log_recovery_reconciliation(tracker, assistant, submission_key, key, page)
             if hasattr(assistant, "autofill_from_resume"):
                 assistant.autofill_from_resume(page, attach_resume)
             run_page_agent(assistant, page, claude, config, profile, resume, job, tracker, key, job_dir,

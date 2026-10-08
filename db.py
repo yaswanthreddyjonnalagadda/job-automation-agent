@@ -242,6 +242,15 @@ class PostgresTracker:
     def submission_safety_events(self, dedup_key: str) -> list[dict]:
         return self._local_submission_tracker().submission_safety_events(dedup_key)
 
+    def write_checkpoint(self, application_key: str, payload: dict) -> None:
+        # Same residual assumption as the submission-effect state above: durable checkpoint
+        # state always lives in one local SQLite file, never in Postgres, regardless of which
+        # tracker backend is configured (Phase 0-B3; documented honestly rather than silently).
+        self._local_submission_tracker().write_checkpoint(application_key, payload)
+
+    def read_checkpoint(self, application_key: str) -> Optional[dict]:
+        return self._local_submission_tracker().read_checkpoint(application_key)
+
     def events(self, dedup_key: str, limit: int = 100) -> list[dict]:
         with self._connect() as conn:
             conn.execute(self._EVENTS_DDL)
