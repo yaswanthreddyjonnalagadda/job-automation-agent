@@ -27,20 +27,15 @@ logger = logging.getLogger("state_machine")
 STATUS_BLOCKED_VALIDATION_LOOP = "BLOCKED_VALIDATION_LOOP"
 
 
-def compute_state_fingerprint(page) -> tuple[str, dict[str, Any]]:
-    """Computes a page state hash string of:
-    1. current URL
-    2. active step text indicator
-    3. count of visible input fields
+def step_indicator_text(page) -> str:
+    """The active wizard/progress-bar step's own text, read straight from whichever of a
+    handful of common markup patterns the page actually uses -- empty if none is found.
 
-    Returns (hash_string, metadata_dict).
-    """
-    url = getattr(page, "url", "") or ""
-
-    # 1. Active step text indicator
-    step_indicator = ""
+    One place for this selector list: `recovery.compute_page_identity` (Phase 0-B3) reuses
+    it for a coarse, restart-safe "which stage is this" signal, rather than keeping its own
+    copy that could drift from this one."""
     try:
-        step_indicator = page.evaluate("""() => {
+        return page.evaluate("""() => {
             const selectors = [
                 "[aria-current='step']",
                 "[data-automation-id='progressBarActiveStep']",
@@ -66,6 +61,21 @@ def compute_state_fingerprint(page) -> tuple[str, dict[str, Any]]:
         }""") or ""
     except Exception as exc:
         logger.debug("Could not extract step indicator: %s", exc)
+        return ""
+
+
+def compute_state_fingerprint(page) -> tuple[str, dict[str, Any]]:
+    """Computes a page state hash string of:
+    1. current URL
+    2. active step text indicator
+    3. count of visible input fields
+
+    Returns (hash_string, metadata_dict).
+    """
+    url = getattr(page, "url", "") or ""
+
+    # 1. Active step text indicator
+    step_indicator = step_indicator_text(page)
 
     # 2. Count of visible input fields
     visible_inputs = 0

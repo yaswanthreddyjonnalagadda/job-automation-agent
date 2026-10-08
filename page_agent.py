@@ -41,6 +41,7 @@ from typing import Callable, Optional
 from urllib.parse import urlparse
 
 import concept_matcher
+import checkpoint
 import emailed_codes
 import geo_reference
 import account_state
@@ -1487,6 +1488,93 @@ class PageAgent:
             return Control(ref="", role="button", name="Sign in with Google")
         return next((c for c in controls if c.role in PRESS_ROLES and self.GOOGLE_SIGN_IN.search(c.name or "")), None)
 
+    # --- account-creation lifecycle (Phase 0-B3) -----------------------------------------
+    #
+    # Account creation is the one consequential, non-idempotent action in the account/auth
+    # flow with no durable guard of its own (discovery: docs/security/phase0-b3-discovery.md
+    # section 8). `_created_at` only lives in memory, so a process that dies between pressing
+    # Create Account and the next verified page read loses the only record that an attempt
+    # was ever made. These three methods give that one gap a small, durable, fail-closed
+    # lifecycle -- intended (about to dispatch) -> attempted (dispatched) -> resolved (live
+    # evidence shows the create form is behind us) -- without creating a second submission-
+    # style transaction system: final submission stays exclusively P0-B1's.
+
+    def _application_key(self) -> str:
+        """The P0-B1 submission-effect identity this run's checkpoint is filed under, so a
+        checkpoint and a submission effect always agree on one application identity (task
+        section 3). Falls back to the application-row key when no submission_key was bound
+        (a test double, or a code path that never set one) so a checkpoint write never
+        silently no-ops for want of an identity."""
+        return str(getattr(self.assistant, "submission_key", "") or self.key or "")
+
+    def _pending_account_creation(self, host: str) -> bool:
+        """True when a durable checkpoint says an earlier, possibly-interrupted run may
+        already have pressed Create Account on `host` without the result ever being
+        confirmed. Read fresh from durable storage on every call, with no in-memory cache --
+        the same restart-safety pattern `login_guard.py` already uses for its own durable,
+        cross-process state."""
+        key = self._application_key()
+        if not key or self.tracker is None or not hasattr(self.tracker, "read_checkpoint"):
+            return False
+        try:
+            payload = self.tracker.read_checkpoint(key)
+        except Exception:
+            return False
+        if not payload:
+            return False
+        return str(payload.get("pending_action") or "") == f"account_creation_dispatched@{host}"
+
+    def _mark_account_creation_dispatched(self, host: str) -> None:
+        """Durably records that Create Account is about to be pressed on `host`, BEFORE it is
+        pressed -- so a process that dies between the click and the next verified page read
+        leaves behind evidence a resumed run can see, instead of silently pressing it again
+        (task section 9: 'Do not create another account automatically')."""
+        key = self._application_key()
+        if not key or self.tracker is None or not hasattr(self.tracker, "write_checkpoint"):
+            return
+        existing: dict = {}
+        if hasattr(self.tracker, "read_checkpoint"):
+            try:
+                existing = self.tracker.read_checkpoint(key) or {}
+            except Exception:
+                existing = {}
+        record = checkpoint.build(
+            application_key=key, dedup_key=self.key or "",
+            employer=getattr(self.job, "company", "") or "",
+            page_url=str(getattr(self.job, "url", "") or ""),
+            page_identity=existing.get("page_identity") or {},
+            verified_stage=existing.get("verified_stage", "") or "",
+            account_state=existing.get("account_state", "") or "",
+            pending_action=f"account_creation_dispatched@{host}",
+            handoff_reason=existing.get("handoff_reason", "") or "",
+        )
+        try:
+            self.tracker.write_checkpoint(key, record.to_dict())
+        except Exception:
+            logger.warning("Could not durably record account-creation dispatch for %s", host)
+
+    def _resolve_pending_account_creation(self, host: str) -> None:
+        """Clears the durable account-creation marker once live evidence (the current
+        `account_state` read) shows the account step is past the create form -- called on
+        every `sign_in_step` read, so this resolves on the very next page read, whether that
+        is later in the same process or a freshly resumed one."""
+        key = self._application_key()
+        if not key or self.tracker is None or not hasattr(self.tracker, "read_checkpoint") \
+                or not hasattr(self.tracker, "write_checkpoint"):
+            return
+        try:
+            existing = self.tracker.read_checkpoint(key)
+        except Exception:
+            existing = None
+        if not existing or str(existing.get("pending_action") or "") != f"account_creation_dispatched@{host}":
+            return
+        record = dict(existing)
+        record["pending_action"] = ""
+        try:
+            self.tracker.write_checkpoint(key, record)
+        except Exception:
+            logger.warning("Could not durably clear account-creation dispatch marker for %s", host)
+
     def sign_in_step(self, page, controls: list[Control]) -> bool:
         """Signs in where the page asks for it. True when something was done.
 
@@ -1506,6 +1594,8 @@ class PageAgent:
         except Exception:
             return False
         state = account_state.read_state(snapshot, password_boxes=self._password_boxes(tab))
+        if state.kind != account_state.CREATE_FORM:
+            self._resolve_pending_account_creation(host)
         try:
             candidate_state = self.assistant.adapter(tab).candidate_account_state(tab)
         except Exception:
@@ -1609,10 +1699,18 @@ class PageAgent:
             return self._give_email_first(page, host, email, controls)
         if step.action in (account_state.CREATE, account_state.SIGN_IN):
             making_account = step.action == account_state.CREATE
+            if making_account and self._pending_account_creation(host):
+                self.account_blocker = (
+                    f"an earlier attempt may already have pressed Create Account on {host} and the run "
+                    "stopped before the result was confirmed -- check whether the account now exists "
+                    "before trying again, then press Continue")
+                return False
             (self._created_at if making_account else self._signed_in_at).add(host)
             if not making_account and host in self._emailed_in:
                 self._account_known.add(host)       # it took the email and asked for this account's password
             logger.info("LOGIN: %s on %s", "creating the account" if making_account else "signing in", host)
+            if making_account:
+                self._mark_account_creation_dispatched(host)
             try:
                 self.assistant._last_login_rejected = False     # only a refusal of this attempt counts below
                 if self.assistant.handle_auth_gate(tab, email):

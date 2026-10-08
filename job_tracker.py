@@ -145,6 +145,17 @@ CREATE TRIGGER IF NOT EXISTS submission_safety_events_no_delete
     BEFORE DELETE ON submission_safety_events
     BEGIN SELECT RAISE(ABORT, 'submission safety events are append-only'); END;
 
+CREATE TABLE IF NOT EXISTS application_checkpoints (
+    application_key TEXT PRIMARY KEY,
+    dedup_key TEXT,
+    schema_version INTEGER NOT NULL,
+    code_version TEXT,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_application_checkpoints_dedup ON application_checkpoints(dedup_key);
+
 CREATE TABLE IF NOT EXISTS ats_accounts (
     employer TEXT PRIMARY KEY,
     email TEXT NOT NULL,
@@ -385,6 +396,60 @@ class JobTracker:
             return ()
         with self._connect() as conn:
             return tuple(self._identity_group(conn, key))
+
+    def write_checkpoint(self, application_key: str, payload: dict) -> None:
+        """Durably records `payload` (an `checkpoint.ApplicationCheckpoint.to_dict()`) as the
+        current checkpoint for `application_key`'s whole submission-effect identity group --
+        the same canonical-root resolution `begin_submission_dispatch` uses, so a checkpoint
+        written from any alias of an application is read back from every other alias too
+        (Phase 0-B3; ties checkpoint identity to the P0-B1 replay identity rather than
+        inventing a separate one). Replaces the entire row in one statement inside one
+        transaction: a reader can never observe a half-written payload."""
+        if not application_key:
+            raise ValueError("A persisted application identity is required for a checkpoint")
+        encoded = json.dumps(payload, sort_keys=True)
+        now = _now()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            canonical = self._resolve_root(conn, application_key)
+            existing = conn.execute(
+                "SELECT created_at FROM application_checkpoints WHERE application_key = ?", (canonical,)
+            ).fetchone()
+            created_at = existing["created_at"] if existing else now
+            conn.execute(
+                """INSERT INTO application_checkpoints
+                       (application_key, dedup_key, schema_version, code_version, payload, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(application_key) DO UPDATE SET
+                       dedup_key = excluded.dedup_key, schema_version = excluded.schema_version,
+                       code_version = excluded.code_version, payload = excluded.payload,
+                       updated_at = excluded.updated_at""",
+                (canonical, str(payload.get("dedup_key") or ""), int(payload.get("schema_version") or 0),
+                 str(payload.get("code_version") or ""), encoded, created_at, now),
+            )
+
+    def read_checkpoint(self, application_key: str) -> Optional[dict]:
+        """The current checkpoint for `application_key`'s identity group, or None if none was
+        ever written, or if the stored payload is corrupt. A corrupt/unparseable payload is
+        deliberately treated the same as "no checkpoint" rather than raised: a malformed
+        checkpoint must never crash the application workflow (Phase 0-B3) -- the caller falls
+        back to inspecting live state fresh, exactly as it already does with no checkpoint at
+        all (a pre-B3 application record)."""
+        if not application_key:
+            return None
+        with self._connect() as conn:
+            canonical = self._resolve_root(conn, application_key)
+            row = conn.execute(
+                "SELECT payload FROM application_checkpoints WHERE application_key = ?", (canonical,)
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            data = json.loads(row["payload"])
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("Corrupted checkpoint payload for %s -- treated as no checkpoint", canonical)
+            return None
+        return data if isinstance(data, dict) else None
 
     def get_submission_effect_state(self, dedup_key: str) -> Optional[str]:
         with self._connect() as conn:
