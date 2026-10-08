@@ -750,11 +750,24 @@ def application(app_id: int):
         if ev.get("screenshot_path") and Path(ev["screenshot_path"]).is_file():
             latest_screenshot = ev["screenshot_path"]
             break
+    handoff = {}
+    if hasattr(tracker, "read_checkpoint_by_dedup_key"):
+        try:
+            stored = tracker.read_checkpoint_by_dedup_key(record.dedup_key)
+        except Exception:
+            stored = None
+        if stored:
+            handoff = {
+                "category": stored.get("handoff_category") or "",
+                "reason": stored.get("handoff_reason") or "",
+                "required_action": stored.get("handoff_required_action") or "",
+                "resume_condition": stored.get("handoff_resume_condition") or "",
+            }
     return render_template_string(
         DETAIL_HTML, a=record, docs=docs, answers=answers, events=events,
         decision=decision, validation=validation, progress=progress_of(record, validation),
         auto_submit_on=get_app_config().auto_submit_verified_only,
-        latest_screenshot=latest_screenshot, run_log=run_log_for(record.url),
+        latest_screenshot=latest_screenshot, run_log=run_log_for(record.url), handoff=handoff,
     )
 
 
@@ -1361,6 +1374,13 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
     <p style="margin:0"><strong>Step {{ progress.step }} of {{ progress.of }}</strong>
        {% if progress.blocked %}<span class="pill needs_user_review" style="margin-left:6px">Needs you</span>{% endif %}</p>
     {% if a.notes %}<p class="muted" style="margin:6px 0 0">{{ a.notes }}</p>{% endif %}
+    {% if handoff and handoff.category %}
+      <p class="section-title">What to do ({{ handoff.category.replace('_', ' ').title() }})</p>
+      <ul class="plain">
+        {% if handoff.required_action %}<li>{{ handoff.required_action }}</li>{% endif %}
+        {% if handoff.resume_condition %}<li class="muted">The agent continues once: {{ handoff.resume_condition }}</li>{% endif %}
+      </ul>
+    {% endif %}
     {% if progress.missing or progress.errors or progress.attestations or progress.captcha %}
       <p class="section-title">Still to do</p>
       <ul class="plain">

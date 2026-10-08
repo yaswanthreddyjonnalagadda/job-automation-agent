@@ -49,7 +49,9 @@ import account_state
 import browser_automation
 import checkpoint
 import config as config_module
+import handoff
 import recovery
+from handoff import Handoff
 from resume_pdf import build_letter_pdf, build_resume_pdf
 from browser_automation import BlockedLoginDomainError, JobApplicationAssistant
 from claude_integration import ClaudeClient, ClaudeIntegrationError
@@ -628,7 +630,9 @@ def shows_the_application(assistant, page) -> bool:
     return False
 
 
-def write_recovery_checkpoint(tracker, assistant, key: str, page, job, handoff_reason: str = "") -> None:
+def write_recovery_checkpoint(tracker, assistant, key: str, page, job, handoff_reason: str = "",
+                              owner_handoff: Optional[Handoff] = None,
+                              new_uncertain_actions: tuple = ()) -> None:
     """Checkpoints where this application stands, at the same once-per-agent-pass boundary
     `remember_progress` already writes `last_page_url` from (Phase 0-B3) -- not on every DOM
     read inside that pass. Best-effort and purely advisory: nothing recorded here is ever
@@ -643,7 +647,17 @@ def write_recovery_checkpoint(tracker, assistant, key: str, page, job, handoff_r
     unresolved `pending_action`/`uncertain_actions` a more specific lifecycle (account
     creation; see `PageAgent._mark_account_creation_dispatched`) recorded and has not yet
     resolved (Phase 0-B3 closure correction: this function originally built a brand-new
-    checkpoint on every call, erasing exactly that marker on the very next ordinary pass)."""
+    checkpoint on every call, erasing exactly that marker on the very next ordinary pass).
+
+    `owner_handoff` (Phase 0-B4), when given, supplies the richer `handoff_category`/
+    `handoff_required_action`/`handoff_resume_condition` fields alongside a context-rich
+    `handoff_reason` (task section 26) -- it takes priority over the plain `handoff_reason`
+    string kept for callers (and the one pre-existing test) that still pass that alone.
+
+    `new_uncertain_actions` (Phase 0-B4) is unioned onto whatever the existing checkpoint
+    already recorded, never replacing it -- this field has no resolve step yet (unlike
+    `pending_action`'s explicit dispatch/resolve lifecycle), so a generic pass that finds
+    nothing new must not look like a generic pass clearing what an earlier one found."""
     if tracker is None or not hasattr(tracker, "write_checkpoint"):
         return
     application_key = str(getattr(assistant, "submission_key", "") or key or "")
@@ -665,13 +679,19 @@ def write_recovery_checkpoint(tracker, assistant, key: str, page, job, handoff_r
             submission_state = tracker.get_submission_effect_state(application_key) or ""
         except Exception:
             submission_state = ""
-    updated = checkpoint.merge_update(
-        existing, application_key=application_key, dedup_key=key or "",
+    changes = dict(
+        application_key=application_key, dedup_key=key or "",
         employer=getattr(job, "company", "") or "",
         page_url=str(getattr(page, "url", "") or ""),
         page_identity=page_identity.to_dict(), verified_stage=page_identity.step_indicator,
         handoff_reason=handoff_reason or "", submission_effect_state=submission_state,
     )
+    if owner_handoff is not None:
+        changes.update(owner_handoff.to_checkpoint_fields())
+    if new_uncertain_actions:
+        prior = tuple((existing or {}).get("uncertain_actions") or ())
+        changes["uncertain_actions"] = tuple(dict.fromkeys(prior + tuple(new_uncertain_actions)))
+    updated = checkpoint.merge_update(existing, **changes)
     try:
         tracker.write_checkpoint(application_key, updated)
     except Exception as exc:
@@ -1051,9 +1071,27 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
 
         page = agent.tab(outcome.page)
         remember_progress(tracker, key, page, outcome.summary[:200], assistant=assistant)
+        owner_handoff = None
+        if outcome.kind != "submitted":
+            try:
+                portal = urlparse(getattr(page, "url", "") or "").netloc
+            except Exception:
+                portal = ""
+            owner_handoff = handoff.build(
+                application_key=str(getattr(assistant, "submission_key", "") or key or ""),
+                employer=getattr(job, "company", "") or "", portal=portal,
+                outcome_kind=outcome.kind, reason_text=outcome.summary[:400])
+            if hasattr(tracker, "record_event"):
+                try:
+                    tracker.record_event(
+                        key, "handoff_started", f"{owner_handoff.category}: {outcome.kind}",
+                        payload={"category": owner_handoff.category, "outcome_kind": outcome.kind,
+                                "portal": portal})
+                except Exception as exc:
+                    logger.debug("Could not record the handoff event: %s", exc)
         write_recovery_checkpoint(
-            tracker, assistant, key, page, job,
-            handoff_reason="" if outcome.kind == "submitted" else outcome.summary[:400])
+            tracker, assistant, key, page, job, owner_handoff=owner_handoff,
+            new_uncertain_actions=agent.uncertain_action_labels())
         notes = "; ".join(agent.notes[:5])
 
         if outcome.kind == "submitted":
@@ -1135,7 +1173,8 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 assistant = load_latest_code(agent, assistant, job, experience_data)
             continue
 
-        message = outcome.summary + (f" | worth checking: {notes}" if notes else "")
+        base_message = owner_handoff.compose_message() if owner_handoff is not None else outcome.summary
+        message = base_message + (f" | worth checking: {notes}" if notes else "")
         tracker.update_status(key, STATUS_NEEDS_USER_REVIEW, notes=message[:1000])
         banner = "=" * 78
         logger.info(banner)
