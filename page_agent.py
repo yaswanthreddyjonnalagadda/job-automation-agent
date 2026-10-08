@@ -1562,6 +1562,19 @@ class PageAgent:
                 except Exception:
                     pass
                 self.settle(page, 2_000)
+                # Observability only (P0-B2, 7 October 2026): some sites' verification link also
+                # signs the account in (a "magic link"), others only verify and still require a
+                # separate sign-in afterward. Both are already handled correctly either way -- the
+                # discard above just allows a fresh attempt, and the next read of the page decides
+                # whether one is actually needed -- this only makes which kind of link it was
+                # visible in the log, rather than leaving both to look identical.
+                try:
+                    after = account_state.read_state(self.snapshot(page), password_boxes=self._password_boxes(tab))
+                    logger.info("VERIFY_LINK: %s -- %s", "also signed the account in" if after.kind ==
+                                account_state.SIGNED_IN else "verified only; sign-in is still its own step",
+                                after)
+                except Exception:
+                    pass
                 return True
             self.account_blocker = str(getattr(self.assistant, "_login_paused", "") or "") \
                 or account_state.next_step(state, replace(memory, verify_tried=True)).why
@@ -1915,6 +1928,41 @@ class PageAgent:
                 if c.role in ("textbox", "searchbox", "spinbutton") and not c.disabled
                 and self.ACCOUNT_CODE.search(f"{c.question} {c.container}")]
 
+    _NEARBY_CODE_CONTROL_ROLES = frozenset((
+        "textbox", "searchbox", "spinbutton", "combobox", "checkbox", "radio", "button", "link",
+    ))
+
+    @staticmethod
+    def _nearby_code_text(snapshot: str, ref: str, max_lines: int = 4) -> str:
+        """Up to `max_lines` of the plain explanatory text immediately preceding the box named
+        `ref` in the snapshot -- the sentence a verification-code step's own wording usually sits
+        in ("We sent a verification code to your email") when that is not already part of the
+        box's own accessible label. Stops at the first heading or other interactive control,
+        never crossing into an earlier, unrelated question's own text (a checkbox for an "SMS
+        updates?" consent question, for example) -- that boundary is what keeps this local to the
+        code step itself rather than scanning the whole page (the P0-B2 follow-up finding, 7
+        October 2026: the first version of this channel check used the entire snapshot, and an
+        unrelated SMS-consent checkbox anywhere on the same page as a genuinely email-delivered
+        code blocked a read that should have been allowed)."""
+        lines = (snapshot or "").splitlines()
+        idx = next((i for i, line in enumerate(lines) if f"[ref={ref}]" in line), None)
+        if idx is None:
+            return ""
+        collected: list[str] = []
+        i = idx - 1
+        while i >= 0 and len(collected) < max_lines:
+            stripped = lines[i].strip()
+            if not stripped:
+                break
+            role_match = re.match(r"^-\s*'?([\w-]+)", stripped)
+            role = (role_match.group(1) if role_match else "").lower()
+            if role == "heading" or role in PageAgent._NEARBY_CODE_CONTROL_ROLES:
+                break
+            collected.append(stripped)
+            i -= 1
+        collected.reverse()
+        return " ".join(collected)
+
     def complete_account_code(self, page, controls: list[Control], snapshot: str) -> bool:
         """Enters a one-time code emailed to the owner for their own account.
 
@@ -1931,6 +1979,17 @@ class PageAgent:
                  if c.role in ("textbox", "searchbox", "spinbutton") and not c.answer and not c.disabled
                  and self.ACCOUNT_CODE.search(f"{c.question} {c.container}")]
         if not boxes or self._code_tries >= 3:
+            return False
+        local_context = f"{boxes[0].question} {boxes[0].container} " \
+                        f"{self._nearby_code_text(snapshot, boxes[0].ref)}"
+        if not emailed_codes.code_channel_is_email(local_context):
+            note = ("a code is required, but the page says it is sent by SMS/text or must come from "
+                    "an authenticator app -- the agent has no authorized way to read either: complete "
+                    "it yourself, then press Continue")
+            if note not in self.notes:
+                self.notes.append(note)
+            self.account_blocker = note
+            logger.info("CODE: %s", note)
             return False
         why = emailed_codes.why_not(self.profile, page.url, captcha=safety.captcha_visible(page),
                                     email=getattr(self.config, "ats_email", "") or "")
@@ -2753,6 +2812,11 @@ class PageAgent:
             if self.complete_account_code(page, controls, snapshot):
                 self.settle(page)
                 continue
+            if self.account_blocker:
+                # complete_account_code() found a code it has no authorized channel to read
+                # (SMS/text or an authenticator app): say so precisely, rather than let the box
+                # fall through to the ordinary question-answering path or a generic stuck loop.
+                return Outcome("owner_needed", page, [self.account_blocker])
             if self.open_entry_for_missing_field(page, snapshot, controls):
                 self.settle(page, 1_500)
                 continue
