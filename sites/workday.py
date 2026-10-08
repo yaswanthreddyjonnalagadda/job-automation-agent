@@ -718,7 +718,7 @@ class WorkdayAdapter(SiteAdapter):
                                 chosen = self._choose_nested_prompt(assistant, page, multiselect_id, cand)
                             if chosen and self._searchable_value_committed(
                                     assistant, page, id_suffix, chosen, multiselect_id, index, exact=True):
-                                logger.info("Selected %r in %s (nested prompt)", chosen, id_suffix)
+                                logger.info('FIELD_ACTION: application field handled')
                                 return True
                             continue
                         row = root.locator(f"[data-automation-id='promptOption']"
@@ -727,7 +727,7 @@ class WorkdayAdapter(SiteAdapter):
                             continue
                         page.wait_for_timeout(800)
                         if self._searchable_value_committed(assistant, page, id_suffix, rows[k], multiselect_id, index, exact=True):
-                            logger.info("Selected %r in %s (the row that is %r)", rows[k], id_suffix, cand)
+                            logger.info('FIELD_ACTION: application field handled')
                             return True
                         continue
                     if strategy == "suggestion_text":
@@ -743,7 +743,7 @@ class WorkdayAdapter(SiteAdapter):
 
                     page.wait_for_timeout(800)
                     if self._searchable_value_committed(assistant, page, id_suffix, cand, multiselect_id, index):
-                        logger.info("Selected %r in %s (via %s)", cand, id_suffix, strategy)
+                        logger.info('FIELD_ACTION: application field handled')
                         return True
                     logger.info(
                         "Option %r appeared to select in %s but did not commit; trying next strategy",
@@ -771,7 +771,7 @@ class WorkdayAdapter(SiteAdapter):
                 if self._click_matching_option(assistant, page, field, pick, id_suffix):
                     page.wait_for_timeout(800)
                     if self._searchable_value_committed(assistant, page, id_suffix, pick, multiselect_id, index):
-                        logger.info("Selected %r in %s (semantic)", pick, id_suffix)
+                        logger.info('FIELD_ACTION: application field handled')
                         return True
             return False
         except Exception as exc:
@@ -1083,7 +1083,7 @@ class WorkdayAdapter(SiteAdapter):
                 page.wait_for_timeout(700)
                 shown = assistant._displayed_value(page, id_suffix)
                 if shown:
-                    logger.info("Chose %r for %s", shown[:60], id_suffix)
+                    logger.info('FIELD_ACTION: application field handled')
                     return True
                 logger.info("Clicked %r for %s but the control shows nothing", choice[:40], id_suffix)
             except Exception as exc:
@@ -1166,14 +1166,14 @@ class WorkdayAdapter(SiteAdapter):
                     if cand.strip().lower() == text.strip().lower():
                         options.nth(i).click(timeout=5_000)
                         page.wait_for_timeout(500)
-                        logger.info("Selected %r (exact) for %s[%d]", text, id_suffix, index)
+                        logger.info('FIELD_ACTION: application field handled')
                         return True
             for cand in candidates:
                 for i, text in texts:
                     if cand.lower() in text.lower():
                         options.nth(i).click(timeout=5_000)
                         page.wait_for_timeout(500)
-                        logger.info("Selected %r (substring) for %s[%d]", text, id_suffix, index)
+                        logger.info('FIELD_ACTION: application field handled')
                         return True
             # Literal matching failed, so this tenant words its options
             # differently ('Masters' where we hold 'Masters of Science').
@@ -1186,7 +1186,7 @@ class WorkdayAdapter(SiteAdapter):
                     if text == pick:
                         options.nth(i).click(timeout=5_000)
                         page.wait_for_timeout(500)
-                        logger.info("Selected %r (semantic) for %s[%d]", text, id_suffix, index)
+                        logger.info('FIELD_ACTION: application field handled')
                         return True
 
             logger.warning(

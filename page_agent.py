@@ -75,6 +75,8 @@ from perception import (
 import provenance
 import safety
 
+import diagnostics
+diagnostics.install_log_privacy()
 logger = logging.getLogger("page_agent")
 
 MAX_PAGES = 30          # steps in one run before handing over
@@ -1832,9 +1834,9 @@ class PageAgent:
             folder = Path(self.job_dir) / "account"
             folder.mkdir(parents=True, exist_ok=True)
             stem = folder / f"{time.strftime('%Y%m%d_%H%M%S')}_{state.kind}"
-            self.tab(page).screenshot(path=str(stem.with_suffix(".png")), full_page=True)
-            stem.with_suffix(".txt").write_text(f"{self.tab(page).url}\n{state}\n-> {step.action} {step.why}\n\n"
-                                                + self.snapshot(page), encoding="utf-8")
+            diagnostics.capture_safe_screenshot(self.tab(page), stem.with_suffix(".png"))
+            diagnostics.write_safe_text(stem.with_suffix(".txt"),
+                diagnostics.sanitize_snapshot(self.snapshot(page)))
         except Exception as exc:
             logger.debug("Could not save the account page: %s", str(exc).splitlines()[0][:100])
 
@@ -2785,7 +2787,7 @@ class PageAgent:
                     filled += 1
                     self.written[control.question] = answer.value
                     self._remember(control, answer)
-                    logger.info("KNEW: %s = %r (%s)", control.question[:44], value[:34], source)
+                    logger.info('FIELD_ACTION: application field handled')
                     # Quiescence check: if Country was updated, let network settle before filling dependent fields
                     if re.search(r"^\s*country(/region)?( of residence)?\s*:?\s*\*?\s*$", control.question or "", re.I):
                         logger.info("LOCATION_SWEEP: Country answered; waiting for network quiescence...")
@@ -3382,13 +3384,11 @@ class PageAgent:
                     and not str(answer.source or "").startswith("work history"):
                 value, source, blank = repeated_entries.answer(entry, getattr(self, "history", {}) or {})
                 if blank:
-                    logger.info("ENTRY: %r stays blank -- %s is the current job (the plan said %r)",
-                                entry.label, source, answer.value[:40])
+                    logger.info('FIELD_ACTION: application field handled')
                     processed_refs.add(control.ref)
                     continue
                 if value and not _same_answer(answer.value, value):
-                    logger.info("ENTRY: %r takes %r from %s, not the plan's %r", entry.label, value[:40], source,
-                                answer.value[:40])
+                    logger.info('FIELD_ACTION: application field handled')
                     answer = Answer(answer.ref, answer.question, answer.action, value, source)
             refusal = self.refusal(page, answer, control, current_controls)
             if refusal:
@@ -3430,8 +3430,7 @@ class PageAgent:
                 self.written[control.question or answer.question] = answer.value
                 self.assistant.values.record(self.tab(page), f"aria:{control.question}", answer.value,
                                              answer.source or "agent")
-                logger.info("ANSWERED: %r -> %r (from %s)", (control.question or answer.question)[:60],
-                            answer.value[:50], answer.source or "?")
+                logger.info('FIELD_ACTION: application field handled')
                 self._remember(control, answer)
 
             processed_refs.add(control.ref)
@@ -3597,8 +3596,7 @@ class PageAgent:
         for asked in {target.question, target.label, target.section} - {""}:
             self.written[asked] = Path(self.resume_file).name   # the page's own words for it: answered
         where = target.section or target.question or target.label or target.name
-        logger.info("ATTACHED: the resume (%s) -- its input found by where it sits: %r",
-                    Path(self.resume_file).name, where[:60])
+        logger.info('ATTACHED: application document')
         return True
 
     def inventory_pass(self, page) -> list[str]:
@@ -3640,8 +3638,7 @@ class PageAgent:
                     continue
                 done_it = form_fields.fill_date(tab, f, value) if f.kind == "date" else form_fields.choose(tab, f, value)
                 if done_it:
-                    logger.info("KNEW: %s = %r (%s) -- a %s the usual reading left empty", question[:44], value[:34],
-                                source, f.kind.replace("_", " "))
+                    logger.info('FIELD_ACTION: application field handled')
                     self.written[question] = value
                     done.append(question)
                 continue
@@ -3655,8 +3652,7 @@ class PageAgent:
                 continue
             value, source = self.known_answer(Control(ref=f"inv:{f.id}", role="combobox", name=question))
             if value and form_fields.choose_from_button_list(tab, f, value):
-                logger.info("KNEW: %s = %r (%s) -- a list the page draws as a button", question[:44], value[:34],
-                            source)
+                logger.info('FIELD_ACTION: application field handled')
                 self.written[question] = value
                 done.append(question)
         return done
@@ -3730,7 +3726,7 @@ class PageAgent:
                 given.append((answer, control))
                 if action == "upload_cover_letter":
                     self._letter_attached = True
-                logger.info("ATTACHED: the %s (%s)", what, Path(path).name)
+                logger.info('ATTACHED: application document')
         return given
 
     def _file_input_for(self, page, controls: list[Control], section: re.Pattern) -> Optional[Control]:
@@ -4177,7 +4173,7 @@ class PageAgent:
                 continue   # the site tidied up what the agent wrote ("62701" -> "62701, Springfield, IL")
             if question in self._paused_state and value != self._paused_state[question]:
                 self.owner_answers[question] = value
-                logger.info("YOURS: %r is now %r -- the agent leaves it as you set it", question[:60], value[:40])
+                logger.info('FIELD_PRESERVED: existing value retained')
                 self._keep_owner_answer(page, question, value)
 
     def _keep_owner_answer(self, page, question: str, value: str) -> None:
@@ -4199,7 +4195,7 @@ class PageAgent:
         try:
             import profile_setup
             if profile_setup.remember_answer(question, value, getattr(self.job, "company", "") or ""):
-                logger.info("SAVED ANSWER: %r = %r, for every application", question[:60], value[:40])
+                logger.info('ANSWER_LIBRARY: approved answer retained')
         except Exception as exc:
             logger.debug("Could not add %r to the saved answers: %s", question[:50], exc)
 
@@ -4504,9 +4500,7 @@ class PageAgent:
                     with tab.expect_file_chooser(timeout=8_000) as chooser:
                         item.click(timeout=5_000)
                     chooser.value.set_files(str(path))
-                    logger.info("ATTACHED: the %s, through the upload menu's %r",
-                                "resume" if answer.action == "upload_resume" else "cover letter",
-                                (item.inner_text() or "").strip()[:30])
+                    logger.info('ATTACHED: application document')
             self.settle(page, 1_500)
             if answer.action == "upload_resume":
                 return self._confirm_resume_attached(page, path)
@@ -4683,8 +4677,7 @@ class PageAgent:
             if done:
                 answered += 1
                 self.written[question] = "; ".join(done)
-                logger.info("KNEW: %s = %s (your state first%s)", question[:50], "; ".join(done)[:120],
-                            ", then anywhere -- open to relocation" if len(done) > 1 else "")
+                logger.info('FIELD_ACTION: application field handled')
         for c in controls:
             if c.role not in ("combobox", "listbox") or c.disabled or c.answer or len(c.options) < 2:
                 continue
@@ -4696,7 +4689,7 @@ class PageAgent:
                 if self.do(page, answer, c):
                     answered += 1
                     self.written[c.question] = answer.value
-                    logger.info("KNEW: %s = %r (your state first)", c.question[:50], answer.value)
+                    logger.info('FIELD_ACTION: application field handled')
             except Exception as exc:
                 logger.info("Could not choose %r: %s", answer.value, str(exc).splitlines()[0][:100])
         return answered
@@ -5098,7 +5091,7 @@ class PageAgent:
                     current = next((c for c in parse_snapshot(self.snapshot(page))
                                     if _same_question(c.question, control.question)), None)
                     if current is not None and _same_answer(current.answer, value):
-                        logger.info("Accepted typed address %r without an exact autocomplete match", value[:60])
+                        logger.info('FIELD_ACTION: application field handled')
                         self._choice_methods[control.ref] = "typed_value"
                         return True
                 except Exception:
@@ -5148,8 +5141,8 @@ class PageAgent:
                 return out.slice(0, 150).join('\n');
             }""")
             folder = self.job_dir if self.job_dir else Path("output")
-            path = Path(folder) / f"dropdown_dump_{control.ref}.txt"
-            path.write_text(f"question={control.question!r}\nurl={tab.url}\n\n{info}\n", encoding="utf-8")
+            path = Path(folder) / "dropdown_dump_structure.txt"
+            diagnostics.write_safe_text(path, diagnostics.sanitize_snapshot(info))
             logger.info("DROPDOWN_DUMP written to %s", path)
         except Exception as exc:
             logger.info("DROPDOWN_DUMP failed: %s", str(exc).splitlines()[0][:120])
@@ -5224,7 +5217,7 @@ class PageAgent:
                           if _same_question(c.question, control.question)), None)
             took = shown is not None and shown.answer and _same_answer(shown.answer, value)
             if took and not complaint.search(snapshot):
-                logger.info("CHOSE %r for %r by typing and clicking its row", value[:30], control.question[:40])
+                logger.info('FIELD_ACTION: application field handled')
                 return True
             if shown is not None and shown.answer and not took:
                 # Enter took whichever row was showing, and it is not what was asked
@@ -5351,13 +5344,13 @@ class PageAgent:
             country = geo_reference.country_code(str(getattr(self.profile, "country", "") or ""))
             for i, name in enumerate(names):
                 if country and (code in name or value.strip() in name) and geo_reference.country_code(name) == country:
-                    logger.info("Matched dial code %r to profile country choice: %r", value, name)
+                    logger.info('FIELD_ACTION: application field handled')
                     return i
         index = self.assistant._best_option(names, [value])
         if index is None:
             index = closest_choice(names, value)
             if index is not None:
-                logger.info("Closest choice to %r is %r", value[:40], names[index][:60])
+                logger.info('FIELD_ACTION: application field handled')
         return index
 
     def _pick_label(self, labels: list[str], value: str) -> Optional[int]:
@@ -5414,7 +5407,7 @@ class PageAgent:
                         choice.first.check(timeout=4_000)
                     except Exception:
                         choice.first.click(timeout=4_000)
-                    logger.info("Chose %r inside %r", wanted[:40], control.question[:40])
+                    logger.info('FIELD_ACTION: application field handled')
                     return True
             except Exception:
                 continue
@@ -6124,7 +6117,7 @@ class PageAgent:
     def _record_resume_attached(self) -> None:
         if self.tracker is not None and self.key and self.resume_file and hasattr(self.tracker, "record_event"):
             try:
-                self.tracker.record_event(self.key, "resume_attached", self.resume_file.name)
+                self.tracker.record_event(self.key, "resume_attached", "resume document")
             except Exception as exc:
                 logger.debug("Could not record the upload: %s", exc)
 
@@ -6173,6 +6166,6 @@ class PageAgent:
             if not folder.is_dir():
                 folder.mkdir(parents=True, exist_ok=True)
                 keep_latest_runs(folder.parent, RUNS_KEPT)
-            (folder / f"page_{self.pages_read:02d}.txt").write_text(snapshot, encoding="utf-8")
+            diagnostics.write_safe_text(folder / f"page_{self.pages_read:02d}.txt", diagnostics.sanitize_snapshot(snapshot))
         except Exception:
             pass

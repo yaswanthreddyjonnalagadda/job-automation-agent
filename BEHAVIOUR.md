@@ -1092,7 +1092,7 @@ Text-message consent in a Yes/No picker or radio group follows the same contact-
 
 Start Dashboard uses the checkout's local Python runtime and one canonical dashboard port. The dashboard exposes its loaded directory and source identity at /runtime; startup reuses only the same unchanged checkout, and refuses an old or different server rather than silently starting with stale code. Deployment redirects the owner's old dashboard entry point and old bookmarks to the corrected canonical runtime.
 
-Source identity includes the runtime modules and portal adapters. A dashboard whose code changed since it loaded refuses to start or resume a worker until restarted. Each application log records the runtime directory, interpreter, and source identity used to launch it.
+Source identity includes the runtime modules and portal adapters. A dashboard whose code changed since it loaded refuses to start or resume a worker until restarted. Each application log records the source identity used to launch it; the runtime identity endpoint retains the directory/interpreter comparison without copying local paths into diagnostics.
 # Active dialog recovery
 
 Grouped native choices covered by a decorative layer use their own associated label when direct checking fails. The fallback clicks once and does not search for a matching label in another question.
@@ -1102,3 +1102,42 @@ The navigation loop guard recognizes changes to visible field values and committ
 Completed degrees can match broader completed education categories when the exact degree is absent: a master's or doctorate can use Post-Graduate Degree, and a bachelor's can use College/University Graduate. A broad category never selects a specific degree, and incomplete studies do not stand in for a completed degree. Immediate availability can use Not Applicable specifically for a notice-period menu when Immediate is absent. Identity verification offering email and phone chooses the saved contact preference; this does not bypass verification-code, credential, or CAPTCHA policy.
 
 While a visible dialog is open, the page reader focuses on that dialog and excludes background posting controls. After an owner completes CAPTCHA, the existing form's Continue remains the next action; a covered background Apply cannot take priority. Once the dialog closes, the reader returns to the page.
+
+## Diagnostic privacy (P0-B5)
+
+Persisted diagnostics use one privacy layer. HTML is a structural projection:
+field values, scripts, bootstrap state, arbitrary text, document content and
+active attributes are omitted. Saved accessibility text retains roles, known
+labels and boolean state. Live form perception and application answers are
+unchanged. Review/validation JSON masks values; review the actual form in the
+browser to inspect your answers.
+
+Screenshots conservatively cover the entire document with an opaque temporary
+mask, including frames, previews and shadow content. They preserve capture
+geometry rather than readable page pixels. Values and input/change events are
+untouched, and capture removes temporary nodes in finally. If setup or sanitation
+fails, the artifact is omitted; raw capture is never a fallback.
+
+Runtime logs omit dynamic personal values, filenames, URLs and exception bodies.
+An invalid Gemini key still produces a fixed format hint without logging the key.
+Dashboard stdout/stderr exports retain only safe operation categories. Console
+exports retain only message type/error category (latest 200 entries). Structured
+application events keep action, evidence, result/category and counts. Existing
+submission safety event enums and human-handoff/checkpoint authority are unchanged.
+
+Evidence/log viewers retain resolved-root containment and require B5 manifests
+binding safe artifacts to their bytes. Legacy unmarked diagnostics are withheld.
+HTML is served as plain text with nosniff and a restrictive CSP.
+
+DIAGNOSTIC_RETENTION_DAYS defaults to 7, accepts 0..30, and uses 7 for invalid
+values. Cleanup runs at runtime/dashboard startup and when a zero-retention
+worker finishes. Zero retains current-use artifacts until that cleanup boundary.
+Cleanup is bounded and best effort, follows no symlinks, and deletes only known
+diagnostics under output/, runs/ and logs/. Documents, DBs, profiles, checkpoints,
+source material, application records and unrelated files remain. The ten-run
+page-recording cap remains in force.
+
+Artifact limits: DOM 2 MiB; accessibility/text/JSON and runtime logs 1 MiB;
+console 512 KiB (the category-only projection is much smaller); screenshots
+16 MiB; manifests 64 KiB. Oversized sanitized text may be truncated with a
+manifest flag; oversized JSON becomes valid truncation metadata.

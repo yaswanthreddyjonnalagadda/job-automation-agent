@@ -576,8 +576,9 @@ def check_visa_sponsorship_shield(
             out_dir = Path(job_dir)
             out_dir.mkdir(parents=True, exist_ok=True)
             shot = out_dir / f"forensic_disqualified_policy_mismatch_{int(time.time())}.png"
-            page.screenshot(path=str(shot), full_page=True)
-            screenshot_path = str(shot)
+            import diagnostics
+            if diagnostics.capture_safe_screenshot(page, shot):
+                screenshot_path = str(shot)
         except Exception as exc:
             logging.getLogger(__name__).debug("Could not take forensic screenshot for visa policy mismatch: %s", exc)
 

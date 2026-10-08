@@ -75,9 +75,10 @@ def test_the_browser_is_never_started_on_a_hidden_desktop(monkeypatch):
     assert not started
 
 
-def test_the_dashboard_does_not_start_on_a_hidden_desktop(monkeypatch, capsys):
+def test_the_dashboard_does_not_start_on_a_hidden_desktop(monkeypatch, capsys, tmp_path):
     import web_ui
     served = []
+    monkeypatch.setattr(web_ui, "BASE_DIR", tmp_path)
     monkeypatch.setattr(visible_desktop, "where_this_runs", lambda: ("WinSta0", "exebox-1"))
     monkeypatch.setattr(web_ui.app, "run", lambda **kw: served.append(kw))
     with pytest.raises(SystemExit) as stopped:
@@ -86,9 +87,10 @@ def test_the_dashboard_does_not_start_on_a_hidden_desktop(monkeypatch, capsys):
     assert "exebox-1" in capsys.readouterr().err
 
 
-def test_the_dashboard_starts_on_the_owners_desktop(monkeypatch):
+def test_the_dashboard_starts_on_the_owners_desktop(monkeypatch, tmp_path):
     import web_ui
     served = []
+    monkeypatch.setattr(web_ui, "BASE_DIR", tmp_path)
     monkeypatch.setattr(visible_desktop, "where_this_runs", lambda: ("WinSta0", "Default"))
     monkeypatch.setattr(web_ui.app, "run", lambda **kw: served.append(kw))
     web_ui.serve()

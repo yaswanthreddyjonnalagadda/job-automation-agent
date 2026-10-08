@@ -135,7 +135,10 @@ def test_every_account_state_is_logged_with_a_screenshot(page, tmp_path):
     serve(page, CREATE)
     step(page, agent(Assistant(gate=True), tmp_path))
     saved = sorted(p.suffix for p in (tmp_path / "account").iterdir())
-    assert saved == [".png", ".txt"]
+    assert saved == [".json", ".png", ".txt"]
+    from diagnostics import is_safe_artifact
+    assert all(is_safe_artifact(p) for p in (tmp_path / "account").iterdir()
+               if p.name != "manifest.json")
 
 
 def test_an_application_page_is_left_to_the_rest_of_the_agent(page, tmp_path):

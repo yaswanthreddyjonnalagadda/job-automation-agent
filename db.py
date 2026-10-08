@@ -39,6 +39,7 @@ from psycopg.rows import dict_row
 import application_status
 from jd_analyzer import is_tracking_query_param, submission_identity_url
 
+import diagnostics
 logger = logging.getLogger(__name__)
 
 
@@ -204,6 +205,11 @@ class PostgresTracker:
         """Appends to an application's history: a status change, an error, a
         screenshot/HTML snapshot, or an auto-submit decision. This is the audit
         trail the dashboard reads."""
+        kind = kind if kind in diagnostics.EVENT_KINDS else "other"
+        message = "event: " + kind
+        payload = diagnostics.sanitize_event_payload(payload)
+        screenshot_path = screenshot_path if screenshot_path and diagnostics.is_safe_artifact(Path(screenshot_path)) else ""
+        html_path = html_path if html_path and diagnostics.is_safe_artifact(Path(html_path)) else ""
         with self._connect() as conn:
             conn.execute(self._EVENTS_DDL)
             app = conn.execute("SELECT id FROM applications WHERE dedup_key = %s", (dedup_key,)).fetchone()
@@ -262,7 +268,7 @@ class PostgresTracker:
                    WHERE a.dedup_key = %s ORDER BY e.created_at DESC LIMIT %s""",
                 (dedup_key, limit),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [diagnostics.sanitize_event(dict(r)) for r in rows]
 
     def document_matches(self, dedup_key: str, kind: str, file_path) -> bool:
         """True when the local file is byte-for-byte a document stored for this

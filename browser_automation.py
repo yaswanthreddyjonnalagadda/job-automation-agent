@@ -56,6 +56,8 @@ from perception import (
 )
 from sites import adapter_for
 
+import diagnostics
+diagnostics.install_log_privacy()
 logger = logging.getLogger(__name__)
 
 # A Chrome-family window is titled "<page> - Google Chrome" (real Chrome, what the agent uses),
@@ -553,11 +555,10 @@ class JobApplicationAssistant:
             page._console_logs = []
         def _on_console(msg):
             try:
-                page._console_logs.append({
-                    "type": msg.type,
-                    "text": msg.text,
-                    "location": getattr(msg, "location", None),
-                })
+                page._console_logs.extend(diagnostics.sanitize_console_logs([{
+                    "type": msg.type, "text": msg.text,
+                }]))
+                del page._console_logs[:-200]
             except Exception:
                 pass
         try:
@@ -863,10 +864,10 @@ class JobApplicationAssistant:
             field = page.locator(selector).first
             current = field.input_value(timeout=3_000) or ""
             if not self.values.may_write(page, selector, current):
-                logger.info("Keeping your answer in %s (%r)", what or selector, current[:40])
+                logger.info('FIELD_PRESERVED: existing value retained')
                 return False
             if not field.is_editable(timeout=2_000):
-                logger.info("Skipping locked field %s (value %r)", what or selector, current[:40])
+                logger.info('FIELD_PRESERVED: existing value retained')
                 return False
             fill_and_dispatch(field, value, timeout=8_000)
             # A key press plus leaving the field makes React-style forms
@@ -931,7 +932,7 @@ class JobApplicationAssistant:
                         pass
                     now = (button.get_attribute("title") or button.get_attribute("aria-label") or "")
                     if any(name.lower() in now.lower() for name in spellings):
-                        logger.info("PROFILE_ANSWER: phone country -> %r", now.strip()[:40])
+                        logger.info('FIELD_ACTION: application field handled')
                         done += 1
                 else:
                     page.keyboard.press("Escape")
@@ -989,7 +990,7 @@ class JobApplicationAssistant:
                     pass
                 if chosen:
                     self.note_page_changed()
-                    logger.info("PROFILE_ANSWER: phone country -> %r", chosen[:40])
+                    logger.info('FIELD_ACTION: application field handled')
                     done += 1
             except Exception as exc:
                 logger.debug("Phone country dropdown failed: %s", str(exc).splitlines()[0][:100])
@@ -1029,7 +1030,7 @@ class JobApplicationAssistant:
                 now = " ".join((combo.inner_text() or "").split())
                 if country.lower() in now.lower():
                     self.note_page_changed()
-                    logger.info("PROFILE_ANSWER: phone country code -> %r", now[:40])
+                    logger.info('FIELD_ACTION: application field handled')
                     done += 1
             except Exception as exc:
                 logger.debug("Country code list failed: %s", str(exc).splitlines()[0][:100])
@@ -1171,7 +1172,7 @@ class JobApplicationAssistant:
                     if (select.input_value() or "").strip() and not self.values.is_ours(
                         page, field.selector, select.input_value()
                     ):
-                        logger.info("Keeping your answer in %s", field.label_text[:50])
+                        logger.info('FIELD_PRESERVED: existing value retained')
                         continue
                     page.select_option(field.selector, label=value)
                     self.values.record(page, field.selector, value, f"profile:{field.matched_profile_key}")
@@ -1754,7 +1755,7 @@ class JobApplicationAssistant:
                 answer = options[index]
             if self._adapter_hook(page, "answer_platform_question", False,
                                   self, page, question.get("qid", ""), answer):
-                logger.info("PROFILE_ANSWER: %r -> %r", question["question"][:60], answer[:40])
+                logger.info('FIELD_ACTION: application field handled')
 
         # Answers can reveal new required fields (choosing Country adds State),
         # so scan once more for anything that has just appeared.
@@ -1871,11 +1872,11 @@ class JobApplicationAssistant:
         idx = self._best_option(options, candidates)
         if idx is None:
             self.note_ambiguous_choice(control["question"], options, candidates[0] if candidates else "")
-            logger.info("PROFILE_ANSWER: no option for %r among %s", control["question"][:60], options[:6])
+            logger.info('FIELD_ACTION: application field handled')
             return
         select.select_option(label=options[idx], timeout=5_000)
         self.values.record(page, f"[id={json.dumps(control['id'])}]", options[idx], "profile:standard answer")
-        logger.info("PROFILE_ANSWER: %r -> %r", control["question"][:60], options[idx])
+        logger.info('FIELD_ACTION: application field handled')
 
     def _salary_band(self, texts: list[str]) -> int | None:
         """Which offered pay band to pick when a form asks for a salary range
@@ -1916,7 +1917,7 @@ class JobApplicationAssistant:
             if overlap > best_overlap:
                 best, best_overlap = index, overlap
         if best is not None:
-            logger.info("PROFILE_ANSWER: salary band %r covers %s-%s", texts[best], low, high)
+            logger.info('FIELD_ACTION: application field handled')
         return best
 
     def displayed_value(self, field) -> str:
@@ -2307,7 +2308,7 @@ class JobApplicationAssistant:
         if idx is None:
             page.keyboard.press("Escape")
             self.note_ambiguous_choice(control["question"], texts, candidates[0] if candidates else "")
-            logger.info("PROFILE_ANSWER: no option for %r among %s", control["question"][:60], texts[:6])
+            logger.info('FIELD_ACTION: application field handled')
             return
         self._click_resiliently(opts.nth(idx), timeout_ms=4_000)
         page.wait_for_timeout(500)
@@ -2318,7 +2319,7 @@ class JobApplicationAssistant:
         # An earlier pass may have filed this question as unanswerable (before
         # the right option list was found); it is answered now.
         self.clear_ambiguous(control["question"])
-        logger.info("PROFILE_ANSWER: %r -> %r (now %r)", control["question"][:60], texts[idx], shown)
+        logger.info('FIELD_ACTION: application field handled')
 
     def radio_groups(self, page: Page) -> list[dict]:
         """Every radio question on the page: its text, its options, and whether
@@ -2458,7 +2459,7 @@ class JobApplicationAssistant:
             if self.answer_radio_group(page, group, group["labels"][index]):
                 self.values.record(page, f"[id={json.dumps(group['ids'][index])}]",
                                    group["labels"][index], "profile:standard answer")
-                logger.info("PROFILE_ANSWER: %r -> %r", group["question"][:60], group["labels"][index][:60])
+                logger.info('FIELD_ACTION: application field handled')
             else:
                 logger.warning("Could not answer %r", group["question"][:60])
 
@@ -2554,7 +2555,7 @@ class JobApplicationAssistant:
                 logger.warning("Could not tick %r: %s", question[:50], str(exc).splitlines()[0][:100])
                 continue
             self.values.record(page, selector, group["labels"][index], "profile:standard answer")
-            logger.info("PROFILE_ANSWER: %r -> %r", question[:60], group["labels"][index][:50])
+            logger.info('FIELD_ACTION: application field handled')
 
     def _answer_text_questions(self, page: Page, profile) -> None:
         """Free-text questions with a known answer: salary expectations (the
@@ -2594,7 +2595,7 @@ class JobApplicationAssistant:
             return
         today = date.today().strftime("%m/%d/%Y")
         if self.adapter(page).set_date(self, page, r"today[’']?s date", today):
-            logger.info("PROFILE_ANSWER: Today's Date -> %r", today)
+            logger.info('FIELD_ACTION: application field handled')
 
         # The same rules the pickers use. A questionnaire asks for the most
         # recent employer, its type of business, the dates and the position as
@@ -2613,7 +2614,7 @@ class JobApplicationAssistant:
                 if question and pattern.search(question):
                     if self.set_value(page, f"[id={json.dumps(box['id'])}]", value, question,
                                       source="profile:standard answer"):
-                        logger.info("PROFILE_ANSWER: %r -> %r", question[:60], value)
+                        logger.info('FIELD_ACTION: application field handled')
                     else:
                         # It used to break in silence here, so a question the
                         # agent had an answer for looked untouched.
@@ -4426,7 +4427,7 @@ class JobApplicationAssistant:
                         self._click_resiliently(confirm.nth(j), timeout_ms=4_000)
                         page.wait_for_timeout(3_000)
                         break
-                logger.info("Uploaded %s through the %r tile", Path(file_path).name, label_pattern)
+                logger.info('ATTACHED: application document')
                 return True
             except Exception:
                 continue
@@ -4544,11 +4545,11 @@ class JobApplicationAssistant:
             return False
         file_input.set_input_files(str(target))
         page.wait_for_timeout(1_500)
-        logger.info("Uploaded resume: %s (replaced %d existing)", target.name, attached)
+        logger.info('ATTACHED: application document')
         tracker, key = getattr(self, "tracker", None), getattr(self, "application_key", "")
         if tracker is not None and key and hasattr(tracker, "record_event"):
             try:
-                tracker.record_event(key, "resume_attached", target.name)
+                tracker.record_event(key, "resume_attached", "resume document")
             except Exception as exc:
                 logger.debug("Could not record the upload: %s", exc)
         # Some sites (Eightfold) pop a privacy agreement over the form as soon
@@ -4835,10 +4836,10 @@ class JobApplicationAssistant:
         try:
             folder = Path("logs") / "account_failures"
             folder.mkdir(parents=True, exist_ok=True)
-            stem = f"{re.sub(r'[^A-Za-z0-9.-]+', '_', site or 'site')}_{datetime.now():%Y%m%d_%H%M%S}"
-            page.screenshot(path=str(folder / f"{stem}.png"), full_page=True)
-            (folder / f"{stem}.txt").write_text(hide_secrets(page.locator("body").aria_snapshot(mode="ai")),
-                                                encoding="utf-8")
+            stem = f"{datetime.now():%Y%m%d_%H%M%S}_ACCOUNT"
+            diagnostics.capture_safe_screenshot(page, folder / f"{stem}.png")
+            diagnostics.write_safe_text(folder / f"{stem}.txt",
+                diagnostics.sanitize_snapshot(page.locator("body").aria_snapshot(mode="ai")))
             logger.warning("ACCOUNT_CREATE_FAILED: what the site showed is saved in %s", folder / stem)
         except Exception as exc:
             logger.info("Could not save the account page: %s", str(exc).splitlines()[0][:100])
@@ -5548,7 +5549,7 @@ class JobApplicationAssistant:
                                           self, page, q.selector, answer):
                         self.values.record(page, f"[data-questionid={json.dumps(q.selector)}]",
                                            answer, "screening answer")
-                        logger.info("PLATFORM_ANSWER: %r -> %r", q.question_text[:60], answer[:40])
+                        logger.info('FIELD_ACTION: application field handled')
                         filled += 1
                 elif q.input_type == "textarea":
                     fill_and_dispatch(page.locator(q.selector), answer)
@@ -7327,9 +7328,9 @@ class JobApplicationAssistant:
         job_dir.mkdir(parents=True, exist_ok=True)
         screenshot_path = job_dir / "review_screenshot.png"
         self.accept_consent_dialog(page)
-        page.screenshot(path=str(screenshot_path), full_page=True)
+        diagnostics.capture_safe_screenshot(page, screenshot_path)
         try:  # the page's markup beside the screenshot, for diagnosing unfamiliar forms
-            (job_dir / "review_page.html").write_text(page.content(), encoding="utf-8")
+            diagnostics.capture_safe_dom(page, job_dir / "review_page.html")
         except Exception:
             pass
         leftovers = self.find_required_blanks(page)
@@ -7367,7 +7368,7 @@ class JobApplicationAssistant:
             "screening_answers": questions_summary,
         }
         summary_path = job_dir / "review_summary.json"
-        summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        diagnostics.write_safe_json(summary_path, summary)
         logger.info("Review package written to %s", summary_path)
         return summary_path
 

@@ -29,6 +29,8 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, redirect, render_template_string, request, send_file, url_for
 
+import diagnostics
+diagnostics.install_log_privacy()
 import application_status
 import ui_shell
 import visible_desktop
@@ -149,28 +151,35 @@ def _run_apply(url: str, open_url: str = "") -> None:
     try:
         if not runtime_matches_source():
             raise RuntimeError('Dashboard code changed; restart the dashboard before starting another application.')
-        with open(log_path, "w", encoding="utf-8") as fh:
-            fh.write('Application runtime: '+json.dumps(RUNTIME_INFO)+'\n')
-            fh.flush()
-            # Popen rather than run() so /stop can reach the process. On POSIX
-            # it gets its own session so the whole group can be signalled.
-            command = [sys.executable, "apply.py", url]
-            if open_url:
-                command += ["--open-url", open_url]
-            proc = subprocess.Popen(
-                command,
-                cwd=str(BASE_DIR), stdout=fh, stderr=subprocess.STDOUT, text=True,
-                start_new_session=(os.name != "nt"), env=run_environment(),
-            )
-            with _RUNS_LOCK:
-                _RUNS[url]["proc"] = proc
-                _RUNS[url]["pid"] = proc.pid
-                _save_runs()
-            proc.wait()
+        private_log = diagnostics.PrivateRunLog(log_path, RUNTIME_INFO["source_id"])
+        # Popen rather than run() so /stop can reach the process. On POSIX
+        # it gets its own session so the whole group can be signalled.
+        command = [sys.executable, "apply.py", url]
+        if open_url:
+            command += ["--open-url", open_url]
+        proc = subprocess.Popen(
+            command,
+            cwd=str(BASE_DIR), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+            start_new_session=(os.name != "nt"), env=run_environment(),
+        )
+        with _RUNS_LOCK:
+            _RUNS[url]["proc"] = proc
+            _RUNS[url]["pid"] = proc.pid
+            _save_runs()
+        # Drain bounded chunks, not arbitrary unbounded readline output.
+        if proc.stdout is not None:
+            while True:
+                chunk = proc.stdout.readline(2048)
+                if not chunk:
+                    break
+                private_log.append(chunk)
+        proc.wait()
         state = "finished" if proc.returncode == 0 else f"failed (exit {proc.returncode})"
     except Exception as exc:
-        state = f"failed ({exc})"
+        state = "failed (runtime error; private details omitted)"
 
+    if diagnostics.retention_days() == 0:
+        diagnostics.cleanup_expired_diagnostics(BASE_DIR, days=0)
     with _RUNS_LOCK:
         if _RUNS[url]["stopping"]:
             state = "stopped by you"
@@ -795,7 +804,10 @@ def latest_validation(record) -> dict:
         if company and company.split("_")[0] not in path.as_posix().lower():
             continue
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            content = diagnostics.read_safe_artifact(path)
+            if content is None:
+                continue
+            return json.loads(content)
         except Exception:
             continue
     return {}
@@ -815,16 +827,19 @@ def progress_of(record, validation: dict) -> dict:
 
 @app.get("/evidence")
 def evidence():
-    """Serves a screenshot/HTML/comparison file from this application's own
-    output folder. Nothing outside output/ is readable."""
+    """Serve only B5-marked artifacts within the existing resolved output root."""
     target = Path(request.args.get("path", "")).resolve()
     root = (BASE_DIR / "output").resolve()
-    if (target != root and root not in target.parents) or not target.is_file():
+    if target != root and root not in target.parents:
         abort(404)
-    if target.suffix.lower() == ".png":
-        return send_file(target, mimetype="image/png")
-    return Response(target.read_text(encoding="utf-8", errors="replace"),
-                    mimetype="text/plain" if target.suffix != ".html" else "text/html")
+    content = diagnostics.read_safe_artifact(target)
+    if content is None:
+        abort(404)
+    response = Response(content, mimetype="image/png" if target.suffix.lower() == ".png" else "text/plain")
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; script-src 'none'; sandbox"
+    return response
+
 
 
 @app.get("/document/<int:doc_id>")
@@ -844,9 +859,15 @@ def log():
     path = request.args.get("path", "")
     target = Path(path).resolve()
     root = (BASE_DIR / "logs").resolve()
-    if (target != root and root not in target.parents) or not target.is_file():
+    if (target != root and root not in target.parents) or target.suffix not in {".log", ".jsonl", ".txt"}:
         abort(404)
-    return Response(target.read_text(encoding="utf-8", errors="replace"), mimetype="text/plain")
+    content = diagnostics.read_safe_artifact(target)
+    if content is None:
+        abort(404)
+    response = Response(content, mimetype="text/plain")
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; script-src 'none'; sandbox"
+    return response
 
 
 # ----------------------------------------------------------------------
@@ -1509,6 +1530,7 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
 
 
 def serve() -> None:
+    diagnostics.cleanup_expired_diagnostics(BASE_DIR)
     # Every run starts from here, so a dashboard on a desktop the owner does not
     # see would open every browser there too (visible_desktop.py): it does not start.
     reason = visible_desktop.why_invisible()
