@@ -184,36 +184,22 @@ def test_a_page_that_is_already_the_form_stays_put(page, agent):
     assert agent.open_embedded_form(page) is page
 
 
-# --- what the agent will click on Claude's say-so -----------------------------
-
-@pytest.mark.parametrize("label", [
-    "Submit Application", "Submit", "Send application", "Finish", "I certify the above is true",
-    "Apply with LinkedIn", "Sign in with Indeed", "Continue with Facebook", "Withdraw application",
-    "Delete", "Sign out", "E-Sign",
-])
-def test_never_clicked_on_claudes_say_so(page, agent, label):
-    page.set_content(FORM)
-    assert not agent.safe_to_click_for_claude(page, label)
-
-
-@pytest.mark.parametrize("label", [
-    "Next", "Continue", "Sign in with Google", "Apply without an account", "Apply Manually", "Start",
-])
-def test_ordinary_steps_are_allowed(page, agent, label):
-    page.set_content(FORM)
-    assert agent.safe_to_click_for_claude(page, label)
-
+# --- the vision/model fallback is observation only, never a click authority ---
+#
+# safe_to_click_for_claude() and the label-vocabulary tests that used to exercise it
+# directly were removed in the P0-B1 vision-fallback architecture correction, 7
+# October 2026: that function existed only to gate look_and_act()'s own click, and
+# look_and_act() no longer clicks a generic, model-selected candidate at all (no
+# DOM-structural signal can prove a candidate's own onclick handler does not submit
+# the application, so there is no safe allowlist, text-based or structural, for that
+# decision any more). "Apply is only pressed from a posting" remains true, but it is
+# enforced the same way it always was for the deterministic PageAgent flow --
+# page_agent.posting_plan()/profile_forward(), neither of which ever called
+# safe_to_click_for_claude() -- not by the now-removed vision-side copy of that rule.
 
 def test_profile_forward_accepts_workday_manual_application(page, agent):
     page.set_content(FORM)
     assert page_agent.FORWARD_LABEL.match("Apply Manually")
-
-
-def test_apply_is_allowed_only_from_a_posting(page, agent):
-    page.set_content(POSTING)
-    assert agent.safe_to_click_for_claude(page, "Apply")
-    page.set_content(REVIEW_WITH_APPLY)
-    assert not agent.safe_to_click_for_claude(page, "Apply")
 
 
 class FakeClaude:
@@ -227,15 +213,26 @@ class FakeClaude:
         return self.answer
 
 
-def test_looking_clicks_what_claude_points_at(page, agent):
+def test_looking_identifies_what_claude_points_at_but_never_clicks_it(page, agent):
+    # The P0-B1 vision-fallback architecture correction, 7 October 2026 (fifth closure
+    # round): "Claude names something -> vision directly clicks it" is exactly the
+    # architecture removed by this round. No DOM-structural signal (a recognized opener
+    # role, aria-haspopup/aria-controls/aria-expanded, even a real anchor href) can prove
+    # a candidate's own onclick handler does not submit the application elsewhere on the
+    # page, so look_and_act() no longer clicks a generic, model-selected candidate at
+    # all. This fixture's own onclick is deliberately harmless (it just flips a dataset
+    # attribute) specifically to prove the point either way: even a control that would be
+    # completely safe to click is still not clicked, because the decision is
+    # architectural, not evidence-based per candidate.
     page.set_content("""
       <html><body><h1>Welcome back</h1>
-        <div role="button" tabindex="0" onclick="document.body.dataset.went='yes'">Continue to application</div>
+        <a href="#apply" tabindex="0" onclick="document.body.dataset.went='yes'">Continue to application</a>
       </body></html>""")
     kind, clicked = agent.look_and_act(page, FakeClaude(
         {"page": "chooser", "click": "Continue to application", "why": "the only way on"}), "apply")
-    assert clicked and kind == "chooser"
-    assert page.evaluate("document.body.dataset.went") == "yes"
+    assert kind == "chooser"       # the model's own observation is still returned
+    assert clicked is False        # but it is never turned into a click
+    assert page.evaluate("document.body.dataset.went") is None
 
 
 def test_looking_never_presses_submit_even_if_claude_says_so(page, agent):
@@ -544,11 +541,10 @@ def test_a_list_holding_only_its_chosen_entry_counts_as_answered(page, agent, mo
     assert "Are you at least 18?" in asked  # the browser's default "Yes" is not an answer
 
 
-def test_update_profile_moves_on_and_finish_later_never_does(page, agent):
+def test_update_profile_moves_on(page, agent):
     page.set_content(ICIMS_PROFILE)
     button = agent._wizard_button(page)
     assert button is not None and button.get_attribute("value") == "Update Profile"
-    assert not agent.safe_to_click_for_claude(page, "Finish Later")
 
 
 def test_submit_is_held_at_the_button_when_the_form_says_no_sponsorship_is_needed(page, agent):
