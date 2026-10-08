@@ -58,6 +58,48 @@ def test_a_future_schema_version_is_unsupported_not_guessed_at():
     assert status == checkpoint.UNSUPPORTED and parsed is None
 
 
+def test_merge_update_with_no_existing_checkpoint_builds_a_fresh_one():
+    updated = checkpoint.merge_update(None, application_key="app1", employer="Acme", page_url="https://x")
+    assert updated["application_key"] == "app1" and updated["employer"] == "Acme"
+    assert updated["pending_action"] == "" and updated["uncertain_actions"] == []
+
+
+def test_merge_update_preserves_sticky_fields_not_named_in_the_update():
+    """The closure-correction invariant: a generic/partial update (a new page URL, a new
+    handoff reason -- the shape of apply_flow.write_recovery_checkpoint's own call) must
+    never silently blank an unresolved pending_action/uncertain_actions it was never told to
+    change."""
+    existing = checkpoint.build(
+        application_key="app1", pending_action="account_creation_dispatched@host",
+        uncertain_actions=("something_else_unresolved",), employer="Acme").to_dict()
+    updated = checkpoint.merge_update(existing, application_key="app1", page_url="https://new-url",
+                                      handoff_reason="paused for the owner")
+    assert updated["pending_action"] == "account_creation_dispatched@host"
+    assert updated["uncertain_actions"] == ["something_else_unresolved"]
+    assert updated["page_url"] == "https://new-url" and updated["handoff_reason"] == "paused for the owner"
+    assert updated["employer"] == "Acme"                      # untouched fields survive too
+
+
+def test_merge_update_clears_a_sticky_field_only_when_named_explicitly():
+    existing = checkpoint.build(application_key="app1", pending_action="account_creation_dispatched@host").to_dict()
+    updated = checkpoint.merge_update(existing, application_key="app1", pending_action="")
+    assert updated["pending_action"] == ""
+
+
+def test_merge_update_treats_an_unparseable_existing_payload_as_none():
+    updated = checkpoint.merge_update({"garbage": True}, application_key="app1", employer="Acme")
+    assert updated["application_key"] == "app1" and updated["employer"] == "Acme"
+    assert updated["pending_action"] == ""     # nothing sticky to inherit from unusable prior data
+
+
+def test_merge_update_is_sticky_across_repeated_generic_updates():
+    first = checkpoint.merge_update(None, application_key="app1", pending_action="account_creation_dispatched@h")
+    second = checkpoint.merge_update(first, application_key="app1", page_url="https://x")
+    third = checkpoint.merge_update(second, application_key="app1", handoff_reason="paused")
+    assert third["pending_action"] == "account_creation_dispatched@h"
+    assert third["page_url"] == "https://x" and third["handoff_reason"] == "paused"
+
+
 def test_malformed_field_types_never_raise():
     """completed_controls as a string, uploaded_documents as a list, page_identity as a
     number -- none of it is a reason to crash the workflow; parse() either coerces it or

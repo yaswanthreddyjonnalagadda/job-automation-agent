@@ -636,12 +636,25 @@ def write_recovery_checkpoint(tracker, assistant, key: str, page, job, handoff_r
     `recovery.reconcile()`, `account_state.read_state()` (P0-B2), and
     `SubmissionGuardV0`/`SubmissionProbe` (P0-B1) remain the sole authorities on account and
     submission state. A failure to write is logged, never raised: a checkpoint speeds up a
-    resume, it is not required for the run itself to proceed."""
+    resume, it is not required for the run itself to proceed.
+
+    Reads the existing checkpoint first and writes through `checkpoint.merge_update()` rather
+    than building a fresh one -- a generic progress write here must never silently blank an
+    unresolved `pending_action`/`uncertain_actions` a more specific lifecycle (account
+    creation; see `PageAgent._mark_account_creation_dispatched`) recorded and has not yet
+    resolved (Phase 0-B3 closure correction: this function originally built a brand-new
+    checkpoint on every call, erasing exactly that marker on the very next ordinary pass)."""
     if tracker is None or not hasattr(tracker, "write_checkpoint"):
         return
     application_key = str(getattr(assistant, "submission_key", "") or key or "")
     if not application_key:
         return
+    existing = None
+    if hasattr(tracker, "read_checkpoint"):
+        try:
+            existing = tracker.read_checkpoint(application_key)
+        except Exception as exc:
+            logger.debug("Could not read the existing checkpoint before updating it: %s", exc)
     try:
         page_identity = recovery.compute_page_identity(page)
     except Exception:
@@ -652,15 +665,15 @@ def write_recovery_checkpoint(tracker, assistant, key: str, page, job, handoff_r
             submission_state = tracker.get_submission_effect_state(application_key) or ""
         except Exception:
             submission_state = ""
-    record = checkpoint.build(
-        application_key=application_key, dedup_key=key or "",
+    updated = checkpoint.merge_update(
+        existing, application_key=application_key, dedup_key=key or "",
         employer=getattr(job, "company", "") or "",
         page_url=str(getattr(page, "url", "") or ""),
         page_identity=page_identity.to_dict(), verified_stage=page_identity.step_indicator,
         handoff_reason=handoff_reason or "", submission_effect_state=submission_state,
     )
     try:
-        tracker.write_checkpoint(application_key, record.to_dict())
+        tracker.write_checkpoint(application_key, updated)
     except Exception as exc:
         logger.debug("Could not write a recovery checkpoint: %s", exc)
 

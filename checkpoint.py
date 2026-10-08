@@ -19,7 +19,7 @@ import json
 import logging
 import subprocess
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -163,6 +163,52 @@ def parse(payload: Any) -> tuple[str, Optional[ApplicationCheckpoint]]:
     if not checkpoint.application_key:
         return UNSUPPORTED, None
     return status, checkpoint
+
+
+# Fields that must never silently revert to their default just because a generic/partial
+# update did not mention them. An unresolved consequential action (Phase 0-B3 closure
+# correction) is evidence that must survive an unrelated progress checkpoint; clearing one is
+# only ever done by naming it explicitly in a merge_update() call, never a side effect of
+# updating something else. (merge_update()'s own replace()-based design already gives every
+# field this property -- this tuple exists to say in code which fields it is load-bearing
+# for, and is asserted by test_checkpoint_state.py.)
+STICKY_FIELDS = ("pending_action", "uncertain_actions")
+
+
+def merge_update(existing: Optional[dict], **changes: Any) -> dict:
+    """The one safe way to update a durable checkpoint. Starts from `existing` (a previously
+    stored payload, or None for a brand-new application) and applies only the fields named in
+    `changes` -- anything not named carries over from `existing` unchanged. A generic
+    progress update (a new page URL, a new stage, a handoff reason) must never silently blank
+    out an unresolved `pending_action`/`uncertain_actions` it was never told about; to
+    actually clear one, name it explicitly: `merge_update(existing, pending_action="")`.
+
+    `existing` is read defensively through `parse()`: a payload from an unsupported/future
+    schema, or one that is simply corrupt, is treated the same as no existing checkpoint --
+    this never raises, and never requires a caller to hand-reconstruct the other fields to
+    avoid losing them."""
+    base = None
+    if existing is not None:
+        status, parsed = parse(existing)
+        if status != UNSUPPORTED:
+            base = parsed
+    if base is None:
+        seed_key = str(changes.get("application_key") or (existing or {}).get("application_key") or "")
+        base = build(application_key=seed_key)
+    if "completed_controls" in changes:
+        changes["completed_controls"] = tuple(changes["completed_controls"] or ())
+    if "uncertain_actions" in changes:
+        changes["uncertain_actions"] = tuple(changes["uncertain_actions"] or ())
+    if "page_identity" in changes:
+        changes["page_identity"] = dict(changes["page_identity"] or {})
+    if "uploaded_documents" in changes:
+        changes["uploaded_documents"] = dict(changes["uploaded_documents"] or {})
+    changes.setdefault("checkpoint_id", new_checkpoint_id())
+    changes.setdefault("created_at", datetime.now(timezone.utc).isoformat())
+    changes["code_version"] = code_version()
+    changes["schema_version"] = SCHEMA_VERSION
+    updated = replace(base, **changes)
+    return updated.to_dict()
 
 
 def _migrate(payload: dict, from_version: int) -> Optional[dict]:

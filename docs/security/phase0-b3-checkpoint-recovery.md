@@ -310,3 +310,155 @@ fingerprint) run separately beforehand, all green: **414 passed** across
 - `write_recovery_checkpoint`/`log_recovery_reconciliation` are wired only into the reader
   engine's `run_page_agent`/`main()` paths (§13) — a run using the `--auto` engine gets none of
   this phase's checkpoint writes or resume diagnostics.
+
+## 15. Closure correction — the generic checkpoint write could erase the one guard this phase exists for
+
+A follow-up review of the merged P0-B3 commit (`94c59bd`) found a confirmed, reproduced
+production-path defect in the account-creation lifecycle (§6), plus two related fail-open
+gaps in the same lifecycle. All three are fixed here, in place, without broadening
+checkpointing or recovery beyond this one lifecycle. This section is appended, not a rewrite
+of §§1–14, which stand as the history of what the original implementation did and why.
+
+### 15.1 The defect: a generic checkpoint write silently erased the account-creation marker
+
+`PageAgent._mark_account_creation_dispatched()` correctly read the existing checkpoint before
+writing its own marker. `apply_flow.write_recovery_checkpoint()` — the generic, once-per-pass
+progress checkpoint called after every `agent.run()` returns — did not: it called
+`checkpoint.build(...)`, which defaults `pending_action=""`, and wrote that over whatever was
+there. Reproduced directly: dispatch Create Account (marker written) → call
+`write_recovery_checkpoint()` with ordinary, unrelated progress fields (a page URL, a handoff
+reason) → the marker read back empty. A resumed process would then see no pending dispatch
+and could press Create Account again — exactly the repetition §6 exists to prevent.
+`tests/test_resume_after_interruption.py::test_the_generic_production_checkpoint_write_does_not_erase_an_unresolved_dispatch`
+is the regression test, and it fails against the pre-correction code (confirmed before
+fixing, per the project's reproduce-before-fix rule).
+
+### 15.2 Fix: one merge-based checkpoint update, not hand-reconstruction at each call site
+
+`checkpoint.merge_update(existing: Optional[dict], **changes) -> dict` (`checkpoint.py`) is
+now the one way any caller updates a durable checkpoint. It starts from `existing` (parsed
+defensively through `parse()`; an unparseable or `None` existing payload is treated as a
+fresh application, never raised) and applies only the fields named in `changes` — anything
+not named carries over unchanged. `STICKY_FIELDS = ("pending_action", "uncertain_actions")`
+names which fields this matters most for, but the mechanism (`dataclasses.replace()` against
+the parsed prior checkpoint) gives every field this property, not just those two: a generic
+update can enrich `page_url`/`page_identity`/`verified_stage`/`handoff_reason`/anything else
+without a caller having to remember to carry forward fields it knows nothing about. Clearing
+a sticky field is only ever done by naming it explicitly:
+`checkpoint.merge_update(existing, pending_action="")` — which is exactly what
+`_resolve_pending_account_creation()` now does.
+
+Both `apply_flow.write_recovery_checkpoint()` and `PageAgent._mark_account_creation_dispatched()`
+/`._resolve_pending_account_creation()` now go through `merge_update()`. The account-creation
+methods are simpler than before this correction, too: they no longer hand-copy
+`page_identity`/`verified_stage`/`account_state`/`handoff_reason` from the existing payload
+field by field — `merge_update()` does that for them.
+
+### 15.3 Fix: a configured tracker that fails is fail-closed, never fail-open
+
+Two related gaps in the same lifecycle, both now closed:
+
+- **Read failure.** `_pending_account_creation()` previously returned plain `bool`, with
+  `except Exception: return False` — indistinguishable from "nothing pending." It now returns
+  `(pending: bool, storage_unavailable: bool)`. `storage_unavailable` is `True` only when a
+  tracker is configured and *does* support `read_checkpoint`, but calling it raised. The
+  caller (`sign_in_step`) checks this first and refuses to dispatch Create Account at all when
+  `True`, with blocker text `"account creation could not be safely recorded; retry after
+  checkpoint storage is available"`.
+- **Write failure.** `_mark_account_creation_dispatched()` previously logged a warning on a
+  write failure and returned `None` — the caller pressed on into `handle_auth_gate(...)`
+  regardless. It now returns `bool`: `True` once the durable marker is confirmed written (or
+  when no tracker is configured at all — see below), `False` when a configured tracker's read
+  (needed to merge) or write actually failed. `sign_in_step` now checks this return value and
+  refuses to dispatch when `False`, with the same blocker text.
+
+**No durable tracker configured at all** (`self.tracker is None`, or it does not implement
+`read_checkpoint`/`write_checkpoint`) remains the project's existing, intentionally supported
+tracker-less/test-double path, and is explicitly *not* treated the same as a storage failure:
+both methods return the "proceed" value (`(False, False)` / `True`) in that case, exactly as
+before this correction.
+`tests/test_resume_after_interruption.py::test_a_checkpoint_read_failure_blocks_account_creation_rather_than_assuming_none_pending`,
+`::test_a_checkpoint_write_failure_blocks_account_creation_rather_than_proceeding_unguarded`,
+and `::test_no_tracker_does_not_block_account_creation` cover the three-way distinction
+directly — a tracker object that raises on `read_checkpoint`/`write_checkpoint` versus
+`tracker=None`.
+
+### 15.4 Fix: the marker only clears on positive, deterministic evidence
+
+`_resolve_pending_account_creation()` was previously called whenever `state.kind !=
+account_state.CREATE_FORM` — which includes `LOADING` ("the account step, still drawing
+itself," `account_state.py`'s own description) and `NONE`/`EMAIL_FIRST`/`CHOOSER`, none of
+which are evidence of anything in particular. The call site now gates on a specific allowlist:
+
+```python
+_ACCOUNT_CREATION_RESOLVED_KINDS = frozenset({
+    account_state.SIGNED_IN, account_state.CODE_ENTRY, account_state.VERIFY_EMAIL,
+    account_state.ACCOUNT_EXISTS, account_state.MFA_REQUIRED, account_state.LOCKED,
+    account_state.WRONG_PASSWORD, account_state.SIGN_IN_FORM,
+})
+```
+
+Each of these is a specific, deterministic `account_state.py` result distinct from
+`CREATE_FORM` itself — not a fallback/generic bucket. `LOADING`, `NONE`, `EMAIL_FIRST`, and
+`CHOOSER` are deliberately excluded: `LOADING` is explicitly transient, and the other three
+can describe a page mid-navigation just as easily as a genuine resolution. This is
+intentionally conservative — a site that redirects straight from Create Account to the plain
+application form with no step indicator and no other account markers (`NONE`) will leave the
+marker set — but per the task's own instruction ("If evidence is ambiguous: keep the pending
+marker"), the failure mode is an occasional unnecessary owner hand-off on a later, unrelated
+create-form encounter for the same application, never a repeated account-creation attempt.
+`tests/test_resume_after_interruption.py::test_a_loading_or_ambiguous_state_does_not_clear_the_marker`
+and `::test_the_marker_clears_only_on_positive_evidence_the_create_form_is_behind_us` cover
+both directions.
+
+### 15.5 What stayed the same
+
+- `recovery.reconcile()` is untouched — still advisory, still live-evidence-first, no
+  broadened authority.
+- P0-B1's submission-authority chain (`apply_flow.submit_verified()` →
+  `click_verified_submit()` → `SubmissionGuardV0.submit_verified()` →
+  `begin_submission_dispatch()`) and its `AUTHORIZED`/`DISPATCHED`/`CONFIRMED`/`UNCERTAIN`
+  states are untouched.
+- P0-B2's `account_state.read_state()` remains the sole authority on live account/auth state;
+  nothing here lets a checkpoint manufacture authenticated/verified/MFA-cleared/created
+  without live evidence — if anything, §15.4 makes the checkpoint *more* conservative about
+  trusting anything other than a specific, named account-state result.
+- No new checkpointing concept, write boundary, or reconciliation outcome was added; this is
+  a correction to the one lifecycle §6 already introduced, not an extension of scope.
+
+### 15.6 Validation
+
+New/updated tests: `tests/test_resume_after_interruption.py` grew from 4 to 8 tests (the
+production-checkpoint-boundary regression, the generic-update-preserves-lifecycle test, the
+positive-evidence resolution test rewritten to use a genuinely resolving page, the
+loading/ambiguous non-clearing test, the read-failure and write-failure fail-closed tests, and
+the no-tracker-preserved test, alongside the pre-existing resolved-then-recreate test).
+`tests/test_checkpoint_state.py` gained 5 direct tests of `checkpoint.merge_update()`. All
+P0-B3 suites together: **60 passed** (up from 51).
+
+Targeted regression suites (the same twelve files as the original P0-B3 validation —
+account/auth, submission-effect, tracker parity, loop-breaker fingerprint): **414 passed**,
+identical to before this correction.
+
+Full suite, run against the corrected code (via `pytest -q -rs -n auto`, matching
+`.github/workflows/ci.yml`'s own invocation):
+
+```
+4 failed, 2217 passed, 3 skipped in 850.06s (0:14:10)
+```
+
+The exact 4 failing test names are identical to the clean baseline's
+(`test_a_whole_application_is_read_answered_and_submitted`,
+`test_a_carried_over_no_to_sponsorship_is_corrected_from_the_profile`,
+`test_a_submit_button_on_a_step_before_the_last_just_moves_on`,
+`test_the_cover_letter_is_attached_where_the_form_asks_for_one` — all in
+`tests/test_page_agent.py`'s `owner_submits()`-based tests, confirmed in §12 as pre-existing
+and unrelated to any file this phase or its correction touches). **Zero new failures, zero
+new errors, same skip count.** The passed-count delta (2208 → 2217) reconciles exactly to the
+9 new tests this correction added (60 B3 tests total, up from 51).
+
+Replay guard: **1243 saved real pages, zero differences** — identical to §11, as expected: no
+saved real page exercises the durable account-creation lifecycle or the generic checkpoint
+writer's merge semantics, so this corpus could not have caught the defect in the first place
+(it is a cross-process/storage-failure scenario, not a page-reading one) — the new
+production-path tests in §15.6 are what actually cover it.
