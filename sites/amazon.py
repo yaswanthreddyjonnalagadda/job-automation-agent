@@ -77,7 +77,14 @@ class AmazonAdapter(SiteAdapter):
             if block.locator("select").count() == 0:
                 textbox.fill(answer)
                 textbox.blur()
-                return True
+                # Verify the committed value (Phase 0-B4 closure) -- fill()+blur() not
+                # throwing is not, by itself, evidence it stuck.
+                try:
+                    shown = (textbox.input_value(timeout=1_500) or "").strip()
+                except Exception:
+                    return False
+                want = answer.strip().lower()
+                return bool(shown) and (want in shown.lower() or shown.lower() in want)
 
             block.locator("[class*=select2-selection]").first.click()
             page.wait_for_timeout(600)
@@ -88,9 +95,20 @@ class AmazonAdapter(SiteAdapter):
                 page.keyboard.press("Escape")
                 assistant.note_ambiguous_choice(self._question_of(page, selector), texts, answer)
                 return False
+            chosen_text = texts[index]
             options.nth(index).click()
             page.wait_for_timeout(400)
-            return True
+            # Verify the select2 widget now shows the chosen option as committed (Phase
+            # 0-B4 closure) -- the same rendered-text evidence platform_questions() already
+            # reads for this exact widget, reused here as a post-check rather than only a
+            # pre-check.
+            try:
+                rendered = (block.locator("[class*=select2-selection__rendered]").first
+                           .inner_text(timeout=1_500) or "").strip()
+            except Exception:
+                return False
+            return bool(rendered) and (chosen_text.lower() in rendered.lower()
+                                       or rendered.lower() in chosen_text.lower())
         except Exception as exc:
             logger.warning("Could not answer Amazon question %s: %s", selector[:12], exc)
             return False

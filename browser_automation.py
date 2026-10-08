@@ -4244,13 +4244,31 @@ class JobApplicationAssistant:
                     return True
                 control.set_input_files(str(letter_pdf), timeout=15_000)
                 page.wait_for_timeout(1_500)
+                # Verify the upload actually shows as attached before trusting it (Phase
+                # 0-B4 closure) -- set_input_files() not throwing is not, by itself,
+                # evidence it landed. Reuses the same `_file_already_attached()` check
+                # already used above as a pre-check, now also as a post-check.
+                if not self._file_already_attached(page, Path(letter_pdf).name):
+                    logger.warning("Cover letter upload did not show as attached after the attempt")
+                    return False
                 logger.info("Attached cover letter: %s", Path(letter_pdf).name)
-            else:
-                if (control.input_value() or "").strip():
-                    logger.info("Cover letter box already has text; leaving it alone")
-                    return True
-                fill_and_dispatch(control, Path(letter_txt).read_text(encoding="utf-8"), timeout=5_000)
-                logger.info("Pasted cover letter into the form's text box")
+                return True
+            if (control.input_value() or "").strip():
+                logger.info("Cover letter box already has text; leaving it alone")
+                return True
+            text = Path(letter_txt).read_text(encoding="utf-8")
+            fill_and_dispatch(control, text, timeout=5_000)
+            # Verify the pasted text actually committed (Phase 0-B4 closure) -- the same
+            # "read the committed value back" principle as every other field write; a
+            # non-throwing fill_and_dispatch() call is not, by itself, evidence it stuck.
+            shown = (control.input_value() or "").strip()
+            expected = text.strip()
+            committed = bool(shown) and (expected[:50].lower() in shown.lower()
+                                         or shown[:50].lower() in expected.lower())
+            if not committed:
+                logger.warning("Cover letter text did not commit to the box")
+                return False
+            logger.info("Pasted cover letter into the form's text box")
             return True
         except Exception as exc:
             logger.warning("Could not attach cover letter: %s", exc)

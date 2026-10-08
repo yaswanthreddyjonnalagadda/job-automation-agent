@@ -4252,17 +4252,30 @@ class PageAgent:
                 elif method == "native_select" and control.options:
                     index = self.assistant._best_option(control.options, [answer.value])
                     if index is not None:
+                        chosen_text = None
                         try:
-                            self.locate(page, control.ref).select_option(
-                                label=control.options[index], timeout=5_000
-                            )
+                            select_loc = self.locate(page, control.ref)
+                            select_loc.select_option(label=control.options[index], timeout=5_000)
+                            # Verify the cached recipe actually committed the selection
+                            # (Phase 0-B4 closure) -- the same positive-evidence check the
+                            # live native-select path uses, rather than trusting
+                            # select_option() not throwing. A verification read failure
+                            # here is routed through the same except branch as a throw from
+                            # select_option() itself, so either way the recipe is marked
+                            # failed under the existing bounded recipe policy, not silently
+                            # reported as success.
+                            chosen_text = select_loc.evaluate(
+                                "el => el.selectedOptions && el.selectedOptions[0] ? el.selectedOptions[0].text : ''",
+                                timeout=1_500)
+                        except Exception:
+                            chosen_text = None
+                        if chosen_text is not None and _fill_value_committed(chosen_text, control.options[index]):
                             self._choice_methods[control.ref] = method
                             if identity is not None:
                                 self._reused_recipes[control.ref] = identity
                             return True
-                        except Exception:
-                            if identity is not None:
-                                self._mark_recipe_failed(identity)
+                        if identity is not None:
+                            self._mark_recipe_failed(identity)
         loc = self.locate(page, control.ref)
         if control.role in ("textbox", "searchbox") and answer.action in ("fill", "choose"):
             from sites.workday import WorkdayAdapter
@@ -4362,10 +4375,21 @@ class PageAgent:
                         el.dispatchEvent(new InputEvent('input', {bubbles: true, composed: true, inputType: 'insertText', data: value}));
                         el.dispatchEvent(new Event('change', {bubbles: true, composed: true}));
                     }""", fill_value, timeout=1_000)
-                    logger.info("Field %r filled via JS fallback after loc.fill failure", control.question[:50])
-                    return True
+                    logger.info("Field %r filled via JS fallback after loc.fill failure -- verifying", control.question[:50])
                 except Exception:
                     pass
+                else:
+                    # Verify the JS fallback actually committed the value (Phase 0-B4
+                    # closure) -- the same positive-evidence check as the ordinary path
+                    # below, not a second, independent method. A readback failure here is
+                    # NOT verified -- it used to be treated as success outright merely
+                    # because the JS evaluate() call itself did not throw.
+                    try:
+                        tab.wait_for_timeout(200)
+                        shown = (loc.input_value(timeout=1_500) or "").strip()
+                    except Exception:
+                        return False
+                    return _fill_value_committed(shown, fill_value)
                 raise
             try:
                 loc.press("Tab", timeout=2_000)
@@ -4373,14 +4397,20 @@ class PageAgent:
                 pass
             # Read the committed value back and verify it, rather than trusting that .fill()
             # not throwing means the value stuck (Phase 0-B4; task sections 4, 6-7). A plain
-            # <input>/<textarea> is what this path fills; if the readback itself fails (an
-            # element input_value() does not support), verification is simply inconclusive --
-            # that is left exactly as it was before this phase rather than guessed at.
+            # <input>/<textarea> is what this path fills.
             try:
                 tab.wait_for_timeout(200)
                 shown = (loc.input_value(timeout=1_500) or "").strip()
             except Exception:
-                return True
+                # Verification unavailable is NOT verified (Phase 0-B4 closure correction):
+                # a readback failure used to be treated as success outright. Failing
+                # conservatively here is safe -- PageAgent.not_stuck()'s own, independent,
+                # later re-check already treats a control that genuinely vanished because
+                # the page moved on as fine ("the page rebuilt itself; the next read will
+                # show it"), so this does not fight that existing, deterministic handling;
+                # it only stops a transient/stale readback from being silently counted as
+                # success before that later check ever runs.
+                return False
             if _fill_value_committed(shown, fill_value):
                 return True
             # One deterministic retry via the same native-setter fallback already used when
@@ -4398,7 +4428,7 @@ class PageAgent:
                 tab.wait_for_timeout(300)
                 shown = (loc.input_value(timeout=1_500) or "").strip()
             except Exception:
-                return True
+                return False   # verification unavailable is NOT verified (Phase 0-B4 closure)
             return _fill_value_committed(shown, fill_value)
         if answer.action in ("check", "uncheck"):
             # Unreferenced ARIA checkboxes can inherit the adjacent label's ref.
@@ -4445,7 +4475,7 @@ class PageAgent:
                             self.settle(page, 1_500)
                             if answer.action == "upload_resume":
                                 return self._confirm_resume_attached(page, path)
-                            return True
+                            return self._confirm_cover_letter_attached(page, path, control)
                 except Exception as exc:
                     logger.info("Nearby file input was unavailable: %s", str(exc).splitlines()[0][:120])
             if answer.action == "upload_resume" and hasattr(self.assistant, "upload_via_chooser"):
@@ -4480,12 +4510,21 @@ class PageAgent:
             self.settle(page, 1_500)
             if answer.action == "upload_resume":
                 return self._confirm_resume_attached(page, path)
-            return True
+            return self._confirm_cover_letter_attached(page, path, control)
         if answer.action == "choose" and control.role == "spinbutton":
             return self.put_in_a_spinbutton(page, loc, answer.value)
         if answer.action == "choose" and control.role in ("textbox", "searchbox"):
             fill_and_dispatch(loc, answer.value, timeout=8_000)     # a plain box, whatever the plan called it
-            return True
+            # Verify the committed value (Phase 0-B4 closure) -- the same positive-evidence
+            # check the ordinary "fill" action uses; a readback failure is NOT verified, not
+            # a silent success (fill_and_dispatch() not throwing is not, by itself, evidence
+            # the value stuck).
+            try:
+                tab.wait_for_timeout(200)
+                shown = (loc.input_value(timeout=1_500) or "").strip()
+            except Exception:
+                return False
+            return _fill_value_committed(shown, answer.value)
         if answer.action in ("choose", "check") and control.role in ("radio", "checkbox", "switch", "group", "radiogroup"):
             snapshot_controls = parse_snapshot(self.snapshot(page))
             if control.role in ("group", "radiogroup"):
@@ -4633,7 +4672,12 @@ class PageAgent:
                         target.set_checked(True, timeout=5_000)
                     except Exception:
                         target.click(timeout=5_000)
-                    done.append(boxes[k].name)
+                    # Verify the box actually ended up checked (Phase 0-B4 closure) -- a
+                    # non-throwing set_checked()/click() is not, by itself, evidence it
+                    # took; a verification read failure (_is_checked returning None) is
+                    # NOT verified either.
+                    if _is_checked(target) is True:
+                        done.append(boxes[k].name)
                 except Exception as exc:
                     logger.info("Could not tick %r: %s", boxes[k].name, str(exc).splitlines()[0][:100])
             if done:
@@ -4670,6 +4714,7 @@ class PageAgent:
             if len(parts) < 2 or any(pick is None for pick in picks):
                 logger.info("No choices matching %r for %r among %s", value, boxes[0].question[:50], names[:8])
                 return False
+        all_checked = True
         for pick in dict.fromkeys(picks):
             if boxes[pick].checked:
                 continue
@@ -4678,7 +4723,13 @@ class PageAgent:
                 target.set_checked(True, timeout=5_000)
             except Exception:
                 target.click(timeout=5_000)
-        return True
+            # Verify the box actually ended up checked (Phase 0-B4 closure) -- same
+            # positive evidence the explicit check/uncheck action already uses, rather
+            # than trusting a non-throwing set_checked()/click() alone. A verification
+            # read failure (_is_checked returning None) is NOT verified either.
+            if _is_checked(target) is not True:
+                all_checked = False
+        return all_checked
 
     def _press_toggle(self, page, choice: Control) -> bool:
         """Press a choice drawn as a toggle button once, and read it back.
@@ -5975,16 +6026,16 @@ class PageAgent:
         except Exception:
             return False
 
-    def _resume_file_input_holds_it(self, page) -> bool:
+    def _file_input_holds_name(self, page, name: str) -> bool:
         """Whether any `<input type=file>` on the page or in a frame currently holds a file
-        matching the resume's name (Phase 0-B4) -- unlike `_resume_on_page()`'s filename-in-
-        text check, this does not depend on the site choosing to display the filename
-        anywhere as text; the input element's own `.files` state is deterministic DOM truth
-        regardless of site rendering, which "a file shows up differently on every site"
-        (discovery) made the text-only check alone too strict for some real/test pages."""
-        if not self.resume_file:
+        matching `name` (Phase 0-B4) -- unlike a filename-in-text check, this does not depend
+        on the site choosing to display the filename anywhere as text; the input element's
+        own `.files` state is deterministic DOM truth regardless of site rendering, which "a
+        file shows up differently on every site" (discovery) made a text-only check alone too
+        strict for some real/test pages. Shared by the resume and cover-letter verifiers
+        below, so both get the same underlying evidence rather than two copies of it."""
+        if not name:
             return False
-        name = self.resume_file.name
         try:
             tab = self.tab(page)
             frames = list(getattr(tab, "frames", None) or [tab])
@@ -6000,6 +6051,9 @@ class PageAgent:
             except Exception:
                 continue
         return False
+
+    def _resume_file_input_holds_it(self, page) -> bool:
+        return bool(self.resume_file) and self._file_input_holds_name(page, self.resume_file.name)
 
     def _confirm_resume_attached(self, page, path) -> bool:
         """Verifies the upload actually shows as attached before trusting it (Phase 0-B4) --
@@ -6023,6 +6077,41 @@ class PageAgent:
                     logger.debug("Could not record the unverified upload: %s", exc)
             return False
         self._resume_went_on(path)
+        return True
+
+    def _confirm_cover_letter_attached(self, page, path, control: Optional["Control"] = None) -> bool:
+        """Verifies the cover-letter upload actually shows as attached before trusting it
+        (Phase 0-B4 closure) -- `set_input_files()`/a completed file-chooser/
+        `assistant.attach_cover_letter()` not throwing is not, by itself, evidence a file now
+        shows attached, the same gap the resume upload had. Checks `_section_holds_a_file()`
+        -- the existing, section-scoped evidence `attach_documents()` already uses as a
+        pre-check ("a section that already holds a file is left alone") -- scoped to this
+        control's own section so an attached resume elsewhere on the page is never mistaken
+        for an attached cover letter, OR the file input's own `.files` state
+        (`_file_input_holds_name`) for a section whose markup shows no filename-shaped text.
+        Unverified is reported honestly: `False`, no `_letter_attached`, exactly like any
+        other answer that could not be committed."""
+        section = (control.container or control.question) if control is not None else ""
+        verified = False
+        try:
+            if _section_holds_a_file(self.snapshot(page), section):
+                verified = True
+        except Exception:
+            pass
+        if not verified:
+            verified = self._file_input_holds_name(page, Path(path).name)
+        if not verified:
+            logger.info("UPLOAD: the cover letter does not yet show as attached after the upload attempt")
+            if self.tracker is not None and self.key and hasattr(self.tracker, "record_event"):
+                try:
+                    self.tracker.record_event(
+                        self.key, "action_outcome_unknown",
+                        "upload_cover_letter: not shown as attached after the attempt",
+                        payload={"action": "upload_cover_letter", "evidence_kind": "attachment_filename"})
+                except Exception as exc:
+                    logger.debug("Could not record the unverified cover-letter upload: %s", exc)
+            return False
+        self._letter_attached = True
         return True
 
     def _resume_went_on(self, path) -> None:

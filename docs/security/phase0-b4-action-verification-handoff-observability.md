@@ -327,3 +327,134 @@ answered.
   updated match on a non-canonical key; if an application's checkpoint were ever written under
   a `submission_key` whose `dedup_key` column was for some reason stale or absent, the
   dashboard would simply show nothing extra (fails toward no display, not a wrong display).
+
+## 19. Closure correction — eliminating "verification unavailable -> True" across every confirmed path
+
+A follow-up review of the merged P0-B4 commit (`4200f01`) found the same defect class
+recurring at several more sites than the original pass closed: a browser mutation is
+attempted, verification is unavailable or bypassed, the helper returns `True` anyway, and
+production records the answer as successfully committed. This section fixes every confirmed
+instance across the existing supported production mutation paths, without broadening scope
+beyond verification of what already exists (no new ATS adapter, no guessed markup).
+
+### 19.1 Ordinary fill — three bypass points in `do()`'s `fill` action
+
+- The native-setter fallback used when `fill_and_dispatch()` itself raises previously logged
+  success and `return`ed `True` unconditionally, with **no readback at all**. It now runs the
+  same `input_value()` verification the ordinary path uses, via a `try/except/else` around
+  the fallback's own `loc.evaluate(...)` call — verified only if the fallback itself didn't
+  raise **and** the readback confirms the value.
+- The initial `input_value()` readback's `except: return True` was changed to `except: return
+  False` — a verification read failure is evidence withheld, not evidence of success.
+- The retry's own `input_value()` readback had the identical `except: return True`, fixed the
+  same way.
+
+A verification failure here is deliberately left to resolve the same way it already did
+before this phase existed: `PageAgent.not_stuck()`'s independent, later, page-cycle re-check
+already treats a control that genuinely vanished because the page moved on as fine ("the page
+rebuilt itself; the next read will show it") — this fix does not fight that handling, it only
+stops a transient or stale readback from being counted as success *before* that later,
+stronger check ever runs.
+
+### 19.2 The cached `native_select` recipe path
+
+`self.locate(...).select_option(...)` followed by an unconditional `return True` is now
+followed by the same `el.selectedOptions[0].text` readback the live (non-cached)
+native-select path already uses. A verification mismatch is routed through the exact same
+`except Exception: self._mark_recipe_failed(identity)` branch a throw from `select_option()`
+already used — the existing bounded recipe-failure policy now also covers "verified wrong,"
+not only "threw."
+
+### 19.3 "choose" dispatched onto a plain textbox/searchbox
+
+`fill_and_dispatch(...)` followed by an unconditional `return True` now reads back
+`input_value()` and verifies it the same way the ordinary `fill` action does, reusing the
+same `_fill_value_committed()` helper (one shared definition, not a second copy that could
+disagree with it).
+
+### 19.4 Cover-letter upload — new verification, never confused with the resume
+
+Cover-letter upload previously set `_letter_attached = True` on a non-throwing
+`set_input_files()`/chooser/`assistant.attach_cover_letter()` call alone — no check of any
+kind. `PageAgent._confirm_cover_letter_attached(page, path, control)` is new:
+
+1. **Section-scoped text evidence**: reuses `_section_holds_a_file()` — the same
+   section-scoped check `attach_documents()` already used as a *pre*-check ("a section that
+   already holds a file is left alone") — now also as a *post*-check, scoped to the specific
+   control's own section (`container`/`question`) so an attached resume elsewhere on the page
+   can never satisfy cover-letter verification.
+2. **File-input evidence**: falls back to `_file_input_holds_name()` (generalized from the
+   resume's own `_resume_file_input_holds_it`, now a single shared helper both documents use)
+   for a section whose markup shows no filename-shaped text at all.
+
+Both reader-path `do()` call sites (the "nearby file input" branch and the final
+set-input-files/chooser fallback) now route cover-letter uploads through this verifier instead
+of an unconditional `True`. The **non-reader** production path,
+`JobApplicationAssistant.attach_cover_letter()` (`browser_automation.py`), had the identical
+gap in both of its branches and is fixed the same way: the file branch now re-checks
+`_file_already_attached()` (the same evidence it already used as a pre-check) immediately
+after the upload; the text-box branch now reads `input_value()` back and requires it to
+overlap with the pasted text, rather than trusting `fill_and_dispatch()` alone.
+
+### 19.5 Remaining discovered residual paths — class audit
+
+- **`_tick_several`** ("tick all that apply"): each pick's `set_checked()`/`click()` is now
+  followed by `_is_checked(target) is True`; the function returns `True` only if every pick
+  verified, `False` otherwise (a verification read failure, `_is_checked` returning `None`, is
+  treated as not-verified).
+- **`answer_location_choices`**: the checkbox/radio tick loop now only appends a box's name to
+  `done` (and therefore only ever writes to `self.written`) once `_is_checked()` confirms it —
+  previously appended unconditionally after a non-throwing attempt.
+- **Amazon adapter** (`sites/amazon.py`, `answer_platform_question`): the textbox branch now
+  reads `input_value()` back after `.fill()`+`.blur()`; the select2 branch now reads the
+  widget's own `.select2-selection__rendered` text back after clicking an option — the exact
+  same rendered-text evidence `platform_questions()` already reads for this widget, reused
+  here as a post-check rather than invented fresh.
+- **SuccessFactors adapter** (`sites/successfactors.py`): `upload_attachment` now re-checks the
+  adapter's own, pre-existing `attachment_is_empty()` after the chooser/dialog completes,
+  rather than reporting success on no-exception alone; `set_date` now reads the date widget's
+  own text input back and requires digit overlap with the intended value (the widget may
+  reformat separators/order, so this checks the date's digits survived, not an exact string
+  match) — a transient/zeroed-out field after the fill sequence is now `False`, not `True`.
+
+No remaining confirmed production mutation path reports success without some positive,
+already-existing evidence being checked. The two pre-existing, intentionally-unchanged
+exceptions remain: a disabled/hidden field (nothing was mutated, so there is nothing to
+verify — `is_inert`/`is_disabled` still `return True` immediately, unchanged) and any path
+P0-B1/B2/B3 already governs (final submission, account/auth, recovery reconciliation), which
+this closure does not touch.
+
+### 19.6 Validation
+
+Focused B4 closure tests (new, this pass): **27** across `tests/test_action_verification.py`
+(generic fill's three bypasses + the production `apply_answers` integration test + the
+cached-recipe pair + the choose-onto-textbox pair + three cover-letter cases + two
+`assistant.attach_cover_letter()` pairs + `_tick_several`/`answer_location_choices`) and a new
+`tests/test_adapter_write_verification.py` (**8**, Amazon's two branches and SuccessFactors'
+two methods, each in both directions). All B4 tests together (original + this closure): **120
+passed**.
+
+B1/B2/B3 targeted regression (the same suites as every prior round — account/auth,
+submission-effect, tracker parity, loop-breaker fingerprint, checkpoint/recovery, dashboard,
+field fillers): **530 passed**, unchanged. A full `tests/test_page_agent.py` run: **97
+passed**, the identical 4 pre-existing failures.
+
+Full suite (`pytest -q -rs -n auto`):
+
+```
+4 failed, 2316 passed, 3 skipped in 817.66s (0:13:37)
+```
+
+The exact 4 failing test names are identical to the reference's
+(`test_a_whole_application_is_read_answered_and_submitted`,
+`test_a_carried_over_no_to_sponsorship_is_corrected_from_the_profile`,
+`test_a_submit_button_on_a_step_before_the_last_just_moves_on`,
+`test_the_cover_letter_is_attached_where_the_form_asks_for_one`). **Zero new failures, zero
+new errors, same skip count.** The passed-count delta (2288 → 2316 = +28) reconciles exactly:
+27 new focused closure tests plus 1 from the pre-existing repo-wide source-hygiene check
+(`tests/test_source_has_no_control_characters.py`) picking up the one new file,
+`tests/test_adapter_write_verification.py`.
+
+Replay guard: **1270 saved real pages, zero differences** (up from 1260 — the two new test
+files' own real-browser runs accumulate a few more page recordings in the course of running,
+not a behavior change in any saved page's reading/classification).

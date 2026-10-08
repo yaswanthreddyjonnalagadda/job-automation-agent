@@ -228,3 +228,264 @@ def test_action_result_rejects_an_unknown_outcome():
 ])
 def test_action_result_constructors_set_the_right_outcome(builder, expected):
     assert builder().outcome == expected
+
+
+# =============================================================================
+# Phase 0-B4 closure: eliminating "verification unavailable -> return True" across
+# every confirmed production mutation path. The common defect: a browser mutation is
+# attempted, verification is unavailable or bypassed, the helper returns True anyway, and
+# production records the answer as successfully committed. ATTEMPTED != VERIFIED: a helper
+# returning True must mean deterministic browser evidence supports the intended state
+# committed; a verification read failure is NOT verified, never converted to a silent True.
+# =============================================================================
+
+# --- 1. ordinary fill: the JS-setter fallback, and every readback failure ------------------
+
+def test_the_js_setter_fallback_that_commits_is_verified(page, tmp_path, monkeypatch):
+    """When fill_and_dispatch() itself raises, do() falls back to a native value-setter +
+    synthetic events. That fallback used to report success unconditionally; it is now
+    verified the same way the ordinary path is."""
+    page.set_content('<label>First Name<input id="fn"></label>')
+    a = agent(tmp_path=tmp_path)
+    box = control_for(a, page, "textbox", "First Name")
+    monkeypatch.setattr(page_agent, "fill_and_dispatch",
+                        lambda *a_, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert a.do(page, page_agent.Answer(box.ref, "First Name", "fill", "Yaswanth"), box) is True
+    assert page.locator("#fn").input_value() == "Yaswanth"
+
+
+def test_the_js_setter_fallback_that_is_rejected_is_not_verified(page, tmp_path, monkeypatch):
+    page.set_content('<label>First Name<input id="fn" oninput="this.value=\'\'"></label>')
+    a = agent(tmp_path=tmp_path)
+    box = control_for(a, page, "textbox", "First Name")
+    monkeypatch.setattr(page_agent, "fill_and_dispatch",
+                        lambda *a_, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert a.do(page, page_agent.Answer(box.ref, "First Name", "fill", "Yaswanth"), box) is False
+    assert page.locator("#fn").input_value() == ""
+
+
+def test_an_initial_readback_failure_is_not_treated_as_committed(page, tmp_path):
+    """The element removes itself the instant it is filled -- the primary fill path's own
+    input_value() readback then throws (the element can no longer be found). A verification
+    read failure must not be converted into a silent True."""
+    page.set_content('<label>First Name<input id="fn" oninput="this.remove()"></label>')
+    a = agent(tmp_path=tmp_path)
+    box = control_for(a, page, "textbox", "First Name")
+    assert a.do(page, page_agent.Answer(box.ref, "First Name", "fill", "Yaswanth"), box) is False
+
+
+def test_a_retry_readback_failure_is_not_treated_as_committed(page, tmp_path):
+    """The element rejects the first commit (so the first readback legitimately disagrees
+    and a retry is attempted), then removes itself on the retry's own input event -- the
+    retry's readback throws. Still not verified."""
+    page.set_content(
+        '<label>First Name<input id="fn" oninput='
+        '"if(!window.__tried){window.__tried=1;this.value=\'WRONG\'}else{this.remove()}">'
+        '</label>')
+    a = agent(tmp_path=tmp_path)
+    box = control_for(a, page, "textbox", "First Name")
+    assert a.do(page, page_agent.Answer(box.ref, "First Name", "fill", "Yaswanth"), box) is False
+
+
+def test_apply_answers_does_not_remember_an_inconclusive_fill(page, tmp_path):
+    """The production answer loop (apply_answers) must not put an inconclusive fill into
+    `written` or remembered/learned state -- the exact production path this whole class of
+    bug reaches the owner through."""
+    page.set_content('<label>First Name<input id="fn" oninput="this.value=\'\'"></label>')
+    a = agent(tmp_path=tmp_path)
+    controls = page_agent.parse_snapshot(a.snapshot(page))
+    box = next(c for c in controls if c.role == "textbox")
+    plan = page_agent.PagePlan(answers=[page_agent.Answer(box.ref, "First Name", "fill", "Yaswanth")])
+    given = a.apply_answers(page, plan, controls)
+    assert given == []
+    assert "First Name" not in a.written
+    assert any("First Name" in f for f in a.failed)
+
+
+# --- 2. cached native-select recipe: verified both ways, bounded recipe policy reused ------
+
+def test_a_cached_native_select_recipe_that_commits_is_verified(page, tmp_path, monkeypatch):
+    page.set_content('<label>Country<select id="c"><option value="">-</option>'
+                     '<option>India</option><option>United States</option></select></label>')
+    a = agent(tmp_path=tmp_path)
+    box = control_for(a, page, "combobox", "Country")
+    monkeypatch.setattr(a, "_recalled_form_recipe", lambda control, answer: {"method": "native_select"})
+    monkeypatch.setattr(a, "_recipe_identity", lambda control, answer: ("host", "q", "combobox", "sig", "choose"))
+    marked = []
+    monkeypatch.setattr(a, "_mark_recipe_failed", lambda identity: marked.append(identity))
+    assert a.do(page, page_agent.Answer(box.ref, "Country", "choose", "United States"), box) is True
+    assert page.locator("#c").input_value() == "United States"
+    assert marked == []
+
+
+def test_a_cached_native_select_recipe_that_is_reset_is_marked_failed(page, tmp_path, monkeypatch):
+    """The site resets the selection (a managed <select>) -- select_option() itself does not
+    throw, so the old, unverified cached-recipe path reported this as chosen. Now verified,
+    and the existing bounded recipe-failure policy (_mark_recipe_failed) is exercised exactly
+    as it already is for a throwing select_option()."""
+    page.set_content(
+        '<label>Country<select id="c" onchange="this.selectedIndex=0"><option value="">-</option>'
+        '<option>India</option><option>United States</option></select></label>')
+    a = agent(tmp_path=tmp_path)
+    box = control_for(a, page, "combobox", "Country")
+    monkeypatch.setattr(a, "_recalled_form_recipe", lambda control, answer: {"method": "native_select"})
+    monkeypatch.setattr(a, "_recipe_identity", lambda control, answer: ("host", "q", "combobox", "sig", "choose"))
+    marked = []
+    monkeypatch.setattr(a, "_mark_recipe_failed", lambda identity: marked.append(identity))
+    result = a.do(page, page_agent.Answer(box.ref, "Country", "choose", "United States"), box)
+    # The cached recipe is marked failed and the live dispatch is free to try its own,
+    # independently-verified native-select path next -- which, on this exact page, also
+    # cannot make a self-resetting select stick, so the overall answer is correctly False.
+    assert marked == [("host", "q", "combobox", "sig", "choose")]
+    assert result is False
+
+
+# --- 3. "choose" dispatched onto a plain textbox/searchbox: verified both ways -------------
+
+def test_a_choose_onto_a_textbox_that_commits_is_verified(page, tmp_path):
+    page.set_content('<label>City<input id="city"></label>')
+    a = agent(tmp_path=tmp_path)
+    box = control_for(a, page, "textbox", "City")
+    assert a.do(page, page_agent.Answer(box.ref, "City", "choose", "Fairfax"), box) is True
+    assert page.locator("#city").input_value() == "Fairfax"
+
+
+def test_a_choose_onto_a_textbox_that_is_rejected_is_not_verified(page, tmp_path):
+    page.set_content('<label>City<input id="city" oninput="this.value=\'\'"></label>')
+    a = agent(tmp_path=tmp_path)
+    box = control_for(a, page, "textbox", "City")
+    assert a.do(page, page_agent.Answer(box.ref, "City", "choose", "Fairfax"), box) is False
+    assert page.locator("#city").input_value() == ""
+
+
+# --- 4. cover-letter upload: verified, and never confused with an attached resume ----------
+
+COVER_LETTER_FORM = (
+    '<label for="cv">Resume *</label><input type="file" id="cv" aria-label="Resume *" '
+    'onchange="document.getElementById(\'cv-shown\').textContent = this.files[0] ? this.files[0].name : \'\'">'
+    '<span id="cv-shown"></span>'
+    '<label for="cl">Cover Letter</label><input type="file" id="cl" aria-label="Cover Letter" '
+    'onchange="document.getElementById(\'cl-shown\').textContent = this.files[0] ? this.files[0].name : \'\'">'
+    '<span id="cl-shown"></span>')
+
+
+@pytest.fixture
+def letter_file(tmp_path):
+    path = tmp_path / "Yaswanth_Jonnalagadda_Cover_Letter.pdf"
+    path.write_bytes(b"%PDF-1.4 test letter")
+    return path
+
+
+def test_a_cover_letter_upload_that_shows_attached_is_verified(page, tmp_path, letter_file):
+    page.set_content(COVER_LETTER_FORM)
+    a = agent(tmp_path=tmp_path)
+    a.cover_letter = lambda: (letter_file.with_suffix(".txt"), letter_file)
+    box = control_for(a, page, "button", "Cover Letter")
+    assert a.do(page, page_agent.Answer(box.ref, "Cover Letter", "upload_cover_letter", "letter"), box) is True
+    assert a._letter_attached is True
+
+
+def test_a_cover_letter_upload_that_never_shows_attached_is_not_verified(page, tmp_path, letter_file):
+    page.set_content(
+        '<label for="cl">Cover Letter</label>'
+        '<input type="file" id="cl" aria-label="Cover Letter" onchange="this.remove()">')
+    a = agent(tmp_path=tmp_path)
+    a.cover_letter = lambda: (letter_file.with_suffix(".txt"), letter_file)
+    box = control_for(a, page, "button", "Cover Letter")
+    assert a.do(page, page_agent.Answer(box.ref, "Cover Letter", "upload_cover_letter", "letter"), box) is False
+    assert a._letter_attached is False
+
+
+def test_a_cover_letter_is_not_confused_with_an_attached_resume(page, tmp_path, resume_file, letter_file):
+    """The resume's filename is visible elsewhere on the page; the cover letter's own
+    section shows nothing and its own file input holds nothing. Verification must still
+    correctly fail -- never satisfied by the resume's evidence from a different section."""
+    page.set_content(
+        f'<div><label>Resume</label><span>{resume_file.name}</span></div>'
+        '<div><label for="cl">Cover Letter</label>'
+        '<input type="file" id="cl" aria-label="Cover Letter"></div>')
+    a = agent(resume_file, tmp_path)
+    control = page_agent.Control(ref="e1", role="button", name="Cover Letter", container="Cover Letter")
+    assert a._confirm_cover_letter_attached(page, letter_file, control) is False
+    assert a._letter_attached is False
+
+
+# --- 5a. _tick_several / answer_location_choices: verified both ways ------------------------
+
+def test_tick_several_is_verified_when_every_pick_commits(page, tmp_path):
+    page.set_content(
+        '<fieldset><legend>Languages</legend>'
+        '<label><input type="checkbox" name="lang" value="English"> English</label>'
+        '<label><input type="checkbox" name="lang" value="Telugu"> Telugu</label>'
+        '<label><input type="checkbox" name="lang" value="Hindi"> Hindi</label></fieldset>')
+    a = agent(tmp_path=tmp_path)
+    boxes = [c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.role == "checkbox"]
+    assert a._tick_several(page, boxes, "English, Telugu") is True
+    assert page.locator("input[value='English']").is_checked()
+    assert page.locator("input[value='Telugu']").is_checked()
+
+
+def test_tick_several_is_not_verified_when_a_pick_does_not_actually_check(page, tmp_path):
+    page.set_content(
+        '<fieldset><legend>Languages</legend>'
+        '<label><input type="checkbox" name="lang" value="English"> English</label>'
+        '<label><input type="checkbox" name="lang" value="Telugu" onclick="this.checked=false"> Telugu</label>'
+        '<label><input type="checkbox" name="lang" value="Hindi"> Hindi</label></fieldset>')
+    a = agent(tmp_path=tmp_path)
+    boxes = [c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.role == "checkbox"]
+    assert a._tick_several(page, boxes, "English, Telugu") is False
+    assert page.locator("input[value='English']").is_checked()
+    assert not page.locator("input[value='Telugu']").is_checked()
+
+
+def test_answer_location_choices_only_writes_what_actually_committed(page, tmp_path, monkeypatch):
+    page.set_content(
+        '<fieldset><legend>Where would you like to work?</legend>'
+        '<label><input type="checkbox" name="loc" value="Virginia"> Virginia</label>'
+        '<label><input type="checkbox" name="loc" value="Remote" onclick="this.checked=false"> Remote</label>'
+        '</fieldset>')
+    a = agent(tmp_path=tmp_path)
+    controls = page_agent.parse_snapshot(a.snapshot(page))
+    import location_choice
+    monkeypatch.setattr(location_choice, "choices", lambda *a_, **k: [0, 1])
+    answered = a.answer_location_choices(page, controls)
+    assert answered == 1
+    assert "Virginia" in a.written["Where would you like to work?"]
+    assert "Remote" not in a.written["Where would you like to work?"]
+
+
+# --- 4b. the non-reader assistant.attach_cover_letter() production path, both branches ----
+
+def test_assistant_attach_cover_letter_file_branch_is_verified(page, tmp_path, letter_file):
+    page.set_content(
+        '<label for="cl">Cover Letter *</label>'
+        '<input type="file" id="cl" onchange="document.body.insertAdjacentHTML('
+        '\'beforeend\', this.files[0] ? this.files[0].name : \'\')">')
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assert assistant.attach_cover_letter(page, letter_file.with_suffix(".txt"), letter_file) is True
+
+
+def test_assistant_attach_cover_letter_file_branch_that_never_shows_is_not_verified(page, tmp_path, letter_file):
+    page.set_content('<label for="cl">Cover Letter *</label><input type="file" id="cl" onchange="this.remove()">')
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assert assistant.attach_cover_letter(page, letter_file.with_suffix(".txt"), letter_file) is False
+
+
+def test_assistant_attach_cover_letter_text_branch_is_verified(page, tmp_path):
+    txt = tmp_path / "letter.txt"
+    txt.write_text("Dear Hiring Manager, I am excited to apply.", encoding="utf-8")
+    page.set_content('<label for="cl">Cover Letter *</label><textarea id="cl"></textarea>')
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assert assistant.attach_cover_letter(page, txt, tmp_path / "letter.pdf") is True
+    assert "excited to apply" in page.locator("#cl").input_value()
+
+
+def test_assistant_attach_cover_letter_text_branch_that_is_rejected_is_not_verified(page, tmp_path):
+    txt = tmp_path / "letter.txt"
+    txt.write_text("Dear Hiring Manager, I am excited to apply.", encoding="utf-8")
+    page.set_content(
+        '<label for="cl">Cover Letter *</label>'
+        '<textarea id="cl" oninput="this.value=\'\'"></textarea>')
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assert assistant.attach_cover_letter(page, txt, tmp_path / "letter.pdf") is False
+    assert page.locator("#cl").input_value() == ""
