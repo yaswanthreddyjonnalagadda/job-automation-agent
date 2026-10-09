@@ -45,6 +45,8 @@ Everything stays on your computer, in `data/`.
 
 The Applications dashboard renders its live cockpit whether there are no
 applications, the agent is idle, a run is active, or an owner handoff is waiting.
+System Health reports an available application database as connected in both
+the page and JSON response, and reports a warning when opening the tracker fails.
 
 ## What it learns from you
 

@@ -35,7 +35,7 @@ import application_status
 import ui_shell
 import visible_desktop
 from config import get_app_config
-from tracking import open_tracker as get_tracker
+from tracking import chosen, open_tracker as get_tracker
 import sqlite3
 import queue
 import handoff

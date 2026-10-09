@@ -1,0 +1,15 @@
+{
+  "id": "f135",
+  "date": "2026-10-09",
+  "site": "Local dashboard System Health",
+  "class": "A health-check presentation error is misreported as dependency failure",
+  "symptom": "System Health displayed a database error while the Applications page and tracker could read application records successfully.",
+  "root_cause": "After successfully opening the tracker, the database health check called tracking.chosen without importing it. Its broad exception handler caught the resulting NameError and presented it as Database unavailable.",
+  "why_tests_missed": "The existing health endpoint test checked HTTP status, check names and static HTML labels, but did not assert that an available database was reported healthy. HTTP 200 is expected even when a dependency fails, so those assertions could not detect a false database alarm.",
+  "fix": "Import the existing centralized tracker-selection helper and assert the database check's actual outcome and message in JSON and HTML for a working synthetic SQLite tracker and a deliberately failing tracker.",
+  "tests": [
+    "tests/test_ui_cockpit.py::test_database_health_reports_a_working_tracker",
+    "tests/test_ui_cockpit.py::test_database_health_reports_a_tracker_failure"
+  ],
+  "prevention": "Verify each health check's positive and negative outcomes independently of overall HTTP status. Exercise successful dependency initialization through message construction so reporting defects cannot masquerade as infrastructure outages."
+}
