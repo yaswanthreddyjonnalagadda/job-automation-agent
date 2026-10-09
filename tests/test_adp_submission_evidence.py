@@ -66,7 +66,7 @@ def test_adp_identity_refuses_other_jobs_tenants_and_hosts(page, current):
     assert adapter.submission_posting_url(page, POSTING, "Security Engineer") is None
 
 
-@pytest.mark.parametrize("plain_rows", [False, True, "hidden"])
+@pytest.mark.parametrize("plain_rows", [False, True, "hidden", "covered"])
 def test_review_attachment_is_read_and_final_panel_restored(page, plain_rows):
     html = """
       <ol><li><button onclick="document.getElementById('panel').innerHTML='<a href=/resume>Resume_Example.pdf</a>'">Review Your Application</button></li>
@@ -80,6 +80,8 @@ def test_review_attachment_is_read_and_final_panel_restored(page, plain_rows):
         html = html.replace(">Self-Attest &amp; Submit</li>", ">6 Self-Attest &amp; Submit</li>")
     if plain_rows == "hidden":
         html = html.replace("</li>", "<button hidden>Details</button></li>")
+    if plain_rows == "covered":
+        html += '<div style="position:fixed;inset:0;z-index:99;background:transparent"></div>'
     page.route("**/*", lambda r: r.fulfill(content_type="text/html", body=html))
     page.goto(CURRENT)
     assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
@@ -95,6 +97,19 @@ def test_missing_review_panel_does_not_claim_attachment(page):
     assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
     adapter = importlib.import_module("sites.adp").ADPAdapter()
     assert adapter.submission_documents(assistant, page) is None
+
+
+def test_covered_review_navigation_never_activates_through_a_captcha(page):
+    page.route("**/*", lambda r: r.fulfill(content_type="text/html", body="""
+      <ol><li onclick="window.activated=true">Review Your Application</li>
+      <li onclick="window.activated=true">Self-Attest &amp; Submit</li></ol>
+      <button>Submit</button>
+      <div style="position:fixed;inset:0;z-index:99">Verify that you are a human</div>
+    """))
+    page.goto(CURRENT)
+    adapter = importlib.import_module("sites.adp").ADPAdapter()
+    assert adapter.submission_documents(JobApplicationAssistant.__new__(JobApplicationAssistant), page) == []
+    assert not page.evaluate("Boolean(window.activated)")
 
 
 @pytest.mark.parametrize("allowed,checked,approved", [

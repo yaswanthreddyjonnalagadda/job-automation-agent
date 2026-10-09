@@ -838,6 +838,10 @@ Local document bytes must still match the stored application documents.
 Navigation uses the visible step action or the row's own click handler, rather
 than a hidden child control. Probe diagnostics retain counts and fixed failure
 categories, never raw exception text or application answers.
+For a visible, enabled wizard step whose pointer click is covered, the adapter
+may invoke that step's click handler once and verify the resulting panel. It
+refuses this fallback when a CAPTCHA is present or the step is disabled; it
+does not apply it to the final Submit control.
 
 A checked electronic-signing checkbox may match your explicit
 `sign_attestations` preference. This neither checks an unsigned box nor grants

@@ -80,7 +80,17 @@ class ADPAdapter(SiteAdapter):
             actions = row.locator("button:visible, a:visible, [role=button]:visible, [role=link]:visible")
             handles_click = row.evaluate("e => typeof e.onclick === 'function' || e.tabIndex >= 0")
             target = row if handles_click or actions.count() != 1 else actions
-            target.click(timeout=4000)
+            try:
+                target.click(timeout=4000)
+            except Exception as exc:
+                import safety
+                if (self._failure_kind(exc) != "covered" or safety.captcha_visible(page)
+                        or not target.is_visible() or not target.is_enabled()
+                        or not target.evaluate("e => !e.closest('[aria-disabled=true]') && !e.disabled")):
+                    raise
+                # Only an enabled wizard step, never the final Submit control.
+                # Existing containment stays armed; the caller verifies the panel.
+                target.evaluate("e => e.click()")
 
         review = step(re.compile(r"Review\s+Your\s+Application", re.I))
         final = step(re.compile(r"Self[-\s]Attest\s*&\s*Submit", re.I))
