@@ -36,7 +36,9 @@ CURRENT = "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/postLogin
     ({"requisitionTitle": "Other role"}, False),
     ({"customFieldGroup": {"stringFields": []}}, False),
 ])
-def test_adp_redirect_identity_requires_requisition_metadata(page, monkeypatch, change, accepted):
+@pytest.mark.parametrize("current", [CURRENT,
+    CURRENT.replace('/mascsr/default/', '/mascsr/applicant/') + '&jobId=123'])
+def test_adp_redirect_identity_requires_requisition_metadata(page, monkeypatch, change, accepted, current):
     metadata = {"itemID": "req-abc", "requisitionTitle": "Security Engineer",
                 "customFieldGroup": {"stringFields": [
                     {"nameCode": {"codeValue": "ExternalJobID"}, "stringValue": "123"}]}}
@@ -45,7 +47,7 @@ def test_adp_redirect_identity_requires_requisition_metadata(page, monkeypatch, 
     page.route("**/*", lambda r: r.fulfill(
         content_type="application/json" if "/job-requisitions/" in r.request.url else "text/html",
         body=json.dumps(metadata) if "/job-requisitions/" in r.request.url else "<h1>Application</h1>"))
-    page.goto(CURRENT)
+    page.goto(current)
     adapter = importlib.import_module("sites.adp").ADPAdapter()
     result = adapter.submission_posting_url(page, POSTING, "Security Engineer")
     assert result == (POSTING if accepted else None)
@@ -91,6 +93,21 @@ def test_review_attachment_is_read_and_final_panel_restored(page, plain_rows):
     assert page.get_by_role("button", name="Submit", exact=True).is_visible()
     assert page.get_by_role("link", name="Resume_Example.pdf").count() == 0
 
+
+
+def test_review_attachment_waits_for_delayed_panel_and_restores_final(page):
+    page.route("**/*", lambda r: r.fulfill(content_type="text/html", body="""
+      <ol><li onclick="document.getElementById('panel').innerHTML='Loading';
+        setTimeout(() => document.getElementById('panel').innerHTML='<a href=/resume>Resume_Example.pdf</a>', 4000)">Review Your Application</li>
+      <li onclick="document.getElementById('panel').innerHTML='<button type=button>Submit</button>'">Self-Attest &amp; Submit</li></ol>
+      <main id=panel><button type=button>Submit</button></main>
+    """))
+    page.goto(CURRENT)
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    adapter = importlib.import_module("sites.adp").ADPAdapter()
+    assert adapter.submission_documents(assistant, page) == ["Resume_Example.pdf"]
+    assert page.get_by_role("button", name="Submit", exact=True).is_visible()
+    assert page.get_by_role("link", name="Resume_Example.pdf").count() == 0
 
 def test_missing_review_panel_does_not_claim_attachment(page):
     page.set_content("<button type=button>Submit</button>")

@@ -23,7 +23,8 @@ class ADPAdapter(SiteAdapter):
                 or original.scheme != "https" or current.scheme != "https"
                 or original.netloc != current.netloc
                 or original.path != "/mascsr/default/mdf/recruitment/recruitment.html"
-                or current.path != "/mascsr/default/mdf/recruitment/postLogin.html"):
+                or current.path not in {"/mascsr/default/mdf/recruitment/postLogin.html",
+                                        "/mascsr/applicant/mdf/recruitment/postLogin.html"}):
             return None
         queries = [parse_qs(p.query) for p in (original, current)]
 
@@ -104,7 +105,7 @@ class ADPAdapter(SiteAdapter):
         restored = False
         try:
             click_step(review)
-            deadline = time.monotonic() + 3
+            deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
                 if page.url != initial_url:
                     break

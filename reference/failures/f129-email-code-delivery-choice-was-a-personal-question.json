@@ -1,0 +1,16 @@
+{
+  "id": "f129",
+  "date": "2026-10-09",
+  "site": "ADP sign-in; shared email-code flow",
+  "class": "Verification destination selection fell through to personal-answer planning",
+  "symptom": "ADP asked where to receive a verification code and the agent waited for an answer despite explicit mail-read permission and a single email option.",
+  "root_cause": "The authentication helpers handled a code-entry textbox but did not resolve the preceding delivery-choice screen.",
+  "why_tests_missed": "Email-code tests started after the code was already sent, without a preceding email versus phone radio chooser.",
+  "fix": "Recognize the explicit verification destination prompt, reuse emailed_codes.why_not and local channel classification, and request the single email option at most once per host in the run. Refuse ambiguous or unsupported options and preserve the existing code reader and limits.",
+  "tests": [
+    "tests/test_code_delivery_choice.py::test_authorized_email_choice_is_sent_once_without_selecting_sms",
+    "tests/test_code_delivery_choice.py::test_unapproved_ambiguous_or_unsupported_delivery_never_sends",
+    "tests/test_code_delivery_choice.py::test_uncertain_email_request_is_not_dispatched_again"
+  ],
+  "prevention": "Exercise delivery selection before code entry, including absent permission, CAPTCHA, protected hosts, SMS-only choices, ambiguous email options and uncertain request outcomes."
+}

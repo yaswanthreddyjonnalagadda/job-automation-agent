@@ -1650,6 +1650,9 @@ class PageAgent:
             snapshot = self.snapshot(page)
         except Exception:
             return False
+        delivery = self.choose_email_code_delivery(page, controls, snapshot)
+        if delivery is not None:
+            return delivery
         state = account_state.read_state(snapshot, password_boxes=self._password_boxes(tab))
         if state.kind in self._ACCOUNT_CREATION_RESOLVED_KINDS:
             self._resolve_pending_account_creation(host)
@@ -1912,6 +1915,48 @@ class PageAgent:
             return True
         except Exception as exc:
             logger.warning("LOGIN: could not give the email (%s)", str(exc).splitlines()[0][:100])
+            return False
+
+    def choose_email_code_delivery(self, page, controls, snapshot):
+        """Resolve a code-delivery chooser through the existing email permission.
+
+        Return None outside this screen, so the account table keeps its normal role.
+        An uncertain send is held rather than requesting another code.
+        """
+        if not re.search(r"(?:where|how) would you like to receive (?:a |the |your )?"
+                         r"(?:verification|security|one[- ]time) code", snapshot or "", re.I):
+            return None
+        tab = self.tab(page)
+        why = emailed_codes.why_not(self.profile, tab.url, captcha=safety.captcha_visible(tab),
+                                    email=getattr(self.config, "ats_email", "") or "")
+        if why:
+            self.account_blocker = why
+            return False
+        emails = [c for c in controls if c.role == "radio" and not c.disabled
+                  and emailed_codes.code_channel(c.name) == "EMAIL"]
+        sends = [c for c in controls if c.role in PRESS_ROLES and not c.disabled
+                 and re.fullmatch(r"send(?: me)?(?: a| the)?(?: verification| security)?(?: code)?|"
+                                  r"continue|next|get code", (c.name or "").strip(), re.I)]
+        if len(emails) != 1 or len(sends) != 1:
+            self.account_blocker = "Choose the email verification destination on the site, then continue."
+            return False
+        asked = self.__dict__.setdefault("_code_delivery_asked", set())
+        host = host_of(tab.url)
+        if host in asked:
+            self.account_blocker = "A verification code was already requested; check the current verification screen."
+            return False
+        try:
+            choice = self.locate(page, emails[0].ref)
+            choice.check(timeout=5000)
+            if not choice.is_checked():
+                return False
+            # Record before dispatch: an interrupted send is never repeated automatically.
+            asked.add(host)
+            self.locate(page, sends[0].ref).click(timeout=8000)
+            logger.info("CODE: requested the email verification channel")
+            return True
+        except Exception:
+            self.account_blocker = "The email verification request could not be confirmed; check the site before retrying."
             return False
 
     # A code emailed to the owner for their own account or email address.

@@ -435,6 +435,10 @@ counts before what the form looks like. Then one table decides:
 - **Sign in** on a sign-in form, once per site per run, with the password from
   Settings; give the email first where the site asks for it on its own.
 - **Enter an emailed code** under the rules below.
+  When a verification screen first asks where to receive the code, the agent may
+  choose its single identifiable email option and send once, under the same mail
+  permission, employer-site, CAPTCHA and rate-limit checks. Ambiguous channels
+  and a send whose outcome is uncertain require inspection before another request.
 - **Reset a refused password** of an account the site knows, to the same password,
   with the code emailed to you -- once per site per run (see "An account that already
   exists").
@@ -835,6 +839,8 @@ Review Your Application panel and return to Self-Attest & Submit. It uses the
 attachments actually found there and then rechecks the restored final form.
 Failure to find or restore those panels does not supply attachment evidence.
 Local document bytes must still match the stored application documents.
+Both default and applicant post-login routes require the same requisition proof.
+The review panel has up to 15 seconds to expose fresh document evidence.
 Navigation uses the visible step action or the row's own click handler, rather
 than a hidden child control. Probe diagnostics retain counts and fixed failure
 categories, never raw exception text or application answers.
