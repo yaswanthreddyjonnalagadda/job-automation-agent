@@ -71,18 +71,28 @@ class ADPAdapter(SiteAdapter):
         if not self.matches(page.url):
             return None
         steps = page.get_by_role("listitem")
-        review = steps.get_by_text(re.compile(r"^\s*Review Your Application\s*$", re.I))
-        final = steps.get_by_text(re.compile(r"^\s*Self-Attest\s*&\s*Submit\s*$", re.I))
+
+        def step(pattern):
+            named = page.get_by_role("listitem", name=pattern)
+            return named if named.count() == 1 else steps.filter(has_text=pattern)
+
+        def click_step(row):
+            actions = row.locator("button, a, [role=button], [role=link]")
+            target = actions if actions.count() == 1 else row
+            target.click(timeout=4000)
+
+        review = step(re.compile(r"Review\s+Your\s+Application", re.I))
+        final = step(re.compile(r"Self[-\s]Attest\s*&\s*Submit", re.I))
         submit = page.get_by_role("button", name=re.compile(r"^Submit$", re.I))
         if review.count() != 1 or final.count() != 1 or not submit.count() or not submit.first.is_visible():
-            return None
-        if not review.locator("xpath=ancestor::li[1]").count() or not final.locator("xpath=ancestor::li[1]").count():
+            self._probe_note(assistant, "review", review.count(), "blocked")
+            self._probe_note(assistant, "submission", final.count(), "blocked")
             return None
         initial_url = page.url
         documents = []
         restored = False
         try:
-            review.click(timeout=4000)
+            click_step(review)
             deadline = time.monotonic() + 3
             while time.monotonic() < deadline:
                 if page.url != initial_url:
@@ -96,9 +106,22 @@ class ADPAdapter(SiteAdapter):
         finally:
             if page.url == initial_url:
                 try:
-                    final.click(timeout=4000)
+                    click_step(final)
                     submit.first.wait_for(state="visible", timeout=4000)
                     restored = page.url == initial_url
                 except Exception:
                     restored = False
+        self._probe_note(assistant, "review", len(documents), "verified" if documents else "unknown")
+        self._probe_note(assistant, "submission", 1 if restored else 0, "verified" if restored else "unknown")
         return documents if restored else []
+
+    @staticmethod
+    def _probe_note(assistant, stage, count, result):
+        tracker = getattr(assistant, "tracker", None)
+        if tracker is not None and hasattr(tracker, "record_event"):
+            try:
+                tracker.record_event(getattr(assistant, "application_key", ""), "note",
+                    "ADP attachment review probe", payload={
+                        "action": "navigate", "stage": stage, "count": count, "result": result})
+            except Exception:
+                pass
