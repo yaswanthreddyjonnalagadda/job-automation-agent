@@ -79,6 +79,10 @@ class SiteAdapter:
         """An independently verified posting identity after a portal redirect."""
         return None
 
+    def submission_receipt(self, page, posting_url: str, title: str) -> bool:
+        """A visible receipt independently bound to the tracked application."""
+        return False
+
     def submission_documents(self, assistant, page) -> Optional[list[str]]:
         """Fresh attachment evidence from a portal's review panel, if supported."""
         return None

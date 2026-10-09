@@ -63,6 +63,48 @@ class ADPAdapter(SiteAdapter):
             pass
         return None
 
+    def submission_receipt(self, page, posting_url, title):
+        """Recognize ADP's submitted label outside its long job description."""
+        if not self.matches(page.url) or not title:
+            return False
+        initial_url = page.url
+        proof = r"""title => {
+          const visible = e => {
+            if (!e.getClientRects().length) return false;
+            for (let p=e; p; p=p.parentElement) {
+              const s=getComputedStyle(p);
+              if (p.hidden || p.getAttribute('aria-hidden')==='true'
+                  || s.visibility==='hidden' || s.visibility==='collapse'
+                  || Number(s.opacity)===0) return false;
+            }
+            return true;
+          };
+          const normalize = t => (t||'').replace(/\s+/g,' ').trim().toLowerCase();
+          const elements = [...document.querySelectorAll('*')];
+          const statuses = elements.filter(e => !e.children.length && visible(e)
+            && normalize(e.textContent)==='application submitted');
+          if (statuses.length!==1) return false;
+          if (elements.some(e => visible(e) &&
+              (e.matches('input,textarea,select')
+               && !['search','hidden','button','submit','reset'].includes(e.type)))) return false;
+          if (elements.some(e => visible(e) && e.matches('button,input[type=submit]')
+              && /^submit(?: application)?$/i.test((e.innerText||e.value||'').trim()))) return false;
+          for (let p=statuses[0], i=0; p && i<8; p=p.parentElement, i++) {
+            const headings=[...p.querySelectorAll('h1,h2,h3,h4,h5,[role=heading]')].filter(visible);
+            if (!headings.some(e => normalize(e.innerText)===normalize(title))) continue;
+            if (headings.length!==1) return false;
+            return ![...p.querySelectorAll('*')].some(e => !e.children.length && visible(e)
+              && /^(draft|continue application|resume application|incomplete)$/i.test((e.textContent||'').trim()));
+          }
+          return false;
+        }"""
+        try:
+            return (bool(page.evaluate(proof, title))
+                    and self.submission_posting_url(page, posting_url, title) == posting_url
+                    and page.url == initial_url and bool(page.evaluate(proof, title)))
+        except Exception:
+            return False
+
     def submission_documents(self, assistant, page):
         """Read the wizard's review panel, then restore its final panel.
 

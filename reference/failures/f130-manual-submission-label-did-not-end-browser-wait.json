@@ -1,0 +1,17 @@
+{
+  "id": "f130",
+  "date": "2026-10-09",
+  "site": "ADP receipt; shared review watcher",
+  "class": "A portal receipt outside headings and short application cards was missed",
+  "symptom": "The owner manually submitted the application, ADP displayed Application Submitted, and the worker kept its browser open waiting for review instructions.",
+  "root_cause": "The receipt detector recognized heading/alert confirmations or short job cards, but ADP rendered a plain status label beside a long job description. The generic card length bound correctly excluded that layout, leaving the watcher without accepted evidence.",
+  "why_tests_missed": "Confirmation tests used heading receipts and short application cards; they did not run the manual-review wait against an authenticated ADP receipt containing the full posting.",
+  "fix": "Add a portal receipt hook. ADP requires a visible exact submitted label, one matching title section, no active applicant form or draft marker, and independently verified original tenant/requisition metadata. Recheck DOM and URL after the API response. Feed accepted evidence into the existing manual-submission return and context cleanup; preserve generic confirmation bounds and submission gates.",
+  "tests": [
+    "tests/test_adp_manual_submission.py::test_manual_receipt_after_long_job_description_is_confirmed",
+    "tests/test_adp_manual_submission.py::test_unverified_or_active_application_does_not_confirm",
+    "tests/test_adp_manual_submission.py::test_manual_receipt_ends_the_flow_and_closes_browser_context",
+    "tests/test_adp_manual_submission.py::test_receipt_is_rechecked_after_the_identity_request"
+  ],
+  "prevention": "Test both receipt recognition and the actual manual-review loop ending with submitted status and closed browser context; reject hidden or changed receipts, unrelated jobs, active forms and failed identity checks."
+}

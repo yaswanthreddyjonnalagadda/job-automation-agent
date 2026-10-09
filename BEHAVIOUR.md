@@ -777,6 +777,14 @@ The run keeps watching and records **submitted** only on evidence:
 * the employer portal listing the job as applied (list reloaded every minute), or
 * the employer's confirmation email (Gmail checked every 2 minutes).
 
+For ADP, an exact visible Application Submitted label may be a receipt even
+when it sits beside a long job description. It must share a single job section
+with the tracked title, have no active applicant fields, Submit control or draft
+status, and match independently verified tenant and requisition metadata. The
+status and URL are checked again after identity verification. A verified manual
+submission ends the review wait, records submitted, and closes the run's browser
+through normal cleanup without another Continue or Close action.
+
 If the application leaves the screen without any of that — the window is
 closed, or the form is abandoned for 10 minutes — the status becomes
 **needs_user_review**, never "submitted". Success is never assumed.

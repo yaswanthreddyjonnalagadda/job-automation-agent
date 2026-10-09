@@ -6298,6 +6298,16 @@ class JobApplicationAssistant:
         if self.find_submit_button(page) is not None:
             return False  # still on the form
         try:
+            tracker = getattr(self, "tracker", None)
+            key = getattr(self, "application_key", "")
+            record = tracker.get(key) if tracker is not None and key and job_title else None
+            if (record is not None and record.title == job_title
+                    and adapter_for(page.url).submission_receipt(page, record.url, job_title)):
+                self._confirmation_evidence = "the portal confirms submission for the independently verified job"
+                return True
+        except Exception:
+            pass  # Missing portal proof never counts as a receipt.
+        try:
             # innerText alone is not reliable evidence of visibility here: a heading with
             # display:none measurably still returned its text in this runtime (verified, not
             # assumed, during the owner's hardening review of 7 October 2026) -- exactly the
@@ -7643,15 +7653,13 @@ class JobApplicationAssistant:
                         self._seen_application_form = True
                     # A confirmation page counts even if the form was never
                     # recognised (it needs its message AND no Submit button).
-                    if not on_form and self.submission_confirmed(page, job_title):
+                    if self.submission_confirmed(page, job_title):
                         return "submitted_by_user"
                     if not getattr(self, "_seen_application_form", False):
                         # Still before the form (a sign-in page, say): nothing
                         # can have been submitted, so no Gmail checks and no
                         # "left the form" timer -- just wait for the user.
                         continue
-                    if self.submission_confirmed(page, job_title):
-                        return "submitted_by_user"
                     if on_form or for_blanks:
                         away_since = None
                     else:
