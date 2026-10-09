@@ -6,15 +6,24 @@ import json
 import logging
 import secrets
 import weakref
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import safety
+from sites.workday import SIGN_IN_ACTION_JS
 from playwright.sync_api import Error as PlaywrightError
 
 logger = logging.getLogger(__name__)
 
 _GUARD_NAME = "__jaaSubmissionGuardV0"
+
+
+@dataclass(frozen=True)
+class _ClickEvidence:
+    frame: Any
+    document_id: str
+    count: int
 
 
 # One conservative DOM predicate shared by posting detection and the click firewall.
@@ -81,10 +90,12 @@ def _guard_script(capability: str) -> str:
         return;
       }
       const capability = CAPABILITY;
+      const documentId = Array.from(crypto.getRandomValues(new Uint32Array(4))).join('-');
       const submitLabel = new RegExp(SUBMIT_PATTERN, "i");
       const safeUtilityLabel = new RegExp(SAFE_UTILITY_PATTERN, "i");
       const applicationContext = APPLICATION_CONTEXT;
       const postingApply = POSTING_APPLY;
+      const workdayAccountAction = WORKDAY_ACCOUNT_ACTION;
       const state = {active: false, authorization: null, denials: [], sequence: 0,
         applicationSeen: applicationContext()};
       const selector = 'button, input[type="submit"], input[type="image"], [role="button"], a';
@@ -143,6 +154,7 @@ def _guard_script(capability: str) -> str:
         if (!candidate) return null;
         state.applicationSeen ||= applicationContext();
         if (!state.applicationSeen && postingApply(candidate)) return null;
+        if (workdayAccountAction(candidate)) return null;
         if (labels(candidate).some(label => submitLabel.test(label))) return candidate;
         if (structuralSubmitter(candidate) && !ordinaryNavigation(candidate)) return candidate;
         return soleRemainingAction(candidate) ? candidate : null;
@@ -273,6 +285,9 @@ def _guard_script(capability: str) -> str:
         denialCount() {
           return state.denials.length;
         },
+        documentId() {
+          return documentId;
+        },
         denials() {
           return state.denials.slice();
         }
@@ -284,7 +299,7 @@ def _guard_script(capability: str) -> str:
         "SUBMIT_PATTERN", json.dumps(safety.SUBMIT_LABEL_RE.pattern)
     ).replace(
         "SAFE_UTILITY_PATTERN", json.dumps(safety.SAFE_UTILITY_LABEL_RE.pattern)
-    ).replace("POSTING_APPLY", _POSTING_APPLY_JS).replace(
+    ).replace("WORKDAY_ACCOUNT_ACTION", SIGN_IN_ACTION_JS).replace("POSTING_APPLY", _POSTING_APPLY_JS).replace(
         "APPLICATION_CONTEXT", _APPLICATION_CONTEXT_JS
     )
 
@@ -410,13 +425,37 @@ class SubmissionGuardV0:
         return sum(len(self._frame_denials(frame)) for frame in page.frames)
 
     @staticmethod
-    def click_denial_count(locator: Any) -> int:
+    def click_denial_count(locator: Any) -> int | _ClickEvidence:
+        # The clicked node may disappear after a successful React transition.
+        # Observe the originating frame/document instead of resolving it again.
+        if hasattr(locator, "element_handle"):
+            handle = locator.element_handle(timeout=2_000)
+            if handle is not None:
+                try:
+                    frame = handle.owner_frame()
+                    observation = frame.evaluate(
+                        f"() => window.{_GUARD_NAME} ? {{count: window.{_GUARD_NAME}.denialCount(), "
+                        f"id: window.{_GUARD_NAME}.documentId?.()}} : null"
+                    )
+                    if observation and observation.get("id"):
+                        return _ClickEvidence(frame, observation["id"], observation["count"])
+                finally:
+                    handle.dispose()
         return locator.evaluate(
             f"element => window.{_GUARD_NAME} ? window.{_GUARD_NAME}.denialCount() : -1"
         )
 
     @staticmethod
-    def click_was_denied(locator: Any, before: int | None) -> bool:
+    def click_was_denied(locator: Any, before: int | _ClickEvidence | None) -> bool:
+        if isinstance(before, _ClickEvidence):
+            try:
+                after = before.frame.evaluate(
+                    f"() => window.{_GUARD_NAME} ? {{count: window.{_GUARD_NAME}.denialCount(), "
+                    f"id: window.{_GUARD_NAME}.documentId?.()}} : null"
+                )
+                return not after or after.get("id") != before.document_id or after["count"] != before.count
+            except Exception:
+                return True
         if before is None or before < 0:
             return False
         try:

@@ -1217,3 +1217,22 @@ With no sponsorship need, the answer follows stated legal work eligibility;
 missing eligibility remains unresolved. Inclusive "with or without sponsorship"
 questions retain their existing handling. Initial filling, correction, and final
 conflict checking share the same rule, preserving owner-entered answers.
+
+## Workday account forms and submission protection
+
+Workday's credential-only Sign In and Create Account forms are recognized separately
+from final application submission. This requires the employer's HTTPS Workday host,
+its account-form marker, an exact account action, one email field and the expected
+password field count. Applicant fields, attestations, unknown fields or competing
+submission actions keep the form protected. Existing credential, account-creation,
+CAPTCHA, consent and retry policies still apply.
+
+Account-state inspection uses the same foreground dialog as the page reader, so
+password fields on a registration page behind Sign In do not cause another account
+creation attempt. A recognized Sign In form uses sign-in rather than registering
+because the local account cache is empty. If its button disappears after a successful
+transition, click evidence is checked in the originating frame and document; a new
+document or unavailable evidence remains uncertain. The login flow verifies a changed
+page and does not retry a denied or uncertain action through another button or Enter.
+A guard handoff names the blocked action and current-step uncertainty rather than
+claiming the application has reached final submission.

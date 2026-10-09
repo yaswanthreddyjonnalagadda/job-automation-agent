@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from playwright.sync_api import Page
+from perception import active_dialog
 
 from .base import SiteAdapter
 
@@ -28,6 +29,41 @@ DELETE_FILE = "button[data-automation-id='delete-file']"
 PROMPT_OPTION = "[data-automation-id='promptOption']"
 ACTIVE_STEP = "[data-automation-id='progressBarActiveStep']"
 EMAIL_INPUT = "input[data-automation-id='email']"
+# Positive account evidence for the browser submission firewall. A label or a
+# password elsewhere on the page cannot exempt an application form.
+SIGN_IN_ACTION_JS = r"""element => {
+    if (location.protocol !== 'https:' || !location.hostname.endsWith('.myworkdayjobs.com')) return false;
+    const form = element.form;
+    if (!form || !/^signInForm/.test(form.getAttribute('data-automation-id') || '')) return false;
+    if (!form.getClientRects().length || !element.getClientRects().length || element.disabled) return false;
+    const labels = el => [el.innerText, el.value, el.getAttribute('aria-label'),
+        el.getAttribute('title')].map(v => String(v || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const names = labels(element);
+    const creating = element.getAttribute('data-automation-id') === 'createAccountSubmitButton'
+        && names.length && names.every(v => /^create account$/i.test(v));
+    if (!creating && (!names.length || !names.every(v => /^(sign in|log in|login)$/i.test(v)))) return false;
+    if (form.querySelector('textarea, select, [contenteditable]:not([contenteditable="false"]), '
+        + '[role="checkbox"], [role="radio"], [role="combobox"], [role="spinbutton"], '
+        + '[role="textbox"]:not(input), iframe')) return false;
+    if (Array.from(form.querySelectorAll('*')).some(el => el.shadowRoot)) return false;
+    let emails = 0, passwords = 0;
+    for (const input of Array.from(form.elements)) {
+        if (input instanceof HTMLButtonElement || (input instanceof HTMLInputElement
+            && ['button', 'submit', 'reset'].includes(input.type))) {
+            const names = labels(input);
+            if (!names.length || !names.every(name => /^(sign in|log in|login|create account|forgot password\??|show|hide)(?: password)?$/i.test(name))) return false;
+            continue;
+        }
+        if (!(input instanceof HTMLInputElement)) return false;
+        if (input.type === 'password') { passwords++; continue; }
+        if (input.type === 'email' || (input.type === 'text'
+            && /^(email|emailAddress|username)$/i.test(input.getAttribute('data-automation-id')
+                || input.name || input.id || ''))) { emails++; continue; }
+        if (input.type === 'hidden' && /^(csrf|_csrf|csrfToken|csrf_token)$/i.test(input.name)) continue;
+        return false;
+    }
+    return emails === 1 && passwords === (creating ? 2 : 1);
+}"""
 # Repeated Work Experience / Education entries ("workExperience-3--jobTitle").
 ENTRY_ID_MARKERS = ("workexperience-", "education-", "languages-", "certification-")
 
@@ -139,8 +175,10 @@ class WorkdayAdapter(SiteAdapter):
     def candidate_account_state(self, page) -> str:
         """Classifies Workday Candidate Home screens from visible structure."""
         try:
-            body = page.locator("body").inner_text(timeout=3_000) or ""
-            password_count = page.locator("input[type=password]:visible").count()
+            scope = active_dialog(page)
+            root = scope if scope is not None else page
+            body = (scope if scope is not None else page.locator("body")).inner_text(timeout=3_000) or ""
+            password_count = root.locator("input[type=password]:visible").count()
         except Exception:
             return ""
         if self._VERIFICATION_CODE.search(body):
@@ -152,11 +190,11 @@ class WorkdayAdapter(SiteAdapter):
             return "registration_error" if self._REGISTRATION_ERROR.search(body) else "registration"
         sign_in = password_count == 1 and (
             bool(re.search(r"\bsign in\b", body, re.IGNORECASE))
-            or page.locator("form[data-automation-id^='signInForm']:visible").count() > 0
+            or root.locator("form[data-automation-id^='signInForm']:visible").count() > 0
         )
         if sign_in:
             return "sign_in"
-        if page.locator("[data-automation-id='progressBarActiveStep']:visible").count() > 0:
+        if root.locator("[data-automation-id='progressBarActiveStep']:visible").count() > 0:
             return "application"
         if re.search(r"\b(?:candidate home|my applications)\b", body, re.IGNORECASE):
             return "candidate_home"

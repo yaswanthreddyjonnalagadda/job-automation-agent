@@ -66,6 +66,7 @@ from interaction import (
     wipe_and_enforce_location_sweep,
 )
 from perception import (
+    active_dialog,
     hide_secrets,
     is_ant_dropdown,
     is_ant_single_select,
@@ -1456,8 +1457,9 @@ class PageAgent:
         tab = self.tab(page)
         # An open dialog owns the interaction. Background posting controls may
         # remain in the accessibility tree even though its overlay blocks them.
-        dialogs = tab.locator('[role="dialog"]:visible, dialog[open]:visible')
-        scope = dialogs.last if dialogs.count() else tab.locator("body")
+        scope = active_dialog(tab)
+        if scope is None:
+            scope = tab.locator("body")
         return hide_secrets(scope.aria_snapshot(mode="ai", timeout=20_000))
 
     def locate(self, page, ref: str):
@@ -5963,7 +5965,8 @@ class PageAgent:
             self.locate(page, control.ref).click(timeout=10_000)
         if guard is not None and denials_before is not None and guard.denial_count(tab) > denials_before:
             logger.error("SUBMISSION_GUARD_V0_DENIED: PageAgent stopped after an intercepted submit attempt")
-            return "stop", page, "final submission is only available through the verified gateway or human handoff"
+            return "stop", page, (f"submission protection blocked {label!r}; its purpose could not be verified "
+                                  "on the current step -- inspect the page, then press Continue")
         if submit_word:
             self.final_pressed = True   # a confirmation after an allowed intermediate Submit counts
         self.settle(page, 2_500)
@@ -6049,6 +6052,9 @@ class PageAgent:
     def _password_boxes(tab) -> int:
         """How many password boxes the page shows, frames included."""
         try:
+            dialog = active_dialog(tab)
+            if dialog is not None:
+                return dialog.locator("input[type=password]:visible").count()
             count = tab.locator("input[type=password]:visible").count()
             for frame in tab.frames[1:]:
                 if not safety.is_captcha_frame(frame.url):

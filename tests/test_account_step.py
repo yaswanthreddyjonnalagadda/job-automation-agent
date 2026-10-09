@@ -124,6 +124,19 @@ def test_an_account_on_record_is_signed_in_to_not_made_again(page, tmp_path):
     assert assistant.calls == [("login_page",)]
 
 
+def test_sign_in_modal_excludes_registration_passwords_behind_it(page, tmp_path):
+    from sites.workday import WorkdayAdapter
+    serve(page, CREATE + '<div role="dialog" aria-modal="true">' + SIGN_IN + '</div>')
+    assistant = Assistant(gate=True)
+    assistant.adapter = lambda tab: WorkdayAdapter()
+    a = agent(assistant, tmp_path)
+    assert a._password_boxes(page) == 1
+    assert assistant.adapter(page).candidate_account_state(page) == 'sign_in'
+    assert step(page, a) is True
+    assert assistant.calls == [('gate', 'jane@example.com')]
+    assert a._created_at == set()
+
+
 def test_a_held_account_is_not_tried_and_the_reason_is_given(page, tmp_path):
     serve(page, SIGN_IN)
     assistant = Assistant(held="an account was already tried 2 times in the last 24 hours")

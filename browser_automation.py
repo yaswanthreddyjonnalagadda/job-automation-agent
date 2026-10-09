@@ -52,6 +52,7 @@ from interaction import (
     wipe_and_enforce_location_sweep,
 )
 from perception import (
+    active_dialog,
     is_ant_dropdown,
 )
 from sites import adapter_for
@@ -3746,7 +3747,9 @@ class JobApplicationAssistant:
                 # can tick a terms checkbox that requires the candidate.
                 return self.fill_create_account_form(page, email)
 
-            pw_count = page.locator("input[type='password']").count()
+            dialog = active_dialog(page)
+            auth_root = dialog if dialog is not None else page
+            pw_count = auth_root.locator("input[type='password']").count()
             create_form = pw_count >= 2 and self._create_account_control(page) is not None
             if create_form and self._account_form_has_validation_error(page):
                 logger.info("ACCOUNT: correcting visible registration validation errors")
@@ -3765,7 +3768,7 @@ class JobApplicationAssistant:
                 if page.locator("button:has-text('Create Account')").count() and self._goto_login_page(page):
                     scope = self._sign_in_scope(page)
                 logger.info("Sign In form present; signing in rather than creating an account")
-                return self.attempt_auto_login(page, email, "", scope=scope)
+                return self.attempt_auto_login(page, email, "", scope=scope, create_if_missing=False)
 
             if pw_count == 0:
                 return False
@@ -5323,11 +5326,19 @@ class JobApplicationAssistant:
             "button:has-text('Log in')",
             "button[type='submit']",
         ):
-            if root.locator(selector).count() and self._click_resiliently(root.locator(selector).first):
+            button = root.locator(selector).first
+            if not button.count():
+                continue
+            before_url = page.url
+            clicked = self._click_resiliently(button)
+            if clicked or page.url != before_url or not pw_locator.count():
                 page.wait_for_load_state("domcontentloaded", timeout=15000)
                 page.wait_for_timeout(3000)
                 logger.info("Attempted auto-login on %s", domain)
                 return self._after_login_attempt(page, email, create_if_missing)
+            # A denied/uncertain sign-in must not fall through to another
+            # button or Enter. A changed page is verified above, never retried.
+            return False
 
         # Some ATS login forms submit on Enter even when no button matches.
         pw_locator.press("Enter")
