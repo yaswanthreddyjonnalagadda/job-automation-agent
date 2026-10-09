@@ -67,6 +67,23 @@ def test_an_ordinary_fill_is_verified_and_reported_as_written(page, tmp_path):
     assert page.locator("#fn").input_value() == "Yaswanth"
 
 
+def test_a_password_input_is_refused_before_any_write_never_reaching_verified_bookkeeping(page, tmp_path):
+    """Cross-phase matrix cell F (B2 x B4, Phase 0 final review): a password-type input is
+    exposed with the same generic accessibility role as an ordinary application textbox, so
+    B4's verified-write bookkeeping cannot rely on role alone to keep the two apart. The
+    `refusal()` gate's own `type=password` attribute check (page_agent.py) is the actual,
+    independent boundary -- this proves it fires for a real password control, so an
+    auth-field write can never reach `do()`/`_fill_value_committed` at all, let alone be
+    recorded as a verified application-field write."""
+    page.set_content('<label for=p>Password<input id=p type=password></label>')
+    a = agent(tmp_path=tmp_path)
+    box = control_for(a, page, "textbox", "Password")
+    answer = page_agent.Answer(box.ref, "Password", "fill", "ATS_PASSWORD_SENTINEL", source="config.ats_password")
+
+    assert a.refusal(page, answer, box) == "a password -- the agent never types those here"
+    assert page.locator("#p").input_value() == ""
+
+
 def test_a_controlled_input_that_rejects_the_value_is_not_reported_as_written(page, tmp_path):
     """A React/Vue-style controlled input that snaps back to its old value on every input
     event -- the Playwright fill() call itself never throws, so the old, unverified do()

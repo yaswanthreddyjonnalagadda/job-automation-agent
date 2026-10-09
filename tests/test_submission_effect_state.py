@@ -240,6 +240,35 @@ def test_restart_reclassifies_unresolved_dispatch_as_uncertain(setup):
     assert tracker.get_submission_effect_state("application-identity") == "UNCERTAIN"
 
 
+def test_a_crash_right_after_dispatch_blocks_a_resumed_runs_second_submit_attempt(setup, tmp_path):
+    """Cross-phase matrix cell B (B1 x B3, Phase 0 final review): the FULL resume path through
+    `apply_flow.submit_verified`, not only the tracker/guard unit level already covered by
+    `test_restart_reclassifies_unresolved_dispatch_as_uncertain` and
+    `test_retry_after_dispatch_cannot_issue_a_second_click`. Simulates a crash immediately after
+    `begin_submission_dispatch` -- no confirmation is ever recorded -- then a freshly-constructed
+    assistant (standing in for a resumed run) calls `apply_flow.submit_verified` again. It must
+    be refused by `refuse_submission_replay` before any click is attempted, never issue a second
+    dispatch."""
+    import apply_flow
+    import safety
+
+    tracker, _database, _context, _page, _guard = setup
+    tracker.begin_submission_dispatch("application-identity")  # the crash happens right here
+
+    class ResumedRunAssistant:
+        def click_verified_submit(self, page, authorization):
+            raise AssertionError("a resumed run must never re-click submit after an unresolved dispatch")
+
+    job = SimpleNamespace(title="Synthetic Engineer", company="Synthetic Employer")
+    ok = apply_flow.submit_verified(
+        ResumedRunAssistant(), None, tracker, "application-identity", job, tmp_path,
+        safety.AutoSubmitDecision(eligible=True),
+    )
+
+    assert ok is False
+    assert tracker.get_submission_effect_state("application-identity") == "UNCERTAIN"
+
+
 def test_confirmation_requires_dispatch_and_uncertain_confirmation_requires_probe_reconciliation(setup):
     tracker, _database, _context, _page, _guard = setup
 

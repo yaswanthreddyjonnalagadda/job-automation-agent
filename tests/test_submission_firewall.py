@@ -160,6 +160,35 @@ def test_interaction_resilient_click_stops_before_force_fallback(page):
     assert page.evaluate("window.submitted") is None
 
 
+@pytest.mark.parametrize("label", ["Verify", "Create Account"])
+def test_an_account_step_submit_typed_button_is_denied_not_silently_clicked(page, label):
+    """Cross-phase matrix cell A (B1 x B2, Phase 0 final review): an account-creation or
+    email-verification button is often an ordinary <button type=submit> inside a real <form>
+    -- structurally identical to a final-submit candidate. This proves that collision fails
+    closed: the guard denies the click outright, the same as any other final submitter."""
+    install_submit_form(page, label)
+    guard = guarded(page)
+
+    page.get_by_role("button", name=label).click()
+
+    assert page.evaluate("window.submitted") is None
+    assert guard.denials(page)[0]["kind"] == "click"
+
+
+def test_the_assistants_own_resilient_click_also_refuses_an_account_button_the_guard_denied(page):
+    """The real account/auth code path (browser_automation.JobApplicationAssistant's resilient
+    click helper, used by e.g. complete_emailed_passcode) must detect the guard's denial on an
+    account-step button and report failure, never mistake the denial for a successful click
+    (cross-phase matrix cell A)."""
+    from browser_automation import JobApplicationAssistant
+
+    install_submit_form(page, "Verify")
+    guarded(page)
+
+    assert JobApplicationAssistant._click_resiliently(page.get_by_role("button", name="Verify")) is False
+    assert page.evaluate("window.submitted") is None
+
+
 def test_dispatch_event_is_blocked(page):
     install_submit_form(page)
     guard = guarded(page)
@@ -716,6 +745,25 @@ def test_plain_boolean_cannot_authorize_gateway_submission(page):
     button = page.get_by_role("button", name="Submit Application")
 
     assert not guard.submit_verified(page, button, True)
+    assert page.evaluate("window.submitted") is None
+    assert guard.denials(page) == []
+
+
+def test_a_verified_action_result_cannot_authorize_gateway_submission_either(page):
+    """Cross-phase matrix cell C (B1 x B4, Phase 0 final review): P0-B4's ActionResult exists
+    precisely to represent a *verified ordinary action* and must never be mistaken for P0-B1's
+    AutoSubmitDecision -- `_valid_authorization`'s strict `type(decision) is not
+    safety.AutoSubmitDecision` check must reject a live ActionResult(outcome=VERIFIED, ...)
+    instance exactly as it rejects a bare `True`, not merely duck-typed objects in general."""
+    import action_result
+
+    install_submit_form(page)
+    guard = guarded(page)
+    button = page.get_by_role("button", name="Submit Application")
+    verified_result = action_result.verified("fill", target="Some field", evidence_kind="input_value",
+                                             evidence_summary="value committed")
+
+    assert not guard.submit_verified(page, button, verified_result)
     assert page.evaluate("window.submitted") is None
     assert guard.denials(page) == []
 

@@ -183,6 +183,34 @@ def test_a_third_process_may_create_the_account_once_the_marker_is_resolved(brow
     assert assistant.calls == [("gate", "jane@example.com"), ("gate", "jane@example.com")]
 
 
+# --- C2: email-verification-code consumption has no durable marker, only the fresh-live-read
+# principle -- cross-phase matrix cell E (B2 x B3, Phase 0 final review) --------------------
+
+def test_a_second_independent_instance_never_re_reads_a_code_once_the_page_no_longer_shows_one(
+        browser, tmp_path):
+    """Unlike account creation, verification-code consumption has no durable
+    `pending_action`-style marker. Its safety instead relies entirely on
+    `complete_account_code()` only ever looking at the CURRENT page's own controls for an
+    actual code box (page_agent.py) -- never at anything remembered from an earlier call or
+    instance. A second, independent PageAgent instance (standing in for a resumed process,
+    sharing nothing in memory with whatever instance may have already read a code) given a
+    page that no longer shows a code box must never call passcode_from_gmail at all."""
+    tracker = job_tracker.JobTracker(tmp_path / "applications.db")
+    tracker.create(dedup_key="k1", title="Engineer", company="Acme", location="Remote",
+                   url="https://jobs.example.com/apply")
+
+    class VerifyingAssistant(Assistant):
+        def passcode_from_gmail(self, tab, previous=None, length=0):
+            raise AssertionError("a resumed run must never re-read a code once none is shown")
+
+    second = new_agent(VerifyingAssistant(gate=True), tracker, tmp_path)
+    page = open_page(browser, SIGNED_IN_PAGE)
+    snapshot = second.snapshot(page)
+    controls = page_agent.parse_snapshot(snapshot)
+
+    assert second.complete_account_code(page, controls, snapshot) is False
+
+
 # --- D: a transient/ambiguous state must NOT clear it ---------------------------------------
 
 def test_a_loading_or_ambiguous_state_does_not_clear_the_marker(browser, tmp_path):

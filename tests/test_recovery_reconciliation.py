@@ -45,6 +45,22 @@ def test_no_checkpoint_is_its_own_outcome_not_an_error():
     assert result.outcome == recovery.NO_CHECKPOINT
 
 
+@pytest.mark.parametrize("state", ["DISPATCHED", "UNCERTAIN"])
+def test_a_dispatched_or_uncertain_submission_falls_through_to_ordinary_page_comparison(state):
+    """Cross-phase matrix cell B (B1 x B3, Phase 0 final review): only CONFIRMED short-circuits
+    reconcile() -- DISPATCHED/UNCERTAIN fall through to the ordinary page-identity comparison
+    below, exactly as if no submission had been attempted at all. This is safe because nothing
+    actually branches on reconcile()'s output (its one caller, apply_flow.log_recovery_
+    reconciliation, is diagnostic-only); the real "never resubmit" guarantee for these states is
+    enforced independently, three layers deep, by B1's own replay guard (see
+    test_submission_effect_state.py::test_a_crash_right_after_dispatch_blocks_a_resumed_runs_
+    second_submit_attempt). This pins down the current, safe-by-construction behavior so a
+    future change here is a deliberate decision, not a silent drift."""
+    result = recovery.reconcile(stored_payload=built(), live_identity=identity(),
+                                live_account_state_kind="SIGNED_IN", live_submission_effect_state=state)
+    assert result.outcome == recovery.MATCH
+
+
 @pytest.mark.parametrize("payload", [{"no": "application_key"}, {"application_key": "a", "schema_version": 999}])
 def test_an_unparseable_checkpoint_is_unsupported(payload):
     result = recovery.reconcile(stored_payload=payload, live_identity=identity(), live_account_state_kind="SIGNED_IN")
