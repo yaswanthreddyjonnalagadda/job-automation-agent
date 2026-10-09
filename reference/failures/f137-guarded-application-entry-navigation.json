@@ -9,6 +9,7 @@
   "fix": "Follow a verified posting anchor with HTTP GET without dispatching click handlers or relaxing the guard. Keep buttons, fragment links and final submission guarded; reject social/job-board destinations by centralized sourcing policy.",
   "tests": [
     "tests/test_run_recovery_regressions.py::test_application_entry_follows_the_link_without_dispatching_submit_handlers",
+    "tests/test_run_recovery_regressions.py::test_page_agent_application_entry_uses_the_verified_navigation_path",
     "tests/test_run_recovery_regressions.py::test_apply_on_a_completed_form_remains_guarded",
     "tests/test_run_recovery_regressions.py::test_social_destinations_are_rejected_even_when_labelled_apply",
     "tests/test_run_recovery_regressions.py::test_social_host_matching_does_not_block_unrelated_employers"

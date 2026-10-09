@@ -112,6 +112,41 @@ def test_apply_on_a_completed_form_remains_guarded(page, assistant):
     assert assistant._submission_guard.denial_count(page) == 1
 
 
+@pytest.mark.parametrize("destination", ["/application", "https://www.facebook.com/share"])
+def test_page_agent_application_entry_uses_the_verified_navigation_path(page, assistant, tmp_path, destination):
+    import page_agent
+    def serve(route):
+        body = ("<h1>Engineer</h1><h2>Responsibilities</h2><p>Build systems.</p>"
+                f'<a href="{destination}" onclick="window.clicked=true;return false">Apply Now</a>')
+        if route.request.url.endswith("/application"):
+            body = '<h1>Application</h1><button>Submit Application</button>'
+        route.fulfill(status=200, content_type="text/html", body=body)
+    page.route("https://employer.example/**", serve)
+    page.goto("https://employer.example/job")
+    assistant._submission_guard = SubmissionGuardV0(page.context)
+    agent = page_agent.PageAgent(
+        assistant, SimpleNamespace(), SimpleNamespace(),
+        SimpleNamespace(accept_application_privacy_prompts=False),
+        SimpleNamespace(raw_text=""), SimpleNamespace(url=page.url),
+        resume_file=None, job_dir=tmp_path,
+    )
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    entry = next(control for control in controls if control.name == "Apply Now")
+    plan = page_agent.PagePlan(page_kind="job_description", next_kind="open_application",
+                               next_label=entry.name, next_ref=entry.ref)
+    outcome, _, _ = agent.press_next(page, plan, controls)
+    if destination.startswith("https://www.facebook.com"):
+        assert outcome == "stop"
+        assert page.url == "https://employer.example/job"
+    else:
+        assert outcome == "moved"
+        assert page.url == "https://employer.example/application"
+        page.get_by_role("button", name="Submit Application").click()
+        assert assistant._submission_guard.denial_count(page) == 1
+    assert page.evaluate("window.clicked") is None
+    assert len(page.context.pages) == 1
+
+
 def setup_wait(tmp_path, assistant, monkeypatch):
     signal = tmp_path / "_signal_synthetic.txt"
     signal.with_name("_job_synthetic.json").write_text(json.dumps({"company": "Example", "title": "Engineer"}))
@@ -184,6 +219,22 @@ def test_cockpit_reports_a_waiting_worker_instead_of_processing(monkeypatch, tmp
     assert state["is_waiting"] is True
     assert state["stage"] == "Waiting for you"
     assert "processing" not in state["current_action"].lower()
+
+
+@pytest.mark.parametrize("waiting", [True, False])
+def test_cockpit_poll_updates_the_visible_waiting_and_stage_badges(page, waiting):
+    from playwright.sync_api import expect
+    page.set_content('<section id="live-cockpit-card"><span id="cockpit-status-text">Idle</span>'
+                     '<span id="cockpit-stall-badge">Normal</span><i id="cockpit-dot"></i></section>')
+    stage = "Waiting for you" if waiting else "Form Fill"
+    page.evaluate("""state => {
+        window.fetch = async () => ({ok: true, json: async () => state});
+    }""", {"is_running": True, "is_waiting": waiting, "stage": stage, "loop_status": "normal"})
+    page.add_script_tag(content=(web_ui.BASE_DIR / "static" / "cockpit.js").read_text(encoding="utf-8"))
+    page.evaluate("window.Cockpit.startPolling()")
+    expect(page.locator("#cockpit-status-text")).to_have_text(stage)
+    expect(page.locator("#cockpit-stall-badge")).to_have_text("Waiting for you" if waiting else "Progressing Normal")
+    expect(page.locator("#cockpit-dot")).to_have_class("cockpit-status-dot warning" if waiting else "cockpit-status-dot pulsing")
 
 
 def test_social_destinations_are_rejected_even_when_labelled_apply(page, assistant):
