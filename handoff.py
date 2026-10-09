@@ -170,6 +170,7 @@ def build(
         category=resolved_category, reason=reason_text, required_action=required_action,
         work_completed=work_completed, resume_condition=resume_condition_for(resolved_category),
     )
+    set_active_handoff(h)
     return h
 
 
@@ -183,28 +184,11 @@ _ACTIVE_HANDOFF_LOCK = threading.RLock()
 _ACTIVE_HANDOFF: Optional[dict] = None
 
 
-def _get_runtime_events():
-    try:
-        import runtime_events
-        return runtime_events
-    except ImportError:
-        try:
-            import sys
-            from pathlib import Path
-            pkg_root = str(Path(__file__).resolve().parent)
-            if pkg_root not in sys.path:
-                sys.path.insert(0, pkg_root)
-            import runtime_events
-            return runtime_events
-        except Exception:
-            return None
-
-
 def set_active_handoff(h: Handoff, handoff_id: Optional[str] = None) -> dict:
     """Registers an active handoff and emits a structured telemetry event."""
     global _ACTIVE_HANDOFF
     import secrets
-    re_mod = _get_runtime_events()
+    from runtime_events import RuntimeEvent, EventName, ReasonCode
 
     hid = handoff_id or secrets.token_urlsafe(16)
     data = {
@@ -224,34 +208,34 @@ def set_active_handoff(h: Handoff, handoff_id: Optional[str] = None) -> dict:
     with _ACTIVE_HANDOFF_LOCK:
         _ACTIVE_HANDOFF = data
 
-    if re_mod is not None:
-        rc = re_mod.ReasonCode.AUTH_REQUIRED
-        if h.category == CAPTCHA:
-            rc = re_mod.ReasonCode.CAPTCHA_REQUIRED
-            ev_name = re_mod.EventName.CAPTCHA_DETECTED
-        elif h.category in (SMS_MFA, AUTHENTICATOR_MFA, SECURITY_KEY, PUSH_APPROVAL):
-            rc = re_mod.ReasonCode.MFA_REQUIRED
-            ev_name = re_mod.EventName.MFA_DETECTED
-        else:
-            ev_name = re_mod.EventName.HANDOFF_CREATED
+    # Map category to telemetry reason code
+    rc = ReasonCode.AUTH_REQUIRED
+    if h.category == CAPTCHA:
+        rc = ReasonCode.CAPTCHA_REQUIRED
+        ev_name = EventName.CAPTCHA_DETECTED
+    elif h.category in (SMS_MFA, AUTHENTICATOR_MFA, SECURITY_KEY, PUSH_APPROVAL):
+        rc = ReasonCode.MFA_REQUIRED
+        ev_name = EventName.MFA_DETECTED
+    else:
+        ev_name = EventName.HANDOFF_CREATED
 
-        re_mod.RuntimeEvent.emit(
-            event_name=ev_name,
-            component="handoff",
-            stage=h.stage or "handoff",
-            display_message=h.compose_message(),
-            reason_code=rc,
-            application_key=h.application_key,
-            safe_metadata={
-                "handoff_id": hid,
-                "category": h.category,
-                "employer": h.employer,
-                "portal": h.portal,
-                "resume_condition": h.resume_condition,
-                "required_action": h.required_action,
-                "work_completed": h.work_completed,
-            },
-        )
+    RuntimeEvent.emit(
+        event_name=ev_name,
+        component="handoff",
+        stage=h.stage or "handoff",
+        display_message=h.compose_message(),
+        reason_code=rc,
+        application_key=h.application_key,
+        safe_metadata={
+            "handoff_id": hid,
+            "category": h.category,
+            "employer": h.employer,
+            "portal": h.portal,
+            "resume_condition": h.resume_condition,
+            "required_action": h.required_action,
+            "work_completed": h.work_completed,
+        },
+    )
     return data
 
 
@@ -284,6 +268,8 @@ def resolve_active_handoff(
     (B3 / B4 invariant: clicking does NOT equal verification).
     """
     global _ACTIVE_HANDOFF
+    from runtime_events import RuntimeEvent, EventName
+
     with _ACTIVE_HANDOFF_LOCK:
         if _ACTIVE_HANDOFF is None:
             return True, "No active handoff to resolve"
@@ -299,16 +285,14 @@ def resolve_active_handoff(
         app_key = _ACTIVE_HANDOFF.get("application_key")
         _ACTIVE_HANDOFF = None
 
-    re_mod = _get_runtime_events()
-    if re_mod is not None:
-        re_mod.RuntimeEvent.emit(
-            event_name=re_mod.EventName.HANDOFF_RESOLVED,
-            component="handoff",
-            stage="resolution",
-            display_message="Human handoff resolved and verified",
-            is_verified=True,
-            application_key=app_key,
-            safe_metadata={"handoff_id": hid},
-        )
+    RuntimeEvent.emit(
+        event_name=EventName.HANDOFF_RESOLVED,
+        component="handoff",
+        stage="resolution",
+        display_message="Human handoff resolved and verified",
+        is_verified=True,
+        application_key=app_key,
+        safe_metadata={"handoff_id": hid},
+    )
     return True, "Handoff resolved successfully"
 
