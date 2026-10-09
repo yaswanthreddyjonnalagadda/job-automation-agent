@@ -52,6 +52,17 @@ import config as config_module
 import handoff
 import recovery
 from handoff import Handoff
+try:
+    from runtime_events import RuntimeEvent, EventName, ReasonCode
+except ImportError:
+    try:
+        import sys
+        _pkg_root = str(Path(__file__).resolve().parent)
+        if _pkg_root not in sys.path:
+            sys.path.insert(0, _pkg_root)
+        from runtime_events import RuntimeEvent, EventName, ReasonCode
+    except Exception:
+        RuntimeEvent = None
 from resume_pdf import build_letter_pdf, build_resume_pdf
 from browser_automation import BlockedLoginDomainError, JobApplicationAssistant
 from claude_integration import ClaudeClient, ClaudeIntegrationError
@@ -666,6 +677,7 @@ def write_recovery_checkpoint(tracker, assistant, key: str, page, job, handoff_r
     )
     if owner_handoff is not None:
         changes.update(owner_handoff.to_checkpoint_fields())
+        handoff.set_active_handoff(owner_handoff)
     if new_uncertain_actions:
         prior = tuple((existing or {}).get("uncertain_actions") or ())
         changes["uncertain_actions"] = tuple(dict.fromkeys(prior + tuple(new_uncertain_actions)))
@@ -1242,11 +1254,38 @@ def submit_verified(assistant, page, tracker, key, job, job_dir: Path, decision)
     )
     if prior_state:
         return False
+    if RuntimeEvent is not None:
+        RuntimeEvent.emit(
+            event_name=EventName.SUBMISSION_AUTHORIZED,
+            component="submission_gateway",
+            stage="submit",
+            display_message=f"Verified auto-submit authorized for {job.title} at {job.company}",
+            application_key=key,
+            safe_metadata={"title": job.title, "company": job.company},
+        )
     assistant.tracker, assistant.application_key = tracker, key
     assistant.submission_state_store = submission_store
+    if RuntimeEvent is not None:
+        RuntimeEvent.emit(
+            event_name=EventName.SUBMISSION_DISPATCHED,
+            component="submission_gateway",
+            stage="submit",
+            display_message="Dispatching verified final submission click",
+            application_key=key,
+        )
     clicked = assistant.click_verified_submit(page, decision)
     if not clicked:
         logger.error("AUTO_SUBMIT_FAILED: the Submit button could not be clicked")
+        if RuntimeEvent is not None:
+            RuntimeEvent.emit(
+                event_name=EventName.SUBMISSION_UNCERTAIN,
+                component="submission_gateway",
+                stage="submit",
+                reason_code=ReasonCode.SUBMISSION_UNCERTAIN,
+                display_message="Submit button could not be clicked",
+                is_verified=False,
+                application_key=key,
+            )
         try:
             if prior_state in (None, "AUTHORIZED") \
                     and submission_store.get_submission_effect_state(submission_key) == "DISPATCHED":
@@ -1262,8 +1301,39 @@ def submit_verified(assistant, page, tracker, key, job, job_dir: Path, decision)
             submission_key, outcome_state,
             evidence_kind="independent_page_or_email" if outcome_state == "CONFIRMED" else None,
         )
+        if RuntimeEvent is not None:
+            if outcome_state == "CONFIRMED":
+                RuntimeEvent.emit(
+                    event_name=EventName.SUBMISSION_CONFIRMED,
+                    component="submission_gateway",
+                    stage="submit",
+                    display_message=f"Submission confirmed by independent evidence: {note}",
+                    is_verified=True,
+                    evidence=str(evidence)[:200],
+                    application_key=key,
+                )
+            else:
+                RuntimeEvent.emit(
+                    event_name=EventName.SUBMISSION_UNCERTAIN,
+                    component="submission_gateway",
+                    stage="submit",
+                    reason_code=ReasonCode.SUBMISSION_UNCERTAIN,
+                    display_message=f"Post-dispatch submission outcome uncertain: {note}",
+                    is_verified=False,
+                    application_key=key,
+                )
     except Exception:
         logger.exception("Post-dispatch result is unknown for application %s", key[:12])
+        if RuntimeEvent is not None:
+            RuntimeEvent.emit(
+                event_name=EventName.SUBMISSION_UNCERTAIN,
+                component="submission_gateway",
+                stage="submit",
+                reason_code=ReasonCode.SUBMISSION_UNCERTAIN,
+                display_message="Post-dispatch exception during evidence check",
+                is_verified=False,
+                application_key=key,
+            )
         try:
             if submission_store.get_submission_effect_state(submission_key) == "DISPATCHED":
                 submission_store.finish_submission_effect(submission_key, "UNCERTAIN")
@@ -1599,6 +1669,16 @@ def main() -> None:
             location=job.location, source_site=job.source_site, url=job.url,
         )
 
+    if RuntimeEvent is not None:
+        RuntimeEvent.emit(
+            event_name=EventName.RUN_STARTED,
+            component="apply_flow",
+            stage="init",
+            display_message=f"Starting application run for {job.title} at {job.company}",
+            application_key=key,
+            safe_metadata={"title": job.title, "company": job.company, "url": job.url},
+        )
+
     effect_state = refuse_submission_replay(
         submission_store, submission_key, "application_start", aliases=tuple(identity_aliases)
     )
@@ -1666,6 +1746,16 @@ def main() -> None:
             # works out what to do there.
             logger.info("Working the application with the reading agent")
             page = assistant.open_job_page(resume_at or job.url)
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.PAGE_OPENED,
+                    component="apply_flow",
+                    stage="navigation",
+                    display_message=f"Opened job page: {page.url[:80]}",
+                    is_verified=True,
+                    application_key=key,
+                    safe_metadata={"url": page.url},
+                )
             # The browser opens behind whatever the owner is using: bring it up now, so they can watch
             # the run, not only at a hand-over.
             assistant.raise_window(page)

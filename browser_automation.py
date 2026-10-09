@@ -58,6 +58,18 @@ from sites import adapter_for
 
 import diagnostics
 diagnostics.install_log_privacy()
+
+try:
+    from runtime_events import RuntimeEvent, EventName, ReasonCode
+except ImportError:
+    try:
+        import sys
+        _pkg_root = str(Path(__file__).resolve().parent)
+        if _pkg_root not in sys.path:
+            sys.path.insert(0, _pkg_root)
+        from runtime_events import RuntimeEvent, EventName, ReasonCode
+    except Exception:
+        RuntimeEvent = None
 logger = logging.getLogger(__name__)
 
 # A Chrome-family window is titled "<page> - Google Chrome" (real Chrome, what the agent uses),
@@ -4611,6 +4623,17 @@ class JobApplicationAssistant:
         'Apply' link/button that leads to the actual form -- sometimes in a
         new tab. This just navigates there; it submits nothing. Returns the
         page to keep working with (same page, or the new tab if one opened)."""
+        app_key = getattr(self, "application_key", "")
+        if RuntimeEvent is not None:
+            RuntimeEvent.emit(
+                event_name=EventName.APPLY_SEARCHING,
+                component="browser_automation",
+                stage="apply_button",
+                display_message="Searching for Apply button on page",
+                application_key=app_key,
+                safe_metadata={"url": page.url},
+            )
+
         btn = self.find_apply_control(page)
         if btn is None:
             destination = self.apply_destination(page)
@@ -4619,13 +4642,57 @@ class JobApplicationAssistant:
                 # page settles), but its link is in the page. Following it is
                 # what clicking it would do.
                 logger.info("Apply link found by address: %s", destination[:90])
+                if RuntimeEvent is not None:
+                    RuntimeEvent.emit(
+                        event_name=EventName.APPLY_FOUND,
+                        component="browser_automation",
+                        stage="apply_button",
+                        display_message=f"Apply destination link found: {destination[:60]}",
+                        application_key=app_key,
+                    )
                 page.goto(destination, wait_until="domcontentloaded", timeout=60_000)
                 page.wait_for_timeout(2_000)
+                if RuntimeEvent is not None:
+                    RuntimeEvent.emit(
+                        event_name=EventName.APPLY_CLICK_VERIFIED,
+                        component="browser_automation",
+                        stage="apply_button",
+                        display_message="Navigated to apply destination link",
+                        is_verified=True,
+                        evidence="url_changed",
+                        application_key=app_key,
+                        safe_metadata={"target_url": page.url},
+                    )
                 return page
             logger.info("No 'Apply' button found -- assuming already on the application form")
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.APPLY_CLICK_BLOCKED,
+                    component="browser_automation",
+                    stage="apply_button",
+                    display_message="No Apply button found; assuming already on form",
+                    application_key=app_key,
+                )
             return page
 
+        if RuntimeEvent is not None:
+            RuntimeEvent.emit(
+                event_name=EventName.APPLY_FOUND,
+                component="browser_automation",
+                stage="apply_button",
+                display_message="Apply button found on page",
+                application_key=app_key,
+            )
+            RuntimeEvent.emit(
+                event_name=EventName.APPLY_CLICK_ATTEMPTED,
+                component="browser_automation",
+                stage="apply_button",
+                display_message="Clicking Apply button",
+                application_key=app_key,
+            )
+
         context = page.context
+        initial_url = page.url
         try:
             with context.expect_page(timeout=5_000) as new_page_info:
                 btn.click()
@@ -4643,6 +4710,30 @@ class JobApplicationAssistant:
             target.wait_for_load_state("networkidle", timeout=10_000)
         except Exception:
             target.wait_for_timeout(3_000)
+
+        if RuntimeEvent is not None:
+            if target != page or (target.url and target.url != initial_url):
+                RuntimeEvent.emit(
+                    event_name=EventName.APPLY_CLICK_VERIFIED,
+                    component="browser_automation",
+                    stage="apply_button",
+                    display_message="Apply button click verified navigation",
+                    is_verified=True,
+                    evidence="tab_opened" if target != page else "url_changed",
+                    application_key=app_key,
+                    safe_metadata={"target_url": target.url},
+                )
+            else:
+                RuntimeEvent.emit(
+                    event_name=EventName.APPLY_NAV_NOT_OBSERVED,
+                    component="browser_automation",
+                    stage="apply_button",
+                    reason_code=ReasonCode.NAVIGATION_FAILED,
+                    display_message="Apply button clicked but URL did not change",
+                    is_verified=False,
+                    application_key=app_key,
+                )
+
         return target
 
     def dismiss_apply_chooser(self, page: Page) -> Page:
@@ -6478,10 +6569,20 @@ class JobApplicationAssistant:
             logger.info("PASSCODE: %s -- leaving it to the user", why)
             return ""
         employer = (getattr(self, "employer", "") or "").strip()
+        app_key = getattr(self, "application_key", "")
         tab = page.context.new_page()
         try:
             deadline = time.time() + wait_seconds
             while time.time() < deadline:
+                if RuntimeEvent is not None:
+                    RuntimeEvent.emit(
+                        event_name=EventName.EMAIL_POLLING,
+                        component="gmail",
+                        stage="email_verification",
+                        display_message=f"Polling Gmail for verification passcode ({employer or 'employer'})",
+                        application_key=app_key,
+                        safe_metadata={"employer": employer},
+                    )
                 query = quote("newer_than:1h (passcode OR \"one-time\" OR verification OR code)")
                 tab.goto(f"https://mail.google.com/mail/u/0/#search/{query}", wait_until="domcontentloaded", timeout=45_000)
                 try:
@@ -6507,6 +6608,16 @@ class JobApplicationAssistant:
                         code = self._extract_code(length=length, text=body)
                     if code and code != previous:
                         logger.info("PASSCODE: found a one-time passcode in Gmail")  # never the mail's text: it holds the code
+                        if RuntimeEvent is not None:
+                            RuntimeEvent.emit(
+                                event_name=EventName.EMAIL_MATCHED,
+                                component="gmail",
+                                stage="email_verification",
+                                display_message="Found verification passcode in Gmail",
+                                is_verified=True,
+                                application_key=app_key,
+                                safe_metadata={"employer": employer},
+                            )
                         login_guard.record_code_read(
                             urlparse(page.url).netloc.lower(),
                             (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
@@ -6516,6 +6627,15 @@ class JobApplicationAssistant:
                 logger.info("PASSCODE: no new passcode email yet -- checking again in 15s")
                 tab.wait_for_timeout(15_000)
             logger.warning("PASSCODE: no passcode email arrived within %ds", wait_seconds)
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.EMAIL_TIMEOUT,
+                    component="gmail",
+                    stage="email_verification",
+                    reason_code=ReasonCode.EMAIL_VERIFICATION_TIMEOUT,
+                    display_message=f"Passcode email did not arrive within {wait_seconds}s",
+                    application_key=app_key,
+                )
             return ""
         except Exception as exc:
             logger.warning("PASSCODE: Gmail read failed: %s", str(exc).splitlines()[0][:160])
@@ -6539,10 +6659,20 @@ class JobApplicationAssistant:
             logger.info("VERIFY_LINK: %s -- leaving it to the user", why)
             return ""
         site_url = page.url
+        app_key = getattr(self, "application_key", "")
         tab = page.context.new_page()
         try:
             deadline = time.time() + wait_seconds
             while time.time() < deadline:
+                if RuntimeEvent is not None:
+                    RuntimeEvent.emit(
+                        event_name=EventName.EMAIL_POLLING,
+                        component="gmail",
+                        stage="email_verification",
+                        display_message="Polling Gmail for account verification link",
+                        application_key=app_key,
+                        safe_metadata={"site_url": site_url},
+                    )
                 query = quote("newer_than:1h (verify OR verification OR activate OR confirm)")
                 tab.goto(f"https://mail.google.com/mail/u/0/#search/{query}", wait_until="domcontentloaded",
                          timeout=45_000)
@@ -6566,6 +6696,16 @@ class JobApplicationAssistant:
                         if emailed_codes.verification_link_ok(href, text, site_url):
                             logger.info("VERIFY_LINK: found the account-verification link from %s in Gmail",
                                         urlparse(emailed_codes.unwrap(href)).netloc)
+                            if RuntimeEvent is not None:
+                                RuntimeEvent.emit(
+                                    event_name=EventName.EMAIL_MATCHED,
+                                    component="gmail",
+                                    stage="email_verification",
+                                    display_message="Found account verification link in Gmail",
+                                    is_verified=True,
+                                    application_key=app_key,
+                                    safe_metadata={"domain": urlparse(site_url).netloc},
+                                )
                             login_guard.record_code_read(
                                 urlparse(site_url).netloc.lower(),
                                 (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
@@ -6577,6 +6717,15 @@ class JobApplicationAssistant:
                 logger.info("VERIFY_LINK: no verification email from this site yet -- checking again in 15s")
                 tab.wait_for_timeout(15_000)
             logger.warning("VERIFY_LINK: no verification email arrived within %ds", wait_seconds)
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.EMAIL_TIMEOUT,
+                    component="gmail",
+                    stage="email_verification",
+                    reason_code=ReasonCode.EMAIL_VERIFICATION_TIMEOUT,
+                    display_message=f"Verification link email did not arrive within {wait_seconds}s",
+                    application_key=app_key,
+                )
             return ""
         except Exception as exc:
             logger.warning("VERIFY_LINK: Gmail read failed: %s", str(exc).splitlines()[0][:160])
