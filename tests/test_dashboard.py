@@ -122,7 +122,10 @@ def test_reload_agent_signals_a_waiting_run(client, tmp_path, monkeypatch):
     signals = tmp_path / "data"
     signals.mkdir()
     (signals / "_signal_Example.txt").write_text("", encoding="utf-8")
+    (signals / "_waiting_Example.txt").write_text("waiting", encoding="utf-8")
     monkeypatch.setattr(web_ui, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(web_ui, "_RUNS_FILE", signals / "_runs.json")
+    monkeypatch.setattr(web_ui, "_running_url", lambda: "https://employer.example/job")
     assert client.post("/reload-agent").status_code == 302
     assert (signals / "_signal_Example.txt").read_text(encoding="utf-8") == "reload_code"
 

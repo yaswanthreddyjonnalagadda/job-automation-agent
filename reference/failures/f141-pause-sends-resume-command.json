@@ -1,0 +1,15 @@
+{
+  "id": "f141",
+  "date": "2026-10-09",
+  "site": "Local dashboard / live cockpit",
+  "class": "An unsupported pause control acknowledges success and sends a command with opposite semantics",
+  "symptom": "The cockpit Pause endpoint claimed paused while writing refresh to existing review signals, which can resume a waiting worker.",
+  "root_cause": "The UI exposed pause without a cooperative runtime pause implementation and reused the refresh command despite its progression semantics.",
+  "why_tests_missed": "The control test asserted HTTP success and an ok flag without verifying the worker command or resulting behavior.",
+  "fix": "Disable the unavailable control and refuse stale-client pause requests without writing any signal. Show the refusal if an old client still invokes the endpoint.",
+  "tests": [
+    "tests/test_run_recovery_regressions.py::test_pause_never_sends_a_signal_that_resumes_automation",
+    "tests/test_run_recovery_regressions.py::test_the_unavailable_pause_control_is_disabled"
+  ],
+  "prevention": "Expose runtime controls only after their command semantics and observed effects are implemented; assert that a pause can never authorize progression."
+}

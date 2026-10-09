@@ -140,10 +140,11 @@ def test_api_cockpit_state(client, monkeypatch):
 
 
 def test_api_cockpit_controls(client, monkeypatch):
-    # Test pause
+    # The runtime has no cooperative pause command. Never acknowledge a pause
+    # or send refresh (which resumes automation) in response to this request.
     res_pause = client.post("/api/cockpit/pause")
-    assert res_pause.status_code == 200
-    assert res_pause.get_json()["ok"] is True
+    assert res_pause.status_code == 409
+    assert res_pause.get_json()["ok"] is False
 
     # Test resume
     res_resume = client.post("/api/cockpit/resume")

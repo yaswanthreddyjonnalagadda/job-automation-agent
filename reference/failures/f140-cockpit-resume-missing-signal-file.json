@@ -3,12 +3,13 @@
   "date": "2026-10-09",
   "site": "Local dashboard cockpit",
   "class": "A resume control only writes to answer files that do not exist yet",
-  "symptom": "Resume could return success without notifying a waiting worker.",
+  "symptom": "Resume could return success without notifying a waiting worker, and Reload could report no waiting run despite its waiting marker.",
   "root_cause": "The cockpit enumerated existing signal files instead of waiting notes. A waiting worker normally has no signal file until an owner sends a decision.",
   "why_tests_missed": "The existing endpoint test asserted only a successful JSON response, not the worker-visible signal artifact.",
-  "fix": "Use the same waiting-note registry as the dashboard and create the corresponding Continue signal for a live waiting run.",
+  "fix": "Use one waiting-note signal writer for Continue and Reload, creating the corresponding decision file for a live waiting run.",
   "tests": [
-    "tests/test_run_recovery_regressions.py::test_cockpit_continue_creates_the_answer_file"
+    "tests/test_run_recovery_regressions.py::test_cockpit_continue_creates_the_answer_file",
+    "tests/test_run_recovery_regressions.py::test_reload_creates_a_signal_for_a_waiting_worker"
   ],
   "prevention": "Test the observable side effect of a UI control, not just its response status. A waiting marker and a response signal have different lifecycle roles."
 }

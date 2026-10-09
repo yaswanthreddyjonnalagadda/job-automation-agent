@@ -266,6 +266,39 @@ def test_cockpit_continue_creates_the_answer_file(monkeypatch, tmp_path):
     assert (tmp_path / "_signal_synthetic.txt").read_text() == "continue"
 
 
+def test_reload_creates_a_signal_for_a_waiting_worker(monkeypatch, tmp_path):
+    (tmp_path / "_waiting_synthetic.txt").write_text("waiting")
+    monkeypatch.setattr(web_ui, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(web_ui, "_RUNS_FILE", tmp_path / "_runs.json")
+    monkeypatch.setattr(web_ui, "_running_url", lambda: "https://employer.example/job")
+    monkeypatch.setitem(web_ui.app.config, "TESTING", True)
+    assert web_ui.app.test_client().post("/reload-agent").status_code == 302
+    assert (tmp_path / "_signal_synthetic.txt").read_text() == "reload_code"
+
+
+def test_pause_never_sends_a_signal_that_resumes_automation(monkeypatch, tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    signal = data / "_signal_synthetic.txt"
+    signal.write_text("hold")
+    monkeypatch.setattr(web_ui, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(web_ui, "_running_url", lambda: "https://employer.example/job")
+    monkeypatch.setitem(web_ui.app.config, "TESTING", True)
+    response = web_ui.app.test_client().post("/api/cockpit/pause")
+    assert response.status_code == 409
+    assert response.get_json()["ok"] is False
+    assert signal.read_text() == "hold"
+
+
+def test_the_unavailable_pause_control_is_disabled(page):
+    from flask import render_template
+    from playwright.sync_api import expect
+    with web_ui.app.test_request_context("/"):
+        markup = render_template("cockpit_card.html", is_running=True)
+    page.set_content(markup)
+    expect(page.get_by_role("button", name="Pause")).to_be_disabled()
+
+
 @pytest.mark.parametrize("code, label", [
     (0, "finished"), (3, "finished -- already submitted"),
     (4, "skipped -- sponsorship not available"), (1, "failed (exit 1)"),

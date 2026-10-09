@@ -323,7 +323,8 @@
     },
 
     pauseRun: async function() {
-      await postJson('/api/cockpit/pause');
+      const result = await postJson('/api/cockpit/pause');
+      if (!result.ok) alert(result.error || 'Pause is unavailable for this run.');
       fetchState();
     },
 

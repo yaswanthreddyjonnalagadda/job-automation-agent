@@ -588,10 +588,7 @@ def reload_agent():
     """Loads edited agent code into the run that is already going, without
     closing its browser or losing the part-filled form (the flow's
     'reload_code' signal)."""
-    written = 0
-    for signal_file in (BASE_DIR / "data").glob("_signal_*.txt"):
-        signal_file.write_text("reload_code", encoding="utf-8")
-        written += 1
+    written = _signal_waiting_run("reload_code")
     if not written:
         # No flow is waiting on a signal right now; leave one for when it is.
         return redirect(url_for("index", error="No run is waiting -- nothing to reload."))
@@ -949,14 +946,7 @@ def api_events_stream():
 
 @app.post("/api/cockpit/pause")
 def api_cockpit_pause():
-    live_url = _running_url()
-    if live_url:
-        for f in (BASE_DIR / "data").glob("_signal_*.txt"):
-            try:
-                f.write_text("refresh", encoding="utf-8")
-            except Exception:
-                pass
-    return {"ok": True, "status": "paused"}
+    return {"ok": False, "error": "Pause is unavailable for this run. No action was sent."}, 409
 
 
 @app.post("/api/cockpit/resume")
@@ -966,11 +956,18 @@ def api_cockpit_resume():
 
 
 def _continue_waiting_run():
+    return _signal_waiting_run("continue")
+
+
+def _signal_waiting_run(decision):
     """Waiting notes exist before an answer file; resume creates that file."""
     if not _running_url():
-        return
+        return 0
+    written = 0
     for waiting in waiting_runs(_RUNS_FILE.parent):
-        (_RUNS_FILE.parent / waiting["signal"]).write_text("continue", encoding="utf-8")
+        (_RUNS_FILE.parent / waiting["signal"]).write_text(decision, encoding="utf-8")
+        written += 1
+    return written
 
 
 @app.post("/api/cockpit/stop")

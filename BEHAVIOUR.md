@@ -48,8 +48,10 @@ applications, the agent is idle, a run is active, or an owner handoff is waiting
 System Health reports an available application database as connected in both
 the page and JSON response, and reports a warning when opening the tracker fails.
 Waiting workers are labeled **Waiting for you**, with their recorded reason,
-instead of appearing to process the form. Continue creates the waiting worker's
-signal file. Deliberate sponsorship skips and already-submitted applications
+instead of appearing to process the form. Continue and Reload create the waiting
+worker's signal file. Pause is unavailable and disabled; an old client's pause
+request is refused without sending a command that could resume automation.
+Deliberate sponsorship skips and already-submitted applications
 have their own run outcomes instead of a generic failed exit.
 
 On a verified job posting, a real application-entry HTTP link is followed with
