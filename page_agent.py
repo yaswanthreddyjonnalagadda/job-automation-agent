@@ -5919,6 +5919,18 @@ class PageAgent:
         else:
             logger.info("NEXT: pressing %r", label)
 
+        locator = self.locate(page, control.ref)
+        try:
+            href = locator.evaluate("e => (e.closest('a[href]') || {}).href || ''")
+        except Exception:
+            href = ""
+        if href and job_sources.job_board(href):
+            return "stop", page, "the proposed navigation leads to a social site or job board"
+        if plan.next_kind == "open_application" and hasattr(self.assistant, "follow_application_entry"):
+            if self.assistant.follow_application_entry(tab, locator):
+                self.settle(page, 2_500)
+                return "moved", page, "followed the posting's application link"
+
         # Task 4.1: Deploy the State Fingerprint Circuit Breaker
         if not hasattr(self, "_circuit_breaker") or self._circuit_breaker is None:
             from state_machine import StateFingerprintCircuitBreaker

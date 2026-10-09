@@ -4618,6 +4618,32 @@ class JobApplicationAssistant:
             return ""
         return href or ""
 
+    def follow_application_entry(self, page: Page, control) -> bool:
+        """Follow a posting's real HTTP link with GET, without executing its
+        click handlers or relaxing the submission guard. Button-only and
+        fragment/JavaScript actions keep their normal guarded click path.
+        """
+        import job_sources
+        if not self.on_job_description(page) or not control.is_visible():
+            return False
+        destination = control.evaluate("""e => {
+            const a = e.closest('a[href]');
+            if (!a || a.closest('form') || a.hasAttribute('download')) return '';
+            const raw = (a.getAttribute('href') || '').trim();
+            return raw && !raw.startsWith('#') ? a.href : '';
+        }""")
+        parsed = urlparse(destination or "")
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            return False
+        if job_sources.job_board(destination) or destination == page.url:
+            return False
+        if safety.captcha_visible(page):
+            return False
+        target = page.frame() if getattr(page, "top", None) is not None else page
+        target.goto(destination, wait_until="domcontentloaded", timeout=60_000)
+        logger.info("APPLY_ENTRY_NAVIGATED: followed the posting's application link with GET")
+        return True
+
     def click_apply_button(self, page: Page) -> Page:
         """Many ATS postings (Workday, Greenhouse...) show a JD page with an
         'Apply' link/button that leads to the actual form -- sometimes in a
@@ -4693,6 +4719,14 @@ class JobApplicationAssistant:
 
         context = page.context
         initial_url = page.url
+        if self.follow_application_entry(page, btn):
+            return page
+        # A misleading label must not send a posting to a social/job-board tab.
+        import job_sources
+        href = btn.evaluate("e => (e.closest('a[href]') || {}).href || ''")
+        if href and job_sources.job_board(href):
+            logger.warning("APPLY_ENTRY_BLOCKED: destination is not an employer application")
+            return page
         try:
             with context.expect_page(timeout=5_000) as new_page_info:
                 btn.click()
@@ -6347,8 +6381,9 @@ class JobApplicationAssistant:
         r"thank you(?:,\s*[^.!?]{0,60})?\s+for\s+(?:applying|your\s+application|your\s+interest)"
         r"(?:\s+(?:to|for|at)\s+[^.!?]{0,60})?",
         r"thanks\s+for\s+applying",
-        r"we(?:'ve| have)\s+received\s+your\s+application",
-        r"your\s+application\s+(?:has\s+been|was)\s+(?:submitted|sent|received)",
+        r"we(?:['’]ve| have)\s+received\s+your\s+application",
+        r"your\s+application\s+(?:has\s+been|was)\s+(?:successfully\s+)?(?:submitted|sent|received)(?:\s+successfully)?",
+        r"thank\s+you\s+for\s+submitting\s+your\s+application",
         r"application\s+(?:submitted|received|has\s+been\s+sent|was\s+sent)",
         r"submission\s+received",
         r"(?:your\s+)?application\s+was\s+successfully\s+submitted",
@@ -6383,13 +6418,18 @@ class JobApplicationAssistant:
             # fixed banner, a horizontally scrollable container) is not attempted here -- a
             # documented limitation, not a silent gap.
             headings = page.evaluate(
-                """() => [...document.querySelectorAll('h1, h2, h3, [role=alert], [role=status]')]
+                """() => [...document.querySelectorAll('h1, h2, h3, p, [role=alert], [role=status]')]
                        .filter(e => {
                            if (e.closest('[hidden]')) return false;
                            if (!e.getClientRects().length) return false;
                            const style = getComputedStyle(e);
                            if (style.visibility === 'hidden' || style.visibility === 'collapse') return false;
                            if (parseFloat(style.opacity) === 0) return false;
+                           let ancestor = e.parentElement;
+                           while (ancestor) {
+                               if (parseFloat(getComputedStyle(ancestor).opacity) === 0) return false;
+                               ancestor = ancestor.parentElement;
+                           }
                            return true;
                        })
                        .map(e => (e.innerText || '').replace(/\\s+/g, ' ').trim())
@@ -6397,7 +6437,12 @@ class JobApplicationAssistant:
             )
         except Exception:
             headings = []
-        if any(self._CONFIRMATION_HEADING_RE.match(text) for text in headings):
+        if any(self._CONFIRMATION_HEADING_RE.match(text) for text in headings) and not page.evaluate(
+            """() => [...document.querySelectorAll('input,textarea,select,[contenteditable=true]')]
+                .filter(e => !e.disabled && e.getClientRects().length
+                    && getComputedStyle(e).visibility !== 'hidden'
+                    && !['hidden','search','button','submit','reset'].includes(e.type || '')).length >= 3"""
+        ):
             return True
         if not job_title:
             return False
@@ -7211,23 +7256,32 @@ class JobApplicationAssistant:
         needs_user_review rather than assuming the application arrived.
         """
         company = getattr(self, "employer", "") or ""
-        waited, mail_checked = 0.0, False
+        waited, mail_attempts, last_mail_check = 0.0, 0, None
+        check_mail = bool(getattr(getattr(self, "_profile", None), "check_gmail_for_confirmation", True))
         while waited < timeout_seconds:
+            on_form = True
             try:
                 if page.is_closed():
                     break
                 if self.submission_confirmed(page, job_title):
                     return f"the page confirmed it ({page.url[:80]})"
+                on_form = self.find_submit_button(page) is not None
             except Exception:
                 pass
-            if not mail_checked and waited >= 60 and company:
-                mail_checked = True
+            if not on_form and check_mail and company and self._confirmation_email_due(waited, last_mail_check, mail_attempts):
+                mail_attempts += 1
+                last_mail_check = waited
                 found = self.gmail_shows_confirmation(page, company, job_title)
                 if found:
                     return f"confirmation email: {found[:120]}"
             time.sleep(5.0)
             waited += 5.0
         return None
+
+    @staticmethod
+    def _confirmation_email_due(elapsed, last_check, attempts):
+        """Give the page/email time to settle, with at most three mail reads."""
+        return elapsed >= 45 and attempts < 3 and (last_check is None or elapsed - last_check >= 120)
 
     def refuse_to_submit(self, reason: str = "") -> None:
         """There is no code path in this class that clicks an application's
@@ -7654,6 +7708,8 @@ class JobApplicationAssistant:
         away_since: Optional[float] = None
         last_list_reload = 0.0
         last_mail_check: Optional[float] = None
+        mail_attempts = 0
+        self._confirmation_evidence = ""
         # Stopped for a CAPTCHA: once the user has completed it, carry on by
         # itself. On Schwab's sign-in the user solved the puzzle, the site moved
         # to its next step, and the run went on waiting for an instruction.
@@ -7757,6 +7813,7 @@ class JobApplicationAssistant:
                     # A confirmation page counts even if the form was never
                     # recognised (it needs its message AND no Submit button).
                     if not on_form and self.submission_confirmed(page, job_title):
+                        self._confirmation_evidence = "the page confirmed it"
                         return "submitted_by_user"
                     if not getattr(self, "_seen_application_form", False):
                         # Still before the form (a sign-in page, say): nothing
@@ -7764,6 +7821,7 @@ class JobApplicationAssistant:
                         # "left the form" timer -- just wait for the user.
                         continue
                     if self.submission_confirmed(page, job_title):
+                        self._confirmation_evidence = "the page confirmed it"
                         return "submitted_by_user"
                     if on_form:
                         away_since = None
@@ -7771,13 +7829,16 @@ class JobApplicationAssistant:
                         away_since = waited if away_since is None else away_since
                         # An applications list may not show a brand-new
                         # submission until reloaded.
-                        if re.search(r"/applications|my-applications|dashboard", page.url) and waited - last_list_reload >= 60:
+                        if re.search(r"/(?:applications|my-applications|dashboard)/?$", urlparse(page.url).path) and waited - last_list_reload >= 60:
                             last_list_reload = waited
                             page.reload(wait_until="domcontentloaded", timeout=30_000)
                         # The site shows nothing conclusive: look for the
                         # employer's confirmation email, every 2 minutes.
-                        if check_mail and (last_mail_check is None or waited - last_mail_check >= 120):
+                        if check_mail and self._confirmation_email_due(
+                                waited - away_since, None if last_mail_check is None else last_mail_check - away_since,
+                                mail_attempts):
                             last_mail_check = waited
+                            mail_attempts += 1
                             found = self.gmail_shows_confirmation(page, company, job_title)
                             if found:
                                 self._confirmation_evidence = f"confirmation email: {found}"

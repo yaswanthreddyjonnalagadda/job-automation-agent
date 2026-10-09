@@ -1,0 +1,15 @@
+{
+  "id": "f136",
+  "date": "2026-10-09",
+  "site": "Baseten / Ashby",
+  "class": "Ambiguous body-text matching mistakes job responsibilities for a verification challenge",
+  "symptom": "The Security Engineer posting was handed off as a CAPTCHA while no challenge was visible.",
+  "root_cause": "The CAPTCHA text pattern matched the unbounded phrase security check anywhere in the body, including automating security checks in a job description.",
+  "why_tests_missed": "CAPTCHA tests covered actual prompts and challenge frames but not ordinary job-description use of the same words.",
+  "fix": "Keep explicit human-verification phrases and visible challenge frames; require ambiguous security-check wording to be a standalone visible prompt.",
+  "tests": [
+    "tests/test_run_recovery_regressions.py::test_job_responsibilities_are_not_a_captcha",
+    "tests/test_run_recovery_regressions.py::test_actual_challenge_evidence_still_requires_the_owner"
+  ],
+  "prevention": "Test detection against both real challenge UI and ordinary employment/security descriptions; report the kind of evidence used."
+}

@@ -34,6 +34,7 @@ diagnostics.install_log_privacy()
 import application_status
 import ui_shell
 import visible_desktop
+import run_outcomes
 from config import get_app_config
 from tracking import chosen, open_tracker as get_tracker
 import sqlite3
@@ -188,7 +189,7 @@ def _run_apply(url: str, open_url: str = "") -> None:
                     break
                 private_log.append(chunk)
         proc.wait()
-        state = "finished" if proc.returncode == 0 else f"failed (exit {proc.returncode})"
+        state = run_outcomes.display_state(proc.returncode)
     except Exception as exc:
         state = "failed (runtime error; private details omitted)"
 
@@ -795,6 +796,7 @@ def api_cockpit_state():
     live_url = _running_url()
     tracker = get_tracker()
     active_handoff = handoff.get_active_handoff()
+    is_waiting = bool(live_url and waiting_runs(_RUNS_FILE.parent))
     
     app_record = None
     app_key = ""
@@ -874,6 +876,12 @@ def api_cockpit_state():
         stage = f"Challenge ({active_handoff.get('category')})"
         stage_step = 3
 
+    if is_waiting:
+        stage = "Waiting for you"
+        stage_step = 4 if getattr(app_record, "status", "") == "ready_to_submit" else 3
+        current_action = (getattr(app_record, "notes", "") or
+                          "Waiting for your action in the browser or Continue on the dashboard")
+
     elapsed_seconds = 0
     if live_url:
         with _RUNS_LOCK:
@@ -897,6 +905,7 @@ def api_cockpit_state():
 
     return {
         "is_running": bool(live_url),
+        "is_waiting": is_waiting,
         "running_url": live_url,
         "job_title": getattr(app_record, "title", "") if app_record else "No active job",
         "employer": getattr(app_record, "company", "") if app_record else "No active employer",
@@ -952,12 +961,16 @@ def api_cockpit_pause():
 
 @app.post("/api/cockpit/resume")
 def api_cockpit_resume():
-    for f in (BASE_DIR / "data").glob("_signal_*.txt"):
-        try:
-            f.write_text("continue", encoding="utf-8")
-        except Exception:
-            pass
+    _continue_waiting_run()
     return {"ok": True, "status": "resumed"}
+
+
+def _continue_waiting_run():
+    """Waiting notes exist before an answer file; resume creates that file."""
+    if not _running_url():
+        return
+    for waiting in waiting_runs(_RUNS_FILE.parent):
+        (_RUNS_FILE.parent / waiting["signal"]).write_text("continue", encoding="utf-8")
 
 
 @app.post("/api/cockpit/stop")
@@ -1042,11 +1055,7 @@ def api_handoff_resolve():
 
     ok, msg = handoff.resolve_active_handoff()
     if ok:
-        for f in (BASE_DIR / "data").glob("_signal_*.txt"):
-            try:
-                f.write_text("continue", encoding="utf-8")
-            except Exception:
-                pass
+        _continue_waiting_run()
         return {"ok": True, "message": msg}
     return {"ok": False, "error": msg}
 
@@ -1243,7 +1252,7 @@ def index():
             if a.url == live:
                 job_title = a.title
                 employer = a.company
-                stage = "Working"
+                stage = "Waiting for you" if signals else "Working"
                 break
     elif active_h:
         job_title = active_h.get("category", "")
@@ -1331,6 +1340,8 @@ def _current_runs() -> dict:
                     if ev.get("screenshot_path") and Path(ev["screenshot_path"]).is_file():
                         run["screenshot"] = ev["screenshot_path"]
                         break
+                if run["state"].startswith(("failed", "finished", "ended")) and rec.status in {"submitted", "skipped"}:
+                    run["state"] = f"finished -- {rec.status}"
             if run["state"] != "running" or _process_alive(run.get("pid")):
                 continue
             status = rec.status if rec else ""
@@ -1808,7 +1819,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
     <div class="card run">
       <div class="where">
         <div>
-          {% if r.state == 'running' %}<span class="live">Running</span>{% else %}<span class="pill">{{ r.state }}</span>{% endif %}
+          {% if r.state == 'running' %}<span class="live">{{ 'Waiting for you' if signals else 'Running' }}</span>{% else %}<span class="pill">{{ r.state }}</span>{% endif %}
           {% if r.title %}<strong style="margin-left:8px">{{ r.title }}</strong>{% endif %}
           {% if r.company %}<span class="muted"> at {{ r.company }}</span>{% endif %}
         </div>

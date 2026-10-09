@@ -29,6 +29,7 @@ diagnostics.install_log_privacy()
 
 from config import DATA_DIR, get_app_config, get_user_profile
 from job_sources import resolve_job
+import run_outcomes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("apply")
@@ -134,10 +135,10 @@ def run_one(url: str, auto: bool = True, open_url: str = "") -> int:
     logger.info("Job: %s @ %s (%s)", job["title"], job["company"], job["location"] or "location n/a")
 
     if already_submitted(job):
-        return 3
+        return run_outcomes.ALREADY_SUBMITTED
 
     if skipped_for_sponsorship(job):
-        return 4
+        return run_outcomes.SKIPPED_SPONSORSHIP
 
     key = slug(f"{job['company']}_{job['title']}")
     job_path = DATA_DIR / f"_job_{key}.json"
@@ -195,11 +196,12 @@ def main() -> int:
         auto = True
         urls = [u for u in urls if u != "--auto"]
 
-    failures = 0
+    outcomes = []
     for url in urls:
-        if run_one(unquote(url) if "%" not in url else url, auto=auto or True, open_url=open_url) != 0:
-            failures += 1
-    return 1 if failures else 0
+        outcomes.append(run_one(unquote(url) if "%" not in url else url, auto=auto or True, open_url=open_url))
+    if len(outcomes) == 1:
+        return outcomes[0]
+    return 1 if any(code != 0 and code not in run_outcomes.EXPECTED_STOPS for code in outcomes) else 0
 
 
 if __name__ == "__main__":

@@ -1,0 +1,17 @@
+{
+  "id": "f139",
+  "date": "2026-10-09",
+  "site": "Local dashboard / LPL Financial",
+  "class": "Process lifecycle is confused with application outcome and owner waiting",
+  "symptom": "A deliberate sponsorship skip appeared as failed exit 1, and an owner handoff appeared as active processing.",
+  "root_cause": "The CLI collapsed all nonzero outcomes into failure; the dashboard displayed a live process as processing even when its waiting note existed.",
+  "why_tests_missed": "Tests checked process liveness and application status separately without asserting CLI outcomes or cockpit waiting presentation.",
+  "fix": "Preserve already-submitted and sponsorship-skip exit codes through the launcher, centralize their display labels, reconcile historical false failures from terminal application status, and show owner waiting separately from process liveness.",
+  "tests": [
+    "tests/test_run_recovery_regressions.py::test_a_deliberate_skip_is_not_a_failed_command",
+    "tests/test_run_recovery_regressions.py::test_run_outcomes_keep_skip_and_failure_distinct",
+    "tests/test_run_recovery_regressions.py::test_cockpit_reports_a_waiting_worker_instead_of_processing",
+    "tests/test_run_recovery_regressions.py::test_an_old_false_failed_skip_is_reconciled_from_the_application"
+  ],
+  "prevention": "Model process liveness, execution activity and application outcome separately. Test deliberate skips, real failures and waiting workers end to end."
+}

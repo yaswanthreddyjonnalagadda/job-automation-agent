@@ -304,6 +304,9 @@ def test_generic_form_logic_holds_no_company_names():
 # ---------------------------------------------------------------- never submit twice
 def test_a_previously_submitted_job_is_refused(monkeypatch):
     import apply
+    # This test supplies a fake Postgres tracker; do not depend on the local
+    # .env selecting that backend rather than the default SQLite tracker.
+    monkeypatch.setenv("TRACKER", "postgres")
 
     class Record:
         title, company, updated_at = "Engineer NOC I", "IGT", "2026-09-15"

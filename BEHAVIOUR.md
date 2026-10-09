@@ -47,6 +47,18 @@ The Applications dashboard renders its live cockpit whether there are no
 applications, the agent is idle, a run is active, or an owner handoff is waiting.
 System Health reports an available application database as connected in both
 the page and JSON response, and reports a warning when opening the tracker fails.
+Waiting workers are labeled **Waiting for you**, with their recorded reason,
+instead of appearing to process the form. Continue creates the waiting worker's
+signal file. Deliberate sponsorship skips and already-submitted applications
+have their own run outcomes instead of a generic failed exit.
+
+On a verified job posting, a real application-entry HTTP link is followed with
+a GET request without executing click handlers or weakening the final-submit
+guard. Social destinations are refused even when labeled Apply. A button or
+JavaScript/fragment link still goes through the existing guarded action path.
+Job-description wording such as "automating security checks" does not establish
+a CAPTCHA; explicit verification prompts, standalone visible security-check
+prompts and visible challenge frames still require the owner.
 
 ## What it learns from you
 
@@ -776,7 +788,16 @@ The run keeps watching and records **submitted** only on evidence:
 
 * a confirmation page ("Application Received", "Thank you for applying"), or
 * the employer portal listing the job as applied (list reloaded every minute), or
-* the employer's confirmation email (Gmail checked every 2 minutes).
+* the employer's confirmation email (when mail reads are allowed).
+
+Page confirmation is checked first on every poll and ends the run promptly,
+updating the status and closing the agent's browser. When a previously seen
+application form disappears without confirmation, the watcher allows a
+45-second grace period before opening Gmail. It makes at most three mail checks,
+at least two minutes apart, while continuing to watch the page. Reappearing
+Submit controls prevent mail checks; a vanished control or elapsed time alone
+is never evidence of submission. Automatic evidence waiting uses the same mail
+schedule and respects the profile's mail-read preference.
 
 If the application leaves the screen without any of that — the window is
 closed, or the form is abandoned for 10 minutes — the status becomes
@@ -821,7 +842,7 @@ report and every reason), and an audit row in `application_events`. The click
 itself is re-checked for a CAPTCHA or attestation that appeared in between.
 Afterwards the application is recorded **submitted** only once a confirmation
 page, portal entry or confirmation email is found — clicking is not evidence.
-A confirmation page is recognized by a heading or alert region whose own text
+A confirmation page is recognized by a visible heading, paragraph or alert/status region whose own text
 essentially is a known confirmation phrase, not by that wording merely
 appearing anywhere on the page: an unrelated FAQ or error page that happens
 to mention "application received" or "previously submitted application" in
