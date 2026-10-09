@@ -7243,6 +7243,10 @@ class JobApplicationAssistant:
                   "wizard_stuck": bool(getattr(self, "_stuck_on", None))}
         try:
             report["page_url"] = page.url
+            current_documents = self.attached_document_names(page)
+            reviewed_documents = None
+            if resume_name and resume_name not in current_documents:
+                reviewed_documents = adapter_for(page.url).submission_documents(self, page)
             blanks = self.find_required_blanks(page)
             report["required_still_blank"] = [" ".join(b.split()) for b in blanks["required_still_blank"]]
             report["errors_shown"] = [" ".join(e.split()) for e in blanks["errors_shown"]]
@@ -7251,9 +7255,12 @@ class JobApplicationAssistant:
             report["ambiguous_choices"] = list(getattr(self, "_ambiguous_choices", []))
             report["unsupported_questions"] = list(getattr(self, "_unsupported_questions", []))
             report["identity_checks"] = self._identity_checks(page)
-            report["attached_documents"] = self.attached_document_names(page)
+            report["attached_documents"] = (reviewed_documents if reviewed_documents is not None
+                                             else self.attached_document_names(page))
             if resume_name:
-                report["resume_attached"] = self._file_already_attached(page, resume_name)
+                report["resume_attached"] = (resume_name in report["attached_documents"]
+                                             or (reviewed_documents is None
+                                                 and self._file_already_attached(page, resume_name)))
             # Signatures and attestations: listed for the user, never filled.
             report["attestations_pending"] = self.pending_attestations(page)
         except Exception as exc:

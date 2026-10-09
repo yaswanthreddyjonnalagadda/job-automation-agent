@@ -75,6 +75,14 @@ class SiteAdapter:
         return None
 
     # -- misc ---------------------------------------------------------------
+    def submission_posting_url(self, page, posting_url: str, title: str) -> Optional[str]:
+        """An independently verified posting identity after a portal redirect."""
+        return None
+
+    def submission_documents(self, assistant, page) -> Optional[list[str]]:
+        """Fresh attachment evidence from a portal's review panel, if supported."""
+        return None
+
     def overlay_selector(self) -> str:
         """Extra selectors for this platform's modal/overlay containers."""
         return ""

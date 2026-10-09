@@ -1,0 +1,20 @@
+{
+  "id": "f126",
+  "date": "2026-10-09",
+  "site": "ADP final application step; shared approval comparison",
+  "class": "Final-step evidence was assumed to remain visible under the original posting route",
+  "symptom": "A completed final application was ready to submit but verified auto-submit refused its post-login URL, hidden resume attachment and approved electronic-signing checkbox.",
+  "root_cause": "Identity comparison treated the posting and post-login routes as different applications; attachment inspection considered only the current panel; approval resolution could not associate a checked signing declaration with the owner's explicit signing preference. The signature detector also missed sign electronically wording.",
+  "why_tests_missed": "Existing auto-submit tests kept the same URL, attachment and ordinary profile fields on a single final page. They did not model ADP's internal requisition metadata, separate review panel or a rebuilt declaration control.",
+  "fix": "Verify ADP tenant and requisition metadata before normalizing identity; read the actual review panel and restore the final panel before comparisons; resolve checked declarations only from their explicit profile permissions. Preserve local document hashing and every existing submission gate.",
+  "tests": [
+    "tests/test_adp_submission_evidence.py::test_adp_redirect_identity_requires_requisition_metadata",
+    "tests/test_adp_submission_evidence.py::test_adp_identity_refuses_other_jobs_tenants_and_hosts",
+    "tests/test_adp_submission_evidence.py::test_review_attachment_is_read_and_final_panel_restored",
+    "tests/test_adp_submission_evidence.py::test_missing_review_panel_does_not_claim_attachment",
+    "tests/test_adp_submission_evidence.py::test_signature_checkbox_approval_uses_explicit_profile_permission",
+    "tests/test_adp_submission_evidence.py::test_signing_permission_does_not_approve_unrelated_checkbox_or_typed_claim",
+    "tests/test_adp_submission_evidence.py::test_electronic_signing_word_order_is_still_an_attestation"
+  ],
+  "prevention": "Exercise multi-panel portals and authenticated route transitions in submission tests. Require independent job identity, fresh attachment evidence and explicit declaration permission rather than weakening the gate to make a form eligible."
+}

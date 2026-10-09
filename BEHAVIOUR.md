@@ -807,8 +807,8 @@ evidence and required-field comparisons valid, which requires **all** of:
   `data/_approved_answers.json`, or an existing value that equals a profile
   value. Near-misses are refusals: "Springfield County" never matches "Springfield";
 * nothing uncertain is present: no blanks, form errors or warnings, no
-  ambiguous dropdown choice, no unsupported custom question, no attestation,
-  e-signature or consent checkbox, no CAPTCHA, no identity check.
+  ambiguous dropdown choice, no unsupported custom question, no pending or
+  unapproved attestation, e-signature or consent checkbox, no CAPTCHA, no identity check.
 
 Before submitting it writes, into `output/<Company>_<Title>/evidence_<time>/`:
 a full-page screenshot, the page HTML, `comparison.json` (the field-by-field
@@ -823,6 +823,28 @@ to mention "application received" or "previously submitted application" in
 an ordinary sentence is not read as confirming this run. A real confirmation
 this does not recognize is left **needs_user_review**, not guessed at --
 never the other way around.
+
+On ADP, a post-login URL is accepted as the original posting only when the
+tenant, career center and external job ID agree and ADP's public requisition
+metadata also matches the internal requisition ID and tracked job title. A
+different route alone is not evidence of a different job; a redirect alone is
+not evidence that it is the same job.
+
+If ADP's final panel hides the résumé, validation attempts to read the existing
+Review Your Application panel and return to Self-Attest & Submit. It uses the
+attachments actually found there and then rechecks the restored final form.
+Failure to find or restore those panels does not supply attachment evidence.
+Local document bytes must still match the stored application documents.
+
+A checked electronic-signing checkbox may match your explicit
+`sign_attestations` preference. This neither checks an unsigned box nor grants
+approval to an unrelated checkbox or an unsupported typed claim. Privacy-only
+consent uses its separate profile preference. “Sign electronically” is treated
+as a signature even when the words appear in that order.
+
+Resuming at final review reactivates automation before reading the form again.
+Once verified auto-submit returns confirmed success, the reading loop exits
+immediately so normal browser cleanup can close the application window.
 
 Immediately before the click, a local SQLite transaction writes the durable
 `DISPATCHED` state and append-only authorization/dispatch safety events. The

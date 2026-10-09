@@ -38,6 +38,7 @@ ATTESTATION_PATTERNS = (
     r"\b(true|accurate) and (correct|complete)\b",
     r"\bby (typing|signing|entering) my name\b",
     r"\belectronic(ally)? sign(ature|ed|ing)?\b",
+    r"\bsign(?:ing|ed)? electronically\b",
     r"\be-?signature\b",
     r"\btyped signature\b",
     r"\bsignature\b",
@@ -71,7 +72,7 @@ def is_attestation(text: str) -> bool:
     if not text or not _ATTESTATION_RE.search(text):
         return False
     if _PRIVACY_ONLY_RE.search(text) and not re.search(
-        r"\bcertify|perjury|true and (correct|complete)|signature|by typing my name\b", text, re.IGNORECASE
+        r"\bcertify|perjury|true and (correct|complete)|signature|by typing my name|sign(?:ing|ed)? electronically\b", text, re.IGNORECASE
     ):
         return False
     return True
@@ -938,6 +939,14 @@ def approved_values(fields, profile, approved_answers: dict, agent_records: dict
         label = " ".join(str(item.get("label", "")).split())
         ref = str(item.get("ref", ""))
         on_form = str(item.get("value", ""))
+        # A checked declaration can be supported by the owner's explicit
+        # signing preference even when its control was rebuilt between steps.
+        # This grants no authority to an unchecked or unrelated checkbox.
+        if item.get("type") == "checkbox" and on_form == "checked":
+            if (is_attestation(label) and getattr(profile, "sign_attestations", False)) or (
+                    is_privacy_consent(label) and getattr(profile, "accept_application_privacy_prompts", False)):
+                resolved[label] = "checked"
+                continue
         recorded = (agent_records or {}).get(ref)
         if recorded:
             recorded_value, source = recorded[0], (recorded[1] if len(recorded) > 1 else "agent")

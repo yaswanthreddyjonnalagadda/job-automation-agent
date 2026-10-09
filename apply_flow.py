@@ -916,9 +916,12 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
 
     approved = safety.approved_values(form_fields, profile, approved_answers_file(),
                                       getattr(assistant.values, "records", {}))
+    from sites import adapter_for
+    verified_posting = adapter_for(page.url).submission_posting_url(
+        page, tracked.get("url", "") or job.url, job.title)
     decision = safety.evaluate_auto_submit(
         enabled=bool(getattr(config, "auto_submit_verified_only", False)),
-        job={"title": job.title, "company": job.company, "url": page.url},
+        job={"title": job.title, "company": job.company, "url": verified_posting or page.url},
         tracked=tracked or {"title": job.title, "company": job.company, "url": page.url},
         report=report,
         form_fields=form_fields,
@@ -1115,7 +1118,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             logger.info("REVIEW BORDER: Reached designated final review step. Halting for human review.")
             assistant.save_progress(page)
             summary_path = job_dir / f"summary_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.json"
-            hand_over(
+            final_status = hand_over(
                 assistant, page, tracker, key, job, job_dir,
                 Path(resume_file).name, summary_path,
                 config=config, profile=profile,
@@ -1123,11 +1126,16 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                            **({"cover_letter": made["letter"][1]} if "letter" in made and made["letter"] else {})},
                 step=agent.pages_read,
             )
+            if final_status == STATUS_SUBMITTED:
+                return
             try:
                 decision = assistant.wait_for_signal(signal_path, timeout_seconds=args.timeout, page=page)
             except TimeoutError:
                 logger.info("No instruction received; application left filled and unsubmitted.")
                 return
+            if decision not in (*RUN_ENDS, "submitted_by_user", "skip", "decline", "abort", "quit") \
+                    and hasattr(assistant, "resume_automation"):
+                assistant.resume_automation(page)
             if not page.is_closed():
                 agent.note_owner_changes(page)
             agent._ensure_state()
@@ -1522,7 +1530,7 @@ def reload_browser_automation(assistant: JobApplicationAssistant) -> JobApplicat
         import sites
         for module in [sites.base] + [
             importlib.import_module(f"sites.{name}") for name in
-            ("amazon", "ashby", "eightfold", "greenhouse", "lever", "successfactors", "workday")
+            ("adp", "amazon", "ashby", "eightfold", "greenhouse", "lever", "successfactors", "workday")
         ]:
             try:
                 compile(Path(module.__file__).read_text(encoding="utf-8"), module.__file__, "exec")
