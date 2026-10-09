@@ -264,6 +264,21 @@ def test_a_labelled_apply_button_is_found_directly(page, agent):
     assert agent.find_apply_control(page) is not None
 
 
+def test_an_adp_custom_sdf_button_is_found(page, agent):
+    page.set_content("""<html><body>
+        <sdf-button>Apply</sdf-button>
+      </body></html>""")
+    assert agent.find_apply_control(page) is not None
+
+
+def test_a_role_button_apply_is_found(page, agent):
+    page.set_content("""<html><body>
+        <div role="button" tabindex="0">Apply Now</div>
+      </body></html>""")
+    assert agent.find_apply_control(page) is not None
+
+
+
 def test_a_posting_with_no_way_to_apply_reports_nothing(page, agent):
     page.set_content("<html><body><p>Just a description, no way to apply.</p></body></html>")
     assert agent.find_apply_control(page) is None

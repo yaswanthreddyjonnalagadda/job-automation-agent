@@ -3764,8 +3764,12 @@ class PageAgent:
             want = answer.value.strip().lower()
             if answer.action == "choose" and before.role in ("radio", "checkbox", "switch"):
                 # A choice among buttons: whichever button carries the answer must be the one on.
-                group = [c for c in after if c.role == before.role and before.group and c.group == before.group]
-                ok = any(c.checked and _same_answer(c.name, answer.value) for c in group) or \
+                group = [c for c in after if c.role == before.role and (
+                    (before.group and c.group == before.group)
+                    or (before.question and _same_question(c.question, before.question))
+                    or (before.container and c.container == before.container)
+                )]
+                ok = any(c.checked and _same_answer(c.name or c.value, answer.value) for c in group) or \
                     (not group and now.checked)
                 if not ok:
                     missing.append(f"{before.question[:60]} = {answer.value[:40]!r}")
@@ -3869,8 +3873,13 @@ class PageAgent:
                     return f"already answered from your profile ({current!r}) -- not changing to {answer.value!r}"
             if not self._ours(question, current):
                 return f"already answered {current[:40]!r} -- not changing an answer the agent didn't give"
-        if control.role == "radio" and action == "check" and control.group:
-            chosen = next((c.name for c in controls if c.role == "radio" and c.group == control.group and c.checked), "")
+        if control.role == "radio" and action == "check":
+            group = [c for c in controls if c.role == "radio" and (
+                (control.group and c.group == control.group)
+                or (control.question and _same_question(c.question, control.question))
+                or (control.container and c.container == control.container)
+            )]
+            chosen = next((c.name for c in group if c.checked), "")
             if chosen and not self._ours(question, chosen):
                 return f"already answered {chosen[:40]!r} -- not changing an answer the agent didn't give"
             if chosen:
@@ -4148,7 +4157,12 @@ class PageAgent:
     @staticmethod
     def _shown_answer(control: Control, controls: list[Control]) -> str:
         if control.role == "radio":
-            return next((c.name for c in controls if c.role == "radio" and c.group == control.group and c.checked), "")
+            group = [c for c in controls if c.role == "radio" and (
+                (control.group and c.group == control.group)
+                or (control.question and _same_question(c.question, control.question))
+                or (control.container and c.container == control.container)
+            )]
+            return next((c.name for c in group if c.checked), "")
         return control.answer
 
     # -- the owner's own answers ----------------------------------------------------------
@@ -4528,7 +4542,11 @@ class PageAgent:
                     group = [c for c in snapshot_controls if c.role in ("radio", "checkbox", "switch")]
             else:
                 group = [c for c in snapshot_controls
-                         if c.role == control.role and c.group and c.group == control.group] or [control]
+                         if c.role == control.role and (
+                             (control.group and c.group == control.group)
+                             or (control.question and _same_question(c.question, control.question))
+                             or (control.container and c.container == control.container)
+                         )] or [control]
             if control.toggle and answer.action == "check" and answer.value.strip().lower() in ("checked", "true", ""):
                 return self._press_toggle(page, control)
             # A question's own choices were found: the answer is one of them or none. Looking further -- every
@@ -5475,9 +5493,12 @@ class PageAgent:
         if now is None:
             return None
         if answer.action == "choose" and before.role in ("radio", "checkbox", "switch"):
-            group = [control for control in after
-                     if control.role == before.role and before.group and control.group == before.group]
-            return any(control.checked and _same_answer(control.name, answer.value) for control in group) or \
+            group = [control for control in after if control.role == before.role and (
+                (before.group and control.group == before.group)
+                or (before.question and _same_question(control.question, before.question))
+                or (before.container and control.container == before.container)
+            )]
+            return any(control.checked and _same_answer(control.name or control.value, answer.value) for control in group) or \
                 (not group and now.checked)
         if answer.action in ("check", "uncheck"):
             if now.role == "radio" and now.group:

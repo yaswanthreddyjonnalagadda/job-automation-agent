@@ -506,3 +506,32 @@ def test_assistant_attach_cover_letter_text_branch_that_is_rejected_is_not_verif
     assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
     assert assistant.attach_cover_letter(page, txt, tmp_path / "letter.pdf") is False
     assert page.locator("#cl").input_value() == ""
+
+
+def test_radio_group_without_aria_group_verified_by_question_matching(page, tmp_path):
+    """ADP Workforce Now and custom DOMs render radios without fieldset/legend or aria-group.
+    Choosing 'No' when 'Yes' is the first sibling must be verified by matching question context."""
+    page.set_content(
+        '<div><p>Are you currently authorized to work in the United States without sponsorship?</p>'
+        '<label><input type="radio" value="Yes"> Yes</label>'
+        '<label><input type="radio" value="No"> No</label></div>')
+    a = agent(tmp_path=tmp_path)
+    snapshot = a.snapshot(page)
+    controls = page_agent.parse_snapshot(snapshot)
+    yes_btn = next(c for c in controls if c.role == "radio" and c.name == "Yes")
+    no_btn = next(c for c in controls if c.role == "radio" and c.name == "No")
+
+    # Select 'No' via a.do
+    q = "Are you currently authorized to work in the United States without sponsorship?"
+    answer = page_agent.Answer(no_btn.ref, q, "choose", "No")
+    assert a.do(page, answer, no_btn) is True
+    assert page.locator("input[value='No']").is_checked()
+
+    # Verify not_stuck recognizes 'No' was checked and does not flag missing
+    after = page_agent.parse_snapshot(a.snapshot(page))
+    assert a.not_stuck([(answer, no_btn)], after) == []
+
+    # Also if the answer was targeted with the first sibling's ref (as some planners emit):
+    answer_first_ref = page_agent.Answer(yes_btn.ref, q, "choose", "No")
+    assert a.not_stuck([(answer_first_ref, yes_btn)], after) == []
+

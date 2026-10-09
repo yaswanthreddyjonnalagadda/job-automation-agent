@@ -1178,7 +1178,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
         try:
             decision = assistant.wait_for_signal(signal_path, timeout_seconds=args.timeout, page=page,
                                                  for_captcha=outcome.kind == "captcha",
-                                                 for_blanks=any("still blank" in r for r in outcome.reasons))
+                                                 for_blanks=any("still blank" in r or "could not set:" in r or "needs your answer" in r for r in outcome.reasons))
         except TimeoutError:
             logger.info("No instruction received; the application is left as it is, unsubmitted.")
             return

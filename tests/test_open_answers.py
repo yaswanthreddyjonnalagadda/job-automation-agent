@@ -36,7 +36,12 @@ AI_ISH = ("I am thrilled to apply! I am deeply passionate about leveraging cutti
     ("What motivates you to apply?", "why"),
     (EXAMPLE, "example"),
     ("Tell us about a time when you fixed an outage.", "example"),
-    ("Describe a project you are proud of.", "example"),
+    ("What security tools have you used previously?", "list"),
+    ("What cloud environments are you comfortable with?", "list"),
+    ("List any certifications you have", "list"),
+    ("Which programming languages are you proficient in?", "list"),
+    ("What databases have you worked with?", "list"),
+    ("Please list your technical skills", "list"),
     ("Is there anything else you would like us to know?", "other"),
 ])
 def test_open_questions_are_recognised_and_sorted(question, kind):

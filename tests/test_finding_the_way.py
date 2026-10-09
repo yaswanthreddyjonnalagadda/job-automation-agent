@@ -591,3 +591,26 @@ def test_a_stop_for_a_captcha_never_seen_is_not_carried_on_by_guessing(page, age
     with pytest.raises(TimeoutError):
         agent.wait_for_signal(tmp_path / "_signal_x.txt", poll_seconds=0.3, timeout_seconds=2, page=page,
                               for_captcha=True)
+
+
+def test_wait_for_signal_never_polls_gmail_when_on_form_or_waiting_for_blanks(page, agent, tmp_path, monkeypatch):
+    """While an applicant is filling in blanks or on an active form step, Gmail confirmation
+    checking must not run or steal window focus."""
+    import threading, time
+    page.set_content("<form><label>Notes</label><textarea id='notes'></textarea></form>")
+    agent._seen_application_form = True
+    mail_checked = []
+    monkeypatch.setattr(agent, "gmail_shows_confirmation", lambda *args, **kwargs: mail_checked.append(True) or None)
+
+    signal_path = tmp_path / "_signal_blanks.txt"
+    def write_signal():
+        time.sleep(0.4)
+        signal_path.write_text("continue", encoding="utf-8")
+    t = threading.Thread(target=write_signal)
+    t.start()
+
+    decision = agent.wait_for_signal(signal_path, poll_seconds=0.1, timeout_seconds=5, page=page, for_blanks=True)
+    t.join()
+    assert decision == "continue"
+    assert len(mail_checked) == 0
+

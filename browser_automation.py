@@ -4571,7 +4571,10 @@ class JobApplicationAssistant:
             page.get_by_role("link", name=re.compile(r"^\s*apply\b", re.I)),
             page.get_by_role("button", name=re.compile(r"^\s*apply\b", re.I)),
             page.locator("a[href*='/apply'], a[href^='./apply'], a[href*='apply?']"),
-            page.locator("a:has-text('Apply'), button:has-text('Apply')"),
+            page.locator(
+                "a:has-text('Apply'), button:has-text('Apply'), [role='button']:has-text('Apply'), "
+                "sdf-button:has-text('Apply'), [data-automation-id*='apply' i]"
+            ),
         ]
         for candidate in candidates:
             try:
@@ -4585,6 +4588,22 @@ class JobApplicationAssistant:
                     return element.element_handle(timeout=3_000)
             except Exception as exc:
                 logger.debug("Apply lookup failed: %s", str(exc).splitlines()[0][:100])
+
+        # Dynamic SPAs (ADP, Workday, custom portals) may render Apply controls
+        # asynchronously via client-side scripts. Allow a bounded wait before giving up.
+        combined_selector = (
+            "button:has-text('Apply'), a:has-text('Apply'), [role='button']:has-text('Apply'), "
+            "sdf-button:has-text('Apply'), a[href*='/apply'], a[href*='apply?'], [data-automation-id*='apply' i]"
+        )
+        try:
+            loc = page.locator(combined_selector).first
+            loc.wait_for(state="visible", timeout=3_000)
+            name = (loc.get_attribute("aria-label") or loc.inner_text() or "").strip()
+            logger.info("Apply control found after wait: %r", name[:40] or "(unnamed control)")
+            loc.scroll_into_view_if_needed(timeout=3_000)
+            return loc.element_handle(timeout=3_000)
+        except Exception:
+            pass
         return None
 
     def apply_destination(self, page: Page) -> str:
@@ -7602,7 +7621,15 @@ class JobApplicationAssistant:
                         filled_since = None
                     last_look = look
                 try:
-                    on_form = self.find_submit_button(page) is not None
+                    has_submit = self.find_submit_button(page) is not None
+                    has_inputs = False
+                    try:
+                        has_inputs = bool(page.evaluate(
+                            "() => document.querySelectorAll('input:not([type=\"hidden\"]), select, textarea').length > 0"
+                        ))
+                    except Exception:
+                        pass
+                    on_form = has_submit or has_inputs
                     if on_form:
                         self._seen_application_form = True
                     # A confirmation page counts even if the form was never
@@ -7616,7 +7643,7 @@ class JobApplicationAssistant:
                         continue
                     if self.submission_confirmed(page, job_title):
                         return "submitted_by_user"
-                    if on_form:
+                    if on_form or for_blanks:
                         away_since = None
                     else:
                         away_since = waited if away_since is None else away_since
@@ -7627,7 +7654,10 @@ class JobApplicationAssistant:
                             page.reload(wait_until="domcontentloaded", timeout=30_000)
                         # The site shows nothing conclusive: look for the
                         # employer's confirmation email, every 2 minutes.
-                        if check_mail and (last_mail_check is None or waited - last_mail_check >= 120):
+                        # Never check email when waiting for blanks/captchas or when on an active form step.
+                        if check_mail and not for_blanks and not for_captcha and (
+                            last_mail_check is None or waited - last_mail_check >= 120
+                        ):
                             last_mail_check = waited
                             found = self.gmail_shows_confirmation(page, company, job_title)
                             if found:
