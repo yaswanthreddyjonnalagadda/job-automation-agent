@@ -43,6 +43,26 @@ def test_skills_use_separate_scoped_verified_rows(page,value,expected,required,s
     assert not page.locator('#popup').is_visible()
 
 
+def test_an_unexpected_tab_opened_during_a_skills_search_is_closed_not_left_open(page):
+    """f134: whatever opens it -- a misclick on the widget, or the page's own script reacting
+    to the search -- a tab this loop did not ask for must never be left dangling. Several
+    separate searches can run in one call (one per skill), and an accumulating stray tab is
+    exactly the kind of resource pressure that can destabilize a long-running Workday page."""
+    page.set_content(widget() + '''<script>
+      document.getElementById('skills').addEventListener('input', () => {
+        if (document.getElementById('skills').value.toLowerCase() === 'missing')
+          window.open('about:blank', '_blank');
+      });
+    </script>''')
+    a = agent()
+    control = next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.name == 'Type to Add Skills')
+    before = set(page.context.pages)
+
+    a.do(page, page_agent.Answer(control.ref, control.question, 'fill', 'Missing', 'profile'), control)
+
+    assert set(page.context.pages) == before
+
+
 def test_resumed_skills_keep_existing_selections_without_duplicates(page):
     page.set_content(widget())
     page.evaluate("add(document.querySelector('[data-automation-id=promptOption]'))")

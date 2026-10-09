@@ -1191,6 +1191,13 @@ console 512 KiB (the category-only projection is much smaller); screenshots
 16 MiB; manifests 64 KiB. Oversized sanitized text may be truncated with a
 manifest flag; oversized JSON becomes valid truncation metadata.
 
+This privacy layer covers diagnostic and forensic captures only -- the
+`output/<job>/pages/` recordings every real page read is kept in (f134) stay raw,
+as they did before P0-B5, since a typed password or other secret box is already
+hidden before a caller ever sees the page text, and a second, coarser redaction
+pass on top of that would only cost the replay fidelity this project's own
+regression testing depends on.
+
 ## Opening Apply versus final Apply
 
 An Apply control on a posting can open the application while submission protection
@@ -1267,3 +1274,13 @@ on editable steps is unchanged; uncertainty in a summary remains held.
 When verified auto-submit is enabled, the page-agent handoff says the Review
 step is ready for verification checks. It does not claim the setting is off,
 and the page agent still never dispatches the final Submit action itself.
+
+## Workday skills search tab safety (f135)
+
+Filling Workday's "Type to Add Skills" widget searches each skill separately
+against the site's own list. Whatever opens one -- a misclick, or the page's
+own script reacting to the search -- a browser tab this search did not ask for
+is closed immediately rather than left open, and a skill the widget's list does
+not recognize is followed by a short pause before the next search rather than
+retrying immediately. Nothing about which skills are offered, chosen, or left
+blank changes.

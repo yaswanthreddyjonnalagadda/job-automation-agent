@@ -6287,7 +6287,15 @@ class PageAgent:
         return snapshot
 
     def _save(self, snapshot: str) -> None:
-        """Every page read is kept: it is what a failure is replayed from."""
+        """Every page read is kept: it is what a failure is replayed from.
+
+        Written raw, never through diagnostics.py's structural sanitization (f134): `snapshot`
+        is always the return value of `self.snapshot()`, which already applies
+        `perception.hide_secrets()` before any caller sees it (f015 -- "redact at the one
+        place a page is read, not in each place it is written"). A second, much coarser
+        redaction pass here does not make a typed password any safer -- it was already
+        hidden -- it only destroys the fidelity replay_guard.py and the test suite depend on
+        to catch one portal's fix silently changing another portal's answers."""
         if self.resume_file and self.resume_file.name.lower() in (snapshot or "").lower():
             self.resume_seen = True   # the tailored resume shows as attached on a page of this run
         if not self.job_dir:
@@ -6299,6 +6307,6 @@ class PageAgent:
             if not folder.is_dir():
                 folder.mkdir(parents=True, exist_ok=True)
                 keep_latest_runs(folder.parent, RUNS_KEPT)
-            diagnostics.write_safe_text(folder / f"page_{self.pages_read:02d}.txt", diagnostics.sanitize_snapshot(snapshot))
+            (folder / f"page_{self.pages_read:02d}.txt").write_text(snapshot or "", encoding="utf-8")
         except Exception:
             pass
