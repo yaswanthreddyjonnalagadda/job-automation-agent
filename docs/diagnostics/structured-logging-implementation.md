@@ -227,6 +227,17 @@ attempt, evidence, subsystem and investigation. Tests against the actual schema
 separately verify its supported email/submission/handoff events and enum gaps.
 Synthetic coverage is not a claim that missing runtime emit points are live.
 
+## Concurrent runtime integration observation
+
+After publishing the draft, the separate runtime branch added emitter commit
+`45ee63b` (413 lines across apply_flow/browser_automation/page_agent). Inspection
+of its added `RuntimeEvent.emit(...)` calls found application keys but **no
+explicit run_id arguments**. With schema `5b0969d`, these calls produce
+`run_id="default"`, which this consumer deliberately rejects. That emitter commit
+is not included here and its runtime behavior was not executed. The runtime
+owner must provide stable execution IDs before those events can be persisted;
+relaxing the consumer to conflate executions would hide the correlation defect.
+
 ## Remaining acceptance work
 
 1. Shared schema owner reconciles taxonomy and missing typed events/transition
