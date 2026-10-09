@@ -1,0 +1,22 @@
+{
+  "id": "f123",
+  "date": "2026-10-09",
+  "site": "ADP recruitment posting; shared browser submission guard",
+  "class": "An action label shared by opening and final submission was classified without DOM context",
+  "symptom": "A live application paused on the job posting, before any application fields appeared, because clicking Apply was intercepted as final submission.",
+  "root_cause": "The browser guard treated every Apply label as final, although Python considered the page a posting. Posting detection also rejected any submit-type button even without an associated form. The PageAgent opening exception depended on the planner's page_kind instead of independent DOM evidence.",
+  "fix": "Share a conservative posting-Apply DOM predicate between the browser firewall, posting detection, and PageAgent. Require job-description evidence and absence of application/review state; preserve final submission containment and remember application DOM state within the guarded document. Ignore only hidden recognized OneTrust cookie utility controls; hidden applicant state remains blocking.",
+  "tests": [
+    "tests/test_submission_firewall.py::test_posting_apply_opens_form_while_review_apply_stays_guarded",
+    "tests/test_submission_firewall.py::test_posting_words_do_not_exempt_apply_in_application_context",
+    "tests/test_submission_firewall.py::test_apply_cannot_become_posting_again_after_application_state",
+    "tests/test_submission_firewall.py::test_shadow_application_fields_do_not_exempt_apply",
+    "tests/test_finding_the_way.py::test_an_unassociated_submit_type_apply_still_opens_the_posting",
+    "tests/test_authority_boundary.py::test_ai_posting_label_cannot_authorize_apply_on_application",
+    "tests/test_authority_boundary.py::test_dom_proven_posting_apply_is_allowed_by_python",
+    "tests/test_submission_firewall.py::test_cookie_preferences_do_not_turn_posting_apply_into_submission",
+    "tests/test_submission_firewall.py::test_cookie_container_does_not_hide_application_state"
+  ],
+  "prevention": "Validate the actual DOM independently of planner classifications and test an opening Apply transitioning into a guarded final Apply in the same document. Never disable submission protection to open the form.",
+  "why_tests_missed": "Existing containment tests covered final Apply labels but never a posting Apply transitioning into the application, or a posting with hidden cookie utilities. The first new synthetic posting also omitted those real cookie controls."
+}

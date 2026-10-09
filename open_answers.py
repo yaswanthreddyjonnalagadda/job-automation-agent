@@ -48,26 +48,32 @@ _EXAMPLE = re.compile(
     r"share (an|a) (example|experience|story))\b", re.IGNORECASE)
 _WHY = re.compile(r"\bwhy\b|interest(ed)? in|what (draws|attracts|excites|motivates|interests)|motivat",
                   re.IGNORECASE)
-_LIST = re.compile(r"^\W*(?:please\s+)?list\b|\b(?:which|what|any)\s+(?:certifications?|licen[cs]es?|languages|"
-                   r"tools|technologies|software|programming languages|clearances?)\b|\bname (?:the|any|your)\b",
-                   re.IGNORECASE)
+_LIST = re.compile(
+    r"^\W*(?:please\s+)?list\b|"
+    r"\b(?:which|what|any)\s+(?:[\w-]+\s+){0,3}(?:tools|technologies|software|environments|platforms|"
+    r"frameworks|databases|systems|languages|programming languages|certifications?|licen[cs]es?|"
+    r"clearances?|protocols|operating systems?|vendors?|skills)\b|"
+    r"\bname (?:the|any|your)\b",
+    re.IGNORECASE,
+)
 
 
 def is_open(question: str, multiline: bool = False) -> bool:
     """A question answered in the owner's words, not with a fact or a choice."""
-    return bool(multiline or _OPEN.search(question or ""))
+    return bool(multiline or _OPEN.search(question or "") or _LIST.search(question or ""))
 
 
 def kind(question: str) -> str:
     # A question that asks for a list is answered with the list: "List any certifications you have" in a large box
     # was written up as a paragraph about experience, padded to the essay minimum (SK AX USA, ADP, 30 September).
-    if _LIST.search(question or ""):
-        return "list"
     if _EXAMPLE.search(question or ""):
         return "example"
     if _WHY.search(question or ""):
         return "why"
+    if _LIST.search(question or ""):
+        return "list"
     return "other"
+
 
 
 # ---------------------------------------------------------------------------

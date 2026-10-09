@@ -486,3 +486,31 @@ def test_the_wizard_marker_check_itself_is_independent_of_a_submit_labeled_butto
     page.set_content(f"<html><body>{NO_INDEPENDENT_EVIDENCE_SUBMIT_STEP}</body></html>")
     assert assistant.is_review_step_by_wizard_marker(page) is False
     assert assistant.is_review_step(page) is True  # the existing, broader check still fires
+
+
+@pytest.mark.parametrize('context', [
+    '<form></form>', '<label>Email<input></label>', '<h2>Review your application</h2>',
+])
+def test_ai_posting_label_cannot_authorize_apply_on_application(page, context):
+    page.set_content('<h1>Engineer</h1><h2>Responsibilities</h2>' + context +
+                     '<button onclick="window.submitted=true">Apply</button>')
+    agent = make_agent()  # No browser guard: Python must refuse independently.
+    snapshot = agent.snapshot(page)
+    controls = parse_snapshot(snapshot)
+    plan = PagePlan(page_kind='job_description', next_kind='open_application',
+                    next_ref=ref_of(snapshot, 'button', 'Apply'), next_label='Apply')
+    assert agent.press_next(page, plan, controls)[0] == 'stop'
+    assert page.evaluate('window.submitted') is None
+
+
+def test_dom_proven_posting_apply_is_allowed_by_python(page):
+    page.set_content('<h1>Engineer</h1><h2>Responsibilities</h2>'
+                     '<button onclick="window.opened=true">Apply</button>')
+    agent = make_agent()
+    agent.settle = lambda *_args: None
+    snapshot = agent.snapshot(page)
+    controls = parse_snapshot(snapshot)
+    plan = PagePlan(page_kind='job_description', next_kind='open_application',
+                    next_ref=ref_of(snapshot, 'button', 'Apply'), next_label='Apply')
+    agent.press_next(page, plan, controls)
+    assert page.evaluate('window.opened') is True

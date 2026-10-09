@@ -38,6 +38,7 @@ ATTESTATION_PATTERNS = (
     r"\b(true|accurate) and (correct|complete)\b",
     r"\bby (typing|signing|entering) my name\b",
     r"\belectronic(ally)? sign(ature|ed|ing)?\b",
+    r"\bsign(?:ing|ed)? electronically\b",
     r"\be-?signature\b",
     r"\btyped signature\b",
     r"\bsignature\b",
@@ -71,7 +72,7 @@ def is_attestation(text: str) -> bool:
     if not text or not _ATTESTATION_RE.search(text):
         return False
     if _PRIVACY_ONLY_RE.search(text) and not re.search(
-        r"\bcertify|perjury|true and (correct|complete)|signature|by typing my name\b", text, re.IGNORECASE
+        r"\bcertify|perjury|true and (correct|complete)|signature|by typing my name|sign(?:ing|ed)? electronically\b", text, re.IGNORECASE
     ):
         return False
     return True
@@ -403,6 +404,24 @@ _NO_ANSWER = re.compile(r"^\W*(no|n)\b|\b(do not|don't|does not|will not|won't) 
 _YES_ANSWER = re.compile(r"^\W*(yes|y)\b|\b(will|do|would) (need|require)\b", re.IGNORECASE)
 
 
+def sponsorship_free_work_answer(question: str, profile) -> Optional[tuple[str, str]]:
+    """Resolve an authorization question explicitly requiring NO sponsorship.
+
+    Needing sponsorship makes the compound proposition false even when work
+    is currently authorized. Inclusive "with or without" wording is unchanged.
+    None means this is not such a question; an empty answer means missing data.
+    """
+    question = " ".join((question or "").split())
+    if profile is None or _CONDITIONAL_Q.search(question) or not _AUTHORIZED_Q.search(question) \
+            or not re.search(_INCLUSIVE_WITHOUT + r"without\b.{0,80}\bsponsorship\b", question, re.I):
+        return None
+    if bool(getattr(profile, "requires_visa_sponsorship", False)):
+        return "No", "profile.requires_visa_sponsorship"
+    eligible = str(getattr(profile, "legally_eligible_to_work", "") or "").strip().lower()
+    answer = "Yes" if eligible == "yes" else "No" if eligible == "no" else ""
+    return answer, "profile.legally_eligible_to_work"
+
+
 def legal_answer_conflicts(form_fields: list[dict], profile) -> list[str]:
     """Sponsorship and work-authorization answers on the page that contradict
     the profile, or that are left blank.
@@ -427,7 +446,15 @@ def legal_answer_conflicts(form_fields: list[dict], profile) -> list[str]:
             continue
         if re.search(r"placeholder|make a selection|^select\b|please select|^-+$", value, re.IGNORECASE):
             value = ""
-        if _SPONSORSHIP_Q.search(question):
+        sponsorship_free = sponsorship_free_work_answer(question, profile)
+        if sponsorship_free is not None:
+            expected, _source = sponsorship_free
+            said_yes, said_no = bool(_YES_ANSWER.search(value)), bool(_NO_ANSWER.search(value))
+            matches = (expected == "Yes" and said_yes and not said_no) \
+                or (expected == "No" and said_no and not said_yes)
+            if not matches:
+                conflicts.append(f"{question[:90]} -- authorization without sponsorship does not match your profile")
+        elif _SPONSORSHIP_Q.search(question):
             said_yes, said_no = bool(_YES_ANSWER.search(value)), bool(_NO_ANSWER.search(value))
             if not value:
                 conflicts.append(f"{question[:90]} -- not answered; your profile says you "
@@ -912,6 +939,14 @@ def approved_values(fields, profile, approved_answers: dict, agent_records: dict
         label = " ".join(str(item.get("label", "")).split())
         ref = str(item.get("ref", ""))
         on_form = str(item.get("value", ""))
+        # A checked declaration can be supported by the owner's explicit
+        # signing preference even when its control was rebuilt between steps.
+        # This grants no authority to an unchecked or unrelated checkbox.
+        if item.get("type") == "checkbox" and on_form == "checked":
+            if (is_attestation(label) and getattr(profile, "sign_attestations", False)) or (
+                    is_privacy_consent(label) and getattr(profile, "accept_application_privacy_prompts", False)):
+                resolved[label] = "checked"
+                continue
         recorded = (agent_records or {}).get(ref)
         if recorded:
             recorded_value, source = recorded[0], (recorded[1] if len(recorded) > 1 else "agent")

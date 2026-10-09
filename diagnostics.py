@@ -153,6 +153,7 @@ EVENT_ENUMS = {
     'result': {'attempted','verified','unknown','failed','blocked'},
     'stage': {'review','application','authentication','submission'},
     'reason_code': {'capture_failed','validation_failed','verification_unavailable','owner_review'},
+    'failure_kind': {'hidden','covered','disabled','detached','timeout','unknown'},
     'category': {'CAPTCHA','SMS_MFA','AUTHENTICATOR_MFA','SECURITY_KEY','PUSH_APPROVAL','ACCOUNT_LOCKED','ACCOUNT_CREATION_UNCERTAIN','FIELD_REQUIRED','UNSUPPORTED_CONTROL','VALIDATION_BLOCKER','ACTION_OUTCOME_UNKNOWN','APPLICATION_RECOVERY','OWNER_REVIEW','OTHER'},
     'outcome_kind': {'review','blocked','stuck','captcha','submitted','user','error',
                      'needs_user','owner_needed','gave_up','disqualified_policy_mismatch',

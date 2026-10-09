@@ -39,7 +39,7 @@ import account_state
 import form_fields
 import option_match
 import safety
-from submission_guard import SubmissionGuardV0
+from submission_guard import SubmissionGuardV0, is_posting_apply
 import visible_desktop
 from config import AppConfig, UserProfile, get_user_profile, resume_to_attach
 from interaction import (
@@ -52,6 +52,7 @@ from interaction import (
     wipe_and_enforce_location_sweep,
 )
 from perception import (
+    active_dialog,
     is_ant_dropdown,
 )
 from sites import adapter_for
@@ -1985,12 +1986,7 @@ class JobApplicationAssistant:
             return False
         control = self.find_apply_control(page)
         if control is not None:
-            try:
-                if (control.get_attribute("type") or "").lower() == "submit":
-                    return False
-            except Exception:
-                pass
-            return True
+            return is_posting_apply(control)
         return bool(self.apply_destination(page))
 
     def open_embedded_form(self, page: Page):
@@ -3751,7 +3747,9 @@ class JobApplicationAssistant:
                 # can tick a terms checkbox that requires the candidate.
                 return self.fill_create_account_form(page, email)
 
-            pw_count = page.locator("input[type='password']").count()
+            dialog = active_dialog(page)
+            auth_root = dialog if dialog is not None else page
+            pw_count = auth_root.locator("input[type='password']").count()
             create_form = pw_count >= 2 and self._create_account_control(page) is not None
             if create_form and self._account_form_has_validation_error(page):
                 logger.info("ACCOUNT: correcting visible registration validation errors")
@@ -3770,7 +3768,7 @@ class JobApplicationAssistant:
                 if page.locator("button:has-text('Create Account')").count() and self._goto_login_page(page):
                     scope = self._sign_in_scope(page)
                 logger.info("Sign In form present; signing in rather than creating an account")
-                return self.attempt_auto_login(page, email, "", scope=scope)
+                return self.attempt_auto_login(page, email, "", scope=scope, create_if_missing=False)
 
             if pw_count == 0:
                 return False
@@ -4372,6 +4370,12 @@ class JobApplicationAssistant:
                     // as a problem held up an application with nothing wrong.
                     const ok = /\\b(success|successfully|uploaded|saved|complete[d]?)\\b/i;
                     const bad = /\\b(error|invalid|required|must|cannot|failed|unable|select an option)\\b/i;
+                    // A conditional accommodation notice is guidance, not a
+                    // failure to complete a field. Real validation text in the
+                    // same alert must still block progression/submission.
+                    const accommodationNotice = t =>
+                        /^if you\\b.+\\bdisability\\b.+\\b(contact|request|ask)\\b.+(?:accommodation|alternative application process)\\.?$/i.test(t)
+                        && !/\\b(error|invalid|required|must|failed|select an option)\\b/i.test(t);
                     // Next.js announces each route change in a clipped,
                     // one-pixel role="alert" for screen readers. It holds the
                     // page title, and was reported as a form error.
@@ -4385,7 +4389,8 @@ class JobApplicationAssistant:
                     const errors = [...document.querySelectorAll('[role=alert], [aria-invalid=true], [class*=error i]')]
                         .filter(e => visible(e) && !announcement(e))
                         .map(e => (e.innerText || '').trim())
-                        .filter(t => t && t.length < 200 && (bad.test(t) || !ok.test(t)));
+                        .filter(t => t && t.length < 200 && !accommodationNotice(t)
+                            && (bad.test(t) || !ok.test(t)));
                     return {required_still_blank: [...new Set(blanks)], errors_shown: [...new Set(errors)]};
                 }"""
             )
@@ -4571,7 +4576,10 @@ class JobApplicationAssistant:
             page.get_by_role("link", name=re.compile(r"^\s*apply\b", re.I)),
             page.get_by_role("button", name=re.compile(r"^\s*apply\b", re.I)),
             page.locator("a[href*='/apply'], a[href^='./apply'], a[href*='apply?']"),
-            page.locator("a:has-text('Apply'), button:has-text('Apply')"),
+            page.locator(
+                "a:has-text('Apply'), button:has-text('Apply'), [role='button']:has-text('Apply'), "
+                "sdf-button:has-text('Apply'), [data-automation-id*='apply' i]"
+            ),
         ]
         for candidate in candidates:
             try:
@@ -4585,6 +4593,22 @@ class JobApplicationAssistant:
                     return element.element_handle(timeout=3_000)
             except Exception as exc:
                 logger.debug("Apply lookup failed: %s", str(exc).splitlines()[0][:100])
+
+        # Dynamic SPAs (ADP, Workday, custom portals) may render Apply controls
+        # asynchronously via client-side scripts. Allow a bounded wait before giving up.
+        combined_selector = (
+            "button:has-text('Apply'), a:has-text('Apply'), [role='button']:has-text('Apply'), "
+            "sdf-button:has-text('Apply'), a[href*='/apply'], a[href*='apply?'], [data-automation-id*='apply' i]"
+        )
+        try:
+            loc = page.locator(combined_selector).first
+            loc.wait_for(state="visible", timeout=3_000)
+            name = (loc.get_attribute("aria-label") or loc.inner_text() or "").strip()
+            logger.info("Apply control found after wait: %r", name[:40] or "(unnamed control)")
+            loc.scroll_into_view_if_needed(timeout=3_000)
+            return loc.element_handle(timeout=3_000)
+        except Exception:
+            pass
         return None
 
     def apply_destination(self, page: Page) -> str:
@@ -5302,11 +5326,19 @@ class JobApplicationAssistant:
             "button:has-text('Log in')",
             "button[type='submit']",
         ):
-            if root.locator(selector).count() and self._click_resiliently(root.locator(selector).first):
+            button = root.locator(selector).first
+            if not button.count():
+                continue
+            before_url = page.url
+            clicked = self._click_resiliently(button)
+            if clicked or page.url != before_url or not pw_locator.count():
                 page.wait_for_load_state("domcontentloaded", timeout=15000)
                 page.wait_for_timeout(3000)
                 logger.info("Attempted auto-login on %s", domain)
                 return self._after_login_attempt(page, email, create_if_missing)
+            # A denied/uncertain sign-in must not fall through to another
+            # button or Enter. A changed page is verified above, never retried.
+            return False
 
         # Some ATS login forms submit on Enter even when no button matches.
         pw_locator.press("Enter")
@@ -6277,6 +6309,16 @@ class JobApplicationAssistant:
         if self.find_submit_button(page) is not None:
             return False  # still on the form
         try:
+            tracker = getattr(self, "tracker", None)
+            key = getattr(self, "application_key", "")
+            record = tracker.get(key) if tracker is not None and key and job_title else None
+            if (record is not None and record.title == job_title
+                    and adapter_for(page.url).submission_receipt(page, record.url, job_title)):
+                self._confirmation_evidence = "the portal confirms submission for the independently verified job"
+                return True
+        except Exception:
+            pass  # Missing portal proof never counts as a receipt.
+        try:
             # innerText alone is not reliable evidence of visibility here: a heading with
             # display:none measurably still returned its text in this runtime (verified, not
             # assumed, during the owner's hardening review of 7 October 2026) -- exactly the
@@ -7099,6 +7141,10 @@ class JobApplicationAssistant:
         auto-submit depends on -- it reads the page, never the agent's
         intentions.
         """
+        from sites import adapter_for
+        reviewed = adapter_for(page.url).submission_fields(page)
+        if reviewed is not None:
+            return reviewed
         try:
             items = page.evaluate("""() => {
                 const visible = e => !!(e.offsetParent || e.getClientRects().length);
@@ -7222,6 +7268,10 @@ class JobApplicationAssistant:
                   "wizard_stuck": bool(getattr(self, "_stuck_on", None))}
         try:
             report["page_url"] = page.url
+            current_documents = self.attached_document_names(page)
+            reviewed_documents = None
+            if resume_name and resume_name not in current_documents:
+                reviewed_documents = adapter_for(page.url).submission_documents(self, page)
             blanks = self.find_required_blanks(page)
             report["required_still_blank"] = [" ".join(b.split()) for b in blanks["required_still_blank"]]
             report["errors_shown"] = [" ".join(e.split()) for e in blanks["errors_shown"]]
@@ -7230,9 +7280,12 @@ class JobApplicationAssistant:
             report["ambiguous_choices"] = list(getattr(self, "_ambiguous_choices", []))
             report["unsupported_questions"] = list(getattr(self, "_unsupported_questions", []))
             report["identity_checks"] = self._identity_checks(page)
-            report["attached_documents"] = self.attached_document_names(page)
+            report["attached_documents"] = (reviewed_documents if reviewed_documents is not None
+                                             else self.attached_document_names(page))
             if resume_name:
-                report["resume_attached"] = self._file_already_attached(page, resume_name)
+                report["resume_attached"] = (resume_name in report["attached_documents"]
+                                             or (reviewed_documents is None
+                                                 and self._file_already_attached(page, resume_name)))
             # Signatures and attestations: listed for the user, never filled.
             report["attestations_pending"] = self.pending_attestations(page)
         except Exception as exc:
@@ -7602,21 +7655,27 @@ class JobApplicationAssistant:
                         filled_since = None
                     last_look = look
                 try:
-                    on_form = self.find_submit_button(page) is not None
+                    has_submit = self.find_submit_button(page) is not None
+                    has_inputs = False
+                    try:
+                        has_inputs = bool(page.evaluate(
+                            "() => document.querySelectorAll('input:not([type=\"hidden\"]), select, textarea').length > 0"
+                        ))
+                    except Exception:
+                        pass
+                    on_form = has_submit or has_inputs
                     if on_form:
                         self._seen_application_form = True
                     # A confirmation page counts even if the form was never
                     # recognised (it needs its message AND no Submit button).
-                    if not on_form and self.submission_confirmed(page, job_title):
+                    if self.submission_confirmed(page, job_title):
                         return "submitted_by_user"
                     if not getattr(self, "_seen_application_form", False):
                         # Still before the form (a sign-in page, say): nothing
                         # can have been submitted, so no Gmail checks and no
                         # "left the form" timer -- just wait for the user.
                         continue
-                    if self.submission_confirmed(page, job_title):
-                        return "submitted_by_user"
-                    if on_form:
+                    if on_form or for_blanks:
                         away_since = None
                     else:
                         away_since = waited if away_since is None else away_since
@@ -7627,7 +7686,10 @@ class JobApplicationAssistant:
                             page.reload(wait_until="domcontentloaded", timeout=30_000)
                         # The site shows nothing conclusive: look for the
                         # employer's confirmation email, every 2 minutes.
-                        if check_mail and (last_mail_check is None or waited - last_mail_check >= 120):
+                        # Never check email when waiting for blanks/captchas or when on an active form step.
+                        if check_mail and not for_blanks and not for_captcha and (
+                            last_mail_check is None or waited - last_mail_check >= 120
+                        ):
                             last_mail_check = waited
                             found = self.gmail_shows_confirmation(page, company, job_title)
                             if found:

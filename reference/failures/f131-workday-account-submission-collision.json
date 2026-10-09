@@ -1,0 +1,20 @@
+{
+  "id": "f131",
+  "date": "2026-10-09",
+  "site": "Workday account forms; shared account perception and click verification",
+  "class": "Account controls were treated as final submission without isolated account context",
+  "symptom": "A Workday application stopped at Create Account/Sign In with a final-submission handoff reason. A read-only live probe confirmed Sign In was denied while a registration form remained behind its dialog.",
+  "root_cause": "The firewall correctly blocked unclassified form submitters but lacked positive evidence for credential-only account forms. The page reader focused on a dialog while password counting and Workday account classification inspected background registration fields. A regression also exposed click verification re-resolving a removed button after a successful account transition, followed by login fallbacks.",
+  "why_tests_missed": "Containment tests covered ambiguous account-labeled buttons, but not a real Workday account-form marker with credential-only fields, a foreground sign-in dialog over registration, or a guarded login that removes its form after success.",
+  "fix": "Recognize tightly scoped Workday credential-only account actions while retaining default denial for mixed or uncertain forms. Share foreground dialog selection across perception and account classification, prefer sign-in on a recognized sign-in form, retain click evidence in its originating document, and verify changed login state without retrying other controls. Report the actual blocked action at handoff.",
+  "tests": [
+    "tests/test_workday_account_submission_guard.py::test_verified_workday_sign_in_form_reaches_account_handler",
+    "tests/test_workday_account_submission_guard.py::test_credential_only_workday_registration_reaches_account_handler",
+    "tests/test_workday_account_submission_guard.py::test_mixed_or_uncertain_account_form_stays_guarded",
+    "tests/test_workday_account_submission_guard.py::test_real_auto_login_advances_through_guarded_sign_in",
+    "tests/test_workday_account_submission_guard.py::test_changed_document_cannot_erase_a_click_observation",
+    "tests/test_workday_account_submission_guard.py::test_denied_account_click_is_not_retried_through_enter",
+    "tests/test_account_step.py::test_sign_in_modal_excludes_registration_passwords_behind_it"
+  ],
+  "prevention": "Test account actions and final submission protection together using actual portal structure, stacked dialogs, mixed forms, detached controls and changed documents. Use the same interaction scope for account evidence and live page reading, and reconcile uncertain outcomes before another consequential action."
+}

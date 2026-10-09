@@ -1,0 +1,18 @@
+{
+  "id": "f125",
+  "date": "2026-10-09",
+  "site": "ADP screening; shared legal-answer resolver and validator",
+  "class": "Negation in a compound authorization question was lost when matching the sponsorship keyword",
+  "symptom": "The application paused on its screening questions after repeatedly correcting a sponsorship-free work-authorization radio answer in opposite directions.",
+  "root_cause": "The validator and correction path interpreted need ... sponsorship inside without the need for sponsorship as a positive sponsorship question. The filling plan and correction rule could therefore disagree about the same Yes/No proposition.",
+  "why_tests_missed": "Previous tests covered positive sponsorship questions, plain authorization questions, and radio click verification separately. They did not run negative-polarity compound authorization through both answer resolution and correction/validation.",
+  "fix": "Add a shared safety resolver for sponsorship-free authorization and use it in initial answer resolution, profile correction, and legal conflict checking. Preserve inclusive with-or-without wording and refuse to infer missing work eligibility.",
+  "tests": [
+    "tests/test_safety_rules.py::test_authorized_without_sponsorship_question_preserves_negative_polarity",
+    "tests/test_safety_rules.py::test_sponsorship_free_authorization_requires_both_profile_facts",
+    "tests/test_safety_rules.py::test_inclusive_authorization_is_not_inverted",
+    "tests/test_action_verification.py::test_sponsorship_free_radio_answer_and_correction_agree",
+    "tests/test_concept_matcher.py::test_sponsorship_free_question_uses_shared_legal_answer"
+  ],
+  "prevention": "Test legal questions as propositions, including negation and compound conditions. Filling and validation must use one deterministic interpretation, and a second correction pass must be stable."
+}

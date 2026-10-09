@@ -1,0 +1,25 @@
+{
+  "id": "f133",
+  "date": "2026-10-09",
+  "site": "Workday final Review; shared submission readback",
+  "class": "Portal route normalization and static review answers were not represented in submission evidence",
+  "symptom": "The live application reached Review but verified submission refused its changed location slug. The comparison contained no fields because the final summary had no editable inputs, and the handoff incorrectly said the enabled setting was off.",
+  "root_cause": "Workday had no independently verified posting-identity hook, and generic readback inspected inputs only. The last-step handoff used an unconditional disabled-setting message.",
+  "why_tests_missed": "Final-step tests used editable controls and unchanged URLs. Skills tests did not cover the subsequent text-only review layout.",
+  "fix": "Verify same host/site/requisition plus fresh server posting metadata and visible identity. Read static review rows without inventing approvals, compare all observed answers conservatively, isolate repeated labels, and return blocking evidence for unknown structure. Report enabled verification accurately while retaining the sole verified submission gateway.",
+  "tests": [
+    "tests/test_workday_review_evidence.py::test_review_reads_static_answers_and_retains_exact_question_approval",
+    "tests/test_workday_review_evidence.py::test_location_slug_redirect_requires_server_job_identity",
+    "tests/test_workday_review_evidence.py::test_identity_refuses_conflicting_metadata",
+    "tests/test_workday_review_evidence.py::test_identity_rejects_wrong_route_before_network",
+    "tests/test_workday_review_evidence.py::test_unrecognized_review_content_refuses_instead_of_empty_evidence",
+    "tests/test_workday_review_evidence.py::test_review_values_are_reread_and_changed_answers_do_not_match_old_approval",
+    "tests/test_workday_review_evidence.py::test_repeated_labels_cannot_reuse_one_approval_for_distinct_entries",
+    "tests/test_workday_review_evidence.py::test_dynamic_or_unlabelled_review_content_remains_held",
+    "tests/test_workday_review_evidence.py::test_final_page_handoff_does_not_claim_verified_setting_is_off",
+    "tests/test_workday_review_evidence.py::test_empty_attachment_label_is_not_an_unanswered_application_field",
+    "tests/test_workday_review_evidence.py::test_identity_rechecks_page_after_metadata_response",
+    "tests/test_workday_review_evidence.py::test_hidden_value_inside_visible_question_is_not_approved"
+  ],
+  "prevention": "Exercise actual static review layouts and canonicalized portal routes together. Resolving a job-URL mismatch must never authorize submission with missing answer evidence."
+}

@@ -506,3 +506,55 @@ def test_assistant_attach_cover_letter_text_branch_that_is_rejected_is_not_verif
     assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
     assert assistant.attach_cover_letter(page, txt, tmp_path / "letter.pdf") is False
     assert page.locator("#cl").input_value() == ""
+
+
+def test_radio_group_without_aria_group_verified_by_question_matching(page, tmp_path):
+    """ADP Workforce Now and custom DOMs render radios without fieldset/legend or aria-group.
+    Choosing 'No' when 'Yes' is the first sibling must be verified by matching question context."""
+    page.set_content(
+        '<div><p>Are you currently authorized to work in the United States without sponsorship?</p>'
+        '<label><input type="radio" value="Yes"> Yes</label>'
+        '<label><input type="radio" value="No"> No</label></div>')
+    a = agent(tmp_path=tmp_path)
+    snapshot = a.snapshot(page)
+    controls = page_agent.parse_snapshot(snapshot)
+    yes_btn = next(c for c in controls if c.role == "radio" and c.name == "Yes")
+    no_btn = next(c for c in controls if c.role == "radio" and c.name == "No")
+
+    # Select 'No' via a.do
+    q = "Are you currently authorized to work in the United States without sponsorship?"
+    answer = page_agent.Answer(no_btn.ref, q, "choose", "No")
+    assert a.do(page, answer, no_btn) is True
+    assert page.locator("input[value='No']").is_checked()
+
+    # Verify not_stuck recognizes 'No' was checked and does not flag missing
+    after = page_agent.parse_snapshot(a.snapshot(page))
+    assert a.not_stuck([(answer, no_btn)], after) == []
+
+    # Also if the answer was targeted with the first sibling's ref (as some planners emit):
+    answer_first_ref = page_agent.Answer(yes_btn.ref, q, "choose", "No")
+    assert a.not_stuck([(answer_first_ref, yes_btn)], after) == []
+
+
+
+@pytest.mark.parametrize('needs_sponsorship', [True, False])
+def test_sponsorship_free_radio_answer_and_correction_agree(page, tmp_path, needs_sponsorship):
+    import safety
+    question = 'Are you currently authorized to work without the need for current or future employer sponsorship?'
+    expected = 'No' if needs_sponsorship else 'Yes'
+    page.set_content(f'<div><p>{question}</p>'
+                     '<label><input type="radio" name="authorization" value="Yes">Yes</label>'
+                     '<label><input type="radio" name="authorization" value="No">No</label></div>')
+    a = agent(tmp_path=tmp_path)
+    a.profile = config.UserProfile(legally_eligible_to_work='Yes', requires_visa_sponsorship=needs_sponsorship)
+    a.assistant.values = safety.AgentValues()
+    controls = page_agent.parse_snapshot(a.snapshot(page))
+    target = next(c for c in controls if c.role == 'radio' and c.name == expected)
+    assert a.known_answer(target)[0] == expected
+    answer = page_agent.Answer(target.ref, question, 'choose', *a.known_answer(target))
+    assert a.do(page, answer, target)
+    for _ in range(2):
+        controls = page_agent.parse_snapshot(a.snapshot(page))
+        assert a.correct_from_profile(page, page_agent.PagePlan(), controls) == []
+        assert not safety.legal_answer_conflicts(page_agent.answered_fields(controls), a.profile)
+        assert page.locator(f'input[value="{expected}"]').is_checked()

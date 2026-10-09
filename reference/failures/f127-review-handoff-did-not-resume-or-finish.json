@@ -1,0 +1,15 @@
+{
+  "id": "f127",
+  "date": "2026-10-09",
+  "site": "Shared reading-agent final-review loop",
+  "class": "Review handoff transitions did not consume their activation and terminal outcomes",
+  "symptom": "Reloading a final-review run left automation parked. The same loop ignored confirmed auto-submit's terminal return and waited for an owner signal instead of finishing and closing normally.",
+  "root_cause": "The review branch lacked the generic handoff branch's resume_automation transition and discarded hand_over's returned submitted status.",
+  "why_tests_missed": "Submission tests exercised hand_over in isolation and did not run the enclosing reading loop through review resume or successful verified auto-submit.",
+  "fix": "Reactivate automation for nonterminal review decisions and return immediately when hand_over reports confirmed submission.",
+  "tests": [
+    "tests/test_adp_submission_evidence.py::test_confirmed_auto_submit_returns_without_waiting_for_an_owner_signal",
+    "tests/test_adp_submission_evidence.py::test_review_resume_reactivates_automation_before_reading_again"
+  ],
+  "prevention": "Test both sides of every handoff state transition and propagate confirmed terminal outcomes through the enclosing control loop."
+}

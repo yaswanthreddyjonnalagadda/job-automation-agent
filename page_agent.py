@@ -66,6 +66,7 @@ from interaction import (
     wipe_and_enforce_location_sweep,
 )
 from perception import (
+    active_dialog,
     hide_secrets,
     is_ant_dropdown,
     is_ant_single_select,
@@ -74,6 +75,7 @@ from perception import (
 )
 import provenance
 import safety
+from submission_guard import is_posting_apply
 
 import diagnostics
 diagnostics.install_log_privacy()
@@ -1425,7 +1427,7 @@ class PageAgent:
         """Code reloaded into a run that is already going keeps its old object:
         anything added since starts empty rather than failing."""
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
-                              ("_entries", dict), ("_entry_blank", set), ("history", dict), ("_attached_here", set),
+                              ("_entries", dict), ("_entry_blank", set), ("_widget_answers", dict), ("history", dict), ("_attached_here", set),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
                               ("_google_reloads", dict), ("_peeked", dict),
                               ("_emailed_in", set), ("_created_at", set), ("_account_known", set), ("_reset_asked", set), ("_verify_asked", set), ("_misfit", set), ("_letter_attached", bool), ("_uncertain_entry_sections", set), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set), ("_list_retries", int), ("_shapes", dict),
@@ -1455,8 +1457,9 @@ class PageAgent:
         tab = self.tab(page)
         # An open dialog owns the interaction. Background posting controls may
         # remain in the accessibility tree even though its overlay blocks them.
-        dialogs = tab.locator('[role="dialog"]:visible, dialog[open]:visible')
-        scope = dialogs.last if dialogs.count() else tab.locator("body")
+        scope = active_dialog(tab)
+        if scope is None:
+            scope = tab.locator("body")
         return hide_secrets(scope.aria_snapshot(mode="ai", timeout=20_000))
 
     def locate(self, page, ref: str):
@@ -1649,6 +1652,9 @@ class PageAgent:
             snapshot = self.snapshot(page)
         except Exception:
             return False
+        delivery = self.choose_email_code_delivery(page, controls, snapshot)
+        if delivery is not None:
+            return delivery
         state = account_state.read_state(snapshot, password_boxes=self._password_boxes(tab))
         if state.kind in self._ACCOUNT_CREATION_RESOLVED_KINDS:
             self._resolve_pending_account_creation(host)
@@ -1911,6 +1917,48 @@ class PageAgent:
             return True
         except Exception as exc:
             logger.warning("LOGIN: could not give the email (%s)", str(exc).splitlines()[0][:100])
+            return False
+
+    def choose_email_code_delivery(self, page, controls, snapshot):
+        """Resolve a code-delivery chooser through the existing email permission.
+
+        Return None outside this screen, so the account table keeps its normal role.
+        An uncertain send is held rather than requesting another code.
+        """
+        if not re.search(r"(?:where|how) would you like to receive (?:a |the |your )?"
+                         r"(?:verification|security|one[- ]time) code", snapshot or "", re.I):
+            return None
+        tab = self.tab(page)
+        why = emailed_codes.why_not(self.profile, tab.url, captcha=safety.captcha_visible(tab),
+                                    email=getattr(self.config, "ats_email", "") or "")
+        if why:
+            self.account_blocker = why
+            return False
+        emails = [c for c in controls if c.role == "radio" and not c.disabled
+                  and emailed_codes.code_channel(c.name) == "EMAIL"]
+        sends = [c for c in controls if c.role in PRESS_ROLES and not c.disabled
+                 and re.fullmatch(r"send(?: me)?(?: a| the)?(?: verification| security)?(?: code)?|"
+                                  r"continue|next|get code", (c.name or "").strip(), re.I)]
+        if len(emails) != 1 or len(sends) != 1:
+            self.account_blocker = "Choose the email verification destination on the site, then continue."
+            return False
+        asked = self.__dict__.setdefault("_code_delivery_asked", set())
+        host = host_of(tab.url)
+        if host in asked:
+            self.account_blocker = "A verification code was already requested; check the current verification screen."
+            return False
+        try:
+            choice = self.locate(page, emails[0].ref)
+            choice.check(timeout=5000)
+            if not choice.is_checked():
+                return False
+            # Record before dispatch: an interrupted send is never repeated automatically.
+            asked.add(host)
+            self.locate(page, sends[0].ref).click(timeout=8000)
+            logger.info("CODE: requested the email verification channel")
+            return True
+        except Exception:
+            self.account_blocker = "The email verification request could not be confirmed; check the site before retrying."
             return False
 
     # A code emailed to the owner for their own account or email address.
@@ -2481,6 +2529,9 @@ class PageAgent:
                     return "checked", "profile.accept_application_privacy_prompts"
         if not question or safety.is_attestation(question):
             return "", ""
+        sponsorship_free = safety.sponsorship_free_work_answer(question, self.profile)
+        if sponsorship_free is not None:
+            return sponsorship_free
 
         # A box inside a repeated Work or Education entry belongs to that job or that degree: it is answered from
         # that entry's own record, never from one value for the whole person (Steelcase, 29 September: a job's
@@ -3282,6 +3333,18 @@ class PageAgent:
                     logger.info("NOT STUCK: %s -- reading the page again", "; ".join(missing)[:200])
                     continue
                 return Outcome("owner_needed", page, [f"could not set: {m}" for m in missing])
+            # A declaration can reveal its name/signature box only after it
+            # is checked. Read newly exposed, answerable fields before calling
+            # a known profile answer a gap requiring the owner. The existing
+            # page/shape limits still bound repeated dynamic changes.
+            before_questions = {(c.role, _plain(c.question)) for c in controls}
+            if given and any(
+                    c.role in ANSWER_ROLES and not c.disabled and not c.answer
+                    and (c.role, _plain(c.question)) not in before_questions
+                    and (self.known_answer(c)[0] or self._attestation_answer(c)[0])
+                    for c in after):
+                feedback = "a new field appeared after the previous answer; resolve it from approved data"
+                continue
             # Only the last step must be complete before the agent presses on.
             about_to_send = plan.next_kind in ("final_submit", "none") or safety.is_submit_label(plan.next_label)
             blockers = self.blockers(page, plan, after, about_to_send=about_to_send)
@@ -3761,11 +3824,20 @@ class PageAgent:
             now = by_ref.get(before.ref) or next(iter(by_question.get(before.question, [])), None)
             if now is None:
                 continue   # the page rebuilt itself; the next read will show it
+            widget_ok = self._widget_answer_verified(before, answer.value)
+            if widget_ok is not None:
+                if not widget_ok:
+                    missing.append(f"{before.question[:60]} = {answer.value[:40]!r}")
+                continue
             want = answer.value.strip().lower()
             if answer.action == "choose" and before.role in ("radio", "checkbox", "switch"):
                 # A choice among buttons: whichever button carries the answer must be the one on.
-                group = [c for c in after if c.role == before.role and before.group and c.group == before.group]
-                ok = any(c.checked and _same_answer(c.name, answer.value) for c in group) or \
+                group = [c for c in after if c.role == before.role and (
+                    (before.group and c.group == before.group)
+                    or (before.question and _same_question(c.question, before.question))
+                    or (before.container and c.container == before.container)
+                )]
+                ok = any(c.checked and _same_answer(c.name or c.value, answer.value) for c in group) or \
                     (not group and now.checked)
                 if not ok:
                     missing.append(f"{before.question[:60]} = {answer.value[:40]!r}")
@@ -3784,6 +3856,25 @@ class PageAgent:
             if not ok:
                 missing.append(f"{before.question[:60]} = {answer.value[:40]!r}")
         return missing
+
+    def _widget_answer_verified(self, control: Control, value: str) -> Optional[bool]:
+        """Re-read committed tags, never the cleared search text or cached success."""
+        saved = getattr(self, "_widget_answers", {}).get(control.ref)
+        if saved is None or saved["attempted"] != value or saved["question"] != control.question \
+                or control.role not in ("textbox", "searchbox"):
+            return None
+        try:
+            from sites.workday import WorkdayAdapter
+            field = saved["field"]
+            metadata = form_fields.field_for_locator(field)
+            if metadata is None or field.input_value().strip():
+                return False
+            chosen = {option_match.plain(item) for item in WorkdayAdapter.selected_skills(field)}
+            if saved["selected"]:
+                return all(option_match.plain(item) in chosen for item in saved["selected"])
+            return not metadata.required
+        except Exception:
+            return False
 
     def refusal(self, page, answer: Answer, control: Control, controls: list[Control] = (),
                 correcting: bool = False) -> str:
@@ -3869,8 +3960,13 @@ class PageAgent:
                     return f"already answered from your profile ({current!r}) -- not changing to {answer.value!r}"
             if not self._ours(question, current):
                 return f"already answered {current[:40]!r} -- not changing an answer the agent didn't give"
-        if control.role == "radio" and action == "check" and control.group:
-            chosen = next((c.name for c in controls if c.role == "radio" and c.group == control.group and c.checked), "")
+        if control.role == "radio" and action == "check":
+            group = [c for c in controls if c.role == "radio" and (
+                (control.group and c.group == control.group)
+                or (control.question and _same_question(c.question, control.question))
+                or (control.container and c.container == control.container)
+            )]
+            chosen = next((c.name for c in group if c.checked), "")
             if chosen and not self._ours(question, chosen):
                 return f"already answered {chosen[:40]!r} -- not changing an answer the agent didn't give"
             if chosen:
@@ -3963,7 +4059,12 @@ class PageAgent:
             question = item["label"]
             if not question or not safety.legal_answer_conflicts([item], self.profile):
                 continue
-            if safety._SPONSORSHIP_Q.search(question):
+            sponsorship_free = safety.sponsorship_free_work_answer(question, self.profile)
+            if sponsorship_free is not None:
+                value, source = sponsorship_free
+                if value:
+                    fixes.append((question, value, source, False))
+            elif safety._SPONSORSHIP_Q.search(question):
                 needs = bool(getattr(self.profile, "requires_visa_sponsorship", False))
                 fixes.append((question, "Yes" if needs else "No", "profile.requires_visa_sponsorship", False))
             elif safety._AUTHORIZED_Q.search(question):
@@ -4148,7 +4249,12 @@ class PageAgent:
     @staticmethod
     def _shown_answer(control: Control, controls: list[Control]) -> str:
         if control.role == "radio":
-            return next((c.name for c in controls if c.role == "radio" and c.group == control.group and c.checked), "")
+            group = [c for c in controls if c.role == "radio" and (
+                (control.group and c.group == control.group)
+                or (control.question and _same_question(c.question, control.question))
+                or (control.container and c.container == control.container)
+            )]
+            return next((c.name for c in group if c.checked), "")
         return control.answer
 
     # -- the owner's own answers ----------------------------------------------------------
@@ -4215,6 +4321,8 @@ class PageAgent:
 
     def do(self, page, answer: Answer, control: Control) -> bool:
         tab = self.tab(page)
+        if answer.action in ("fill", "choose") and self._widget_answer_verified(control, answer.value) is True:
+            return True
         if control.role == "group" and not control.name and not control.holds_choices:
             return False  # A layout wrapper is not a page-wide choice group.
         # Only typed text: a choice can only ever take one of the list's own options, and "N/A" or "None" is
@@ -4282,7 +4390,7 @@ class PageAgent:
                 from browser_automation import FramedPage
                 frame = loc.element_handle().owner_frame()
                 target = FramedPage(tab, frame) if frame != tab.main_frame else tab
-                if re.fullmatch(r"(?:type to add )?skills", control.question.strip(), re.IGNORECASE):
+                if re.fullmatch(r"(?:type to add )?skills", control.question.rstrip(" *✱"), re.IGNORECASE):
                     chosen, missing = WorkdayAdapter().select_skills(
                         self.assistant, target, loc, re.split(r"[,;\n]+", answer.value))
                     if missing:
@@ -4290,9 +4398,16 @@ class PageAgent:
                         if note not in self.notes:
                             self.notes.append(note)
                         logger.info("SKILLS: %s", note)
-                    required = loc.get_attribute("aria-required") == "true" or loc.get_attribute("required") is not None
+                    stable_field = target.locator(f"input[id={json.dumps(identifier)}]")
+                    metadata = form_fields.field_for_locator(stable_field)
+                    required = metadata is None or metadata.required
                     if missing and not chosen and not required:
                         self._entry_blank.add(control.ref)
+                    if chosen or not required:
+                        self._widget_answers[control.ref] = {
+                            "field": stable_field, "selected": tuple(chosen), "attempted": answer.value,
+                            "question": control.question,
+                        }
                     return bool(chosen) or not required
                 return WorkdayAdapter().select_from_searchable_input(
                     self.assistant, target, identifier, [answer.value] + self._alternatives_for(answer.value), keyboard=False)
@@ -4528,7 +4643,11 @@ class PageAgent:
                     group = [c for c in snapshot_controls if c.role in ("radio", "checkbox", "switch")]
             else:
                 group = [c for c in snapshot_controls
-                         if c.role == control.role and c.group and c.group == control.group] or [control]
+                         if c.role == control.role and (
+                             (control.group and c.group == control.group)
+                             or (control.question and _same_question(c.question, control.question))
+                             or (control.container and c.container == control.container)
+                         )] or [control]
             if control.toggle and answer.action == "check" and answer.value.strip().lower() in ("checked", "true", ""):
                 return self._press_toggle(page, control)
             # A question's own choices were found: the answer is one of them or none. Looking further -- every
@@ -5475,9 +5594,12 @@ class PageAgent:
         if now is None:
             return None
         if answer.action == "choose" and before.role in ("radio", "checkbox", "switch"):
-            group = [control for control in after
-                     if control.role == before.role and before.group and control.group == before.group]
-            return any(control.checked and _same_answer(control.name, answer.value) for control in group) or \
+            group = [control for control in after if control.role == before.role and (
+                (before.group and control.group == before.group)
+                or (before.question and _same_question(control.question, before.question))
+                or (before.container and control.container == before.container)
+            )]
+            return any(control.checked and _same_answer(control.name or control.value, answer.value) for control in group) or \
                 (not group and now.checked)
         if answer.action in ("check", "uncheck"):
             if now.role == "radio" and now.group:
@@ -5777,7 +5899,12 @@ class PageAgent:
             if not getattr(self.profile, "accept_application_privacy_prompts", False):
                 return "stop", page, f"{label!r} accepts a notice -- you haven't allowed the agent to accept those"
 
-        submit_word = safety.is_submit_label(label) and plan.page_kind != "job_description"
+        posting_opening = (
+            plan.page_kind == "job_description" and plan.next_kind == "open_application"
+            and not getattr(self.assistant, "_form_filled_this_run", False)
+            and is_posting_apply(self.locate(page, control.ref))
+        )
+        submit_word = safety.is_submit_label(label) and not posting_opening
         # Schwab's questions page is step 2 of 5 and its button says "Submit": it saves
         # that step. A "Submit" is the application's last only when the page's own DOM
         # structure positively proves it -- never plan.step (AI-reported text this code
@@ -5808,7 +5935,7 @@ class PageAgent:
         )
         final = plan.next_kind == "final_submit" or (is_review and not steps_remain) \
             or (submit_word and step_finality != "NON_FINAL")
-        if plan.page_kind == "job_description" and plan.next_kind == "open_application":
+        if posting_opening:
             final = False
         if final:
             gate = self.submit_gate(page, controls)
@@ -5871,7 +5998,8 @@ class PageAgent:
             self.locate(page, control.ref).click(timeout=10_000)
         if guard is not None and denials_before is not None and guard.denial_count(tab) > denials_before:
             logger.error("SUBMISSION_GUARD_V0_DENIED: PageAgent stopped after an intercepted submit attempt")
-            return "stop", page, "final submission is only available through the verified gateway or human handoff"
+            return "stop", page, (f"submission protection blocked {label!r}; its purpose could not be verified "
+                                  "on the current step -- inspect the page, then press Continue")
         if submit_word:
             self.final_pressed = True   # a confirmation after an allowed intermediate Submit counts
         self.settle(page, 2_500)
@@ -5921,6 +6049,8 @@ class PageAgent:
             # Not a form still without the resume it asks for.
             if self._tailored_resume_missing(page) and self._form_asks_for_a_resume(page, controls):
                 return "the tailored resume is not attached"
+            if getattr(self.config, "auto_submit_verified_only", False):
+                return "review step reached -- the application is ready for verified submission checks"
             return "automatic submission is off -- the application is ready for you to submit"
         # A button that says Submit on a step with more to come: it saves the step, and gets every check but the
         # finished-application ones. The old AUTO_SUBMIT setting plays no part.
@@ -5957,6 +6087,9 @@ class PageAgent:
     def _password_boxes(tab) -> int:
         """How many password boxes the page shows, frames included."""
         try:
+            dialog = active_dialog(tab)
+            if dialog is not None:
+                return dialog.locator("input[type=password]:visible").count()
             count = tab.locator("input[type=password]:visible").count()
             for frame in tab.frames[1:]:
                 if not safety.is_captcha_frame(frame.url):
@@ -6154,7 +6287,15 @@ class PageAgent:
         return snapshot
 
     def _save(self, snapshot: str) -> None:
-        """Every page read is kept: it is what a failure is replayed from."""
+        """Every page read is kept: it is what a failure is replayed from.
+
+        Written raw, never through diagnostics.py's structural sanitization (f134): `snapshot`
+        is always the return value of `self.snapshot()`, which already applies
+        `perception.hide_secrets()` before any caller sees it (f015 -- "redact at the one
+        place a page is read, not in each place it is written"). A second, much coarser
+        redaction pass here does not make a typed password any safer -- it was already
+        hidden -- it only destroys the fidelity replay_guard.py and the test suite depend on
+        to catch one portal's fix silently changing another portal's answers."""
         if self.resume_file and self.resume_file.name.lower() in (snapshot or "").lower():
             self.resume_seen = True   # the tailored resume shows as attached on a page of this run
         if not self.job_dir:
@@ -6166,6 +6307,6 @@ class PageAgent:
             if not folder.is_dir():
                 folder.mkdir(parents=True, exist_ok=True)
                 keep_latest_runs(folder.parent, RUNS_KEPT)
-            diagnostics.write_safe_text(folder / f"page_{self.pages_read:02d}.txt", diagnostics.sanitize_snapshot(snapshot))
+            (folder / f"page_{self.pages_read:02d}.txt").write_text(snapshot or "", encoding="utf-8")
         except Exception:
             pass

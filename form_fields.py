@@ -324,6 +324,13 @@ def inventory(page) -> list[Field]:
     return fields
 
 
+def field_for_locator(locator) -> Optional[Field]:
+    """Fresh metadata for this exact input, including its own requirement scope."""
+    fields = inventory(locator.page)
+    identifier = locator.get_attribute(STAMP, timeout=2_000)
+    return next((item for item in fields if item.id == identifier), None)
+
+
 def blank_required(fields: list[Field]) -> list[Field]:
     """Fields a person can see, that the page marks required, that hold nothing yet -- never a trap. Radio and
     checkbox groups count once, as answered if any box in the group is ticked."""

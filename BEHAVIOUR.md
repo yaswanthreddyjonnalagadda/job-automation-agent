@@ -435,6 +435,10 @@ counts before what the form looks like. Then one table decides:
 - **Sign in** on a sign-in form, once per site per run, with the password from
   Settings; give the email first where the site asks for it on its own.
 - **Enter an emailed code** under the rules below.
+  When a verification screen first asks where to receive the code, the agent may
+  choose its single identifiable email option and send once, under the same mail
+  permission, employer-site, CAPTCHA and rate-limit checks. Ambiguous channels
+  and a send whose outcome is uncertain require inspection before another request.
 - **Reset a refused password** of an account the site knows, to the same password,
   with the code emailed to you -- once per site per run (see "An account that already
   exists").
@@ -773,6 +777,14 @@ The run keeps watching and records **submitted** only on evidence:
 * the employer portal listing the job as applied (list reloaded every minute), or
 * the employer's confirmation email (Gmail checked every 2 minutes).
 
+For ADP, an exact visible Application Submitted label may be a receipt even
+when it sits beside a long job description. It must share a single job section
+with the tracked title, have no active applicant fields, Submit control or draft
+status, and match independently verified tenant and requisition metadata. The
+status and URL are checked again after identity verification. A verified manual
+submission ends the review wait, records submitted, and closes the run's browser
+through normal cleanup without another Continue or Close action.
+
 If the application leaves the screen without any of that — the window is
 closed, or the form is abandoned for 10 minutes — the status becomes
 **needs_user_review**, never "submitted". Success is never assumed.
@@ -807,8 +819,8 @@ evidence and required-field comparisons valid, which requires **all** of:
   `data/_approved_answers.json`, or an existing value that equals a profile
   value. Near-misses are refusals: "Springfield County" never matches "Springfield";
 * nothing uncertain is present: no blanks, form errors or warnings, no
-  ambiguous dropdown choice, no unsupported custom question, no attestation,
-  e-signature or consent checkbox, no CAPTCHA, no identity check.
+  ambiguous dropdown choice, no unsupported custom question, no pending or
+  unapproved attestation, e-signature or consent checkbox, no CAPTCHA, no identity check.
 
 Before submitting it writes, into `output/<Company>_<Title>/evidence_<time>/`:
 a full-page screenshot, the page HTML, `comparison.json` (the field-by-field
@@ -823,6 +835,43 @@ to mention "application received" or "previously submitted application" in
 an ordinary sentence is not read as confirming this run. A real confirmation
 this does not recognize is left **needs_user_review**, not guessed at --
 never the other way around.
+
+On ADP, a post-login URL is accepted as the original posting only when the
+tenant, career center and external job ID agree and ADP's public requisition
+metadata also matches the internal requisition ID and tracked job title. A
+different route alone is not evidence of a different job; a redirect alone is
+not evidence that it is the same job.
+
+If ADP's final panel hides the résumé, validation attempts to read the existing
+Review Your Application panel and return to Self-Attest & Submit. It uses the
+attachments actually found there and then rechecks the restored final form.
+Failure to find or restore those panels does not supply attachment evidence.
+Local document bytes must still match the stored application documents.
+Both default and applicant post-login routes require the same requisition proof.
+The review panel has up to 15 seconds to expose fresh document evidence.
+Navigation uses the visible step action or the row's own click handler, rather
+than a hidden child control. Probe diagnostics retain counts and fixed failure
+categories, never raw exception text or application answers.
+For a visible, enabled wizard step whose pointer click is covered, the adapter
+may invoke that step's click handler once and verify the resulting panel. It
+refuses this fallback when a CAPTCHA is present or the step is disabled; it
+does not apply it to the final Submit control.
+
+A checked electronic-signing checkbox may match your explicit
+`sign_attestations` preference. This neither checks an unsigned box nor grants
+approval to an unrelated checkbox or an unsupported typed claim. Privacy-only
+consent uses its separate profile preference. “Sign electronically” is treated
+as a signature even when the words appear in that order.
+
+Resuming at final review reactivates automation before reading the form again.
+Once verified auto-submit returns confirmed success, the reading loop exits
+immediately so normal browser cleanup can close the application window.
+
+When an answer reveals another field the profile can answer, the reader checks
+the page again before handing it over as missing information. This includes a
+signing checkbox that reveals a required full-name box. Existing page and retry
+limits still apply. Prompts such as “Please type your full name” resolve to the
+applicant's profile name; employer and supervisor names do not.
 
 Immediately before the click, a local SQLite transaction writes the durable
 `DISPATCHED` state and append-only authorization/dispatch safety events. The
@@ -1141,3 +1190,97 @@ Artifact limits: DOM 2 MiB; accessibility/text/JSON and runtime logs 1 MiB;
 console 512 KiB (the category-only projection is much smaller); screenshots
 16 MiB; manifests 64 KiB. Oversized sanitized text may be truncated with a
 manifest flag; oversized JSON becomes valid truncation metadata.
+
+This privacy layer covers diagnostic and forensic captures only -- the
+`output/<job>/pages/` recordings every real page read is kept in (f134) stay raw,
+as they did before P0-B5, since a typed password or other secret box is already
+hidden before a caller ever sees the page text, and a second, coarser redaction
+pass on top of that would only cost the replay fidelity this project's own
+regression testing depends on.
+
+## Opening Apply versus final Apply
+
+An Apply control on a posting can open the application while submission protection
+stays active. The browser guard and Python navigation use the same conservative
+DOM check: an Apply label, job-description text and a heading, with no application
+form, answer fields (including hidden fields and open shadow roots), or review/
+signature text. A submit-type button without an associated form can qualify.
+AI page classification alone never authorizes the exception. After application
+DOM state has been observed in a guarded document, the exception stays disabled
+for that document, even if the fields disappear. Ambiguous pages still hand off;
+review-page Apply remains subject to the existing submission gate.
+The posting check ignores only hidden OneTrust cookie switches and its explicitly
+labelled cookie-list search control. Hidden applicant fields still count, even
+inside that container. Conditional disability-accommodation guidance is not a
+form error; actual validation messages, including ones sharing its alert, remain
+blocking.
+
+## Work authorization without sponsorship
+
+A compound question asking whether the applicant is authorized to work without
+current or future sponsorship uses both profile facts. A need for sponsorship
+makes its answer No even when the applicant is currently authorized to work.
+With no sponsorship need, the answer follows stated legal work eligibility;
+missing eligibility remains unresolved. Inclusive "with or without sponsorship"
+questions retain their existing handling. Initial filling, correction, and final
+conflict checking share the same rule, preserving owner-entered answers.
+
+## Workday account forms and submission protection
+
+Workday's credential-only Sign In and Create Account forms are recognized separately
+from final application submission. This requires the employer's HTTPS Workday host,
+its account-form marker, an exact account action, one email field and the expected
+password field count. Applicant fields, attestations, unknown fields or competing
+submission actions keep the form protected. Existing credential, account-creation,
+CAPTCHA, consent and retry policies still apply.
+
+Account-state inspection uses the same foreground dialog as the page reader, so
+password fields on a registration page behind Sign In do not cause another account
+creation attempt. A recognized Sign In form uses sign-in rather than registering
+because the local account cache is empty. If its button disappears after a successful
+transition, click evidence is checked in the originating frame and document; a new
+document or unavailable evidence remains uncertain. The login flow verifies a changed
+page and does not retry a denied or uncertain action through another button or Enter.
+A guard handoff names the blocked action and current-step uncertainty rather than
+claiming the application has reached final submission.
+
+Workday skill selections are checked again from their committed tags after the page
+is reread. The search box clearing after a selection is expected. An unavailable
+optional skill list can remain intentionally blank; its fresh, field-specific
+required status is checked before continuing. Removed tags, leftover search text,
+unreadable state, or a newly required blank still fail verification. A verified
+optional blank does not repeat the same unavailable searches on each read.
+
+## Workday final-review evidence
+
+Workday may change the posting's location slug when it opens Apply Manually.
+The final verification adapter accepts that route only for the same HTTPS
+Workday host, career site and exact requisition slug, with a visible matching
+job title and Review step. A fresh, nonredirected Workday job-metadata response
+must independently match the original posting's external URL, requisition ID
+and title. The page URL and visible identity are rechecked after that response.
+
+Workday's final summary renders answers as text rather than input controls.
+Verification reads the current labelled rows, questionnaire rows and heading
+value blocks within the visible review container. It compares every observed
+answer conservatively as required because the summary omits earlier field
+requirements. The reader supplies no approvals. Repeated labels receive distinct
+identities; they cannot borrow one another's recorded answer. Unknown answer
+structure, dynamic controls, frames, shadow content and unreadable summaries
+produce a blocking comparison rather than empty evidence. Changed values are
+read afresh and compared against existing approved data. Optional blank handling
+on editable steps is unchanged; uncertainty in a summary remains held.
+
+When verified auto-submit is enabled, the page-agent handoff says the Review
+step is ready for verification checks. It does not claim the setting is off,
+and the page agent still never dispatches the final Submit action itself.
+
+## Workday skills search tab safety (f135)
+
+Filling Workday's "Type to Add Skills" widget searches each skill separately
+against the site's own list. Whatever opens one -- a misclick, or the page's
+own script reacting to the search -- a browser tab this search did not ask for
+is closed immediately rather than left open, and a skill the widget's list does
+not recognize is followed by a short pause before the next search rather than
+retrying immediately. Nothing about which skills are offered, chosen, or left
+blank changes.

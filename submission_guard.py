@@ -6,15 +6,71 @@ import json
 import logging
 import secrets
 import weakref
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import safety
+from sites.workday import SIGN_IN_ACTION_JS
 from playwright.sync_api import Error as PlaywrightError
 
 logger = logging.getLogger(__name__)
 
 _GUARD_NAME = "__jaaSubmissionGuardV0"
+
+
+@dataclass(frozen=True)
+class _ClickEvidence:
+    frame: Any
+    document_id: str
+    count: int
+
+
+# One conservative DOM predicate shared by posting detection and the click firewall.
+# Labels or a planner's page_kind alone cannot establish opening vs. submitting.
+_APPLICATION_CONTEXT_JS = r"""() => {
+    // Cookie managers retain hidden utility controls after their banner closes.
+    // Only these recognizable utilities are exempt; hidden applicant inputs,
+    // including inputs placed in the same container, still count as state.
+    const cookieUtility = input => !input.getClientRects().length && !input.form
+        && input.closest('#onetrust-consent-sdk, #onetrust-pc-sdk')
+        && (input.type === 'checkbox' || (input.type === 'text'
+            && /^cookie list search$/i.test(input.getAttribute('aria-label') || '')));
+    const roots = [document];
+    for (let i = 0; i < roots.length; i++) {
+        const root = roots[i];
+        if (root.querySelector('form, textarea, select, [role="textbox"], [role="combobox"], '
+            + '[role="checkbox"], [role="radio"], [contenteditable="true"]')) return true;
+        if (Array.from(root.querySelectorAll('input')).some(input =>
+            !['search', 'button', 'submit', 'image', 'reset'].includes(input.type)
+                && !cookieUtility(input))) return true;
+        for (const element of root.querySelectorAll('*')) {
+            if (element.shadowRoot) roots.push(element.shadowRoot);
+        }
+    }
+    return false;
+}"""
+_POSTING_APPLY_JS = r"""element => {
+    if (!element || element.form || element.closest('form') || element.hasAttribute('form')) return false;
+    const labels = [element.innerText, element.value, element.getAttribute('aria-label'),
+        element.getAttribute('title')].map(value => String(value || '').replace(/\s+/g, ' ').trim())
+        .filter(Boolean);
+    if (!labels.length || !labels.every(label => /^apply(?: now| for (?:this|the) job(?: online)?)?$/i.test(label)))
+        return false;
+    if ((APPLICATION_CONTEXT)()) return false;
+    const body = document.body ? document.body.innerText : '';
+    if (!/responsibilities|qualifications|requirements|job description|about the (role|job|position)|what you('ll| will) do|who you are|job (id|number|requisition)|posted/i.test(body)) return false;
+    if (/review (your|and submit)|submit (your|this) application|confirm (your|this) application|application (review|summary)|electronic signature|e-signature/i.test(body)) return false;
+    return Boolean(document.querySelector('h1, h2, [role="heading"]'));
+}""".replace('APPLICATION_CONTEXT', _APPLICATION_CONTEXT_JS)
+
+
+def is_posting_apply(control: Any) -> bool:
+    """Require positive posting evidence and absence of application DOM state."""
+    try:
+        return bool(control.evaluate(_POSTING_APPLY_JS))
+    except (PlaywrightError, AttributeError):
+        return False
 
 
 def _guard_script(capability: str) -> str:
@@ -34,9 +90,14 @@ def _guard_script(capability: str) -> str:
         return;
       }
       const capability = CAPABILITY;
+      const documentId = Array.from(crypto.getRandomValues(new Uint32Array(4))).join('-');
       const submitLabel = new RegExp(SUBMIT_PATTERN, "i");
       const safeUtilityLabel = new RegExp(SAFE_UTILITY_PATTERN, "i");
-      const state = {active: false, authorization: null, denials: [], sequence: 0};
+      const applicationContext = APPLICATION_CONTEXT;
+      const postingApply = POSTING_APPLY;
+      const workdayAccountAction = WORKDAY_ACCOUNT_ACTION;
+      const state = {active: false, authorization: null, denials: [], sequence: 0,
+        applicationSeen: applicationContext()};
       const selector = 'button, input[type="submit"], input[type="image"], [role="button"], a';
       const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
       const labels = element => [
@@ -91,6 +152,9 @@ def _guard_script(capability: str) -> str:
         if (!(element instanceof Element)) return null;
         const candidate = element.closest(selector);
         if (!candidate) return null;
+        state.applicationSeen ||= applicationContext();
+        if (!state.applicationSeen && postingApply(candidate)) return null;
+        if (workdayAccountAction(candidate)) return null;
         if (labels(candidate).some(label => submitLabel.test(label))) return candidate;
         if (structuralSubmitter(candidate) && !ordinaryNavigation(candidate)) return candidate;
         return soleRemainingAction(candidate) ? candidate : null;
@@ -202,6 +266,7 @@ def _guard_script(capability: str) -> str:
         activate(token) {
           if (token === capability) {
             state.active = true;
+            state.applicationSeen ||= applicationContext();
             ensureListeners();
           }
         },
@@ -220,6 +285,9 @@ def _guard_script(capability: str) -> str:
         denialCount() {
           return state.denials.length;
         },
+        documentId() {
+          return documentId;
+        },
         denials() {
           return state.denials.slice();
         }
@@ -231,6 +299,8 @@ def _guard_script(capability: str) -> str:
         "SUBMIT_PATTERN", json.dumps(safety.SUBMIT_LABEL_RE.pattern)
     ).replace(
         "SAFE_UTILITY_PATTERN", json.dumps(safety.SAFE_UTILITY_LABEL_RE.pattern)
+    ).replace("WORKDAY_ACCOUNT_ACTION", SIGN_IN_ACTION_JS).replace("POSTING_APPLY", _POSTING_APPLY_JS).replace(
+        "APPLICATION_CONTEXT", _APPLICATION_CONTEXT_JS
     )
 
 
@@ -355,13 +425,37 @@ class SubmissionGuardV0:
         return sum(len(self._frame_denials(frame)) for frame in page.frames)
 
     @staticmethod
-    def click_denial_count(locator: Any) -> int:
+    def click_denial_count(locator: Any) -> int | _ClickEvidence:
+        # The clicked node may disappear after a successful React transition.
+        # Observe the originating frame/document instead of resolving it again.
+        if hasattr(locator, "element_handle"):
+            handle = locator.element_handle(timeout=2_000)
+            if handle is not None:
+                try:
+                    frame = handle.owner_frame()
+                    observation = frame.evaluate(
+                        f"() => window.{_GUARD_NAME} ? {{count: window.{_GUARD_NAME}.denialCount(), "
+                        f"id: window.{_GUARD_NAME}.documentId?.()}} : null"
+                    )
+                    if observation and observation.get("id"):
+                        return _ClickEvidence(frame, observation["id"], observation["count"])
+                finally:
+                    handle.dispose()
         return locator.evaluate(
             f"element => window.{_GUARD_NAME} ? window.{_GUARD_NAME}.denialCount() : -1"
         )
 
     @staticmethod
-    def click_was_denied(locator: Any, before: int | None) -> bool:
+    def click_was_denied(locator: Any, before: int | _ClickEvidence | None) -> bool:
+        if isinstance(before, _ClickEvidence):
+            try:
+                after = before.frame.evaluate(
+                    f"() => window.{_GUARD_NAME} ? {{count: window.{_GUARD_NAME}.denialCount(), "
+                    f"id: window.{_GUARD_NAME}.documentId?.()}} : null"
+                )
+                return not after or after.get("id") != before.document_id or after["count"] != before.count
+            except Exception:
+                return True
         if before is None or before < 0:
             return False
         try:

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import geo_reference
+import safety
 
 
 def clean_text(text: str) -> str:
@@ -92,6 +93,7 @@ CONCEPTS: dict[str, dict[str, Any]] = {
             r"^\W*name\W*$",
             r"^\W*(?:full|legal|complete|applicant|candidate)\s*(?:legal\s*)?name\b",
             r"^\W*your\s*name\b",
+            r"^\W*(?:please\s+)?(?:enter|type|provide)\s+(?:your\s+)?(?:full|legal|complete)\s+name\b",
             r"^\W*name\s*\(\s*first\s+and\s+last\s*\)\b",
         ],
         "negative": r"company|employer|school|university|reference|supervisor|manager|emergency|contact person",
@@ -677,6 +679,11 @@ def resolve_profile_value(
     """
     if not concept or profile is None:
         return "", ""
+
+    if concept in {"WORK_AUTHORIZATION", "VISA_SPONSORSHIP"}:
+        sponsorship_free = safety.sponsorship_free_work_answer(question, profile)
+        if sponsorship_free is not None:
+            return sponsorship_free
 
     val = ""
     src = f"profile.{concept.lower()}"

@@ -1,0 +1,14 @@
+{
+  "id": "f135",
+  "date": "2026-10-09",
+  "site": "Workday (any tenant with a \"Type to Add Skills\" multiselect)",
+  "class": "A rapid retry loop against a stateful widget had no defense against an unexpected browser-level side effect",
+  "symptom": "A live Harris Computer Workday application (Altera Digital Health, Principal Network Engineer) repeatedly crashed with Playwright's 'Page.wait_for_timeout: Page crashed' during Skills filling; the owner observed a Facebook tab opening right after a skill failed to type into the search box, immediately before each crash.",
+  "root_cause": "sites/workday.py WorkdayAdapter.select_skills() loops over every extracted skill value, each iteration opening the widget's prompt, typing, reading the popup, and -- on a miss -- pressing Escape and sometimes clicking a 'Skills' heading as a fallback dismiss, with no pause between iterations and no awareness of the page's own context.pages. Nothing in the loop ever checked whether an iteration's interaction (a click, a keypress, or the site's own script reacting to the rapid retries) opened a new browser tab. An unexpected tab was left open and accumulating across many failed-value iterations, which is resource pressure a long, JS-heavy Workday session does not need, consistent with the subsequent Chromium renderer crash. The exact element/script responsible for opening the tab could not be confirmed after the fact: the page recordings from that run had already been sanitized to <redacted-value> by a separate, since-fixed regression (f134), destroying the evidence needed to pin it down precisely.",
+  "why_tests_missed": "No test exercised what happens when something other than the expected skills popup opens during this loop -- every existing test's synthetic widget was well-behaved.",
+  "fix": "select_skills() now records page.context.pages before each iteration's interaction and closes any page that appears there that it did not already know about, every iteration, regardless of what opened it. A short settle pause follows a failed (non-matching) skill search, instead of retrying the next skill immediately against a widget that may still be settling from the last one.",
+  "tests": [
+    "tests/test_workday_skills.py::test_an_unexpected_tab_opened_during_a_skills_search_is_closed_not_left_open"
+  ],
+  "prevention": "A loop that interacts with a stateful third-party widget many times in a row, especially one driving real keystrokes into a live search box, should assume it does not fully control what the page does in response, and defend the one invariant it actually needs (this tab, still this tab) rather than only the specific interaction it intended."
+}

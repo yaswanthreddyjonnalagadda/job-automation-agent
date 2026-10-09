@@ -96,6 +96,11 @@ def test_events_keep_b4_metadata_without_values():
     assert handoff == {'portal':'workday','outcome_kind':'owner_needed','category':'SMS_MFA'}
 
 
+def test_navigation_failures_keep_only_known_error_categories():
+    assert d.sanitize_event_payload({'failure_kind':'hidden'}) == {'failure_kind':'hidden'}
+    assert d.sanitize_event_payload({'failure_kind':SENTINELS[0], 'exception':SENTINELS[1]}) == {}
+
+
 def test_sqlite_events_do_not_persist_private_messages_or_payloads(tmp_path):
     from job_tracker import JobTracker
     tracker = JobTracker(tmp_path / 'applications.db')

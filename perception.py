@@ -15,6 +15,12 @@ from playwright.sync_api import Page
 
 logger = logging.getLogger(__name__)
 
+
+def active_dialog(page):
+    """The same foreground dialog for page reading and account inspection."""
+    dialogs = page.locator('[role="dialog"]:visible, dialog[open]:visible')
+    return dialogs.last if dialogs.count() else None
+
 # Roles that accept answers or navigate
 ANSWER_ROLES = frozenset({
     "textbox", "searchbox", "combobox", "listbox", "radio",
