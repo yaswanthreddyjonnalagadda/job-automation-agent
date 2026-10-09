@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+import diagnostics
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -197,6 +198,7 @@ def _models_from_env(name: str, default: tuple) -> tuple:
 
 @dataclass(frozen=True)
 class AppConfig:
+    diagnostic_retention_days: int = field(default_factory=diagnostics.retention_days)
     anthropic_api_key: str = field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", ""))
     anthropic_model: str = field(
         default_factory=lambda: os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")

@@ -656,7 +656,8 @@ def test_an_upload_is_recorded_for_later_runs(page, resume_file):
     agent = make_agent(Planner(), resume_file)
     agent.key, agent.tracker = "k", Tracker()
     assert handed_over(agent.run(page))
-    assert {"kind": "resume_attached", "message": resume_file.name} in agent.tracker._events
+    assert {"kind": "resume_attached", "message": "resume document"} in agent.tracker._events
+    assert resume_file.name not in str(agent.tracker._events)
 
 
 def test_a_dropdown_that_shows_its_choice_beside_it_is_read_as_answered():

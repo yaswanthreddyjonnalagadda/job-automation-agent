@@ -1,0 +1,19 @@
+{
+  "id": "f121",
+  "date": "2026-10-08",
+  "site": "Cross-portal diagnostic capture and local dashboard",
+  "class": "Raw observation copied to durable diagnostics without a privacy boundary",
+  "symptom": "Failure/review screenshots, HTML, page recordings, console logs and events could retain applicant values and secrets; the evidence route served employer HTML as executable dashboard-origin content.",
+  "root_cause": "Capture paths wrote raw observations independently. Password-only text masking and resolved-root containment did not sanitize the contents or make HTML non-executable.",
+  "why_tests_missed": "Tests asserted artifact existence and raw format, without synthetic PII/auth/document sentinels, masking restoration, direct route content-type checks or retention safety.",
+  "fix": "Centralized structural projections, conservative visual covering, bounded safe writers, content-bound manifests, event/log projections, plain-text evidence serving and diagnostic-only retention; no raw fallback.",
+  "tests": [
+    "tests/test_diagnostic_sanitization.py::test_dom_projects_structure_without_untrusted_text",
+    "tests/test_diagnostic_sanitization.py::test_sqlite_events_do_not_persist_private_messages_or_payloads",
+    "tests/test_diagnostic_screenshot_privacy.py::test_central_capture_sentinels_absent_from_all_text_artifacts",
+    "tests/test_diagnostic_screenshot_privacy.py::test_screenshot_pixels_are_conservatively_covered_including_documents_and_frames",
+    "tests/test_evidence_route_security.py::test_safe_html_is_nonactive_and_legacy_is_rejected",
+    "tests/test_diagnostic_retention.py::test_symlink_target_and_material_in_diagnostic_folder_are_preserved"
+  ],
+  "prevention": "Make diagnostic capture a storage-only, fail-closed boundary from the outset. Test content privacy and restoration separately from runtime perception, authority, replay and path containment."
+}

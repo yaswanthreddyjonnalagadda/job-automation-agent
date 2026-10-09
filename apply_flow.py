@@ -82,6 +82,8 @@ logging.basicConfig(
 )
 logging.getLogger("anthropic").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+import diagnostics
+diagnostics.install_log_privacy()
 logger = logging.getLogger("apply_flow")
 
 # Nothing the agent logs may carry an API key, a password, an email address or
@@ -99,19 +101,8 @@ class JsonLogHandler(logging.Handler):
         self._path = path
 
     def emit(self, record: logging.LogRecord) -> None:
-        try:
-            entry = {
-                "time": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
-                "level": record.levelname,
-                "logger": record.name,
-                "event": (record.getMessage().split(":", 1)[0][:40]
-                          if record.getMessage()[:40].isupper() else ""),
-                "message": safety.redact(record.getMessage())[:2000],
-            }
-            with self._path.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(entry) + "\n")
-        except Exception:
-            pass
+        diagnostics.append_log_record(self._path, record)
+
 
 
 def refresh_answer_bank(tracker) -> None:
@@ -539,23 +530,10 @@ def approved_answers_file() -> dict:
 
 
 def collect_evidence(assistant, page, job_dir: Path, step: int) -> dict:
-    """Full-page screenshot and page HTML, saved before any decision is made."""
-    evidence_dir = job_dir / f"evidence_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_step{step}"
-    evidence_dir.mkdir(parents=True, exist_ok=True)
-    paths = {}
-    try:
-        shot = evidence_dir / "page.png"
-        page.screenshot(path=str(shot), full_page=True)
-        paths["screenshot"] = str(shot)
-    except Exception as exc:
-        logger.warning("Could not capture the screenshot: %s", exc)
-    try:
-        html = evidence_dir / "page.html"
-        html.write_text(page.content(), encoding="utf-8")
-        paths["html"] = str(html)
-    except Exception as exc:
-        logger.warning("Could not capture the page HTML: %s", exc)
-    return paths
+    """Privacy-safe evidence copy; never changes the page's answers/authority."""
+    evidence_dir = job_dir / f"evidence_{datetime.now(timezone.utc):%Y%m%d_%H%M%S_%f}_step{step}"
+    return diagnostics.capture_bundle(page, evidence_dir)
+
 
 
 def delete_screenshots(job_dir: Path) -> None:
@@ -602,9 +580,9 @@ def save_stop_page(page, job_dir: Path) -> None:
     try:
         stem = Path(job_dir) / f"stopped_{datetime.now():%Y%m%d_%H%M%S}"
         stem.parent.mkdir(parents=True, exist_ok=True)
-        page.screenshot(path=str(stem.with_suffix(".png")), full_page=True)
-        stem.with_suffix(".txt").write_text(
-            f"{page.url}\n\n" + hide_secrets(page.locator("body").aria_snapshot(mode="ai")), encoding="utf-8")
+        diagnostics.capture_safe_screenshot(page, stem.with_suffix(".png"))
+        diagnostics.write_safe_text(stem.with_suffix(".txt"),
+            diagnostics.sanitize_snapshot(page.locator("body").aria_snapshot(mode="ai")))
         logger.info("Where it stopped: %s", stem.with_suffix(".png"))
     except Exception as exc:
         logger.info("Could not save the page it stopped on: %s", str(exc).splitlines()[0][:100])
@@ -836,8 +814,7 @@ def remembered_answers(tracker, questions) -> dict:
             if match.get("answered_by") != "user":
                 continue
             recalled[question.question_text] = answer
-            logger.info("RECALLED: %r -> %r (answered by %s before)",
-                        question.question_text[:60], answer[:40], match.get("answered_by"))
+            logger.info('ANSWER_LIBRARY: approved answer retained')
             break
     return recalled
 
@@ -883,7 +860,7 @@ def learn_user_answers(assistant, page, tracker, key, profile, company: str = ""
         try:
             import profile_setup
             if profile_setup.remember_answer(label, value, company):
-                logger.info("SAVED ANSWER: %r = %r, for every application", label[:60], value[:40])
+                logger.info('ANSWER_LIBRARY: approved answer retained')
         except Exception as exc:
             logger.debug("Could not add %r to the saved answers: %s", label[:50], exc)
     if learned:
@@ -954,15 +931,15 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
 
     # The field-by-field comparison report, beside the screenshot it describes.
     comparison_path = Path(evidence.get("screenshot", str(job_dir / "x"))).with_name("comparison.json")
-    comparison_path.write_text(json.dumps(decision.as_dict(), indent=2), encoding="utf-8")
+    diagnostics.write_safe_json(comparison_path, decision.as_dict())
     evidence["comparison"] = str(comparison_path)
-    summary_path.with_name("validation.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    diagnostics.write_safe_json(summary_path.with_name("validation.json"), report)
 
     if hasattr(tracker, "record_event"):
         tracker.record_event(key, "auto_submit", decision.summary(),
                              screenshot_path=evidence.get("screenshot", ""),
                              html_path=evidence.get("html", ""),
-                             payload=decision.as_dict())
+                             payload=diagnostics.sanitize_event_payload(decision.as_dict()))
 
     status, message = safety.handover_status(report)
     if decision.eligible:
@@ -1064,7 +1041,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 return
             try:
                 dump_path = dump_forensic_failure(page, reason=f"Unhandled agent error/stall: {exc}", console_logs=getattr(page, "_console_logs", []))
-                tracker.update_status(key, STATUS_NEEDS_USER_REVIEW, notes=f"Crashed/Stalled: {exc} (dump: {dump_path})")
+                tracker.update_status(key, STATUS_NEEDS_USER_REVIEW, notes="Runtime interrupted; sanitized diagnostic capture attempted")
             except Exception as dump_err:
                 logger.error("Failed to dump forensic diagnostics: %s", dump_err)
             raise
@@ -1096,7 +1073,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
 
         if outcome.kind == "submitted":
             try:
-                page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
+                diagnostics.capture_safe_screenshot(page, job_dir / "submitted_confirmation.png")
             except Exception:
                 pass
             delete_screenshots(job_dir)
@@ -1296,7 +1273,7 @@ def submit_verified(assistant, page, tracker, key, job, job_dir: Path, decision)
         return False
     tracker.update_status(key, status, notes=note)
     try:
-        page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
+        diagnostics.capture_safe_screenshot(page, job_dir / "submitted_confirmation.png")
     except Exception:
         pass
     if status == STATUS_SUBMITTED:
@@ -1593,6 +1570,7 @@ def main() -> None:
 
     config = get_app_config()
     profile = get_user_profile()
+    diagnostics.cleanup_expired_diagnostics(config_module.BASE_DIR)
     structured = JsonLogHandler(config.log_dir / f"run_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.jsonl")
     logging.getLogger().addHandler(structured)
 
@@ -1948,7 +1926,7 @@ def main() -> None:
                 # The user submitted it themselves and the site (or their
                 # inbox) confirmed it.
                 try:
-                    page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
+                    diagnostics.capture_safe_screenshot(page, job_dir / "submitted_confirmation.png")
                 except Exception as exc:
                     logger.warning("Could not capture confirmation screenshot: %s", exc)
                 if status == STATUS_SUBMITTED:

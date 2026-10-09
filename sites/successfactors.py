@@ -77,7 +77,7 @@ class SuccessFactorsAdapter(SiteAdapter):
                 # already exposes as a pre-check, now also as a post-check, rather than
                 # inventing a new one.
                 if self.attachment_is_empty(page, kind) is False:
-                    logger.info("Uploaded %s through the %s attachment icon", Path(file_path).name, kind)
+                    logger.info('ATTACHED: application document')
                     return True
                 logger.warning("SuccessFactors attachment does not show as attached after the attempt (kind=%s)", kind)
             except Exception as exc:

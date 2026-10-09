@@ -246,7 +246,8 @@ def test_hand_over_records_evidence_and_does_not_submit_by_default(page, tmp_pat
     assert Assistant.raised is True
     audit = [e for e in tracker.events if e[0] == "auto_submit"]
     assert audit and audit[0][2]["eligible"] is False
-    assert any("AUTO_SUBMIT_VERIFIED_ONLY" in r for r in audit[0][2]["reasons"])
+    assert audit[0][2]["reason_code"] == "owner_review"
+    assert "reasons" not in audit[0][2]  # full question/answer reasons stay in live authority
     evidence = list(tmp_path.glob("evidence_*/*"))
     assert {p.name for p in evidence} >= {"page.png", "page.html", "comparison.json"}
     comparison = json.loads(next(p for p in evidence if p.name == "comparison.json").read_text(encoding="utf-8"))
@@ -375,4 +376,5 @@ def test_verified_auto_submit_stops_when_one_field_is_unapproved(page, tmp_path,
     assert status == "ready_to_submit"
     assert page.evaluate("() => !!window.submitted") is False
     audit = [e for e in tracker.events if e[0] == "auto_submit"][0][2]
-    assert any("Notice period" in r for r in audit["reasons"])
+    assert audit["eligible"] is False and audit["unapproved_field_count"] == 1
+    assert "Notice period" not in json.dumps(audit) and "2 weeks" not in json.dumps(audit)

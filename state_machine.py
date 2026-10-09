@@ -129,79 +129,17 @@ def dump_forensic_failure(
     base_dir: Path = Path("runs"),
     console_logs: Optional[list] = None,
 ) -> Path:
-    """Automated forensic failure dumper:
-    Creates a timestamped folder under runs/<timestamp>_<domain>/ and exports four
-    critical diagnostic assets:
-    1. screenshot.png (full-page screenshot)
-    2. page_state.html (complete raw HTML snapshot)
-    3. axtree_dump.json (browser accessibility snapshot)
-    4. console_logs.json (captured browser console logs)
-    """
-    url = getattr(page, "url", "") or ""
-    raw_domain = urlparse(url).netloc.lower() or "unknown_domain"
-    domain = re.sub(r"[^a-zA-Z0-9.-]", "_", raw_domain).strip("_") or "session"
-
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    """Export storage-only, privacy-safe structural evidence; failures omit assets."""
+    import diagnostics
+    domain = urlparse(getattr(page, "url", "") or "").hostname or "session"
+    domain = re.sub(r"[^a-zA-Z0-9.-]", "_", domain)[:100]
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     dump_dir = Path(base_dir) / f"{timestamp}_{domain}"
-    dump_dir.mkdir(parents=True, exist_ok=True)
-
-    # 1. Full-page screenshot (.png)
-    screenshot_path = dump_dir / "screenshot.png"
-    try:
-        page.screenshot(path=str(screenshot_path), full_page=True)
-    except Exception as exc:
-        logger.debug("Forensic screenshot capture failed: %s", exc)
-
-    # 2. Raw HTML snapshot (page_state.html)
-    html_path = dump_dir / "page_state.html"
-    try:
-        html_content = page.content() or ""
-        html_path.write_text(html_content, encoding="utf-8")
-    except Exception as exc:
-        logger.debug("Forensic HTML capture failed: %s", exc)
-
-    # 3. Accessibility snapshot (axtree_dump.json)
-    axtree_path = dump_dir / "axtree_dump.json"
-    try:
-        axtree_data: Any = None
-        if hasattr(page, "accessibility") and hasattr(page.accessibility, "snapshot"):
-            axtree_data = hide_secrets_in_tree(page.accessibility.snapshot())
-        if not axtree_data:
-            axtree_data = {"aria_snapshot": hide_secrets(page.locator("body").aria_snapshot(mode="ai", timeout=5_000))}
-        axtree_path.write_text(json.dumps(axtree_data, indent=2, default=str), encoding="utf-8")
-    except Exception as exc:
-        logger.debug("Forensic accessibility snapshot failed: %s", exc)
-        axtree_path.write_text(json.dumps({"error": str(exc)}, indent=2), encoding="utf-8")
-
-    # 4. Captured browser console logs (console_logs.json)
-    logs_path = dump_dir / "console_logs.json"
-    try:
-        logs_to_write = console_logs
-        if logs_to_write is None:
-            logs_to_write = getattr(page, "_console_logs", None)
-        if logs_to_write is None:
-            logs_to_write = []
-        logs_path.write_text(json.dumps(logs_to_write, indent=2, default=str), encoding="utf-8")
-    except Exception as exc:
-        logger.debug("Forensic console logs export failed: %s", exc)
-
-    # Diagnostic metadata
-    meta_path = dump_dir / "failure_meta.json"
-    try:
-        meta_path.write_text(
-            json.dumps({
-                "reason": reason,
-                "timestamp": timestamp,
-                "url": url,
-                "domain": domain,
-            }, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
-
-    logger.warning("FORENSIC DUMPER: Exported 4 diagnostic assets to %s (Reason: %s)", dump_dir, reason)
+    diagnostics.capture_bundle(page, dump_dir, reason=reason, console_logs=console_logs,
+                               screenshot_name="screenshot.png", html_name="page_state.html")
+    logger.warning("FORENSIC_CAPTURE: sanitized diagnostic capture attempted")
     return dump_dir
+
 
 
 class StateFingerprintCircuitBreaker:

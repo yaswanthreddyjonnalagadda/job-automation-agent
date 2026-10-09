@@ -197,10 +197,14 @@ def test_forensic_failure_dumper_exports_all_four_assets(page, tmp_path):
     assert screenshot_file.is_file()
     assert screenshot_file.stat().st_size > 0
 
-    # 2. Complete raw HTML snapshot (page_state.html)
+    # 2. Sanitized structural DOM source (page_state.html)
     html_file = dump_path / "page_state.html"
     assert html_file.is_file()
-    assert "Failure Diagnostics Page" in html_file.read_text(encoding="utf-8")
+    safe_dom = html_file.read_text(encoding="utf-8")
+    assert "Failure Diagnostics Page" not in safe_dom
+    assert "<h1>" in safe_dom and "<button>Submit</button>" in safe_dom
+    import diagnostics
+    assert diagnostics.is_safe_artifact(html_file)
 
     # 3. Native browser accessibility snapshot (axtree_dump.json)
     axtree_file = dump_path / "axtree_dump.json"
@@ -219,7 +223,8 @@ def test_forensic_failure_dumper_exports_all_four_assets(page, tmp_path):
     meta_file = dump_path / "failure_meta.json"
     assert meta_file.is_file()
     meta = json.loads(meta_file.read_text(encoding="utf-8"))
-    assert meta["reason"] == "Circuit breaker tripped: loop detected"
+    assert meta["reason"] == "<redacted-value>"
+    assert diagnostics.is_safe_artifact(meta_file)
 
 
 # ==============================================================================

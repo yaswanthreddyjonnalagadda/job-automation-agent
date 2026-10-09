@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+import diagnostics
 logger = logging.getLogger(__name__)
 
 _SUBMISSION_EVENT_FIELDS = {
@@ -294,6 +295,11 @@ class JobTracker:
     # ------------------------------------------------------------------
     def record_event(self, dedup_key: str, kind: str, message: str = "",
                      screenshot_path: str = "", html_path: str = "", payload: Optional[dict] = None) -> None:
+        kind = kind if kind in diagnostics.EVENT_KINDS else "other"
+        message = "event: " + kind
+        payload = diagnostics.sanitize_event_payload(payload)
+        screenshot_path = screenshot_path if screenshot_path and diagnostics.is_safe_artifact(Path(screenshot_path)) else ""
+        html_path = html_path if html_path and diagnostics.is_safe_artifact(Path(html_path)) else ""
         with self._connect() as conn:
             app = self._app_id(conn, dedup_key)
             if app is None:
@@ -648,7 +654,7 @@ class JobTracker:
                     item["payload"] = json.loads(item["payload"])
                 except (TypeError, ValueError):
                     pass
-            found.append(item)
+            found.append(diagnostics.sanitize_event(item))
         return found
 
     def document_matches(self, dedup_key: str, kind: str, file_path) -> bool:

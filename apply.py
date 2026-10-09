@@ -24,6 +24,9 @@ from pathlib import Path
 from urllib.parse import unquote
 
 
+import diagnostics
+diagnostics.install_log_privacy()
+
 from config import DATA_DIR, get_app_config, get_user_profile
 from job_sources import resolve_job
 
