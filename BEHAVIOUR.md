@@ -43,6 +43,9 @@ answers** on the dashboard; answer it once there and it is used on every form th
 asks it. Resumes and cover letters are named after you (`Jane_Doe_Resume_Acme.pdf`).
 Everything stays on your computer, in `data/`.
 
+The Applications dashboard renders its live cockpit whether there are no
+applications, the agent is idle, a run is active, or an owner handoff is waiting.
+
 ## What it learns from you
 
 Anything **you** type or choose on the form is your answer: it is never
