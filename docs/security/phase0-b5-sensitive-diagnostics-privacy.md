@@ -261,6 +261,64 @@ an unrelated `account/resume.txt`. Cleanup now reuses the recognized diagnostic
 filename policy; the regression checks account-folder resume/cover-letter
 preservation alongside deletion of an expired, named account-state diagnostic.
 
+## Closure correction: a retention-cleanup defect deleted real recordings
+
+Independent pre-merge verification (2026-10-08, after the run above) found that
+`cleanup_expired_diagnostics()`'s traversal entered every job's `pages/` folder and
+matched files there by the `page_\d+\.txt` filename pattern alone. That pattern is
+shared by two unrelated things: the new, run-scoped, genuinely ephemeral snapshots
+`PageAgent._save()` writes under a timestamped subfolder (already retained/pruned by
+the separate, pre-existing, count-based `page_agent.keep_latest_runs()`), and this
+project's old-style, flat, **permanent** real-application-page recordings that
+`replay_guard.py` and `tests/test_page_agent.py` depend on. A filename-only match
+cannot tell the two apart, so the first production/dashboard-startup cleanup pass
+against the real `output/` tree deleted the flat recordings once they aged past the
+retention cutoff.
+
+Timeline evidence places this before, not during, the verification above: 51 of the
+repository's `output/<job>/pages/` directories are now entirely empty (no files, no
+subfolders), with mtimes clustered in an 11.6-second window at 19:01:55-19:02:07 on
+2026-10-08, roughly 40 minutes before the `295d8eb` commit that introduced the defect
+(19:42:37) and well before this correction's own test runs. A further 14 directories
+hold only run-scoped subfolders and were not necessarily affected (they may never
+have held flat recordings). `output/` is listed in `.gitignore`, confirmed via
+`git check-ignore -v`, so none of the 51 can be recovered from git history. This is
+an already-occurred, irreversible loss of real application-page data, not a
+hypothetical risk.
+
+The fix removes `pages/` entirely from the set of directory names
+`cleanup_expired_diagnostics()` will descend into, at any depth, under any retention
+setting -- the function now never looks inside any `pages/` folder, so it can neither
+delete a flat recording nor duplicate `keep_latest_runs()`'s own handling of
+run-scoped subfolders. Two new regression tests
+(`tests/test_diagnostic_retention.py::test_flat_page_recordings_in_pages_are_never_deleted_however_old`
+and `::test_run_scoped_page_snapshots_under_pages_are_also_left_to_keep_latest_runs`)
+assert both shapes survive unconditionally, including at `days=0`, the most
+aggressive setting; both would have failed against the pre-fix code. A failure-catalogue
+entry, `reference/failures/f122-retention-cleanup-entered-pages-and-deleted-real-recordings.json`,
+records the defect class per the project's "fix the class, not the instance" rule.
+
+Consequences that cannot be undone by this fix: the five historical-recording skips
+already noted above (OCC page_53/page_02/page_08, WinChoice page_09, Rubrik page_01)
+remain skipped in every subsequent run -- confirmed by re-running
+`tests/test_page_agent.py` after the fix: the same 4 baseline failures, 92 passed,
+and the same 5 skips, unchanged from before the fix, because the fix stops future
+deletion but cannot resurrect what is already gone.
+
+Post-fix validation (run after the fix above, in this order): focused B5 tests --
+**36 passed, 3 skipped** (same Windows symlink-privilege skips as before); B1-B4
+regression (`test_auto_submit.py`, `test_account_step.py`, `test_phase4_features.py`,
+`test_page_recordings.py`, `test_visible_desktop.py`) -- **74 passed**; full
+`test_page_agent.py` -- **4 failed, 92 passed, 5 skipped** (unchanged, as above); one
+final full suite (`-n auto`, `PYTEST_XDIST_AUTO_NUM_WORKERS=4`) -- **4 failed, 2356
+passed, 11 skipped**, exactly the same four baseline node IDs, no new failing or
+error IDs; one final replay through the actual pre-commit hook (staged fix against
+`295d8eb`) -- **446 saved pages, 231 distinct, read the same before and after** --
+zero differences, confirming the fix changes no question's reading, grouping or
+answer. The replay's page count differs from the 430 recorded in the run above it
+because real application activity between the two checks added new recordings; it
+does not indicate further loss.
+
 ## Residual limitations
 
 No live employer/application submission was performed. Screenshot/console/text

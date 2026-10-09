@@ -41,6 +41,43 @@ def test_cleanup_removes_only_old_diagnostics(tmp_path):
     assert all(p.read_text() == 'protected' for p in protected)
 
 
+def test_flat_page_recordings_in_pages_are_never_deleted_however_old(tmp_path):
+    """Closure correction: the confirmed, irreversible data-loss bug this fixes. A real,
+    permanent application-page recording (`output/<job>/pages/page_NN.txt`, sitting flat,
+    with no run-timestamp subfolder) must never be treated as a diagnostic artifact
+    eligible for cleanup -- `page_NN.txt` is also the exact filename pattern
+    `PageAgent._save()` uses for its own, genuinely ephemeral, run-scoped snapshots, and a
+    name-only match cannot tell the two apart. `pages/` is therefore never entered by this
+    function at all, at any depth, regardless of the retention setting."""
+    job = tmp_path / 'output' / 'job'
+    pages = job / 'pages'
+    pages.mkdir(parents=True)
+    recording = pages / 'page_01.txt'
+    recording.write_text('a real saved application page recording')
+    very_old = time.time() - 365 * 86400
+    os.utime(recording, (very_old, very_old))
+    os.utime(pages, (very_old, very_old))
+    d.cleanup_expired_diagnostics(tmp_path, days=0)   # the most aggressive setting
+    assert recording.exists() and recording.read_text() == 'a real saved application page recording'
+
+
+def test_run_scoped_page_snapshots_under_pages_are_also_left_to_keep_latest_runs(tmp_path):
+    """The new-style, genuinely ephemeral per-run snapshots (`pages/<run>/page_NN.txt`) are
+    intentionally untouched by this function too -- their retention is already handled by
+    `page_agent.keep_latest_runs()`'s own, separate, count-based mechanism; this function
+    must not duplicate or interfere with it by also deleting from inside `pages/`."""
+    job = tmp_path / 'output' / 'job'
+    run_folder = job / 'pages' / '20260101_000000'
+    run_folder.mkdir(parents=True)
+    snapshot = run_folder / 'page_01.txt'
+    snapshot.write_text('an ephemeral run snapshot')
+    very_old = time.time() - 365 * 86400
+    os.utime(snapshot, (very_old, very_old))
+    os.utime(run_folder, (very_old, very_old))
+    d.cleanup_expired_diagnostics(tmp_path, days=0)
+    assert snapshot.exists()
+
+
 def test_zero_retention_preserves_active_capture(tmp_path):
     active = tmp_path / 'runs' / 'active'
     inactive = tmp_path / 'runs' / 'inactive'

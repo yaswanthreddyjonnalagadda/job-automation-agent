@@ -459,14 +459,27 @@ def cleanup_expired_diagnostics(base_dir: Path, days=None, active_dir=None, now=
                     continue
                 if path.is_dir():
                     # Restrict subtrees to known locations; job folders at output depth 0.
+                    # `pages/` is deliberately NEVER entered: it holds `page_NN.txt`, a name
+                    # shared by two unrelated things -- the new, run-scoped, genuinely
+                    # ephemeral snapshots PageAgent._save() writes under a timestamped
+                    # subfolder (already retained/pruned by page_agent.keep_latest_runs(),
+                    # a separate, existing, count-based mechanism), and the OLD-style, FLAT,
+                    # PERMANENT real-application-page recordings this project keeps for
+                    # replay testing. A filename-only match cannot tell them apart, so this
+                    # function must never delete anything under `pages/` at all (confirmed,
+                    # irreversible loss found in an earlier version of this function, which
+                    # entered `pages/` and deleted the flat recordings once they aged past
+                    # the retention cutoff -- `output/` is gitignored, so there was no git
+                    # recovery). `account/` is unaffected: it holds only this run's own
+                    # account-state diagnostic screenshots, never permanent recordings.
                     root = folder.relative_to(base_dir).parts[0]
-                    allowed = (root=='output' and depth==0) or (root=='output' and depth==1 and (path.name.startswith(('evidence_','step_')) or path.name in {'pages','account'})) or (root=='output' and depth==2 and folder.name=='pages') or (root=='runs' and depth==0) or (root=='logs' and path.name=='account_failures' and depth==0)
+                    allowed = (root=='output' and depth==0) or (root=='output' and depth==1 and (path.name.startswith(('evidence_','step_')) or path.name=='account')) or (root=='runs' and depth==0) or (root=='logs' and path.name=='account_failures' and depth==0)
                     if allowed:
                         stack.append((path,depth+1))
                 elif path.is_file() and _safe_artifact_name(path.name) and path.stat().st_mtime <= cutoff:
                     path.unlink()
                     removed += 1
-            if folder.name.startswith(('evidence_','step_')) or folder.parent.name in {'runs','pages'}:
+            if folder.name.startswith(('evidence_','step_')) or folder.parent.name=='runs':
                 try:
                     folder.rmdir()  # Only empty folders; never recursively delete materials.
                 except OSError:
