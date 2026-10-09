@@ -7141,6 +7141,10 @@ class JobApplicationAssistant:
         auto-submit depends on -- it reads the page, never the agent's
         intentions.
         """
+        from sites import adapter_for
+        reviewed = adapter_for(page.url).submission_fields(page)
+        if reviewed is not None:
+            return reviewed
         try:
             items = page.evaluate("""() => {
                 const visible = e => !!(e.offsetParent || e.getClientRects().length);

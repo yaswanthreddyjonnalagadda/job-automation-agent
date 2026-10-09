@@ -162,6 +162,144 @@ class WorkdayAdapter(SiteAdapter):
     confirmation_phrases = ("your application has been submitted", "application submitted", "already applied")
     portal_list_patterns = ("/candidate_home", "/applications")
 
+    def submission_posting_url(self, page, posting_url: str, title: str):
+        """Bind a location-slug redirect to the original server requisition."""
+        from urllib.parse import unquote, urlsplit
+        original, current = urlsplit(posting_url), urlsplit(page.url)
+        if (original.scheme != 'https' or current.scheme != 'https'
+                or original.netloc != current.netloc or not original.hostname
+                or not original.hostname.endswith('.myworkdayjobs.com')
+                or original.username or original.password):
+            return None
+        before, after = original.path.strip('/').split('/'), current.path.strip('/').split('/')
+        if (len(before) != 5 or len(after) != 7 or before[2] != 'job'
+                or after[:3] != before[:3] or after[4] != before[4]
+                or after[5:] != ['apply', 'applyManually']
+                or not re.fullmatch(r'[A-Za-z0-9_-]+', before[1])
+                or any(unquote(s) in {'.', '..'} or '/' in unquote(s) or '\\' in unquote(s)
+                       for s in before + after)):
+            return None
+        initial_url = page.url
+
+        def visible_identity():
+            headings = page.locator('[data-automation-id="jobTitleHeading"]:visible')
+            steps = page.locator('[data-automation-id="progressBarActiveStep"]:visible')
+            return (headings.count() == 1 and steps.count() == 1
+                    and ' '.join(headings.inner_text().split()).casefold() == ' '.join(title.split()).casefold()
+                    and bool(re.search(r'\bReview\s*$', steps.inner_text(), re.I))
+                    and page.locator('[data-automation-id="applyFlowReviewPage"]:visible').count() == 1)
+        try:
+            if not visible_identity():
+                return None
+            endpoint = (f'https://{original.netloc}/wday/cxs/{original.hostname.split(".")[0]}/'
+                        + '/'.join(before[1:]))
+            response = page.request.get(endpoint, timeout=10000, max_redirects=0)
+            if not response.ok:
+                return None
+            info = response.json().get('jobPostingInfo', {})
+            external = urlsplit(info.get('externalUrl', ''))
+            external_parts = external.path.strip('/').split('/')
+            if len(external_parts) == 5 and external_parts[0] == before[0]:
+                external_parts = external_parts[1:]
+            requisition = str(info.get('jobReqId', ''))
+            if (not requisition or not re.fullmatch(r'[A-Za-z0-9_-]+', requisition)
+                    or not re.search('_' + re.escape(requisition) + r'(?:-\d+)?$', before[4])
+                    or external.scheme != 'https' or external.netloc != original.netloc
+                    or [unquote(p) for p in external_parts] != [unquote(p) for p in before[1:]]
+                    or ' '.join(str(info.get('title', '')).split()).casefold() != ' '.join(title.split()).casefold()):
+                return None
+            return posting_url if page.url == initial_url and visible_identity() else None
+        except Exception:
+            return None
+
+    def submission_fields(self, page):
+        """Read Workday's static summary, refusing unrecognized answer structure.
+
+        Original input requirements are absent here, so every observed answer
+        is compared conservatively as required. This never supplies approvals.
+        """
+        try:
+            return page.evaluate(r"""() => {
+                const visible = e => {
+                    if (!e.getClientRects().length) return false;
+                    for (let p=e; p; p=p.parentElement) {
+                        const s=getComputedStyle(p);
+                        if (p.hidden || p.getAttribute('aria-hidden')==='true'
+                            || s.visibility==='hidden' || s.visibility==='collapse' || Number(s.opacity)===0) return false;
+                    }
+                    return true;
+                };
+                const roots=[...document.querySelectorAll('[data-automation-id="applyFlowReviewPage"]')].filter(visible);
+                if (!roots.length) return null;
+                const failure = (code='unreadable') => [{ref:'workday:review:'+code, label:'Workday review answers could not be verified',
+                    value:'', required:true, source:'site', type:'review'}];
+                if (roots.length!==1) return failure();
+                const root=roots[0], out=[], claimed=new Set();
+                if (root.querySelector('input:not([type=hidden]):not([type=file]), select, textarea, iframe, '
+                        + '[contenteditable]:not([contenteditable="false"]), [role=checkbox], [role=radio], [role=combobox]')
+                        || [...root.querySelectorAll('*')].some(e=>e.shadowRoot)) return failure();
+                const text=e=>(e?.innerText||'').replace(/\s+/g,' ').trim();
+                const claim=e=>{claimed.add(e); for(const n of e.querySelectorAll('*')) claimed.add(n);};
+                const add=(label, value, labelNode, valueNode)=>{
+                    if (!label) throw Error('empty-label');
+                    if (value.length>10000) throw Error('oversized-answer');
+                    for (const node of [labelNode, valueNode].flat()) {
+                        const walker=document.createTreeWalker(node,NodeFilter.SHOW_TEXT);
+                        while(walker.nextNode()) if(walker.currentNode.textContent.trim()
+                                && !visible(walker.currentNode.parentElement)) throw Error('hidden-answer');
+                    }
+                    out.push({ref:'aria:'+label,label,value,required:true,source:'site',type:'review'});
+                    claim(labelNode); for(const node of [valueNode].flat()) claim(node);
+                };
+                try {
+                    for (const e of root.querySelectorAll('[data-automation-id="attachments-FileUpload"], [data-automation-id="smartDivider"]')) claim(e);
+                    for (const label of root.querySelectorAll('label')) {
+                        if (!visible(label) || claimed.has(label)) continue;
+                        const row=label.parentElement, children=[...row.children];
+                        if(children.length!==2 || children[0]!==label || children[1].tagName!=='DIV') return failure('label-row');
+                        if (!text(label) && row.getAttribute('data-automation-id')==='formField-'
+                                && children[1].querySelector('[data-automation-id="attachments-FileUpload"]')) {
+                            claim(label); continue;
+                        }
+                        add(text(label),text(children[1]),label,children[1]);
+                    }
+                    for (const label of root.querySelectorAll('[data-automation-id="richText"]')) {
+                        if (!visible(label) || claimed.has(label)) continue;
+                        const row=label.parentElement.parentElement, children=[...row.children];
+                        if(children.length!==2 || !children[0].contains(label) || !children[1].querySelector('span')) return failure('question-row');
+                        add(text(label),text(children[1]),children[0],children[1]);
+                    }
+                    for (const heading of root.querySelectorAll('h4')) {
+                        const row=heading.parentElement, children=[...row.children];
+                        const values=children.filter(e=>e!==heading && visible(e) && text(e));
+                        if (values.length && values.every(e=>!e.querySelector('label,h3,h4,h5,[data-automation-id="richText"],[data-automation-id="attachments-FileUpload"]')
+                                && !claimed.has(e) && ![...e.querySelectorAll('*')].some(n=>claimed.has(n)))) {
+                            add(text(heading),values.map(text).join(' '),heading,values);
+                        }
+                    }
+                    const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+                    while(walker.nextNode()) {
+                        const node=walker.currentNode, e=node.parentElement;
+                        if(!node.textContent.trim() || claimed.has(e)) continue;
+                        if(!visible(e)) return failure('hidden-answer');
+                        if(e.closest('h3,h4,h5,h6')) continue;
+                        return failure('unlabelled-'+e.tagName+'-'+e.parentElement.tagName);
+                    }
+                    if(!out.length || out.length>200) return failure();
+                    const counts=new Map();
+                    for(const f of out) counts.set(f.label,(counts.get(f.label)||0)+1);
+                    const seen=new Map();
+                    for(const f of out) if(counts.get(f.label)>1) {
+                        const n=(seen.get(f.label)||0)+1;seen.set(f.label,n);
+                        f.label+=` [entry ${n}]`; f.ref='workday:review:'+f.label;
+                    }
+                    return out;
+                } catch (error) { return failure(['empty-label','oversized-answer','hidden-answer'].includes(error.message) ? error.message : 'read-error'); }
+            }""")
+        except Exception:
+            return [{"ref": "workday:review:unreadable", "label": "Workday review answers could not be verified",
+                     "value": "", "required": True, "source": "site", "type": "review"}]
+
     _REGISTRATION_ERROR = re.compile(
         r"passwords? (?:do not|don't) match|please check (?:the )?box|field is required|"
         r"(?:email|password).{0,30}(?:invalid|required)",

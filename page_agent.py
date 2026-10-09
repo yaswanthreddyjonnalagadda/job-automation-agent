@@ -6049,6 +6049,8 @@ class PageAgent:
             # Not a form still without the resume it asks for.
             if self._tailored_resume_missing(page) and self._form_asks_for_a_resume(page, controls):
                 return "the tailored resume is not attached"
+            if getattr(self.config, "auto_submit_verified_only", False):
+                return "review step reached -- the application is ready for verified submission checks"
             return "automatic submission is off -- the application is ready for you to submit"
         # A button that says Submit on a step with more to come: it saves the step, and gets every check but the
         # finished-application ones. The old AUTO_SUBMIT setting plays no part.

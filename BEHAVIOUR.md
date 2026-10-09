@@ -1243,3 +1243,27 @@ optional skill list can remain intentionally blank; its fresh, field-specific
 required status is checked before continuing. Removed tags, leftover search text,
 unreadable state, or a newly required blank still fail verification. A verified
 optional blank does not repeat the same unavailable searches on each read.
+
+## Workday final-review evidence
+
+Workday may change the posting's location slug when it opens Apply Manually.
+The final verification adapter accepts that route only for the same HTTPS
+Workday host, career site and exact requisition slug, with a visible matching
+job title and Review step. A fresh, nonredirected Workday job-metadata response
+must independently match the original posting's external URL, requisition ID
+and title. The page URL and visible identity are rechecked after that response.
+
+Workday's final summary renders answers as text rather than input controls.
+Verification reads the current labelled rows, questionnaire rows and heading
+value blocks within the visible review container. It compares every observed
+answer conservatively as required because the summary omits earlier field
+requirements. The reader supplies no approvals. Repeated labels receive distinct
+identities; they cannot borrow one another's recorded answer. Unknown answer
+structure, dynamic controls, frames, shadow content and unreadable summaries
+produce a blocking comparison rather than empty evidence. Changed values are
+read afresh and compared against existing approved data. Optional blank handling
+on editable steps is unchanged; uncertainty in a summary remains held.
+
+When verified auto-submit is enabled, the page-agent handoff says the Review
+step is ready for verification checks. It does not claim the setting is off,
+and the page agent still never dispatches the final Submit action itself.

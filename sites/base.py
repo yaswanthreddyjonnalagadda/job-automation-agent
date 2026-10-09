@@ -87,6 +87,10 @@ class SiteAdapter:
         """Fresh attachment evidence from a portal's review panel, if supported."""
         return None
 
+    def submission_fields(self, page) -> Optional[list[dict]]:
+        """Fresh static review answers; None means ordinary input readback applies."""
+        return None
+
     def overlay_selector(self) -> str:
         """Extra selectors for this platform's modal/overlay containers."""
         return ""
