@@ -835,6 +835,9 @@ Review Your Application panel and return to Self-Attest & Submit. It uses the
 attachments actually found there and then rechecks the restored final form.
 Failure to find or restore those panels does not supply attachment evidence.
 Local document bytes must still match the stored application documents.
+Navigation uses the visible step action or the row's own click handler, rather
+than a hidden child control. Probe diagnostics retain counts and fixed failure
+categories, never raw exception text or application answers.
 
 A checked electronic-signing checkbox may match your explicit
 `sign_attestations` preference. This neither checks an unsigned box nor grants

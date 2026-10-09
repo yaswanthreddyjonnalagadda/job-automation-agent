@@ -77,8 +77,9 @@ class ADPAdapter(SiteAdapter):
             return named if named.count() == 1 else steps.filter(has_text=pattern)
 
         def click_step(row):
-            actions = row.locator("button, a, [role=button], [role=link]")
-            target = actions if actions.count() == 1 else row
+            actions = row.locator("button:visible, a:visible, [role=button]:visible, [role=link]:visible")
+            handles_click = row.evaluate("e => typeof e.onclick === 'function' || e.tabIndex >= 0")
+            target = row if handles_click or actions.count() != 1 else actions
             target.click(timeout=4000)
 
         review = step(re.compile(r"Review\s+Your\s+Application", re.I))
@@ -101,27 +102,40 @@ class ADPAdapter(SiteAdapter):
                 if documents:
                     break
                 page.wait_for_timeout(200)
-        except Exception:
+        except Exception as exc:
             documents = []
+            self._probe_note(assistant, "review", 1, "failed", self._failure_kind(exc))
         finally:
             if page.url == initial_url:
                 try:
                     click_step(final)
                     submit.first.wait_for(state="visible", timeout=4000)
                     restored = page.url == initial_url
-                except Exception:
+                except Exception as exc:
                     restored = False
+                    self._probe_note(assistant, "submission", 1, "failed", self._failure_kind(exc))
         self._probe_note(assistant, "review", len(documents), "verified" if documents else "unknown")
         self._probe_note(assistant, "submission", 1 if restored else 0, "verified" if restored else "unknown")
         return documents if restored else []
 
     @staticmethod
-    def _probe_note(assistant, stage, count, result):
+    def _probe_note(assistant, stage, count, result, failure_kind=None):
         tracker = getattr(assistant, "tracker", None)
         if tracker is not None and hasattr(tracker, "record_event"):
             try:
+                payload = {"action": "navigate", "stage": stage, "count": count, "result": result}
+                if failure_kind:
+                    payload["failure_kind"] = failure_kind
                 tracker.record_event(getattr(assistant, "application_key", ""), "note",
-                    "ADP attachment review probe", payload={
-                        "action": "navigate", "stage": stage, "count": count, "result": result})
+                    "ADP attachment review probe", payload=payload)
             except Exception:
                 pass
+
+    @staticmethod
+    def _failure_kind(exc):
+        text = str(exc).lower()
+        for phrase, code in (("not visible", "hidden"), ("intercepts pointer events", "covered"),
+                             ("not enabled", "disabled"), ("detached", "detached")):
+            if phrase in text:
+                return code
+        return "timeout" if type(exc).__name__ == "TimeoutError" else "unknown"

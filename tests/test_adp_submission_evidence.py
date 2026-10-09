@@ -66,7 +66,7 @@ def test_adp_identity_refuses_other_jobs_tenants_and_hosts(page, current):
     assert adapter.submission_posting_url(page, POSTING, "Security Engineer") is None
 
 
-@pytest.mark.parametrize("plain_rows", [False, True])
+@pytest.mark.parametrize("plain_rows", [False, True, "hidden"])
 def test_review_attachment_is_read_and_final_panel_restored(page, plain_rows):
     html = """
       <ol><li><button onclick="document.getElementById('panel').innerHTML='<a href=/resume>Resume_Example.pdf</a>'">Review Your Application</button></li>
@@ -78,6 +78,8 @@ def test_review_attachment_is_read_and_final_panel_restored(page, plain_rows):
         html = html.replace("<li><button onclick=", "<li onclick=").replace("</button></li>", "</li>")
         html = html.replace(">Review Your Application</li>", ">5 Review Your Application</li>")
         html = html.replace(">Self-Attest &amp; Submit</li>", ">6 Self-Attest &amp; Submit</li>")
+    if plain_rows == "hidden":
+        html = html.replace("</li>", "<button hidden>Details</button></li>")
     page.route("**/*", lambda r: r.fulfill(content_type="text/html", body=html))
     page.goto(CURRENT)
     assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
