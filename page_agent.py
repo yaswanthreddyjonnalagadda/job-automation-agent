@@ -3286,6 +3286,18 @@ class PageAgent:
                     logger.info("NOT STUCK: %s -- reading the page again", "; ".join(missing)[:200])
                     continue
                 return Outcome("owner_needed", page, [f"could not set: {m}" for m in missing])
+            # A declaration can reveal its name/signature box only after it
+            # is checked. Read newly exposed, answerable fields before calling
+            # a known profile answer a gap requiring the owner. The existing
+            # page/shape limits still bound repeated dynamic changes.
+            before_questions = {(c.role, _plain(c.question)) for c in controls}
+            if given and any(
+                    c.role in ANSWER_ROLES and not c.disabled and not c.answer
+                    and (c.role, _plain(c.question)) not in before_questions
+                    and (self.known_answer(c)[0] or self._attestation_answer(c)[0])
+                    for c in after):
+                feedback = "a new field appeared after the previous answer; resolve it from approved data"
+                continue
             # Only the last step must be complete before the agent presses on.
             about_to_send = plan.next_kind in ("final_submit", "none") or safety.is_submit_label(plan.next_label)
             blockers = self.blockers(page, plan, after, about_to_send=about_to_send)

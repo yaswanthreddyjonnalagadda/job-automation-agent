@@ -1,0 +1,17 @@
+{
+  "id": "f128",
+  "date": "2026-10-09",
+  "site": "ADP electronic-signing step; shared dynamic-field reader",
+  "class": "A final declaration exposed an answerable field after planning and was handed off as unknown",
+  "symptom": "After the signing checkbox was checked, the required Please type your full name field appeared and the run stopped despite the profile containing the applicant's name.",
+  "root_cause": "Final declaration actions run after ordinary answers. Newly revealed controls were checked for blanks before a fresh plan, and the name matcher recognized full-name labels only without imperative enter/type/provide prefixes.",
+  "why_tests_missed": "Earlier signature tests kept the name input visible at planning time and used direct Full Name labels. They did not introduce a required name input in response to checking a declaration.",
+  "fix": "Reread newly exposed fields when supported profile or authorized declaration answers exist, under the existing page/shape limits. Resolve imperative full-name prompts while retaining exclusions for other people's names. Scope ADP review-step lookup to navigation list items so duplicate page headings do not suppress evidence collection.",
+  "tests": [
+    "tests/test_adp_submission_evidence.py::test_signing_checkbox_revealing_a_known_required_name_is_reread",
+    "tests/test_adp_submission_evidence.py::test_imperative_full_name_prompt_resolves_to_profile",
+    "tests/test_adp_submission_evidence.py::test_other_peoples_names_are_not_the_applicants_full_name",
+    "tests/test_adp_submission_evidence.py::test_review_attachment_is_read_and_final_panel_restored"
+  ],
+  "prevention": "Test conditional fields revealed by final declarations and resolve supported profile facts before handoff. Distinguish navigation controls from headings with the same text."
+}

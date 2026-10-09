@@ -70,6 +70,7 @@ def test_review_attachment_is_read_and_final_panel_restored(page):
     page.route("**/*", lambda r: r.fulfill(content_type="text/html", body="""
       <ol><li><button onclick="document.getElementById('panel').innerHTML='<a href=/resume>Resume_Example.pdf</a>'">Review Your Application</button></li>
       <li><button onclick="document.getElementById('panel').innerHTML='<button type=button>Submit</button>'">Self-Attest &amp; Submit</button></li></ol>
+      <h1>Review Your Application</h1><h2>Self-Attest &amp; Submit</h2>
       <main id=panel><button type=button>Submit</button></main>
     """))
     page.goto(CURRENT)
@@ -167,3 +168,38 @@ def test_review_resume_reactivates_automation_before_reading_again(page, tmp_pat
         config.UserProfile(full_name="Example Applicant"), SimpleNamespace(), job,
         SimpleNamespace(update_status=lambda *a, **k: None), "key", tmp_path,
         tmp_path / "Resume.pdf", SimpleNamespace(timeout=1), tmp_path / "signal")
+
+
+def test_signing_checkbox_revealing_a_known_required_name_is_reread(page, tmp_path):
+    import config
+    import page_agent
+    page.set_content("""<h1>Self-Attest &amp; Submit</h1>
+      <label><input id=consent type=checkbox required
+         onchange="document.getElementById('signature').innerHTML='<label>Please type your full name.<input id=fullname required></label>'">
+        Yes, I agree to sign electronically.</label>
+      <div id=signature></div><button type=button onclick="window.sent=true">Submit</button>""")
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant.values = safety.AgentValues()
+    profile = config.UserProfile(full_name="Example Applicant", sign_attestations=True)
+    agent = page_agent.PageAgent(assistant, SimpleNamespace(),
+        SimpleNamespace(form_answer_mode="profile", auto_submit=False, ats_email=""), profile,
+        SimpleNamespace(raw_text=""), SimpleNamespace(title="Engineer", company="Example", url=POSTING),
+        job_dir=tmp_path)
+    outcome = agent.run(page)
+    assert page.locator("#fullname").input_value() == profile.full_name, (
+        outcome.reasons, [(c.role, c.question, agent.known_answer(c), agent._attestation_answer(c))
+                          for c in page_agent.parse_snapshot(agent.snapshot(page)) if c.role == "textbox"])
+    assert not page.evaluate("Boolean(window.sent)")
+    assert not any("still blank" in reason for reason in outcome.reasons)
+
+
+@pytest.mark.parametrize("question", ["Please type your full name.", "Enter your legal name", "Provide complete name"])
+def test_imperative_full_name_prompt_resolves_to_profile(question):
+    import concept_matcher
+    assert concept_matcher.match_concept(question=question) == "FULL_NAME"
+
+
+@pytest.mark.parametrize("question", ["Please enter your employer full name", "Please type your supervisor legal name"])
+def test_other_peoples_names_are_not_the_applicants_full_name(question):
+    import concept_matcher
+    assert concept_matcher.match_concept(question=question) != "FULL_NAME"

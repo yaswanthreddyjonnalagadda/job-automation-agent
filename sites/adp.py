@@ -70,8 +70,9 @@ class ADPAdapter(SiteAdapter):
         """
         if not self.matches(page.url):
             return None
-        review = page.get_by_text(re.compile(r"^\s*Review Your Application\s*$", re.I))
-        final = page.get_by_text(re.compile(r"^\s*Self-Attest\s*&\s*Submit\s*$", re.I))
+        steps = page.get_by_role("listitem")
+        review = steps.get_by_text(re.compile(r"^\s*Review Your Application\s*$", re.I))
+        final = steps.get_by_text(re.compile(r"^\s*Self-Attest\s*&\s*Submit\s*$", re.I))
         submit = page.get_by_role("button", name=re.compile(r"^Submit$", re.I))
         if review.count() != 1 or final.count() != 1 or not submit.count() or not submit.first.is_visible():
             return None

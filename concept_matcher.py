@@ -93,6 +93,7 @@ CONCEPTS: dict[str, dict[str, Any]] = {
             r"^\W*name\W*$",
             r"^\W*(?:full|legal|complete|applicant|candidate)\s*(?:legal\s*)?name\b",
             r"^\W*your\s*name\b",
+            r"^\W*(?:please\s+)?(?:enter|type|provide)\s+(?:your\s+)?(?:full|legal|complete)\s+name\b",
             r"^\W*name\s*\(\s*first\s+and\s+last\s*\)\b",
         ],
         "negative": r"company|employer|school|university|reference|supervisor|manager|emergency|contact person",

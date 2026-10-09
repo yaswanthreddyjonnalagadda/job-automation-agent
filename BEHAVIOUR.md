@@ -846,6 +846,12 @@ Resuming at final review reactivates automation before reading the form again.
 Once verified auto-submit returns confirmed success, the reading loop exits
 immediately so normal browser cleanup can close the application window.
 
+When an answer reveals another field the profile can answer, the reader checks
+the page again before handing it over as missing information. This includes a
+signing checkbox that reveals a required full-name box. Existing page and retry
+limits still apply. Prompts such as “Please type your full name” resolve to the
+applicant's profile name; employer and supervisor names do not.
+
 Immediately before the click, a local SQLite transaction writes the durable
 `DISPATCHED` state and append-only authorization/dispatch safety events. The
 state uses a separate canonical effect key derived from the application URL:
