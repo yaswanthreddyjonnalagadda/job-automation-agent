@@ -1,0 +1,10 @@
+{
+  "id": "f119", "date": "2026-10-05", "site": "Hospital for Special Surgery Workday",
+  "class": "Loop detector ignores committed form progress",
+  "symptom": "After LinkedIn was committed on My Information, the third Continue attempt was blocked before clicking.",
+  "root_cause": "State fingerprints included only URL, step and field count, so changed answers did not reset the identical-state counter. A preferred-name checkbox also received a text name.",
+  "why_tests_missed": "Circuit-breaker tests changed page structure instead of committed answers on the same step; preferred-name tests did not cover its presence toggle.",
+  "fix": "Fingerprint visible form values and selections using a private digest, excluding passwords. Preferred-name presence toggles return checked or unchecked from the profile.",
+  "tests": ["tests/test_form_progress_fingerprint.py::test_changed_answers_allow_continue_but_unchanged_form_still_trips", "tests/test_form_progress_fingerprint.py::test_preferred_name_toggle_uses_boolean_not_name"],
+  "prevention": "Test both real field progress and unchanged-state loop protection on the same wizard step."
+}

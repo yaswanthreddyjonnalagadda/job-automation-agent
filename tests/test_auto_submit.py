@@ -60,6 +60,7 @@ class Tracker:
         self.status = None
         self.notes = None
         self.events = []
+        self.submission_state = None
         self._docs_match = docs_match
 
     def update_status(self, key, status, notes=None):
@@ -68,6 +69,27 @@ class Tracker:
     def record_event(self, key, kind, message="", screenshot_path="", html_path="", payload=None):
         self.events.append((kind, message, payload))
 
+    def get_submission_effect_state(self, key):
+        return self.submission_state
+
+    def begin_submission_dispatch(self, key, aliases=()):
+        if self.submission_state in {"DISPATCHED", "CONFIRMED", "UNCERTAIN"}:
+            raise RuntimeError("replay blocked")
+        self.events.append(("SUBMISSION_AUTHORIZED", "", {}))
+        self.submission_state = "DISPATCHED"
+        self.events.append(("SUBMISSION_DISPATCHED", "", {}))
+
+    def finish_submission_effect(self, key, state, *, reconciled=False, evidence_kind=None):
+        if self.submission_state != "DISPATCHED" and not (
+            self.submission_state == "UNCERTAIN" and state == "CONFIRMED" and reconciled
+        ):
+            raise RuntimeError("invalid state transition")
+        self.submission_state = state
+        self.events.append((f"SUBMISSION_{state}", "", {"evidence_kind": evidence_kind}))
+
+    def record_submission_safety_event(self, key, kind, payload=None):
+        self.events.append((kind, "", payload or {}))
+
     def document_matches(self, key, kind, path):
         return self._docs_match
 
@@ -75,6 +97,7 @@ class Tracker:
         class Record:
             title, company = "Network Engineer", "Example Corp"
             url = "https://jobs.example.com/apply/42"
+            status = "prepared"
         return Record()
 
 
@@ -205,7 +228,7 @@ def test_hand_over_records_evidence_and_does_not_submit_by_default(page, tmp_pat
         def find_submit_button(self, page):
             button = page.get_by_role("button", name="Submit application")
             return button if button.count() else None
-        def click_verified_submit(self, page):
+        def click_verified_submit(self, page, authorization):
             raise AssertionError("must not submit while the setting is off")
 
     tracker = Tracker()
@@ -223,7 +246,8 @@ def test_hand_over_records_evidence_and_does_not_submit_by_default(page, tmp_pat
     assert Assistant.raised is True
     audit = [e for e in tracker.events if e[0] == "auto_submit"]
     assert audit and audit[0][2]["eligible"] is False
-    assert any("AUTO_SUBMIT_VERIFIED_ONLY" in r for r in audit[0][2]["reasons"])
+    assert audit[0][2]["reason_code"] == "owner_review"
+    assert "reasons" not in audit[0][2]  # full question/answer reasons stay in live authority
     evidence = list(tmp_path.glob("evidence_*/*"))
     assert {p.name for p in evidence} >= {"page.png", "page.html", "comparison.json"}
     comparison = json.loads(next(p for p in evidence if p.name == "comparison.json").read_text(encoding="utf-8"))
@@ -249,7 +273,7 @@ def test_a_page_before_the_last_is_not_called_ready_to_submit(page, tmp_path):
             pass
         def find_submit_button(self, page):
             return None
-        def click_verified_submit(self, page):
+        def click_verified_submit(self, page, authorization):
             raise AssertionError("never on a page before the last")
 
     class Config:
@@ -266,7 +290,8 @@ def test_a_page_before_the_last_is_not_called_ready_to_submit(page, tmp_path):
 
 def test_submission_is_recorded_only_on_evidence(page, tmp_path):
     class Assistant:
-        def click_verified_submit(self, page):
+        def click_verified_submit(self, page, authorization):
+            self.tracker.begin_submission_dispatch(self.application_key)
             return True
         def wait_for_submission_evidence(self, page, job_title="", timeout_seconds=0):
             return None            # the site said nothing
@@ -351,4 +376,5 @@ def test_verified_auto_submit_stops_when_one_field_is_unapproved(page, tmp_path,
     assert status == "ready_to_submit"
     assert page.evaluate("() => !!window.submitted") is False
     audit = [e for e in tracker.events if e[0] == "auto_submit"][0][2]
-    assert any("Notice period" in r for r in audit["reasons"])
+    assert audit["eligible"] is False and audit["unapproved_field_count"] == 1
+    assert "Notice period" not in json.dumps(audit) and "2 weeks" not in json.dumps(audit)

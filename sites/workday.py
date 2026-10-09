@@ -199,9 +199,11 @@ class WorkdayAdapter(SiteAdapter):
             # never run on a work entry (it wrote the owner's home into each).
             start_month, start_year = _split_month_year(job.get("start", ""))
             self.fill_date_spinner(assistant, page, "workExperience", "startDate", i, start_month, start_year)
-            if job.get("current"):
-                assistant.check_first_matching(page, ["currently work here"])
-            else:
+            # A repeated checkbox belongs to this job, even when the site
+            # starts every entry checked. Clear former jobs before locating To.
+            current = page.locator('input[id$="--currentlyWorkHere"]').nth(i)
+            current.set_checked(bool(job.get("current")), timeout=5_000)
+            if not job.get("current"):
                 end_month, end_year = _split_month_year(job.get("end", ""))
                 # 'To' only renders for non-current entries, so index among
                 # those, not the overall job index.
@@ -254,6 +256,17 @@ class WorkdayAdapter(SiteAdapter):
             names += [str(a) for a in (alternatives.get(name) or [])]
         return [n for n in dict.fromkeys(n.strip() for n in names) if n]
 
+    @staticmethod
+    def _field_names(assistant, field: str) -> list[str]:
+        """The recorded subject, then only the owner's approved substitutes."""
+        import option_match
+        alternatives = getattr(getattr(assistant, "_profile", None), "answer_alternatives", None) or {}
+        candidates = [field]
+        for name, values in alternatives.items():
+            if option_match.plain(str(name)) == option_match.plain(field) and isinstance(values, (list, tuple)):
+                candidates.extend(str(value) for value in values if str(value).strip())
+        return list(dict.fromkeys(candidates))
+
     def fill_education_section(self, assistant, page: Page, education: list[dict]) -> None:
         self.delete_all_entries(assistant, page, "Education", "Certifications")
         # Some Workday tenants collect only school, degree and field of study.
@@ -285,7 +298,8 @@ class WorkdayAdapter(SiteAdapter):
             # option from the tenant's list.
             field = edu.get("field", "")
             if field:
-                self.select_from_searchable_input(assistant, page, "--fieldOfStudy", [field], i)
+                self.select_from_searchable_input(assistant, page, "--fieldOfStudy",
+                                                  self._field_names(assistant, field), i, keyboard=False)
             if has_completion_year:
                 _, end_year = _split_month_year(edu.get("end", ""))
                 # Education's date part is 'lastYearAttended', not 'endDate'.
@@ -302,7 +316,8 @@ class WorkdayAdapter(SiteAdapter):
                     self.fill_by_id_suffix(assistant, page, "--schoolName", i, edu.get("school", ""))
                 field = edu.get("field", "")
                 if field and not self._multiselect_selection(page, "--fieldOfStudy", index=i):
-                    self.select_from_searchable_input(assistant, page, "--fieldOfStudy", [field], i)
+                    self.select_from_searchable_input(assistant, page, "--fieldOfStudy",
+                                                  self._field_names(assistant, field), i, keyboard=False)
                 if has_completion_year:
                     _, end_year = _split_month_year(edu.get("end", ""))
                     if end_year and not self._date_year_is(assistant, page, "education", "lastYearAttended", i, end_year):
@@ -349,6 +364,62 @@ class WorkdayAdapter(SiteAdapter):
                     return True
             except Exception:
                 return False
+        return False
+
+    @staticmethod
+    def fill_date_segment(page, field, value: str):
+        """Update one segment while preserving and verifying its composite date."""
+        marker = field.get_attribute("data-automation-id") or ""
+        parts = ("Month", "Day", "Year")
+        chosen = next((part for part in parts if marker == f"dateSection{part}-input"), None)
+        if chosen is None:
+            return None
+        if not str(value).isdigit():
+            return False
+        group = field.locator(
+            'xpath=ancestor::*[count(.//input[starts-with(@data-automation-id,"dateSection")]) > 1][1]')
+        if not group.count():
+            return None
+        segments, expected = [], []
+        for part in parts:
+            segment = group.locator(f'input[data-automation-id="dateSection{part}-input"]')
+            if not segment.count():
+                continue
+            wanted = str(value) if part == chosen else segment.first.input_value().strip()
+            if wanted and not wanted.isdigit():
+                return False
+            segments.append(segment.first)
+            expected.append(wanted.zfill(4 if part == "Year" else 2) if wanted else "")
+        # Three-part variants can advance focus differently from MM/YYYY.
+        # Their bounded spin controls change one segment without typing into
+        # the neighboring segment. Verify every part after the adjustment.
+        current = field.input_value().strip()
+        target = int(value)
+        if not current:
+            field.press("ArrowUp")
+            page.wait_for_timeout(100)
+            current = field.input_value().strip()
+        if current.isdigit() and abs(int(current) - target) <= 60:
+            for _ in range(abs(int(current) - target)):
+                field.press("ArrowUp" if int(current) < target else "ArrowDown")
+                current = field.input_value().strip()
+                if not current.isdigit():
+                    break
+            actual = [segment.input_value().strip() for segment in segments]
+            if all(got.lstrip("0") == want.lstrip("0") for got, want in zip(actual, expected)):
+                return True
+        occupied = [i for i, v in enumerate(expected) if v]
+        if not occupied or any(not expected[i] for i in range(occupied[0], occupied[-1] + 1)):
+            return False  # An internal gap cannot be represented by a digit stream.
+        stream = "".join(expected[occupied[0]:occupied[-1] + 1])
+        for _ in range(3):
+            segments[occupied[0]].focus(timeout=3_000)
+            page.keyboard.press("Control+a")
+            page.keyboard.type(stream, delay=120)
+            page.wait_for_timeout(400)
+            actual = [segment.input_value().strip() for segment in segments]
+            if all(got.lstrip("0") == want.lstrip("0") for got, want in zip(actual, expected)):
+                return True
         return False
 
     def fill_date_spinner(self, assistant, page: Page, section_key: str, date_key: str, index: int, month: str = "", year: str = ""
@@ -534,6 +605,48 @@ class WorkdayAdapter(SiteAdapter):
         except Exception:
             return False
 
+    @staticmethod
+    def is_searchable_input(field) -> bool:
+        """A Workday prompt can expose a textbox role while requiring a selected row."""
+        return bool(field.evaluate("""e => e.tagName === 'INPUT' && (
+            e.getAttribute('data-uxi-widget-type') === 'selectinput' ||
+            (e.getAttribute('data-automation-id') === 'searchBox' &&
+             e.closest('[data-automation-id="monikerSearchBox"]')))
+        """))
+
+    def select_skills(self, assistant, page, field, values: list[str]) -> tuple[list[str], list[str]]:
+        """Search each supported skill separately and verify its committed tag."""
+        import option_match
+        identifier = field.get_attribute("id") or ""
+        widget = field.get_attribute("data-uxi-multiselect-id") or ""
+        field = page.locator(f"input[id={json.dumps(identifier)}]")
+        container = field.locator('xpath=ancestor::*[@data-automation-id="multiSelectContainer"][1]')
+        selected = lambda: container.locator('[data-automation-id="selectedItem"]').all_text_contents()
+        missing = []
+        for value in dict.fromkeys(v.strip() for v in values if v.strip()):
+            if option_match.best_option(selected(), value) is not None:
+                continue
+            self._open_prompt(assistant, page, field, widget)
+            field.fill("")
+            field.type(value, delay=10)
+            page.wait_for_timeout(700)
+            popup = page.locator(f'[data-automation-id="responsiveMonikerPrompt"][data-associated-widget={json.dumps(widget)}]')
+            rows = popup.locator('[data-automation-id="promptOption"]')
+            labels = rows.all_text_contents()
+            index = option_match.best_option(labels, value)
+            if index is not None:
+                rows.nth(index).click(timeout=3_000)
+                page.wait_for_timeout(300)
+            if option_match.best_option(selected(), value) is None:
+                missing.append(value)
+            field.fill("")
+            page.keyboard.press("Escape")
+            if popup.count() and popup.is_visible():
+                heading = page.get_by_role("heading", name="Skills", exact=True)
+                if heading.count() == 1:
+                    heading.click(timeout=3_000)
+        return selected(), missing
+
     def select_from_searchable_input(
         self, assistant, page: Page, id_suffix: str, candidates: list[str], index: int = 0,
         keyboard: bool = True,
@@ -549,14 +662,23 @@ class WorkdayAdapter(SiteAdapter):
                 return False
 
             multiselect_id = field.get_attribute("data-uxi-multiselect-id") or ""
+            # Opening a prompt relocates the input and changes nth() order.
+            # Keep the identity selected before opening it, not its old index.
+            identifier = field.get_attribute("id") or ""
+            if identifier:
+                field = page.locator(f"input[id={json.dumps(identifier)}]")
+            elif multiselect_id:
+                field = page.locator(f"input[data-uxi-multiselect-id={json.dumps(multiselect_id)}]")
 
             # Never re-drive a widget that already holds a value: these
             # retries toggle selections, so a second pass over a correctly
             # filled field is how a good answer gets cleared.
             existing = self._multiselect_selection(page, id_suffix, multiselect_id, index)
             if existing:
-                logger.info("%s already holds %r; leaving it alone", id_suffix, existing)
-                return True
+                import option_match
+                supported = any(option_match.plain(existing) == option_match.plain(candidate) for candidate in candidates)
+                logger.info("%s already holds %r; supported=%s, leaving it alone", id_suffix, existing, supported)
+                return supported
 
             for cand in candidates:
                 # Keyboard first: typing already opens the list with the best
@@ -581,17 +703,31 @@ class WorkdayAdapter(SiteAdapter):
 
                     if strategy == "matched_row":
                         import option_match
-                        rows = assistant._visible_option_texts(page)
+                        prompt = page.locator(
+                            f'[data-automation-id="responsiveMonikerPrompt"][data-associated-widget={json.dumps(multiselect_id)}]')
+                        root = prompt if prompt.count() else page
+                        rows = ([row.get_attribute("data-automation-label") or row.inner_text()
+                                 for row in root.locator('[data-automation-id="promptOption"]').all()]
+                                if prompt.count() else assistant._visible_option_texts(page))
                         k = option_match.best_option(rows, cand)
-                        if k is None:
+                        if k is None or page.locator(
+                                f'[data-automation-id="responsiveMonikerPrompt"][data-associated-widget={json.dumps(multiselect_id)}] '
+                                '[data-uxi-multiselectlistitem-type="2"]').count():
+                            chosen = self._choose_scrolled_prompt(assistant, page, multiselect_id, cand)
+                            if not chosen:
+                                chosen = self._choose_nested_prompt(assistant, page, multiselect_id, cand)
+                            if chosen and self._searchable_value_committed(
+                                    assistant, page, id_suffix, chosen, multiselect_id, index, exact=True):
+                                logger.info('FIELD_ACTION: application field handled')
+                                return True
                             continue
-                        row = page.locator(f"[data-automation-id='promptOption']"
+                        row = root.locator(f"[data-automation-id='promptOption']"
                                            f"[data-automation-label={json.dumps(rows[k])}]")
                         if not row.count() or not assistant._click_resiliently(row.first):
                             continue
                         page.wait_for_timeout(800)
-                        if self._searchable_value_committed(assistant, page, id_suffix, rows[k], multiselect_id, index):
-                            logger.info("Selected %r in %s (the row that is %r)", rows[k], id_suffix, cand)
+                        if self._searchable_value_committed(assistant, page, id_suffix, rows[k], multiselect_id, index, exact=True):
+                            logger.info('FIELD_ACTION: application field handled')
                             return True
                         continue
                     if strategy == "suggestion_text":
@@ -607,7 +743,7 @@ class WorkdayAdapter(SiteAdapter):
 
                     page.wait_for_timeout(800)
                     if self._searchable_value_committed(assistant, page, id_suffix, cand, multiselect_id, index):
-                        logger.info("Selected %r in %s (via %s)", cand, id_suffix, strategy)
+                        logger.info('FIELD_ACTION: application field handled')
                         return True
                     logger.info(
                         "Option %r appeared to select in %s but did not commit; trying next strategy",
@@ -635,12 +771,91 @@ class WorkdayAdapter(SiteAdapter):
                 if self._click_matching_option(assistant, page, field, pick, id_suffix):
                     page.wait_for_timeout(800)
                     if self._searchable_value_committed(assistant, page, id_suffix, pick, multiselect_id, index):
-                        logger.info("Selected %r in %s (semantic)", pick, id_suffix)
+                        logger.info('FIELD_ACTION: application field handled')
                         return True
             return False
         except Exception as exc:
             logger.warning("Searchable selection failed for %s: %s", id_suffix, exc)
             return False
+
+    @staticmethod
+    def _choose_scrolled_prompt(assistant, page, multiselect_id: str, wanted: str):
+        """Read virtualized rows by scrolling this input's own popup."""
+        import option_match
+        prompt = page.locator(
+            f'[data-automation-id="responsiveMonikerPrompt"][data-associated-widget={json.dumps(multiselect_id)}]')
+        listing = prompt.locator('[data-automation-id="activeListContainer"]')
+        if not listing.count():
+            return None
+        listing = listing.first
+        listing.evaluate('e => { e.scrollTop = 0; }')
+        page.wait_for_timeout(200)
+        for _ in range(80):
+            rows = prompt.locator('[data-automation-id="promptOption"]')
+            for i in range(rows.count()):
+                row = rows.nth(i)
+                label = row.get_attribute('data-automation-label') or row.inner_text()
+                if option_match.plain(label) != option_match.plain(wanted):
+                    continue
+                category = row.evaluate("e => e.closest('[data-uxi-multiselectlistitem-type]')?.getAttribute('data-uxi-multiselectlistitem-type') === '2'")
+                if not category and assistant._click_resiliently(row):
+                    page.wait_for_timeout(800)
+                    return label
+            moved = listing.evaluate("""e => { const before = e.scrollTop; e.scrollTop += Math.max(1, e.clientHeight * .8); return e.scrollTop > before; }""")
+            if not moved:
+                break
+            page.wait_for_timeout(200)
+        listing.evaluate('e => { e.scrollTop = 0; }')
+        page.wait_for_timeout(200)
+        return None
+
+    @staticmethod
+    def _choose_nested_prompt(assistant, page, multiselect_id: str, wanted: str):
+        """Explore marked category nodes; commit only a matching offered leaf."""
+        import option_match
+        prompt = page.locator(
+            f'[data-automation-id="responsiveMonikerPrompt"][data-associated-widget={json.dumps(multiselect_id)}]')
+        if not prompt.count():
+            return None
+        budget = [20]
+
+        def visit(depth):
+            if depth > 4 or budget[0] <= 0:
+                return None
+            rows = prompt.locator('[data-automation-id="promptOption"]')
+            leaves, branches = [], []
+            for i in range(min(rows.count(), 80)):
+                row = rows.nth(i)
+                if not row.is_visible():
+                    continue
+                label = row.get_attribute('data-automation-label') or row.inner_text()
+                kind = row.evaluate("e => e.closest('[data-uxi-multiselectlistitem-type]')?.getAttribute('data-uxi-multiselectlistitem-type')")
+                (branches if kind == '2' else leaves).append(label)
+            hit = option_match.best_option(leaves, wanted)
+            if hit is not None:
+                label = leaves[hit]
+                row = prompt.locator(f'[data-automation-id="promptOption"][data-automation-label={json.dumps(label)}]')
+                if row.count() and assistant._click_resiliently(row.first):
+                    page.wait_for_timeout(800)
+                    return label
+            for label in branches:
+                if budget[0] <= 0:
+                    break
+                budget[0] -= 1
+                row = prompt.locator(f'[data-automation-id="promptOption"][data-automation-label={json.dumps(label)}]')
+                if not row.count() or not assistant._click_resiliently(row.first):
+                    continue
+                page.wait_for_timeout(500)
+                chosen = visit(depth + 1)
+                if chosen:
+                    return chosen
+                back = prompt.locator('[data-automation-id="backButton"]')
+                if not back.count() or not assistant._click_resiliently(back.first):
+                    return None
+                page.wait_for_timeout(300)
+            return None
+
+        return visit(0)
 
     def _open_prompt(self, assistant, page: Page, field, multiselect_id: str) -> None:
         """Opens a Workday multiselect's option list. Clicking the input
@@ -745,7 +960,7 @@ class WorkdayAdapter(SiteAdapter):
         except Exception:
             return ""
 
-    def _searchable_value_committed(self, assistant, page: Page, id_suffix: str, cand: str, multiselect_id: str = "", index: int = 0
+    def _searchable_value_committed(self, assistant, page: Page, id_suffix: str, cand: str, multiselect_id: str = "", index: int = 0, exact: bool = False
     ) -> bool:
         """True when the widget actually holds the value. Clicking an option
         can look successful -- no exception, no error -- while committing
@@ -758,6 +973,10 @@ class WorkdayAdapter(SiteAdapter):
             page.keyboard.press("Escape")
             page.wait_for_timeout(600)
         selection = self._multiselect_selection(page, id_suffix, multiselect_id, index)
+        if exact:
+            import option_match
+            logger.info("COMMIT_CHECK[%s] selection=%r wanted=%r", id_suffix, selection, cand)
+            return bool(selection) and option_match.plain(selection) == option_match.plain(cand)
         if not selection:
             # Not every combobox uses a pill; simpler ones leave the chosen
             # text in the input. But raw text is NOT proof of a committed
@@ -864,7 +1083,7 @@ class WorkdayAdapter(SiteAdapter):
                 page.wait_for_timeout(700)
                 shown = assistant._displayed_value(page, id_suffix)
                 if shown:
-                    logger.info("Chose %r for %s", shown[:60], id_suffix)
+                    logger.info('FIELD_ACTION: application field handled')
                     return True
                 logger.info("Clicked %r for %s but the control shows nothing", choice[:40], id_suffix)
             except Exception as exc:
@@ -947,14 +1166,14 @@ class WorkdayAdapter(SiteAdapter):
                     if cand.strip().lower() == text.strip().lower():
                         options.nth(i).click(timeout=5_000)
                         page.wait_for_timeout(500)
-                        logger.info("Selected %r (exact) for %s[%d]", text, id_suffix, index)
+                        logger.info('FIELD_ACTION: application field handled')
                         return True
             for cand in candidates:
                 for i, text in texts:
                     if cand.lower() in text.lower():
                         options.nth(i).click(timeout=5_000)
                         page.wait_for_timeout(500)
-                        logger.info("Selected %r (substring) for %s[%d]", text, id_suffix, index)
+                        logger.info('FIELD_ACTION: application field handled')
                         return True
             # Literal matching failed, so this tenant words its options
             # differently ('Masters' where we hold 'Masters of Science').
@@ -967,7 +1186,7 @@ class WorkdayAdapter(SiteAdapter):
                     if text == pick:
                         options.nth(i).click(timeout=5_000)
                         page.wait_for_timeout(500)
-                        logger.info("Selected %r (semantic) for %s[%d]", text, id_suffix, index)
+                        logger.info('FIELD_ACTION: application field handled')
                         return True
 
             logger.warning(

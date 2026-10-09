@@ -85,6 +85,12 @@ def best_option(options: list[str], answer: str) -> Optional[int]:
     list does not offer is looked for once more as its broader term ("South Asian" as "Asian"), never narrower."""
     hit = _best_option(options, answer)
     if hit is None:
+        group = _group_of(answer) or ()
+        if plain('Master') in group or plain('Doctorate') in group:
+            hit = _best_option(options, 'Post-Graduate Degree')
+        elif plain('Bachelor') in group:
+            hit = _best_option(options, 'College/University Graduate')
+    if hit is None:
         broader = _broader().get(plain(answer))
         if broader:
             hit = _best_option(options, broader)

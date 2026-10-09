@@ -1,0 +1,10 @@
+{
+  "id": "f112", "date": "2026-10-04", "site": "AVFUEL Paycom",
+  "class": "Composite widget fragments become unrelated questions",
+  "symptom": "The phone wrapper was treated as another textbox and the inner number was named +1; AI answered 6 years. Consent was named for more details instead of its question.",
+  "root_cause": "Nested textbox roles were not collapsed, dial-code text replaced the phone heading, and linked paragraph fragments replaced the consent question.",
+  "why_tests_missed": "Fixtures did not combine a textbox wrapper, dial button, child input, and a consent paragraph containing links with adjacent paragraph radio labels.",
+  "fix": "Keep the actual child textbox with its phone heading, ignore the dial-code as a label, and preserve the paragraph question across links while reading adjacent radio captions.",
+  "tests": ["tests/test_composite_field_reading.py::test_phone_wrapper_and_dial_code_are_not_extra_questions", "tests/test_composite_field_reading.py::test_link_fragments_do_not_replace_radio_question"],
+  "prevention": "Assert the final question identities and offered radio labels for composite widgets before profile or AI answering."
+}

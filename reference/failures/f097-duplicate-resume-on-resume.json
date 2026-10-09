@@ -1,0 +1,15 @@
+{
+  "id": "f097",
+  "date": "2026-10-03",
+  "class": "A saved attachment is missed because the file input resets",
+  "symptom": "Waystar showed two identical copies of its tailored resume.",
+  "site": "Workday",
+  "root_cause": "Inventory upload ran before the later attachment snapshot guard. Saved attachments leave their file input empty, and upload state starts fresh on a resumed run.",
+  "why_tests_missed": "Upload tests covered same-run repetition but not a fresh agent with an existing attachment, including an iframe.",
+  "fix": "Check the listed attachment in the upload input's own frame before uploading and set observed resume state when found.",
+  "tests": [
+    "tests/test_education_attachment_regressions.py::test_resume_listed_by_previous_run_is_not_uploaded_again",
+    "tests/test_education_attachment_regressions.py::test_unattached_resume_is_uploaded_once"
+  ],
+  "prevention": "Verify committed subject identity and existing attachment evidence across resumed runs rather than counting keystrokes or empty input values."
+}

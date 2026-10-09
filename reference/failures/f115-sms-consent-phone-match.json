@@ -1,0 +1,10 @@
+{
+  "id": "f115", "date": "2026-10-04", "site": "AVFUEL Paycom",
+  "class": "Consent question mentioning a number matched as contact data",
+  "symptom": "The correctly recognized SMS consent question was offered the applicant's phone number as its Yes/No answer.",
+  "root_cause": "Phone concept and fallback matching treated mobile number in the consent wording as a request for the number. The existing text-contact preference rule covered checkboxes only.",
+  "why_tests_missed": "Text-message consent tests did not exercise Yes/No radio and dropdown fields whose wording also mentioned a mobile number.",
+  "fix": "SMS choice questions use an exact approved saved answer or the existing contact-preference policy; phone matching excludes SMS consent wording.",
+  "tests": ["tests/test_composite_field_reading.py::test_sms_consent_uses_contact_preference_instead_of_phone", "tests/test_composite_field_reading.py::test_sms_consent_keeps_an_explicit_saved_answer", "tests/test_composite_field_reading.py::test_phone_and_sms_radio_are_filled_without_a_planner"],
+  "prevention": "Verify semantic answer type and actual committed radio state with a synthetic profile before calling a planner."
+}

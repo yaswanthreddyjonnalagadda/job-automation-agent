@@ -19,12 +19,12 @@ def agent(job_dir, stamp):
 
 
 def test_two_runs_keep_their_own_pages(tmp_path):
-    for stamp, text in (("20260929_100000", "first run"), ("20260929_110000", "second run")):
+    for stamp, text in (("20260929_100000", '- textbox "Email": privacy-test@example.invalid'), ("20260929_110000", '- button "Continue"')):
         a = agent(tmp_path, stamp)
         a.pages_read = 1
         a._save(text)
-    assert (tmp_path / "pages" / "20260929_100000" / "page_01.txt").read_text() == "first run"
-    assert (tmp_path / "pages" / "20260929_110000" / "page_01.txt").read_text() == "second run"
+    assert (tmp_path / "pages" / "20260929_100000" / "page_01.txt").read_text() == '- textbox "Email"'
+    assert (tmp_path / "pages" / "20260929_110000" / "page_01.txt").read_text() == '- button "Continue"'
 
 
 def test_only_the_latest_runs_are_kept(tmp_path):

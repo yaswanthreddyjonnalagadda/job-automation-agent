@@ -360,7 +360,9 @@ class GeminiBrain:
                                    "(make a key at aistudio.google.com)")
             problem = key_problem(config.gemini_api_key)
             if problem:
-                logger.warning("GEMINI: %s", problem)
+                logger.warning("GEMINI: check the bare API key for spaces or quotes; "
+                               "expected AIza with 39 characters or the supported AQ. format. "
+                               "Copy the complete key from aistudio.google.com.")
             answers = GeminiClient(config)
         self._answers = answers
         self._documents = documents if documents is not None else ClaudeClient(config)

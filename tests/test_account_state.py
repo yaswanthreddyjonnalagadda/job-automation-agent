@@ -86,9 +86,91 @@ def test_an_email_that_already_has_an_account(message):
     ('- heading "Apply" [ref=e1]\n- button "Sign in with Google" [ref=e2]\n- button "Apply Manually" [ref=e3]', A.CHOOSER),
     ('- heading "Senior Engineer" [ref=e1]\n- button "Apply" [ref=e2]', A.NONE),
     ('- text: First Name\n- textbox "First Name" [ref=e1]\n- textbox "Email" [ref=e2]\n- button "Sign in" [ref=e3]', A.NONE),
+    # P0-B2, 7 October 2026: a second factor the agent has no authorized way to complete.
+    ('- heading "Two-factor authentication" [ref=e1]\n- text: Enter the 6-digit code from your authenticator app.\n'
+     '- textbox "Authentication code" [ref=e2]\n- button "Verify" [ref=e3]', A.MFA_REQUIRED),
+    ('- heading "Verify your identity" [ref=e1]\n'
+     '- text: We texted a 6-digit code to your phone number ending in 1234.\n'
+     '- textbox "Enter the 6-digit one-time code" [ref=e2]\n- button "Submit" [ref=e3]', A.MFA_REQUIRED),
+    ('- heading "Sign In" [ref=e1]\n- text: Insert your security key and press the button on it.\n'
+     '- textbox "Email Address" [ref=e2]\n- textbox "Password" [ref=e3]\n- button "Sign In" [ref=e4]',
+     A.MFA_REQUIRED),
+    # A job description that merely mentions MFA vocabulary, with no account-step context of any
+    # kind, must not be swept up as an account page.
+    ('- heading "Senior Security Engineer" [ref=e1]\n'
+     '- text: Must have experience with two-factor authentication and authenticator apps.\n'
+     '- button "Apply" [ref=e2]', A.NONE),
 ])
 def test_each_account_state_is_recognised(snapshot, kind):
     assert A.read_state(snapshot).kind == kind
+
+
+def test_a_code_sent_by_email_is_still_code_entry_not_mfa():
+    """The channel matters: ordinary email-delivered codes are unaffected by the new MFA check."""
+    snapshot = ('- heading "Confirm your email" [ref=e1]\n'
+                '- text: We sent a verification code to your email. Check your inbox.\n'
+                '- textbox "Verification code" [ref=e2]\n- button "Confirm" [ref=e3]')
+    assert A.read_state(snapshot).kind == A.CODE_ENTRY
+
+
+def test_phone_channel_wording_outranks_a_generic_code_box():
+    """A box that would otherwise read as an ordinary emailed code is read as MFA_REQUIRED when the
+    page's own wording says the code went to a phone -- the channel the agent cannot read, not
+    CODE_ENTRY, which the agent WOULD try to satisfy from the owner's email."""
+    snapshot = ('- heading "Verify your identity" [ref=e1]\n'
+                '- text: We texted a 6-digit code to your phone number ending in 1234.\n'
+                '- textbox "Enter the 6-digit one-time code" [ref=e2]\n- button "Submit" [ref=e3]')
+    state = A.read_state(snapshot)
+    assert state.kind == A.MFA_REQUIRED
+    assert state.kind != A.CODE_ENTRY
+
+
+# --- authentication MODE vs. delivery/completion MECHANISM (8 October 2026) -------------------
+#
+# "two-factor"/"2-step verification" name an authentication MODE, never a delivery MECHANISM --
+# a second factor can legitimately be delivered by email, which the agent is authorized to read.
+# MFA_REQUIRED means "the page positively identifies a second-factor MECHANISM the agent has no
+# authorized way to complete," never "the page uses the words 'two-factor' or '2-step'."
+
+def test_two_factor_heading_with_an_emailed_code_is_code_entry_not_mfa():
+    snapshot = ('- heading "Two-factor authentication" [ref=e1]\n'
+                '- text: We emailed your verification code.\n'
+                '- textbox "Verification Code" [ref=e2]\n- button "Submit" [ref=e3]')
+    state = A.read_state(snapshot)
+    assert state.kind == A.CODE_ENTRY
+    assert state.kind != A.MFA_REQUIRED
+
+
+def test_two_step_heading_with_an_inbox_code_is_code_entry_not_mfa():
+    snapshot = ('- heading "2-step verification" [ref=e1]\n'
+                '- text: Check your inbox for the code.\n'
+                '- textbox "Verification Code" [ref=e2]\n- button "Submit" [ref=e3]')
+    state = A.read_state(snapshot)
+    assert state.kind == A.CODE_ENTRY
+    assert state.kind != A.MFA_REQUIRED
+
+
+def test_two_factor_heading_with_an_authenticator_app_is_mfa_required():
+    snapshot = ('- heading "Two-factor authentication" [ref=e1]\n'
+                '- text: Enter the code from your authenticator app.\n'
+                '- textbox "Authentication Code" [ref=e2]\n- button "Submit" [ref=e3]')
+    assert A.read_state(snapshot).kind == A.MFA_REQUIRED
+
+
+def test_two_factor_heading_with_sms_is_mfa_required():
+    snapshot = ('- heading "Two-factor authentication" [ref=e1]\n'
+                '- text: We texted a code to your phone.\n'
+                '- textbox "One-time code" [ref=e2]\n- button "Submit" [ref=e3]')
+    assert A.read_state(snapshot).kind == A.MFA_REQUIRED
+
+
+def test_two_factor_heading_alone_with_no_mechanism_is_not_mfa_required():
+    """Generic MFA wording with no concrete, unsupported mechanism named must not invent one --
+    the existing no-channel-named default (CODE_ENTRY, if a code box is present at all) is
+    preserved rather than silently turned into a new reason to refuse."""
+    snapshot = ('- heading "Two-factor authentication" [ref=e1]\n'
+                '- textbox "Verification code" [ref=e2]\n- button "Submit" [ref=e3]')
+    assert A.read_state(snapshot).kind != A.MFA_REQUIRED
 
 
 def test_a_verify_message_beside_a_sign_in_form_is_the_sign_in_form():
@@ -108,9 +190,18 @@ def step(kind, google=False, **memory):
     (A.LOCKED, A.FOR_OWNER), (A.VERIFY_EMAIL, A.VERIFY_BY_LINK), (A.WRONG_PASSWORD, A.FOR_OWNER),
     (A.CODE_ENTRY, A.ENTER_CODE), (A.CREATE_FORM, A.CREATE), (A.SIGN_IN_FORM, A.SIGN_IN),
     (A.EMAIL_FIRST, A.GIVE_EMAIL), (A.ACCOUNT_EXISTS, A.OPEN_SIGN_IN), (A.CHOOSER, A.NOTHING),
+    (A.MFA_REQUIRED, A.FOR_OWNER),
 ])
 def test_every_state_has_one_next_step(kind, action):
     assert step(kind).action == action
+
+
+def test_mfa_required_is_never_retried_automatically():
+    """No authorized mechanism exists for SMS/authenticator/security-key approval -- every call,
+    with any memory, must hand off rather than guess or retry."""
+    assert step(A.MFA_REQUIRED).action == A.FOR_OWNER
+    assert step(A.MFA_REQUIRED, google=True).action == A.FOR_OWNER
+    assert step(A.MFA_REQUIRED, created=True, signed_in_tried=True).action == A.FOR_OWNER
 
 
 @pytest.mark.parametrize("kind", [A.CREATE_FORM, A.SIGN_IN_FORM, A.CHOOSER, A.EMAIL_FIRST])
@@ -120,7 +211,7 @@ def test_google_comes_first_when_the_site_offers_it(kind):
     assert step(kind, google=True, google_refused=True).action != A.GOOGLE
 
 
-@pytest.mark.parametrize("kind", [A.LOCKED, A.VERIFY_EMAIL, A.WRONG_PASSWORD, A.CODE_ENTRY])
+@pytest.mark.parametrize("kind", [A.LOCKED, A.VERIFY_EMAIL, A.WRONG_PASSWORD, A.CODE_ENTRY, A.MFA_REQUIRED])
 def test_what_the_site_says_is_answered_before_google_is_tried(kind):
     assert step(kind, google=True).action != A.GOOGLE
 

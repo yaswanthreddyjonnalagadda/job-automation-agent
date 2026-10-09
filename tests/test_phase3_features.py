@@ -142,6 +142,16 @@ def test_modal_interceptor_skips_password_login_dialogs(page):
     assert page.locator("button#save_btn").is_visible(), "Login modal button must remain untouched"
 
 
+def test_modal_interceptor_never_advances_a_data_entry_dialog(page):
+    page.set_content('''<div role="dialog" aria-modal="true" class="modal">
+        <label>Legal First Name<input required></label>
+        <button onclick="window.continueClicks=(window.continueClicks||0)+1">Continue To Application</button>
+        </div>''')
+    for _ in range(3):
+        assert interaction.sweep_modals_and_policies(page, SimpleNamespace()) is False
+    assert page.evaluate('window.continueClicks || 0') == 0
+
+
 # ==============================================================================
 # Task 3.2: Dependent Cascading Fields (Topological Re-Scan)
 # ==============================================================================

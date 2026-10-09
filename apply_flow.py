@@ -45,13 +45,18 @@ from pathlib import Path
 
 import re
 
+import account_state
 import browser_automation
+import checkpoint
 import config as config_module
+import handoff
+import recovery
+from handoff import Handoff
 from resume_pdf import build_letter_pdf, build_resume_pdf
 from browser_automation import BlockedLoginDomainError, JobApplicationAssistant
 from claude_integration import ClaudeClient, ClaudeIntegrationError
 from config import get_app_config, get_user_profile
-from jd_analyzer import build_job_description, dedup_key_for_url
+from jd_analyzer import build_job_description, dedup_key_for_url, submission_effect_key_for_url
 import ai_choice
 import answer_bank
 import safety
@@ -77,6 +82,8 @@ logging.basicConfig(
 )
 logging.getLogger("anthropic").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+import diagnostics
+diagnostics.install_log_privacy()
 logger = logging.getLogger("apply_flow")
 
 # Nothing the agent logs may carry an API key, a password, an email address or
@@ -94,19 +101,8 @@ class JsonLogHandler(logging.Handler):
         self._path = path
 
     def emit(self, record: logging.LogRecord) -> None:
-        try:
-            entry = {
-                "time": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
-                "level": record.levelname,
-                "logger": record.name,
-                "event": (record.getMessage().split(":", 1)[0][:40]
-                          if record.getMessage()[:40].isupper() else ""),
-                "message": safety.redact(record.getMessage())[:2000],
-            }
-            with self._path.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(entry) + "\n")
-        except Exception:
-            pass
+        diagnostics.append_log_record(self._path, record)
+
 
 
 def refresh_answer_bank(tracker) -> None:
@@ -534,23 +530,10 @@ def approved_answers_file() -> dict:
 
 
 def collect_evidence(assistant, page, job_dir: Path, step: int) -> dict:
-    """Full-page screenshot and page HTML, saved before any decision is made."""
-    evidence_dir = job_dir / f"evidence_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_step{step}"
-    evidence_dir.mkdir(parents=True, exist_ok=True)
-    paths = {}
-    try:
-        shot = evidence_dir / "page.png"
-        page.screenshot(path=str(shot), full_page=True)
-        paths["screenshot"] = str(shot)
-    except Exception as exc:
-        logger.warning("Could not capture the screenshot: %s", exc)
-    try:
-        html = evidence_dir / "page.html"
-        html.write_text(page.content(), encoding="utf-8")
-        paths["html"] = str(html)
-    except Exception as exc:
-        logger.warning("Could not capture the page HTML: %s", exc)
-    return paths
+    """Privacy-safe evidence copy; never changes the page's answers/authority."""
+    evidence_dir = job_dir / f"evidence_{datetime.now(timezone.utc):%Y%m%d_%H%M%S_%f}_step{step}"
+    return diagnostics.capture_bundle(page, evidence_dir)
+
 
 
 def delete_screenshots(job_dir: Path) -> None:
@@ -597,9 +580,9 @@ def save_stop_page(page, job_dir: Path) -> None:
     try:
         stem = Path(job_dir) / f"stopped_{datetime.now():%Y%m%d_%H%M%S}"
         stem.parent.mkdir(parents=True, exist_ok=True)
-        page.screenshot(path=str(stem.with_suffix(".png")), full_page=True)
-        stem.with_suffix(".txt").write_text(
-            f"{page.url}\n\n" + hide_secrets(page.locator("body").aria_snapshot(mode="ai")), encoding="utf-8")
+        diagnostics.capture_safe_screenshot(page, stem.with_suffix(".png"))
+        diagnostics.write_safe_text(stem.with_suffix(".txt"),
+            diagnostics.sanitize_snapshot(page.locator("body").aria_snapshot(mode="ai")))
         logger.info("Where it stopped: %s", stem.with_suffix(".png"))
     except Exception as exc:
         logger.info("Could not save the page it stopped on: %s", str(exc).splitlines()[0][:100])
@@ -625,7 +608,118 @@ def shows_the_application(assistant, page) -> bool:
     return False
 
 
-def remember_progress(tracker, key: str, page, note: str = "") -> None:
+def write_recovery_checkpoint(tracker, assistant, key: str, page, job, handoff_reason: str = "",
+                              owner_handoff: Optional[Handoff] = None,
+                              new_uncertain_actions: tuple = ()) -> None:
+    """Checkpoints where this application stands, at the same once-per-agent-pass boundary
+    `remember_progress` already writes `last_page_url` from (Phase 0-B3) -- not on every DOM
+    read inside that pass. Best-effort and purely advisory: nothing recorded here is ever
+    trusted back without fresh, independent verification on the next read --
+    `recovery.reconcile()`, `account_state.read_state()` (P0-B2), and
+    `SubmissionGuardV0`/`SubmissionProbe` (P0-B1) remain the sole authorities on account and
+    submission state. A failure to write is logged, never raised: a checkpoint speeds up a
+    resume, it is not required for the run itself to proceed.
+
+    Reads the existing checkpoint first and writes through `checkpoint.merge_update()` rather
+    than building a fresh one -- a generic progress write here must never silently blank an
+    unresolved `pending_action`/`uncertain_actions` a more specific lifecycle (account
+    creation; see `PageAgent._mark_account_creation_dispatched`) recorded and has not yet
+    resolved (Phase 0-B3 closure correction: this function originally built a brand-new
+    checkpoint on every call, erasing exactly that marker on the very next ordinary pass).
+
+    `owner_handoff` (Phase 0-B4), when given, supplies the richer `handoff_category`/
+    `handoff_required_action`/`handoff_resume_condition` fields alongside a context-rich
+    `handoff_reason` (task section 26) -- it takes priority over the plain `handoff_reason`
+    string kept for callers (and the one pre-existing test) that still pass that alone.
+
+    `new_uncertain_actions` (Phase 0-B4) is unioned onto whatever the existing checkpoint
+    already recorded, never replacing it -- this field has no resolve step yet (unlike
+    `pending_action`'s explicit dispatch/resolve lifecycle), so a generic pass that finds
+    nothing new must not look like a generic pass clearing what an earlier one found."""
+    if tracker is None or not hasattr(tracker, "write_checkpoint"):
+        return
+    application_key = str(getattr(assistant, "submission_key", "") or key or "")
+    if not application_key:
+        return
+    existing = None
+    if hasattr(tracker, "read_checkpoint"):
+        try:
+            existing = tracker.read_checkpoint(application_key)
+        except Exception as exc:
+            logger.debug("Could not read the existing checkpoint before updating it: %s", exc)
+    try:
+        page_identity = recovery.compute_page_identity(page)
+    except Exception:
+        page_identity = recovery.PageIdentity()
+    submission_state = ""
+    if hasattr(tracker, "get_submission_effect_state"):
+        try:
+            submission_state = tracker.get_submission_effect_state(application_key) or ""
+        except Exception:
+            submission_state = ""
+    changes = dict(
+        application_key=application_key, dedup_key=key or "",
+        employer=getattr(job, "company", "") or "",
+        page_url=str(getattr(page, "url", "") or ""),
+        page_identity=page_identity.to_dict(), verified_stage=page_identity.step_indicator,
+        handoff_reason=handoff_reason or "", submission_effect_state=submission_state,
+    )
+    if owner_handoff is not None:
+        changes.update(owner_handoff.to_checkpoint_fields())
+    if new_uncertain_actions:
+        prior = tuple((existing or {}).get("uncertain_actions") or ())
+        changes["uncertain_actions"] = tuple(dict.fromkeys(prior + tuple(new_uncertain_actions)))
+    updated = checkpoint.merge_update(existing, **changes)
+    try:
+        tracker.write_checkpoint(application_key, updated)
+    except Exception as exc:
+        logger.debug("Could not write a recovery checkpoint: %s", exc)
+
+
+def log_recovery_reconciliation(tracker, assistant, submission_key: str, key: str, page) -> None:
+    """Logs (never acts on) how a resumed page relates to its durable checkpoint, if any
+    (Phase 0-B3, task section 28). Purely diagnostic: the existing `shows_the_application`
+    fallback a few lines above this call site is what actually governs navigation, unchanged
+    by this function. Evidence is gathered fresh here -- a live page identity, a live
+    `account_state.read_state()` read, the live submission-effect state -- never taken from
+    the checkpoint, which is why this can run unconditionally without risk: at worst it logs
+    `OUTCOME_UNKNOWN` or fails silently."""
+    if tracker is None:
+        return
+    try:
+        stored = tracker.read_checkpoint(submission_key) if hasattr(tracker, "read_checkpoint") else None
+    except Exception:
+        stored = None
+    try:
+        live_identity = recovery.compute_page_identity(page)
+    except Exception:
+        live_identity = recovery.PageIdentity()
+    try:
+        live_snapshot = page.locator("body").aria_snapshot(mode="ai")
+        live_account_kind = account_state.read_state(live_snapshot).kind
+    except Exception:
+        live_account_kind = ""
+    try:
+        live_submission_state = tracker.get_submission_effect_state(submission_key) \
+            if hasattr(tracker, "get_submission_effect_state") else None
+    except Exception:
+        live_submission_state = None
+    try:
+        present = shows_the_application(assistant, page)
+    except Exception:
+        present = True
+    result = recovery.reconcile(
+        stored_payload=stored, live_identity=live_identity, live_account_state_kind=live_account_kind,
+        live_submission_effect_state=live_submission_state, application_present=present)
+    logger.info("RECOVERY_%s: %s", result.outcome, result.why)
+    if hasattr(tracker, "record_event"):
+        try:
+            tracker.record_event(key, "note", f"recovery: {result.outcome} -- {result.why}"[:400])
+        except Exception as exc:
+            logger.debug("Could not record the recovery reconciliation: %s", exc)
+
+
+def remember_progress(tracker, key: str, page, note: str = "", assistant=None) -> None:
     """Writes down where this application has got to.
 
     Called on every pass rather than only when a review package is written, so
@@ -636,6 +730,13 @@ def remember_progress(tracker, key: str, page, note: str = "") -> None:
         url = page.url
     except Exception:
         return
+    # Identity continuity and "where to resume" are different questions: a login/SSO/OTP/
+    # verification host is not a page worth reopening a human to, but it is still part of this
+    # same bound application's flow, and excluding it here left a gap (the owner's finding of
+    # 7 October 2026) where re-entering from that exact host found no prior effect history. So
+    # this is unconditional -- not gated by worth_returning_to() -- while update_last_page below
+    # still is, since that one really is about where Resume should reopen the browser.
+    _remember_submission_identity_alias(assistant, url)
     if not worth_returning_to(url):
         return
     if hasattr(tracker, "update_last_page"):
@@ -648,6 +749,31 @@ def remember_progress(tracker, key: str, page, note: str = "") -> None:
             tracker.record_event(key, "note", f"{note}: {url}"[:400])
         except Exception as exc:
             logger.debug("Could not record the event: %s", exc)
+
+
+def _remember_submission_identity_alias(assistant, url: str) -> None:
+    """Durably ties a host/path visited while working a bound application (a login page, an ATS
+    redirect, a review step) to that run's bound submission-effect identity, so a later invocation
+    started from there finds the same effect history instead of a fresh one.
+
+    `apply_flow.py` binds `assistant.submission_key` once, from the original posting URL, before
+    any navigation; it never recomputes it from the page the browser happens to be on. This only
+    records the *other* host/path as a known alias of that one stable identity -- it does not
+    change what the current run authorizes."""
+    if assistant is None:
+        return
+    store = getattr(assistant, "submission_state_store", None)
+    primary = getattr(assistant, "submission_key", "")
+    if store is None or not primary or not hasattr(store, "record_submission_identity_alias"):
+        return
+    try:
+        alias = submission_effect_key_for_url(url)
+    except ValueError:
+        return
+    try:
+        store.record_submission_identity_alias(primary, alias)
+    except Exception:
+        logger.debug("Could not record a submission identity alias for %s", url[:80])
 
 
 def remembered_answers(tracker, questions) -> dict:
@@ -688,8 +814,7 @@ def remembered_answers(tracker, questions) -> dict:
             if match.get("answered_by") != "user":
                 continue
             recalled[question.question_text] = answer
-            logger.info("RECALLED: %r -> %r (answered by %s before)",
-                        question.question_text[:60], answer[:40], match.get("answered_by"))
+            logger.info('ANSWER_LIBRARY: approved answer retained')
             break
     return recalled
 
@@ -735,7 +860,7 @@ def learn_user_answers(assistant, page, tracker, key, profile, company: str = ""
         try:
             import profile_setup
             if profile_setup.remember_answer(label, value, company):
-                logger.info("SAVED ANSWER: %r = %r, for every application", label[:60], value[:40])
+                logger.info('ANSWER_LIBRARY: approved answer retained')
         except Exception as exc:
             logger.debug("Could not add %r to the saved answers: %s", label[:50], exc)
     if learned:
@@ -755,6 +880,9 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
     Returns the status that was set.
     """
     documents = documents or {}
+    assistant.tracker, assistant.application_key = tracker, key
+    if not hasattr(assistant, "submission_state_store"):
+        assistant.submission_state_store = tracker
     if profile is not None:
         learn_user_answers(assistant, page, tracker, key, profile, getattr(job, "company", ""))
     report = assistant.validate_application(page, resume_name)
@@ -803,15 +931,15 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
 
     # The field-by-field comparison report, beside the screenshot it describes.
     comparison_path = Path(evidence.get("screenshot", str(job_dir / "x"))).with_name("comparison.json")
-    comparison_path.write_text(json.dumps(decision.as_dict(), indent=2), encoding="utf-8")
+    diagnostics.write_safe_json(comparison_path, decision.as_dict())
     evidence["comparison"] = str(comparison_path)
-    summary_path.with_name("validation.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    diagnostics.write_safe_json(summary_path.with_name("validation.json"), report)
 
     if hasattr(tracker, "record_event"):
         tracker.record_event(key, "auto_submit", decision.summary(),
                              screenshot_path=evidence.get("screenshot", ""),
                              html_path=evidence.get("html", ""),
-                             payload=decision.as_dict())
+                             payload=diagnostics.sanitize_event_payload(decision.as_dict()))
 
     status, message = safety.handover_status(report)
     if decision.eligible:
@@ -829,6 +957,8 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
             "stopped before the last page: nothing is left to fill here, but the agent found no way "
             "on to the next step")
     tracker.update_status(key, status, notes=message)
+    if hasattr(assistant, "human_handoff"):
+        assistant.human_handoff(page)
     assistant.raise_window(page)
 
     banner = "=" * 78
@@ -911,18 +1041,39 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 return
             try:
                 dump_path = dump_forensic_failure(page, reason=f"Unhandled agent error/stall: {exc}", console_logs=getattr(page, "_console_logs", []))
-                tracker.update_status(key, STATUS_NEEDS_USER_REVIEW, notes=f"Crashed/Stalled: {exc} (dump: {dump_path})")
+                tracker.update_status(key, STATUS_NEEDS_USER_REVIEW, notes="Runtime interrupted; sanitized diagnostic capture attempted")
             except Exception as dump_err:
                 logger.error("Failed to dump forensic diagnostics: %s", dump_err)
             raise
 
         page = agent.tab(outcome.page)
-        remember_progress(tracker, key, page, outcome.summary[:200])
+        remember_progress(tracker, key, page, outcome.summary[:200], assistant=assistant)
+        owner_handoff = None
+        if outcome.kind != "submitted":
+            try:
+                portal = urlparse(getattr(page, "url", "") or "").netloc
+            except Exception:
+                portal = ""
+            owner_handoff = handoff.build(
+                application_key=str(getattr(assistant, "submission_key", "") or key or ""),
+                employer=getattr(job, "company", "") or "", portal=portal,
+                outcome_kind=outcome.kind, reason_text=outcome.summary[:400])
+            if hasattr(tracker, "record_event"):
+                try:
+                    tracker.record_event(
+                        key, "handoff_started", f"{owner_handoff.category}: {outcome.kind}",
+                        payload={"category": owner_handoff.category, "outcome_kind": outcome.kind,
+                                "portal": portal})
+                except Exception as exc:
+                    logger.debug("Could not record the handoff event: %s", exc)
+        write_recovery_checkpoint(
+            tracker, assistant, key, page, job, owner_handoff=owner_handoff,
+            new_uncertain_actions=agent.uncertain_action_labels())
         notes = "; ".join(agent.notes[:5])
 
         if outcome.kind == "submitted":
             try:
-                page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
+                diagnostics.capture_safe_screenshot(page, job_dir / "submitted_confirmation.png")
             except Exception:
                 pass
             delete_screenshots(job_dir)
@@ -988,7 +1139,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 logger.info("SUBMITTED_BY_USER: %s", note)
                 return
             if decision in RUN_ENDS:
-                remember_progress(tracker, key, page, f"run ended: {decision}")
+                remember_progress(tracker, key, page, f"run ended: {decision}", assistant=assistant)
                 return
             if decision in ("skip", "decline", "abort", "quit"):
                 tracker.update_status(key, STATUS_SKIPPED, notes="Skipped by you")
@@ -999,7 +1150,8 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 assistant = load_latest_code(agent, assistant, job, experience_data)
             continue
 
-        message = outcome.summary + (f" | worth checking: {notes}" if notes else "")
+        base_message = owner_handoff.compose_message() if owner_handoff is not None else outcome.summary
+        message = base_message + (f" | worth checking: {notes}" if notes else "")
         tracker.update_status(key, STATUS_NEEDS_USER_REVIEW, notes=message[:1000])
         banner = "=" * 78
         logger.info(banner)
@@ -1019,6 +1171,8 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                         "the agent reads the page again and carries on.")
         save_stop_page(page, job_dir)
         logger.info(banner)
+        if hasattr(assistant, "human_handoff"):
+            assistant.human_handoff(page)
         assistant.raise_window(page)
         agent.remember_page_state(page)
         try:
@@ -1028,6 +1182,9 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
         except TimeoutError:
             logger.info("No instruction received; the application is left as it is, unsubmitted.")
             return
+        terminal_decisions = (*RUN_ENDS, "submitted_by_user", "skip", "decline", "abort", "quit")
+        if decision not in terminal_decisions and hasattr(assistant, "resume_automation"):
+            assistant.resume_automation(page)
         if not page.is_closed():
             agent.note_owner_changes(page)
         refresh_answer_bank(tracker)
@@ -1042,7 +1199,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             logger.info("SUBMITTED_BY_USER: %s", note)
             return
         if decision in RUN_ENDS:
-            remember_progress(tracker, key, page, f"run ended: {decision}")
+            remember_progress(tracker, key, page, f"run ended: {decision}", assistant=assistant)
             return
         if decision in ("skip", "decline", "abort", "quit"):
             tracker.update_status(key, STATUS_SKIPPED, notes="Skipped by you")
@@ -1077,24 +1234,85 @@ def submit_verified(assistant, page, tracker, key, job, job_dir: Path, decision)
     confirms it -- clicking is not evidence.
     """
     logger.info("AUTO_SUBMIT: %s -- submitting %s at %s", decision.summary(), job.title, job.company)
-    if hasattr(tracker, "record_event"):
-        tracker.record_event(key, "auto_submit", "clicked Submit after verification",
-                             payload={"reasons": [], "evidence": decision.evidence_paths})
-    clicked = assistant.click_verified_submit(page)
+    submission_store = getattr(assistant, "submission_state_store", tracker)
+    submission_key = getattr(assistant, "submission_key", key)
+    identity_aliases = getattr(assistant, "submission_key_aliases", ())
+    prior_state = refuse_submission_replay(
+        submission_store, submission_key, "submit_gateway", aliases=identity_aliases
+    )
+    if prior_state:
+        return False
+    assistant.tracker, assistant.application_key = tracker, key
+    assistant.submission_state_store = submission_store
+    clicked = assistant.click_verified_submit(page, decision)
     if not clicked:
         logger.error("AUTO_SUBMIT_FAILED: the Submit button could not be clicked")
+        try:
+            if prior_state in (None, "AUTHORIZED") \
+                    and submission_store.get_submission_effect_state(submission_key) == "DISPATCHED":
+                submission_store.finish_submission_effect(submission_key, "UNCERTAIN")
+        except Exception:
+            logger.exception("Could not preserve uncertain submission state for %s", key[:12])
         return False
-    evidence = assistant.wait_for_submission_evidence(page, job.title)
-    status, note = safety.verification_status(evidence)
+    try:
+        evidence = assistant.wait_for_submission_evidence(page, job.title)
+        status, note = safety.verification_status(evidence)
+        outcome_state = "CONFIRMED" if evidence and status == STATUS_SUBMITTED else "UNCERTAIN"
+        submission_store.finish_submission_effect(
+            submission_key, outcome_state,
+            evidence_kind="independent_page_or_email" if outcome_state == "CONFIRMED" else None,
+        )
+    except Exception:
+        logger.exception("Post-dispatch result is unknown for application %s", key[:12])
+        try:
+            if submission_store.get_submission_effect_state(submission_key) == "DISPATCHED":
+                submission_store.finish_submission_effect(submission_key, "UNCERTAIN")
+        except Exception:
+            logger.exception("Could not durably mark application %s uncertain", key[:12])
+        tracker.update_status(key, STATUS_NEEDS_USER_REVIEW, notes="submission outcome is uncertain; reconcile before retry")
+        return False
     tracker.update_status(key, status, notes=note)
     try:
-        page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
+        diagnostics.capture_safe_screenshot(page, job_dir / "submitted_confirmation.png")
     except Exception:
         pass
     if status == STATUS_SUBMITTED:
         delete_screenshots(job_dir)
     logger.info("AUTO_SUBMIT result: %s -- %s", status, note)
     return status == STATUS_SUBMITTED
+
+
+def refuse_submission_replay(
+    submission_store, key: str, source: str, aliases: tuple[str, ...] | list[str] = ()
+) -> Optional[str]:
+    """Keep dispatch history sticky and convert an interrupted dispatch to uncertain.
+
+    Checked identities are not only whatever the caller happened to pass: any alias durably
+    recorded for `key` (a cross-host/path redirect seen earlier in this or a prior run) is
+    consulted too, so a URL-derived key that changed across invocations cannot dodge an existing
+    DISPATCHED/CONFIRMED/UNCERTAIN history merely because it is not literally the same string.
+    """
+    durable_aliases: tuple[str, ...] = ()
+    if hasattr(submission_store, "submission_identity_group"):
+        try:
+            durable_aliases = submission_store.submission_identity_group(key)
+        except Exception:
+            logger.debug("Could not read durable submission identity aliases for %s", key[:12])
+    candidate_keys = tuple(dict.fromkeys(
+        (key, *(alias for alias in (*aliases, *durable_aliases) if alias and alias != key))
+    ))
+    for candidate in candidate_keys:
+        state = submission_store.get_submission_effect_state(candidate)
+        if state == "DISPATCHED":
+            submission_store.finish_submission_effect(candidate, "UNCERTAIN")
+            state = "UNCERTAIN"
+        if state in {"AUTHORIZED", "UNCERTAIN", "CONFIRMED"}:
+            submission_store.record_submission_safety_event(
+                candidate, "SUBMISSION_REPLAY_BLOCKED", {"state": state, "source": source}
+            )
+            logger.error("SUBMISSION_REPLAY_BLOCKED: durable state is %s", state)
+            return state
+    return None
 
 
 # What the owner can say, from the dashboard or by closing the window, that ends the run. "close" is the
@@ -1352,6 +1570,7 @@ def main() -> None:
 
     config = get_app_config()
     profile = get_user_profile()
+    diagnostics.cleanup_expired_diagnostics(config_module.BASE_DIR)
     structured = JsonLogHandler(config.log_dir / f"run_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.jsonl")
     logging.getLogger().addHandler(structured)
 
@@ -1364,8 +1583,13 @@ def main() -> None:
     job.analysis["published_questions"] = list(job_input.get("questions") or [])
 
     tracker = open_tracker(config)
+    submission_store = JobTracker(getattr(config, "db_path", None) or config_module.DB_PATH)
     refresh_answer_bank(tracker)
     key = dedup_key_for_url(job.url)
+    submission_key = submission_effect_key_for_url(job.url)
+    identity_aliases = set(tracker.submission_keys_for_url(job.url))
+    identity_aliases.add(key)
+    identity_aliases.discard(submission_key)
     # Postgres upserts, so a re-run corrects a title/company that an earlier,
     # worse read of the posting recorded (status is never changed there). The
     # SQLite fallback has no upsert and would raise on a duplicate.
@@ -1374,6 +1598,13 @@ def main() -> None:
             dedup_key=key, title=job.title, company=job.company,
             location=job.location, source_site=job.source_site, url=job.url,
         )
+
+    effect_state = refuse_submission_replay(
+        submission_store, submission_key, "application_start", aliases=tuple(identity_aliases)
+    )
+    if effect_state:
+        logger.error("Submission for %s is parked for reconciliation", key[:12])
+        return
 
     if hasattr(tracker, "find_submitted"):
         already = tracker.find_submitted(url=job.url, company=job.company, title=job.title)
@@ -1404,6 +1635,9 @@ def main() -> None:
         # Lets the assistant check and record which employers have accounts.
         assistant.tracker, assistant.employer, assistant._profile = tracker, job.company, profile
         assistant.application_key = key
+        assistant.submission_key = submission_key
+        assistant.submission_key_aliases = tuple(identity_aliases)
+        assistant.submission_state_store = submission_store
         existing = tracker.get(key) if hasattr(tracker, "get") else None
         if existing and existing.status not in ("prepared",):
             logger.info("PICKING UP: %s was last %s%s", existing.title[:50],
@@ -1449,6 +1683,8 @@ def main() -> None:
                 page = assistant.click_apply_button(page)
                 page = assistant.dismiss_apply_chooser(page)
                 page = assistant.open_embedded_form(page)
+            if resume_at:
+                log_recovery_reconciliation(tracker, assistant, submission_key, key, page)
             if hasattr(assistant, "autofill_from_resume"):
                 assistant.autofill_from_resume(page, attach_resume)
             run_page_agent(assistant, page, claude, config, profile, resume, job, tracker, key, job_dir,
@@ -1515,7 +1751,7 @@ def main() -> None:
             # answer: remember it before filling, both so it is not overwritten
             # and so the next application can use it.
             learn_user_answers(assistant, page, tracker, key, profile, getattr(job, "company", ""))
-            remember_progress(tracker, key, page)
+            remember_progress(tracker, key, page, assistant=assistant)
 
             # A job may say it will not sponsor a visa only inside its form --
             # Casey's did, on page nine. The user needs sponsorship, so the
@@ -1690,7 +1926,7 @@ def main() -> None:
                 # The user submitted it themselves and the site (or their
                 # inbox) confirmed it.
                 try:
-                    page.screenshot(path=str(job_dir / "submitted_confirmation.png"), full_page=True)
+                    diagnostics.capture_safe_screenshot(page, job_dir / "submitted_confirmation.png")
                 except Exception as exc:
                     logger.warning("Could not capture confirmation screenshot: %s", exc)
                 if status == STATUS_SUBMITTED:
@@ -1699,12 +1935,12 @@ def main() -> None:
                     "the page confirmed it (see submitted_confirmation.png)"
                 status, note = safety.verification_status(evidence)
                 tracker.update_status(key, status, notes=note)
-                remember_progress(tracker, key, page, "submitted by the user")
+                remember_progress(tracker, key, page, "submitted by the user", assistant=assistant)
                 logger.info("SUBMITTED_BY_USER: confirmation seen on %s", page.url)
                 return
 
             if decision in RUN_ENDS:
-                remember_progress(tracker, key, page, f"run ended: {decision}")
+                remember_progress(tracker, key, page, f"run ended: {decision}", assistant=assistant)
                 # The application left the screen without any confirmation. It
                 # may or may not have gone through, so it is never recorded as
                 # submitted -- it goes to the user to check.
@@ -1726,6 +1962,8 @@ def main() -> None:
                 # Kept only to answer it: the agent stops before Submit, and
                 # clicking it is the user's decision made in the browser.
                 assistant.refuse_to_submit("a 'submit' signal was written")
+                if hasattr(assistant, "human_handoff"):
+                    assistant.human_handoff(page)
                 assistant.raise_window(page)
                 continue
 

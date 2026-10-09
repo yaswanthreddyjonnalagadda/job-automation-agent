@@ -1,9 +1,9 @@
 # What the assistant does, and what it never does
 
 The agent prepares a job application end to end and then **stops before the
-final Submit button**. Clicking Submit is the user's — unless the user turns on
-verified auto-submit (below), which is off by default and refuses on any
-uncertainty.
+final Submit button**. Only the verified auto-submit gateway may click it,
+which is off by default and refuses on any uncertainty. Otherwise the visible
+browser is handed to the user, who can submit manually.
 
 ## What it may do
 
@@ -16,7 +16,7 @@ the result, and hand the finished application over.
 
 | Rule | Where it is enforced | Test |
 |---|---|---|
-| Never clicks Submit | `browser_automation.py` has no `click_submit`; `refuse_to_submit()` answers a `submit` signal; wizard navigation skips any submit-labelled button; the web UI has no Submit button | `test_the_agent_has_no_way_to_click_submit`, `test_wizard_navigation_never_presses_a_submit_button` |
+| Ordinary automation cannot click a final Submit | `SubmissionGuardV0` intercepts recognized submit-capable clicks, forced/event/JavaScript clicks, Enter, and form submission; structurally associated submit buttons are also held unless clearly labeled Next/Continue. Only the verified gateway can authorize an automated final click. Handoff parks automation and records it before the guard is relaxed; failed persistence keeps the guard armed | `tests/test_submission_firewall.py`, `tests/test_submission_effect_state.py`, `test_the_agent_has_no_way_to_click_submit`, `test_wizard_navigation_never_presses_a_submit_button` |
 | Signs attestations and e-signatures only when the owner allows it (`sign_attestations` in the profile; the owner's decision of 2026-09-17), last on the page and only when every other answer came from the profile | `safety.is_attestation()` finds them; `page_agent.PageAgent.sign()` signs or leaves them; pending ones are listed for the user | `test_signature_fields_are_left_for_the_user`, `test_attestation_checkboxes_are_left_for_the_user` |
 | Never guesses | answers come from `UserProfile` or the posting; an empty profile field means the question is left for the user; a dropdown answer must match an offered option, found in the whole list (a long list is scrolled through, not judged by its first rows), and counts as given only once the list shows it | `test_people_managed_is_left_blank_when_the_profile_is_silent`, `test_field_of_study_is_never_swapped_for_another_subject`, `test_the_country_far_down_the_list_is_the_one_chosen`, `test_an_answer_the_list_does_not_offer_is_left_for_the_owner` |
 | Never overwrites the user | `safety.AgentValues` records what the agent wrote and `provenance.py` observes what a person typed or chose; a value the owner entered is never changed. A value the *site* filled in is left alone too, except the owner's own details (name, country, state, city, and the sponsorship/authorization answers) where they contradict the profile -- see "Values the site filled in" below. `safety.may_overrule()` is the only place this is decided | `test_a_users_answer_is_never_overwritten`, `test_site_prefilled_values_count_as_the_users`, `test_the_owners_own_choice_is_never_overwritten`, `test_a_country_the_owner_typed_is_never_corrected`, `test_one_rule_decides_who_may_be_overruled` |
@@ -288,9 +288,11 @@ language picker -- nothing on a posting is yours to answer. A field a site hides
 to catch programs ("This input is for robots only") is never filled and never
 sent to the AI. The page still goes to the AI when there is no
 plain Next/Continue to press (for example only "Add Experience"), or when a
-dropdown still shows "Choose an option" or "Select". The agent reads the page's
-step counter itself ("Step 1 of 2"), so a "Submit" button on a step with more
-to come only saves that step. It reads only the step the page is *on*: a progress
+dropdown still shows "Choose an option" or "Select". A step counter is context,
+not permission to press a submit-capable control: when a button is recognized
+as a final-submit control, even an intermediate "Submit" is left for you to
+handle rather than being clicked based on the counter. Ordinary "Next" and
+"Continue" navigation remains available. It reads only the step the page is *on*: a progress
 bar that lists finished steps ("completed step 1 of 5 ... current step 5 of 5")
 is read as step 5 of 5, and when the page does not make clear which step it is
 on, a "Submit" is treated as the last one and the agent stops for you. On a step
@@ -785,16 +787,16 @@ that had not got past account creation.
 
 ## Verified auto-submit (opt in, off by default)
 
-The agent that works the pages never presses an application's last Submit, whatever
-`.env` says: the old `AUTO_SUBMIT` setting is ignored everywhere (on 29 September it
-still let the page agent press Secunetics' 'Submit Application' itself). At the last
-step it stops and hands the application to you; only the verified check below, run at
-that hand-over, may ever send it. If a run stops on an error while the page already
+The ordinary page agent never presses an application's last Submit, whatever
+`.env` says: the old `AUTO_SUBMIT` setting is ignored everywhere. At the last
+step it stops and hands the application to you; only the verified gateway below
+may send it automatically. If a run stops on an error while the page already
 says the application was received, it is recorded as submitted by you.
 
 Set `AUTO_SUBMIT_VERIFIED_ONLY=true` in `.env` to allow it. Even then, the
 agent submits only when `safety.evaluate_auto_submit()` returns an eligible
-`AutoSubmitDecision`, which requires **all** of:
+`AutoSubmitDecision`, accepted by `SubmissionGuardV0` only with its structured
+evidence and required-field comparisons valid, which requires **all** of:
 
 * the job title, company and canonical URL match the tracked application
   (tracking parameters are not a difference);
@@ -814,6 +816,68 @@ report and every reason), and an audit row in `application_events`. The click
 itself is re-checked for a CAPTCHA or attestation that appeared in between.
 Afterwards the application is recorded **submitted** only once a confirmation
 page, portal entry or confirmation email is found — clicking is not evidence.
+A confirmation page is recognized by a heading or alert region whose own text
+essentially is a known confirmation phrase, not by that wording merely
+appearing anywhere on the page: an unrelated FAQ or error page that happens
+to mention "application received" or "previously submitted application" in
+an ordinary sentence is not read as confirming this run. A real confirmation
+this does not recognize is left **needs_user_review**, not guessed at --
+never the other way around.
+
+Immediately before the click, a local SQLite transaction writes the durable
+`DISPATCHED` state and append-only authorization/dispatch safety events. The
+state uses a separate canonical effect key derived from the application URL:
+known tracking parameters, fragments, query ordering, trailing slashes, host
+case, and HTTP-to-HTTPS variation do not create a fresh effect identity.
+Existing application keys for an equivalent normalized URL and the prior raw
+URL key are checked as legacy aliases. A host or path the browser actually
+visits while working a bound application -- a login page, an ATS redirect, a
+review step -- is durably remembered as that same effect identity, so a later
+invocation started from that host or path finds the same history instead of a
+fresh one; it cannot create a new submission authority merely because its own
+URL hashes to a different key. Two identities are never merged on a guess: a
+URL that already has its own independent dispatch history, or that has no
+provable relationship (by normalization or a remembered redirect) to an
+existing bound application, is treated as its own separate identity, never
+folded into another one. The state survives new processes,
+browser contexts and tabs, including when the normal application tracker uses
+PostgreSQL. URLs that do not identify a specific posting fail closed. If the
+dispatch transaction cannot commit, no click is attempted. A confirmed result
+becomes `CONFIRMED`; an ambiguous result becomes `UNCERTAIN`. Either state,
+and an unresolved `DISPATCHED` state found
+after restart, blocks another automated submission until reconciliation --
+including when that state is only reachable through a remembered redirect
+alias rather than the literal key on hand, at any chain depth (a redirect of
+a redirect, or an identity discovered to be the same one after the fact):
+every member of a merged identity resolves to, and is checked against, the
+exact same durable record, never a copy of it. A URL that LinkedIn, Facebook,
+Google, Microsoft, or Twitter's own click-tracking parameters decorate
+(`trk`, `fbclid`, `gclid`, `msclkid`, `twclid`, and the like) does not create
+a fresh identity either, nor does a login/SSO host visited along the way --
+both are tied to the one bound identity the same as any other redirect.
+Reconciliation can read page/status/confirmation evidence through the
+read-only probe, but that probe has no submit operation.
+
+Human handoff parks execution and appends `MANUAL_HANDOFF_STARTED` before
+relaxing the browser guard. If durable handoff recording fails, automation
+remains parked and the guard stays armed; the person must not treat that as a
+successful handoff.
+
+Submission safety events accept only known event types and allowlisted
+metadata fields and values; arbitrary payload objects are rejected.
+
+Final-control recognition starts from the centralized submit-label
+vocabulary plus deterministic form-submit semantics, and now also denies by
+default a labelled, enabled, form-associated control whose own label is
+neither a known submit word nor a known non-final one (add/remove/edit/
+cancel/back/save-for-later/a dropdown opener/...) when it is the only such
+control left in its form -- a custom "Confirm & Send"/"Finalize"-style
+button with no native submit type is covered without needing its exact
+wording known in advance. An icon-only or otherwise unlabeled control
+remains a limitation. This is still not a universal semantic or
+network-effects firewall. The browser containment guard is active on every
+tab and popup in the browser context automatically, including ones opened
+after the browser session starts, not only pages the agent explicitly reads.
 
 Every decision, eligible or not, is written to the audit trail and shown on the
 dashboard with its reasons.
@@ -966,6 +1030,10 @@ or run `python web_ui.py` in a terminal you opened.
 
 ## Operational detail
 
+* **Searchable prompts** — a Workday selection widget can appear as a text box.
+  The agent opens its picker and clicks the matching option; typing search text
+  alone does not count as an answer. The picker is handled in the input's own
+  frame. A missing choice remains unresolved.
 * **Declarations are signed last** — profile filling leaves declarations for the
   signing step. That step checks the current required fields, including answers
   that disappeared after filling, before signing on the owner's behalf.
@@ -994,3 +1062,82 @@ or run `python web_ui.py` in a terminal you opened.
 * **Dashboard** — each application's page shows progress, what is still
   outstanding, the field-by-field comparison, evidence links and the full event
   history. It is served on 127.0.0.1 only.
+
+Workday hierarchical prompts: explore only marked category nodes (bounded depth and visits), select a matching offered leaf, and verify its committed value. A category is never accepted as the answer.
+
+Generic field labels: bare Name denotes the applicant outside an education container. Unqualified Month/Day/Year spinbuttons never reuse answer-library or historical values; dates inside work/education entries still use their own record.
+
+Workday split date controls: changing a segment uses bounded spin controls when possible, then a composite digit stream when needed, and checks every segment while preserving neighboring values. Internal gaps remain unresolved rather than being filled with invented dates.
+
+Education subjects: select only the recorded subject or an owner-approved substitute, by clicking its actual option and verifying the committed label. Workday prompts stay tied to the same education row when the input moves, and scroll their own virtual list to inspect later options. Structured profile subjects override older resume extraction for an unambiguously matched school.
+Resume uploads on a resumed form check for the already listed filename in the upload field's frame before adding a file; an empty file input beside a saved attachment is not evidence that a new upload is needed.
+
+A Continue signal is consumed only after its file contains a nonempty answer. An empty file created by a writer still in progress leaves the agent waiting, with its normal timeout and browser checks.
+
+Each repeated job’s current-employment checkbox takes that job’s own yes/no value, even when its surrounding heading is read as a choice group. A contradictory site-filled current flag is corrected under the existing provenance policy; owner-entered choices remain protected. From/To groups qualify split Month/Year controls so former jobs receive their own end dates. The Workday entry filler sets each row’s current flag before locating its end-date controls.
+
+Workday skills prompts search one approved skill at a time, click a matching row only inside that widget's popup, and verify the committed tag. Existing tags remain in place. Unavailable skills are noted, the search text is cleared, and the menu is closed; an optional empty skills catalogue does not block progression.
+Unnamed layout groups without their own choices do not inherit the preceding field's question and cannot be used to select unrelated checkboxes elsewhere on the page.
+The Workday menu status "Options Expanded/Collapsed" is not a second form question. Empty skills menus are dismissed by clicking the section heading when Escape is ignored; unsupported optional skills are retained as intentionally blank for that page.
+Numeric/date spinbuttons always use verified spinner entry, including when the planner calls the action "choose". Composite dates preserve their neighboring segments under either action.
+# Dependent location pickers
+
+The address sweep commits SuccessFactors country and state choices through their own offered menu rows and verifies the selected value. A location control that remains disabled is deferred without clearing it, force-enabling it, or recording a successful answer. This prevents an uncommitted country from crashing the run on its dependent State field.
+
+## Field reading, modals, and runtime identity
+
+Composite phone widgets produce one number question: the actual child textbox retains the phone heading and the dial-code button does not become its label. Questions in paragraphs retain their wording across embedded terms/privacy links, and radio captions drawn as adjacent paragraphs are read as choices. Policy sweeps leave dialogs containing entry fields to the normal filling and validation flow, and report dismissal only when the dialog hides. The existing page fingerprint breaker still bounds genuine repeated navigation without progress.
+
+Text-message consent in a Yes/No picker or radio group follows the same contact-preference policy as a checkbox, preserving an exact approved saved answer when present. Mentioning a mobile number inside a consent question does not make it a phone-number field.
+
+Start Dashboard uses the checkout's local Python runtime and one canonical dashboard port. The dashboard exposes its loaded directory and source identity at /runtime; startup reuses only the same unchanged checkout, and refuses an old or different server rather than silently starting with stale code. Deployment redirects the owner's old dashboard entry point and old bookmarks to the corrected canonical runtime.
+
+Source identity includes the runtime modules and portal adapters. A dashboard whose code changed since it loaded refuses to start or resume a worker until restarted. Each application log records the source identity used to launch it; the runtime identity endpoint retains the directory/interpreter comparison without copying local paths into diagnostics.
+# Active dialog recovery
+
+Grouped native choices covered by a decorative layer use their own associated label when direct checking fails. The fallback clicks once and does not search for a matching label in another question.
+
+The navigation loop guard recognizes changes to visible field values and committed selections on the same wizard step. Its diagnostics store a digest rather than personal answer values; passwords are excluded. An unchanged form still trips the existing loop limit. Preferred-name presence checkboxes use a boolean derived from the profile rather than the name text.
+
+Completed degrees can match broader completed education categories when the exact degree is absent: a master's or doctorate can use Post-Graduate Degree, and a bachelor's can use College/University Graduate. A broad category never selects a specific degree, and incomplete studies do not stand in for a completed degree. Immediate availability can use Not Applicable specifically for a notice-period menu when Immediate is absent. Identity verification offering email and phone chooses the saved contact preference; this does not bypass verification-code, credential, or CAPTCHA policy.
+
+While a visible dialog is open, the page reader focuses on that dialog and excludes background posting controls. After an owner completes CAPTCHA, the existing form's Continue remains the next action; a covered background Apply cannot take priority. Once the dialog closes, the reader returns to the page.
+
+## Diagnostic privacy (P0-B5)
+
+Persisted diagnostics use one privacy layer. HTML is a structural projection:
+field values, scripts, bootstrap state, arbitrary text, document content and
+active attributes are omitted. Saved accessibility text retains roles, known
+labels and boolean state. Live form perception and application answers are
+unchanged. Review/validation JSON masks values; review the actual form in the
+browser to inspect your answers.
+
+Screenshots conservatively cover the entire document with an opaque temporary
+mask, including frames, previews and shadow content. They preserve capture
+geometry rather than readable page pixels. Values and input/change events are
+untouched, and capture removes temporary nodes in finally. If setup or sanitation
+fails, the artifact is omitted; raw capture is never a fallback.
+
+Runtime logs omit dynamic personal values, filenames, URLs and exception bodies.
+An invalid Gemini key still produces a fixed format hint without logging the key.
+Dashboard stdout/stderr exports retain only safe operation categories. Console
+exports retain only message type/error category (latest 200 entries). Structured
+application events keep action, evidence, result/category and counts. Existing
+submission safety event enums and human-handoff/checkpoint authority are unchanged.
+
+Evidence/log viewers retain resolved-root containment and require B5 manifests
+binding safe artifacts to their bytes. Legacy unmarked diagnostics are withheld.
+HTML is served as plain text with nosniff and a restrictive CSP.
+
+DIAGNOSTIC_RETENTION_DAYS defaults to 7, accepts 0..30, and uses 7 for invalid
+values. Cleanup runs at runtime/dashboard startup and when a zero-retention
+worker finishes. Zero retains current-use artifacts until that cleanup boundary.
+Cleanup is bounded and best effort, follows no symlinks, and deletes only known
+diagnostics under output/, runs/ and logs/. Documents, DBs, profiles, checkpoints,
+source material, application records and unrelated files remain. The ten-run
+page-recording cap remains in force.
+
+Artifact limits: DOM 2 MiB; accessibility/text/JSON and runtime logs 1 MiB;
+console 512 KiB (the category-only projection is much smaller); screenshots
+16 MiB; manifests 64 KiB. Oversized sanitized text may be truncated with a
+manifest flag; oversized JSON becomes valid truncation metadata.

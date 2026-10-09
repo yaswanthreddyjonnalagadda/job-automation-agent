@@ -89,6 +89,7 @@ CONCEPTS: dict[str, dict[str, Any]] = {
     },
     "FULL_NAME": {
         "patterns": [
+            r"^\W*name\W*$",
             r"^\W*(?:full|legal|complete|applicant|candidate)\s*(?:legal\s*)?name\b",
             r"^\W*your\s*name\b",
             r"^\W*name\s*\(\s*first\s+and\s+last\s*\)\b",
@@ -109,7 +110,7 @@ CONCEPTS: dict[str, dict[str, Any]] = {
             r"\b(?:mobile|cell|cellphone|primary\s*phone|contact\s*number|phone\s*number|telephone)\b",
             r"^\W*phone\W*$",
         ],
-        "negative": r"home\s*phone|work\s*phone|employer\s*phone|office\s*phone|supervisor|emergency|fax",
+        "negative": r"home\s*phone|work\s*phone|employer\s*phone|office\s*phone|supervisor|emergency|fax|\bconsent\b|\bsms\b|text\s+(?:message|communication)",
     },
     "PHONE_COUNTRY_CODE": {
         "patterns": [
@@ -457,6 +458,10 @@ def match_concept(
         negative = defn.get("negative")
         container_boost = defn.get("container_boost")
 
+        if concept_name == "SCHOOL_UNIVERSITY" and clean_q == "name" and not re.search(
+                r"education|academic|school|university|college|institution|degree", clean_c, re.IGNORECASE):
+            continue  # A bare Name is not evidence of an education entry.
+
         # Check negative guardrails first against combined text
         if negative and re.search(negative, combined, re.IGNORECASE):
             continue
@@ -564,6 +569,10 @@ def best_option_match(desired: str, options: list[str]) -> Optional[str]:
         return None
     desired_clean = clean_text(desired)
     desired_lower = desired.strip().lower()
+    import option_match
+    shared = option_match.best_option(options, desired)
+    if shared is not None:
+        return options[shared]
 
     # Exact or stripped match
     for opt in options:

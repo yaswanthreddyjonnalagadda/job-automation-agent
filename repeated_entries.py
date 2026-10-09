@@ -54,6 +54,7 @@ def entry_map(snapshot: str) -> dict[str, Entry]:
     section_indent = -1                              # where the entry's own title is drawn
     current: dict = {}
     peers: dict[str, list] = {"work": [], "education": []}
+    date_groups: list[tuple[int, str]] = []
     last_box: Optional[tuple[int, str]] = None      # (indent, label) of the last box, whose value may follow
     for raw in (snapshot or "").splitlines():
         m = _LINE.match(raw)
@@ -62,6 +63,10 @@ def entry_map(snapshot: str) -> dict[str, Entry]:
         role, name, attrs, value = m.group(2), (m.group(3) or ""), m.group(4) or "", (m.group(5) or "").strip()
         ref = re.search(r"\[ref=([\w-]+)\]", attrs)
         indent = len(m.group(1))
+        while date_groups and indent <= date_groups[-1][0]:
+            date_groups.pop()
+        if role == "group" and re.fullmatch(r"From|To|Start(?: date)?|End(?: date)?", name, re.IGNORECASE):
+            date_groups.append((indent, name))
         # A text box with a placeholder shows what it holds as a child line ("- text: Capital One").
         if last_box is not None and indent > last_box[0] and role == "text" and value and section:
             if not current.get(last_box[1].lower()):
@@ -93,6 +98,8 @@ def entry_map(snapshot: str) -> dict[str, Entry]:
         if role == "button" and re.search(r"\b(remove|delete|add|save|cancel)\b", name, re.IGNORECASE):
             continue
         label = " ".join(name.split())
+        if role == "spinbutton" and date_groups and re.fullmatch(r"Month|Day|Year", label, re.IGNORECASE):
+            label = f"{date_groups[-1][1]} {label}"
         if first_label is None or first_label == "":
             if first_label is None:
                 index += 1
@@ -149,18 +156,22 @@ def _identifies(shown: str, name: str) -> bool:
 
 
 def with_profile(history: dict, profile) -> dict:
-    """The work history, with each degree's dates completed from the profile's education dates.
+    """The work history, with explicit profile subjects and missing education dates applied.
 
     The resume reader keeps only a degree's end; the owner's profile holds both ends ("JNTU Hyderabad, August
     2015, April 2019"). UKG's degree entries asked From and To, the history had no start, and the run stopped for
     the owner to type dates the profile already held (30 September). A date the history has is kept."""
     history = dict(history or {})
     dated = [tuple(d) for d in (getattr(profile, "education_dates", ()) or ()) if d and len(d) >= 3]
-    if not dated:
-        return history
+    profile_degrees = [tuple(row) for row in (getattr(profile, "education", ()) or ()) if row and len(row) >= 3]
     degrees = []
     for record in history.get("education") or []:
         record = dict(record)
+        candidates = [row for row in profile_degrees if _identifies(str(row[2]), str(record.get("school") or ""))]
+        if len(candidates) > 1:
+            candidates = [row for row in candidates if _identifies(str(row[0]), str(record.get("degree") or ""))]
+        if len(candidates) == 1 and str(candidates[0][1]).strip():
+            record["field"] = str(candidates[0][1]).strip()
         for school, start, end in (d[:3] for d in dated):
             if _identifies(str(school or ""), str(record.get("school") or "")):
                 record["start"] = record.get("start") or start

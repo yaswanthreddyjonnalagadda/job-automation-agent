@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re
+import threading
 from datetime import datetime
 import subprocess
 import time
@@ -38,6 +39,7 @@ import account_state
 import form_fields
 import option_match
 import safety
+from submission_guard import SubmissionGuardV0
 import visible_desktop
 from config import AppConfig, UserProfile, get_user_profile, resume_to_attach
 from interaction import (
@@ -54,6 +56,8 @@ from perception import (
 )
 from sites import adapter_for
 
+import diagnostics
+diagnostics.install_log_privacy()
 logger = logging.getLogger(__name__)
 
 # A Chrome-family window is titled "<page> - Google Chrome" (real Chrome, what the agent uses),
@@ -248,6 +252,9 @@ class JobApplicationAssistant:
         self._config = config
         self._playwright = None
         self._context: Optional[BrowserContext] = None
+        self._submission_guard: Optional[SubmissionGuardV0] = None
+        self._submission_execution_lock = threading.RLock()
+        self._submission_execution_state = "active"
         # Every value the agent puts on a page, so it never overwrites the user.
         self.values = safety.AgentValues()
 
@@ -318,7 +325,76 @@ class JobApplicationAssistant:
         # Record which form controls a person changes, so a value the site put
         # there is never mistaken for the owner's answer (provenance.py).
         provenance.install(self._context)
+        self._submission_guard = SubmissionGuardV0(self._context)
         return self
+
+    def _ensure_submission_guard(self, page: Page) -> SubmissionGuardV0:
+        guard = getattr(self, "_submission_guard", None)
+        if guard is None:
+            guard = SubmissionGuardV0(page.context)
+            self._submission_guard = guard
+        return guard
+
+    def protect_submission(self, page: Page) -> None:
+        """Arm final-submit containment outside pages identified as postings."""
+        if getattr(self, "_submission_execution_state", "active") != "active":
+            return
+        if not self.on_job_description(page):
+            guard = self._ensure_submission_guard(page)
+            tracker = getattr(self, "submission_state_store", getattr(self, "tracker", None))
+            key = getattr(self, "application_key", "")
+            if tracker is not None and key:
+                guard.bind_application(tracker, key)
+            guard.activate(page)
+
+    def human_handoff(self, page: Page) -> None:
+        """Park automation durably before allowing owner-controlled submission."""
+        with self._execution_lock():
+            self._submission_execution_state = "parking"
+            tracker = getattr(self, "submission_state_store", getattr(self, "tracker", None))
+            key = getattr(self, "application_key", "")
+            try:
+                if tracker is None or not key:
+                    raise RuntimeError("Cannot hand off without a persisted application identity")
+                guard = getattr(self, "_submission_guard", None)
+                if guard is not None:
+                    guard.bind_application(tracker, key)
+                tracker.record_submission_safety_event(
+                    key, "MANUAL_HANDOFF_STARTED", {"execution_state": "parked"}
+                )
+            except Exception:
+                self._submission_execution_state = "parked"
+                logger.exception("Manual handoff could not be durably recorded; submission guard remains armed")
+                raise
+            self._submission_execution_state = "parked"
+            guard = getattr(self, "_submission_guard", None)
+            if guard is not None:
+                guard.deactivate(page)
+
+    def _execution_lock(self):
+        lock = getattr(self, "_submission_execution_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._submission_execution_lock = lock
+        return lock
+
+    def _record_submission_event(self, kind: str, reason: str) -> None:
+        tracker = getattr(self, "submission_state_store", getattr(self, "tracker", None))
+        key = getattr(self, "application_key", "")
+        if tracker is None or not key:
+            return
+        try:
+            tracker.record_submission_safety_event(key, kind, {"reason": reason})
+        except Exception:
+            logger.exception("%s could not be durably recorded", kind)
+
+    def resume_automation(self, page: Page) -> None:
+        """Re-arm containment before any automation resumes after a handoff."""
+        with self._execution_lock():
+            guard = getattr(self, "_submission_guard", None)
+            if guard is not None:
+                guard.activate(page)
+            self._submission_execution_state = "active"
 
     def _choose_channel(self) -> str:
         """Selects the browser channel.
@@ -479,11 +555,10 @@ class JobApplicationAssistant:
             page._console_logs = []
         def _on_console(msg):
             try:
-                page._console_logs.append({
-                    "type": msg.type,
-                    "text": msg.text,
-                    "location": getattr(msg, "location", None),
-                })
+                page._console_logs.extend(diagnostics.sanitize_console_logs([{
+                    "type": msg.type, "text": msg.text,
+                }]))
+                del page._console_logs[:-200]
             except Exception:
                 pass
         try:
@@ -789,10 +864,10 @@ class JobApplicationAssistant:
             field = page.locator(selector).first
             current = field.input_value(timeout=3_000) or ""
             if not self.values.may_write(page, selector, current):
-                logger.info("Keeping your answer in %s (%r)", what or selector, current[:40])
+                logger.info('FIELD_PRESERVED: existing value retained')
                 return False
             if not field.is_editable(timeout=2_000):
-                logger.info("Skipping locked field %s (value %r)", what or selector, current[:40])
+                logger.info('FIELD_PRESERVED: existing value retained')
                 return False
             fill_and_dispatch(field, value, timeout=8_000)
             # A key press plus leaving the field makes React-style forms
@@ -857,7 +932,7 @@ class JobApplicationAssistant:
                         pass
                     now = (button.get_attribute("title") or button.get_attribute("aria-label") or "")
                     if any(name.lower() in now.lower() for name in spellings):
-                        logger.info("PROFILE_ANSWER: phone country -> %r", now.strip()[:40])
+                        logger.info('FIELD_ACTION: application field handled')
                         done += 1
                 else:
                     page.keyboard.press("Escape")
@@ -915,7 +990,7 @@ class JobApplicationAssistant:
                     pass
                 if chosen:
                     self.note_page_changed()
-                    logger.info("PROFILE_ANSWER: phone country -> %r", chosen[:40])
+                    logger.info('FIELD_ACTION: application field handled')
                     done += 1
             except Exception as exc:
                 logger.debug("Phone country dropdown failed: %s", str(exc).splitlines()[0][:100])
@@ -955,7 +1030,7 @@ class JobApplicationAssistant:
                 now = " ".join((combo.inner_text() or "").split())
                 if country.lower() in now.lower():
                     self.note_page_changed()
-                    logger.info("PROFILE_ANSWER: phone country code -> %r", now[:40])
+                    logger.info('FIELD_ACTION: application field handled')
                     done += 1
             except Exception as exc:
                 logger.debug("Country code list failed: %s", str(exc).splitlines()[0][:100])
@@ -1097,7 +1172,7 @@ class JobApplicationAssistant:
                     if (select.input_value() or "").strip() and not self.values.is_ours(
                         page, field.selector, select.input_value()
                     ):
-                        logger.info("Keeping your answer in %s", field.label_text[:50])
+                        logger.info('FIELD_PRESERVED: existing value retained')
                         continue
                     page.select_option(field.selector, label=value)
                     self.values.record(page, field.selector, value, f"profile:{field.matched_profile_key}")
@@ -1680,7 +1755,7 @@ class JobApplicationAssistant:
                 answer = options[index]
             if self._adapter_hook(page, "answer_platform_question", False,
                                   self, page, question.get("qid", ""), answer):
-                logger.info("PROFILE_ANSWER: %r -> %r", question["question"][:60], answer[:40])
+                logger.info('FIELD_ACTION: application field handled')
 
         # Answers can reveal new required fields (choosing Country adds State),
         # so scan once more for anything that has just appeared.
@@ -1797,11 +1872,11 @@ class JobApplicationAssistant:
         idx = self._best_option(options, candidates)
         if idx is None:
             self.note_ambiguous_choice(control["question"], options, candidates[0] if candidates else "")
-            logger.info("PROFILE_ANSWER: no option for %r among %s", control["question"][:60], options[:6])
+            logger.info('FIELD_ACTION: application field handled')
             return
         select.select_option(label=options[idx], timeout=5_000)
         self.values.record(page, f"[id={json.dumps(control['id'])}]", options[idx], "profile:standard answer")
-        logger.info("PROFILE_ANSWER: %r -> %r", control["question"][:60], options[idx])
+        logger.info('FIELD_ACTION: application field handled')
 
     def _salary_band(self, texts: list[str]) -> int | None:
         """Which offered pay band to pick when a form asks for a salary range
@@ -1842,7 +1917,7 @@ class JobApplicationAssistant:
             if overlap > best_overlap:
                 best, best_overlap = index, overlap
         if best is not None:
-            logger.info("PROFILE_ANSWER: salary band %r covers %s-%s", texts[best], low, high)
+            logger.info('FIELD_ACTION: application field handled')
         return best
 
     def displayed_value(self, field) -> str:
@@ -1978,41 +2053,61 @@ class JobApplicationAssistant:
             logger.debug("Frame check failed: %s", str(exc).splitlines()[0][:100])
         return page
 
-    # Never clicked on Claude's say-so, whatever it reads on the screen. The
-    # Apply that opens a form from a posting is allowed separately below.
-    _NEVER_CLICK = re.compile(
-        r"\bsubmit|send (my |your |the |this )?application|\bfinish\b|certify|attest|\bsignature\b|"
-        r"\be-?sign\b|sign (here|below)|agree to the terms|linked ?in|\bindeed\b|facebook|"
-        r"log ?out|sign ?out|withdraw|delete|remove",
-        re.IGNORECASE)
-
-    def safe_to_click_for_claude(self, page: Page, label: str) -> bool:
-        label = " ".join((label or "").split())
-        if not label or self._NEVER_CLICK.search(label) or safety.is_attestation(label):
-            return False
-        if safety.is_submit_label(label):
-            # "Apply" sends the application on some final pages; it only opens
-            # the form from a posting that has no form of its own.
-            return bool(re.match(r"^\s*apply\b", label, re.IGNORECASE)) and self.on_job_description(page)
-        return True
-
     def look_and_act(self, page: Page, claude, goal: str) -> tuple[str, bool]:
-        """Looks at the page the way a person would and takes the next step.
+        with self._execution_lock():
+            if getattr(self, "_submission_execution_state", "active") != "active":
+                logger.warning("LOOKED: automation is parked for human handoff")
+                return "", False
+            return self._look_and_act_locked(page, claude, goal)
+
+    def _look_and_act_locked(self, page: Page, claude, goal: str) -> tuple[str, bool]:
+        """Looks at the page the way a person would -- an observation step, never an
+        independent click authority.
 
         Used when the usual reading finds nothing to fill and nothing to press.
-        Claude names the control; the agent finds it on the page and clicks it
-        -- unless it submits, signs, certifies, deletes or uses a LinkedIn,
-        Indeed or Facebook sign-in, which is refused here whatever Claude says.
-        Returns (what kind of page it is, whether something was clicked).
+        Claude is shown a screenshot and names what kind of page it is and what
+        control looks relevant; this function logs and returns that observation,
+        but it never clicks the named control itself. Returns (what kind of page it
+        is, always False -- nothing is ever clicked here).
 
-        A CAPTCHA ends it: nothing is clicked while one is showing, and nothing
-        inside a CAPTCHA's frame is ever clicked. On Schwab's sign-in the
-        screenshot was read as a sign-in prompt and the puzzle's own "Skip"
-        was clicked before the usual CAPTCHA check had run.
+        A fifth closure review, 7 October 2026, found that the DOM-structural
+        allowlist this function used to consult (a recognized opener role,
+        aria-haspopup/aria-controls/aria-expanded, a real anchor href) was itself
+        still unsafe: every one of those signals can coexist with a custom onclick
+        handler that calls requestSubmit() on an unrelated form --
+        <button aria-haspopup="listbox" onclick="...requestSubmit()">, a
+        <div role="tab" onclick="...requestSubmit()">, and
+        <a href="/next" onclick="...requestSubmit()"> all describe harmless-looking
+        UI semantics while being exactly as irreversible as a bare submit button.
+        No generic, structure-only test can tell "this opens a dropdown" apart from
+        "this opens a dropdown and also submits the form" -- UI semantics are
+        useful for discovery, never for irreversible-action authority. Earlier
+        attempts (a label-text filter, then a DOM-structural allowlist) were each
+        found insufficient in turn; the only fix left is architectural: there is no
+        second click-authority system here at all any more.
+
+        The vision/model fallback is therefore purely an observer: it inspects,
+        classifies, and reports what it sees, never independently executing an
+        unverified, model-selected DOM click. The deterministic mechanisms this
+        project already has -- PageAgent's own control-matching and step-navigation
+        authority (submission_step_finality()), the field/dropdown helpers, and the
+        verified final-submit gateway -- remain the only paths that may ever act on
+        the page. When none of them can positively authorize an action on a page
+        this function is asked to look at, the application is left for normal
+        recovery or human handoff rather than guessed at here; for P0-B1 that cost
+        is accepted explicitly, per the owner's own instruction, rather than
+        inventing another generic allowlist to recover the old compatibility.
+
+        A CAPTCHA still ends it early: nothing is read or reported while one is
+        showing. On Schwab's sign-in the screenshot was once read as a sign-in
+        prompt and the puzzle's own "Skip" was clicked before the usual CAPTCHA
+        check had run -- a risk this redesign also removes outright, since nothing
+        here is ever clicked at all any more.
         """
         if safety.captcha_visible(page):
             logger.info("LOOKED: a CAPTCHA is showing -- only you can complete it; the agent does nothing")
             return "captcha", False
+        self.protect_submission(page)
         try:
             shot = page.screenshot(full_page=False, timeout=15_000)
             seen = claude.read_page(shot, page.url, goal)
@@ -2021,53 +2116,13 @@ class JobApplicationAssistant:
             return "", False
         kind, label, why = seen.get("page", ""), seen.get("click", ""), seen.get("why", "")
         logger.info("LOOKED: %s -- %s%s", kind.replace("_", " ") or "a page", why[:140],
-                    f" -> click {label[:40]!r}" if label else "")
+                    f" -- identified {label[:40]!r}; observation only, never a click" if label else "")
         if kind == "captcha" or safety.captcha_visible(page):
             logger.info("LOOKED: a CAPTCHA is showing -- only you can complete it; the agent does nothing")
             return "captcha", False
-        if not label:
-            return kind, False
-        if not self.safe_to_click_for_claude(page, label):
-            logger.info("LOOKED: not clicking %r -- the agent never presses that on its own", label[:40])
-            return kind, False
-        exact = re.compile(rf"^\s*{re.escape(label)}\s*$", re.IGNORECASE)
-        loose = re.compile(re.escape(label), re.IGNORECASE)
-        scopes = [page] + [f for f in page.frames[1:]
-                           if (f.url or "").startswith("http") and not safety.is_captcha_frame(f.url)]
-        before = self._page_fingerprint(page)
-        for scope in scopes:
-            candidates = [scope.get_by_role("button", name=exact), scope.get_by_role("link", name=exact),
-                          scope.get_by_role("button", name=loose), scope.get_by_role("link", name=loose),
-                          scope.get_by_role("menuitem", name=loose), scope.get_by_role("tab", name=loose),
-                          scope.get_by_text(exact), scope.get_by_label(exact)]
-            for candidate in candidates:
-                try:
-                    for i in range(min(candidate.count(), 4)):
-                        el = candidate.nth(i)
-                        if not el.is_visible():
-                            continue
-                        on_it = " ".join(((el.inner_text(timeout=1_000) or "") + " " +
-                                          (el.get_attribute("aria-label") or "")).split())
-                        if on_it and not self.safe_to_click_for_claude(page, on_it):
-                            continue
-                        if safety.captcha_visible(page):
-                            logger.info("LOOKED: a CAPTCHA appeared -- only you can complete it; not clicking")
-                            return "captcha", False
-                        el.scroll_into_view_if_needed(timeout=3_000)
-                        el.click(timeout=5_000)
-                        page.wait_for_timeout(2_500)
-                        try:
-                            page.wait_for_load_state("networkidle", timeout=10_000)
-                        except Exception:
-                            pass
-                        self.note_page_changed()
-                        moved = self._page_fingerprint(page) != before
-                        logger.info("LOOKED: clicked %r%s", label[:40], "" if moved else " (the page looks the same)")
-                        return kind, True
-                except Exception as exc:
-                    logger.debug("Vision click failed: %s", str(exc).splitlines()[0][:100])
-                    continue
-        logger.info("LOOKED: could not find %r on the page to click", label[:40])
+        # Observation ends here. No generic, model-selected candidate is ever
+        # clicked by this function, whatever structural signals it carries --
+        # that decision belongs to a deterministic mechanism, not to this one.
         return kind, False
 
     def open_picker_control(self, page: Page, field) -> bool:
@@ -2253,7 +2308,7 @@ class JobApplicationAssistant:
         if idx is None:
             page.keyboard.press("Escape")
             self.note_ambiguous_choice(control["question"], texts, candidates[0] if candidates else "")
-            logger.info("PROFILE_ANSWER: no option for %r among %s", control["question"][:60], texts[:6])
+            logger.info('FIELD_ACTION: application field handled')
             return
         self._click_resiliently(opts.nth(idx), timeout_ms=4_000)
         page.wait_for_timeout(500)
@@ -2264,7 +2319,7 @@ class JobApplicationAssistant:
         # An earlier pass may have filed this question as unanswerable (before
         # the right option list was found); it is answered now.
         self.clear_ambiguous(control["question"])
-        logger.info("PROFILE_ANSWER: %r -> %r (now %r)", control["question"][:60], texts[idx], shown)
+        logger.info('FIELD_ACTION: application field handled')
 
     def radio_groups(self, page: Page) -> list[dict]:
         """Every radio question on the page: its text, its options, and whether
@@ -2404,7 +2459,7 @@ class JobApplicationAssistant:
             if self.answer_radio_group(page, group, group["labels"][index]):
                 self.values.record(page, f"[id={json.dumps(group['ids'][index])}]",
                                    group["labels"][index], "profile:standard answer")
-                logger.info("PROFILE_ANSWER: %r -> %r", group["question"][:60], group["labels"][index][:60])
+                logger.info('FIELD_ACTION: application field handled')
             else:
                 logger.warning("Could not answer %r", group["question"][:60])
 
@@ -2500,7 +2555,7 @@ class JobApplicationAssistant:
                 logger.warning("Could not tick %r: %s", question[:50], str(exc).splitlines()[0][:100])
                 continue
             self.values.record(page, selector, group["labels"][index], "profile:standard answer")
-            logger.info("PROFILE_ANSWER: %r -> %r", question[:60], group["labels"][index][:50])
+            logger.info('FIELD_ACTION: application field handled')
 
     def _answer_text_questions(self, page: Page, profile) -> None:
         """Free-text questions with a known answer: salary expectations (the
@@ -2540,7 +2595,7 @@ class JobApplicationAssistant:
             return
         today = date.today().strftime("%m/%d/%Y")
         if self.adapter(page).set_date(self, page, r"today[’']?s date", today):
-            logger.info("PROFILE_ANSWER: Today's Date -> %r", today)
+            logger.info('FIELD_ACTION: application field handled')
 
         # The same rules the pickers use. A questionnaire asks for the most
         # recent employer, its type of business, the dates and the position as
@@ -2559,7 +2614,7 @@ class JobApplicationAssistant:
                 if question and pattern.search(question):
                     if self.set_value(page, f"[id={json.dumps(box['id'])}]", value, question,
                                       source="profile:standard answer"):
-                        logger.info("PROFILE_ANSWER: %r -> %r", question[:60], value)
+                        logger.info('FIELD_ACTION: application field handled')
                     else:
                         # It used to break in silence here, so a question the
                         # agent had an answer for looked untouched.
@@ -3026,13 +3081,144 @@ class JobApplicationAssistant:
         try:
             if page.locator("button:text-is('Submit'), [role='button']:text-is('Submit'), button:has-text('Submit Application')").count():
                 return True
-            # Workday marks the active wizard step; 'Review' being current is
-            # the same signal without depending on a button label.
+            return self.is_review_step_by_wizard_marker(page)
+        except Exception:
+            return False
+
+    def is_review_step_by_wizard_marker(self, page: Page) -> bool:
+        """True only on the DOM-structural signal half of is_review_step(): an active
+        wizard-progress indicator (Workday and similar) that itself reads 'Review'. Deliberately
+        does not also fire on a literal 'Submit'-labeled button the way is_review_step() does --
+        that shortcut is already known to fire on Schwab's own step 2 of 5 (its button reads
+        exactly 'Submit'), which is why PageAgent's own step-counter check must be able to
+        override is_review_step() for that case.
+
+        This narrower, independent signal exists so a caller can ask "does the page's own wizard
+        chrome -- not just a button's wording -- say this is the review step" as a cross-check
+        against a step counter that might itself be wrong (a hallucinated/misread 'step N of M',
+        or an unrelated number the same pattern happened to match) -- the P0-B1 authority-boundary
+        finding, 7 October 2026: trusting a step counter alone, with no second signal, to decide
+        that a submit-labeled control is safe to click without the hard final-step gate.
+
+        Superseded as PageAgent's actual gating signal by submission_step_finality() below (the
+        P0-B1 general authority-boundary follow-up, 7 October 2026: this method only ever answers
+        for the page that carries the marker at all -- a page with none, which the final
+        independent review found to be the common shape for ATSs that are not Workday-style
+        wizards, answered False here with nothing else standing between a wrong step count and a
+        real, uncontained submit). Left unchanged and still callable on its own: nothing below
+        depends on it, but removing it would be an unrelated regression for any other caller."""
+        try:
             return page.locator(
                 "[aria-current='step']:has-text('Review'), [data-automation-id='progressBarActiveStep']:has-text('Review'), [class*='active']:has-text('Review')"
             ).count() > 0
         except Exception:
             return False
+
+    _STEP_FINALITY_SCRIPT = r"""() => {
+        function visible(el) { return el.getClientRects().length > 0; }
+
+        // Workday's own active-step marker: its own text carries a real, numeric
+        // "current step N of M" (or "completed step N of M") phrase -- confirmed against
+        // a real recorded production page -- read directly via a digit-only regex capture
+        // (parseInt on \d+ groups can never be empty, negative, or NaN). A marker present
+        // but not parseable this way is still checked for the literal word "Review"
+        // (756b77b's original, unchanged signal). Selector deliberately does NOT also match
+        // the generic [aria-current='step'] state: a third closure review, 7 October 2026,
+        // found that an unrelated element anywhere on the page carrying that bare ARIA
+        // state (not tied to Workday's own vetted data-automation-id at all) could satisfy
+        // this selector and be misread as application-wizard evidence -- aria-current="step"
+        // is a generic, standards-based state any unrelated nested stepper can carry, and
+        // its presence alone does not establish that it belongs to THIS application's
+        // wizard/navigation flow. Only the one structure actually vetted against a real
+        // recorded production page is accepted.
+        const stepRe = /\bstep\s+(\d+)\s+of\s+(\d+)\b/i;
+        const markers = Array.from(document.querySelectorAll(
+            "[data-automation-id='progressBarActiveStep']"
+        ));
+        if (markers.length > 1) return "UNKNOWN";  // duplicated/ambiguous -- no positive evidence either way
+        if (markers.length === 1) {
+            const text = (markers[0].textContent || '').trim();
+            const m = stepRe.exec(text);
+            if (m) {
+                const current = parseInt(m[1], 10), total = parseInt(m[2], 10);
+                if (total > 0) {
+                    if (current >= total) return "FINAL";
+                    if (visible(markers[0])) return "NON_FINAL";
+                    // a hidden/stale marker claiming steps remain is not trusted as permission
+                }
+            } else if (/\breview\b/i.test(text)) {
+                return "FINAL";
+            }
+        }
+
+        // No generic, non-Workday signal is accepted as NON_FINAL authority. A second
+        // closure review, 7 October 2026, found that role="progressbar" combined with
+        // aria-posinset/aria-setsize (this file's own prior attempt at a stronger,
+        // non-text-based association) was still not sufficient: aria-posinset/aria-setsize
+        // are plain set-position semantics for a set-item role, and their mere presence
+        // alongside role="progressbar" does not establish that the element belongs to, or
+        // describes, THIS application's own wizard/navigation flow -- it can describe an
+        // unrelated upload, onboarding, or document sub-process just as easily, with or
+        // without application-looking label text. Positive NON_FINAL evidence is
+        // deliberately restricted to the one structure actually vetted against a real
+        // recorded production page (the Workday marker above); an unsupported ATS shape
+        // returns UNKNOWN here and fails closed, same as FINAL. A future ATS-specific
+        // positive proof may be added later, but only after being individually validated
+        // against that ATS's own real markup -- never as another generic, cross-ATS
+        // heuristic.
+        return "UNKNOWN";
+    }"""
+
+    def submission_step_finality(self, page: Page) -> str:
+        """"FINAL", "NON_FINAL", or "UNKNOWN" -- whether the page's own DOM structure, read
+        directly and never from plan.step (an AI-reported field this code never verifies against
+        the page) or from the clicked control's own label, proves a submit-labeled control is the
+        application's last step, proves it is not, or proves neither.
+
+        The P0-B1 general authority-boundary finding, 7 October 2026: the prior fix (commit
+        756b77b) only cross-checked the step counter against a wizard marker when one was present
+        and read literally as 'Review'. The final independent review reproduced, through the real
+        production entry point with the browser-side guard entirely absent, a genuinely final
+        submit control on a page with no such marker and a wrong step count being clicked anyway --
+        proving the general case, not just the Workday-wizard-contradiction case, was still open.
+
+        Evidence actually used, confirmed against a real recorded Workday page (7 October 2026,
+        output/AIG_Technologies*/evidence_*/page.html): the active-step marker's own text reads
+        'current step 6 of 6' / 'completed step 5 of 6' -- a real, numeric, DOM-native step count,
+        not the word 'Review' alone, so a final step under any other name is caught the same way.
+
+        No generic, non-Workday signal is accepted as NON_FINAL authority. Three successive
+        attempts at a cross-ATS generic signal were each found insufficient and reproduced as live
+        defects: first, a bare role='progressbar' whose accessible-name text merely mentioned the
+        word 'step' (misfired on an unrelated upload-progress indicator labeled 'Upload step 2 of
+        5', and let aria-valuenow='' / aria-valuenow='-1' slip past a bare Number.isFinite() check
+        via JavaScript's own coercion quirks); then, requiring that same progressbar to also carry
+        aria-posinset/aria-setsize (the real ARIA "position in an ordered set" relationship), which
+        was still not sufficient -- that attribute pair is plain set-position semantics for a
+        set-item role, and its presence does not establish that the element belongs to this
+        application's own wizard/navigation flow rather than an unrelated upload, onboarding, or
+        document sub-process; then, the marker selector itself also matching the bare, generic
+        [aria-current='step'] ARIA state (7 October 2026, a third closure review) -- any unrelated
+        nested stepper elsewhere on the page can carry that same standards-based state without any
+        tie to this application at all, and the selector accepted it exactly as it accepted
+        Workday's own vetted marker. Positive NON_FINAL evidence is therefore restricted to the one
+        structure actually vetted against a real recorded production page
+        ([data-automation-id='progressBarActiveStep'] alone, above); any other ATS shape --
+        supported or not, however convincing its text or ARIA attributes look -- resolves "UNKNOWN"
+        here. A future ATS-specific positive proof may be added later, but only after being
+        individually validated against that ATS's own real recorded markup, never as another
+        generic, cross-ATS heuristic.
+
+        Absence of a recognized structure, more than one conflicting marker, or a marker that is
+        hidden/stale is "UNKNOWN", never "NON_FINAL": an unsupported ATS shape, or ambiguous
+        evidence, is not permission to proceed past a submit-labeled control outside the
+        authoritative final-submit gateway. Only "NON_FINAL" may authorize that ordinary click;
+        both "FINAL" and "UNKNOWN" must refuse it."""
+        try:
+            result = page.evaluate(self._STEP_FINALITY_SCRIPT)
+            return result if result in ("FINAL", "NON_FINAL", "UNKNOWN") else "UNKNOWN"
+        except Exception:
+            return "UNKNOWN"
 
     _NEXT_SELECTORS = (
         "button:has-text('Save and Continue')",
@@ -4059,13 +4245,31 @@ class JobApplicationAssistant:
                     return True
                 control.set_input_files(str(letter_pdf), timeout=15_000)
                 page.wait_for_timeout(1_500)
+                # Verify the upload actually shows as attached before trusting it (Phase
+                # 0-B4 closure) -- set_input_files() not throwing is not, by itself,
+                # evidence it landed. Reuses the same `_file_already_attached()` check
+                # already used above as a pre-check, now also as a post-check.
+                if not self._file_already_attached(page, Path(letter_pdf).name):
+                    logger.warning("Cover letter upload did not show as attached after the attempt")
+                    return False
                 logger.info("Attached cover letter: %s", Path(letter_pdf).name)
-            else:
-                if (control.input_value() or "").strip():
-                    logger.info("Cover letter box already has text; leaving it alone")
-                    return True
-                fill_and_dispatch(control, Path(letter_txt).read_text(encoding="utf-8"), timeout=5_000)
-                logger.info("Pasted cover letter into the form's text box")
+                return True
+            if (control.input_value() or "").strip():
+                logger.info("Cover letter box already has text; leaving it alone")
+                return True
+            text = Path(letter_txt).read_text(encoding="utf-8")
+            fill_and_dispatch(control, text, timeout=5_000)
+            # Verify the pasted text actually committed (Phase 0-B4 closure) -- the same
+            # "read the committed value back" principle as every other field write; a
+            # non-throwing fill_and_dispatch() call is not, by itself, evidence it stuck.
+            shown = (control.input_value() or "").strip()
+            expected = text.strip()
+            committed = bool(shown) and (expected[:50].lower() in shown.lower()
+                                         or shown[:50].lower() in expected.lower())
+            if not committed:
+                logger.warning("Cover letter text did not commit to the box")
+                return False
+            logger.info("Pasted cover letter into the form's text box")
             return True
         except Exception as exc:
             logger.warning("Could not attach cover letter: %s", exc)
@@ -4223,7 +4427,7 @@ class JobApplicationAssistant:
                         self._click_resiliently(confirm.nth(j), timeout_ms=4_000)
                         page.wait_for_timeout(3_000)
                         break
-                logger.info("Uploaded %s through the %r tile", Path(file_path).name, label_pattern)
+                logger.info('ATTACHED: application document')
                 return True
             except Exception:
                 continue
@@ -4341,11 +4545,11 @@ class JobApplicationAssistant:
             return False
         file_input.set_input_files(str(target))
         page.wait_for_timeout(1_500)
-        logger.info("Uploaded resume: %s (replaced %d existing)", target.name, attached)
+        logger.info('ATTACHED: application document')
         tracker, key = getattr(self, "tracker", None), getattr(self, "application_key", "")
         if tracker is not None and key and hasattr(tracker, "record_event"):
             try:
-                tracker.record_event(key, "resume_attached", target.name)
+                tracker.record_event(key, "resume_attached", "resume document")
             except Exception as exc:
                 logger.debug("Could not record the upload: %s", exc)
         # Some sites (Eightfold) pop a privacy agreement over the form as soon
@@ -4486,6 +4690,10 @@ class JobApplicationAssistant:
         topmost thing at its coordinates, which fails when an overlay or
         decorative element sits on top; force=True skips that check, and
         dispatch_event fires the handler directly as a last resort."""
+        try:
+            denial_count = SubmissionGuardV0.click_denial_count(locator)
+        except Exception:
+            denial_count = None
         for attempt, action in enumerate(
             (
                 lambda: locator.click(timeout=timeout_ms),
@@ -4496,8 +4704,14 @@ class JobApplicationAssistant:
         ):
             try:
                 action()
+                if SubmissionGuardV0.click_was_denied(locator, denial_count):
+                    logger.warning("SUBMISSION_GUARD_V0_DENIED: refusing click fallback")
+                    return False
                 return True
             except Exception as exc:
+                if SubmissionGuardV0.click_was_denied(locator, denial_count):
+                    logger.warning("SUBMISSION_GUARD_V0_DENIED: refusing click fallback")
+                    return False
                 logger.warning("Click strategy %d failed: %s", attempt, str(exc)[:120])
         return False
 
@@ -4622,10 +4836,10 @@ class JobApplicationAssistant:
         try:
             folder = Path("logs") / "account_failures"
             folder.mkdir(parents=True, exist_ok=True)
-            stem = f"{re.sub(r'[^A-Za-z0-9.-]+', '_', site or 'site')}_{datetime.now():%Y%m%d_%H%M%S}"
-            page.screenshot(path=str(folder / f"{stem}.png"), full_page=True)
-            (folder / f"{stem}.txt").write_text(hide_secrets(page.locator("body").aria_snapshot(mode="ai")),
-                                                encoding="utf-8")
+            stem = f"{datetime.now():%Y%m%d_%H%M%S}_ACCOUNT"
+            diagnostics.capture_safe_screenshot(page, folder / f"{stem}.png")
+            diagnostics.write_safe_text(folder / f"{stem}.txt",
+                diagnostics.sanitize_snapshot(page.locator("body").aria_snapshot(mode="ai")))
             logger.warning("ACCOUNT_CREATE_FAILED: what the site showed is saved in %s", folder / stem)
         except Exception as exc:
             logger.info("Could not save the account page: %s", str(exc).splitlines()[0][:100])
@@ -5335,7 +5549,7 @@ class JobApplicationAssistant:
                                           self, page, q.selector, answer):
                         self.values.record(page, f"[data-questionid={json.dumps(q.selector)}]",
                                            answer, "screening answer")
-                        logger.info("PLATFORM_ANSWER: %r -> %r", q.question_text[:60], answer[:40])
+                        logger.info('FIELD_ACTION: application field handled')
                         filled += 1
                 elif q.input_type == "textarea":
                     fill_and_dispatch(page.locator(q.selector), answer)
@@ -6027,15 +6241,31 @@ class JobApplicationAssistant:
                            (": " + "; ".join(said)) if said else " and said nothing about why")
         return True
 
-    _CONFIRMATION_PHRASES = (
-        "thank you for applying", "application submitted", "thanks for applying",
-        "we have received your application", "your application has been submitted",
-        "submission received", "application received",
-        # Ashby / Lever wording
-        "application was successfully submitted", "successfully submitted your application",
-        "your application was submitted",
-        # SuccessFactors wording
-        "your application has been sent", "application has been sent", "application was sent",
+    # Anchored at both ends (minor trailing punctuation aside): the whole heading/alert text must
+    # BE one of these short confirmations, not merely contain the words somewhere in a longer
+    # sentence. A loose "phrase in body" substring search over the entire page matched incidental
+    # text like "Application received after 5pm will be reviewed next day" on an unrelated FAQ/
+    # error page (the adversarial review's Finding 6, 7 October 2026) -- that sentence does not
+    # match this pattern, because it does not end where a real confirmation heading would.
+    _CONFIRMATION_HEADING_PHRASES = (
+        # "Thank you[, Name,] for applying[ to the X position[ at Y]]!" -- a short, bounded
+        # trailing mention of the role/company is allowed here (unlike the terser phrases below),
+        # since that is common real confirmation wording and does not carry the misleading-FAQ
+        # risk: unlike "application received after 5pm...", nothing starting "thank you ... for
+        # applying" is a plausible unrelated-policy sentence.
+        r"thank you(?:,\s*[^.!?]{0,60})?\s+for\s+(?:applying|your\s+application|your\s+interest)"
+        r"(?:\s+(?:to|for|at)\s+[^.!?]{0,60})?",
+        r"thanks\s+for\s+applying",
+        r"we(?:'ve| have)\s+received\s+your\s+application",
+        r"your\s+application\s+(?:has\s+been|was)\s+(?:submitted|sent|received)",
+        r"application\s+(?:submitted|received|has\s+been\s+sent|was\s+sent)",
+        r"submission\s+received",
+        r"(?:your\s+)?application\s+was\s+successfully\s+submitted",
+        r"successfully\s+submitted\s+your\s+application",
+    )
+    _CONFIRMATION_HEADING_RE = re.compile(
+        r"^\s*(?:" + "|".join(_CONFIRMATION_HEADING_PHRASES) + r")\s*[!.✔✓]{0,3}\s*$",
+        re.IGNORECASE,
     )
 
     def submission_confirmed(self, page: Page, job_title: str = "") -> bool:
@@ -6046,8 +6276,37 @@ class JobApplicationAssistant:
         they jump straight to 'My applications'."""
         if self.find_submit_button(page) is not None:
             return False  # still on the form
-        body = (page.locator("body").inner_text(timeout=5_000) or "").lower()
-        if any(phrase in body for phrase in self._CONFIRMATION_PHRASES):
+        try:
+            # innerText alone is not reliable evidence of visibility here: a heading with
+            # display:none measurably still returned its text in this runtime (verified, not
+            # assumed, during the owner's hardening review of 7 October 2026) -- exactly the
+            # shape of a conditionally-rendered SPA "success" template kept in the DOM ahead of
+            # time. A genuinely visible element is required: it must generate a layout box
+            # (rules out display:none on itself or any ancestor, via getClientRects -- the same
+            # check this file's own job-title card scan already uses below), and must not be
+            # hidden by visibility, the HTML hidden attribute (on itself or an ancestor), or full
+            # transparency. Off-screen positioning and zero-size-but-technically-displayed
+            # elements are deliberately NOT specially detected: those are rarer, more deliberate
+            # techniques than plain display:none/hidden/visibility toggling, and reliably
+            # detecting "off-screen" without false-negating legitimately positioned content (a
+            # fixed banner, a horizontally scrollable container) is not attempted here -- a
+            # documented limitation, not a silent gap.
+            headings = page.evaluate(
+                """() => [...document.querySelectorAll('h1, h2, h3, [role=alert], [role=status]')]
+                       .filter(e => {
+                           if (e.closest('[hidden]')) return false;
+                           if (!e.getClientRects().length) return false;
+                           const style = getComputedStyle(e);
+                           if (style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+                           if (parseFloat(style.opacity) === 0) return false;
+                           return true;
+                       })
+                       .map(e => (e.innerText || '').replace(/\\s+/g, ' ').trim())
+                       .filter(Boolean)"""
+            )
+        except Exception:
+            headings = []
+        if any(self._CONFIRMATION_HEADING_RE.match(text) for text in headings):
             return True
         if not job_title:
             return False
@@ -6726,7 +6985,23 @@ class JobApplicationAssistant:
                     continue
         return None
 
-    def click_verified_submit(self, page: Page) -> bool:
+    def click_verified_submit(
+        self,
+        page: Page,
+        authorization: Optional[safety.AutoSubmitDecision] = None,
+    ) -> bool:
+        with self._execution_lock():
+            if getattr(self, "_submission_execution_state", "active") != "active":
+                logger.error("SUBMISSION_BLOCKED: automation is parked for human handoff")
+                self._record_submission_event("SUBMISSION_BLOCKED", "automation_parked")
+                return False
+            return self._click_verified_submit_locked(page, authorization)
+
+    def _click_verified_submit_locked(
+        self,
+        page: Page,
+        authorization: Optional[safety.AutoSubmitDecision],
+    ) -> bool:
         """Clicks the application's Submit button.
 
         The ONLY caller is apply_flow.submit_verified(), and only on an
@@ -6738,22 +7013,37 @@ class JobApplicationAssistant:
         """
         if safety.captcha_visible(page):
             logger.error("SUBMIT_HELD: a CAPTCHA appeared -- not submitting")
+            self._record_submission_event("SUBMISSION_BLOCKED", "captcha_visible")
             return False
         if self.pending_attestations(page):
             logger.error("SUBMIT_HELD: an attestation/signature is outstanding -- not submitting")
+            self._record_submission_event("SUBMISSION_BLOCKED", "attestation_pending")
             return False
         # Checked again at the button itself, whatever decided to submit.
         conflicts = safety.legal_answer_conflicts(self.read_back_fields(page), getattr(self, "_profile", None))
         if conflicts:
             logger.error("SUBMIT_HELD: %s -- not submitting", conflicts[0])
+            self._record_submission_event("SUBMISSION_BLOCKED", "legal_answer_conflict")
             return False
         button = self.find_submit_button(page)
         if button is None:
             logger.error("SUBMIT_HELD: no Submit button on this page")
+            self._record_submission_event("SUBMISSION_BLOCKED", "submit_control_missing")
             return False
         label = (button.inner_text() or "").strip()
-        if not self._click_resiliently(button, timeout_ms=10_000):
-            logger.error("SUBMIT_HELD: the Submit button could not be clicked (covered or disabled)")
+        tracker = getattr(self, "submission_state_store", getattr(self, "tracker", None))
+        application_key = getattr(self, "application_key", "")
+        submission_key = getattr(self, "submission_key", application_key)
+        aliases = getattr(self, "submission_key_aliases", ())
+        if tracker is not None and submission_key:
+            self._ensure_submission_guard(page).bind_application(tracker, submission_key)
+        application_tracker = getattr(self, "tracker", None)
+        if not self._ensure_submission_guard(page).submit_verified(
+            page, button, authorization, tracker=tracker, dedup_key=submission_key,
+            application_tracker=application_tracker,
+            application_key=application_key, aliases=aliases,
+        ):
+            logger.error("SUBMIT_HELD: the SubmissionGuardV0 gateway refused the submit")
             return False
         logger.info("Clicked %r", label[:40])
         page.wait_for_timeout(5_000)
@@ -7038,9 +7328,9 @@ class JobApplicationAssistant:
         job_dir.mkdir(parents=True, exist_ok=True)
         screenshot_path = job_dir / "review_screenshot.png"
         self.accept_consent_dialog(page)
-        page.screenshot(path=str(screenshot_path), full_page=True)
+        diagnostics.capture_safe_screenshot(page, screenshot_path)
         try:  # the page's markup beside the screenshot, for diagnosing unfamiliar forms
-            (job_dir / "review_page.html").write_text(page.content(), encoding="utf-8")
+            diagnostics.capture_safe_dom(page, job_dir / "review_page.html")
         except Exception:
             pass
         leftovers = self.find_required_blanks(page)
@@ -7078,7 +7368,7 @@ class JobApplicationAssistant:
             "screening_answers": questions_summary,
         }
         summary_path = job_dir / "review_summary.json"
-        summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        diagnostics.write_safe_json(summary_path, summary)
         logger.info("Review package written to %s", summary_path)
         return summary_path
 
@@ -7248,7 +7538,16 @@ class JobApplicationAssistant:
                     waiting_on_signature = False
                 if waiting_on_signature:
                     logger.info("Waiting for your signature; the agent carries on once you have given it")
-        while not signal_path.exists():
+        while True:
+            # A writer creates the file before writing its answer. Do not consume
+            # or delete that intermediate empty file; keep waiting for its text.
+            # utf-8-sig accepts the BOM PowerShell may write with a signal.
+            try:
+                raw = signal_path.read_text(encoding="utf-8-sig").strip().strip("\ufeff")
+            except OSError:
+                raw = ""
+            if raw:
+                break
             time.sleep(poll_seconds)
             waited += poll_seconds
             # Checked first: the page checks below can `continue`, and a skipped
@@ -7340,10 +7639,6 @@ class JobApplicationAssistant:
                     if page.is_closed() or "closed" in str(exc).lower():
                         return "browser_closed"
                     # Mid-navigation (the confirmation page loading) -- try again next poll.
-        # utf-8-sig, not utf-8: PowerShell's Set-Content -Encoding utf8 writes
-        # a BOM, and a leading BOM made 'reload_code' miss every branch and
-        # fall through to "skip", silently abandoning a live application.
-        raw = signal_path.read_text(encoding="utf-8-sig").strip().strip("﻿")
         # "goto:<url>" keeps its capitals: an Amazon application path is
         # /en-US/..., and lowercasing it leads somewhere else.
         decision = raw if raw.lower().startswith("goto:") else raw.lower()
@@ -7366,4 +7661,3 @@ class JobApplicationAssistant:
                 logger.warning("Could not return to %s: %s", destination, exc)
             return "refresh"  # re-detect whatever is on the page now
         return decision
-

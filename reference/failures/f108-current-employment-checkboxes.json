@@ -1,0 +1,17 @@
+{
+  "id": "f108",
+  "date": "2026-10-04",
+  "class": "Former jobs checked as current and missing their end dates",
+  "symptom": "Waystar showed all three employers as current, hiding end dates for two completed roles.",
+  "site": "Workday",
+  "root_cause": "A repeated job heading was treated as a checkbox choice group. The known No answer used choose, which selected the box. Existing checked boxes were skipped and split Month/Year labels did not identify From versus To. The legacy filler also checked only the first current box and never cleared former rows.",
+  "why_tests_missed": "Employment tests used clearly named date fields and current-status select boxes rather than grouped checkboxes with conditional split dates.",
+  "fix": "Use individual yes/no checkbox actions for repeated entries; correct a site-filled current flag through existing provenance rules; qualify date parts from their owning From/To group; scope the legacy current checkbox to its row.",
+  "tests": [
+    "tests/test_employment_current_dates.py::test_each_current_checkbox_uses_its_own_job_not_the_entry_group",
+    "tests/test_employment_current_dates.py::test_former_jobs_end_segments_take_their_own_to_dates",
+    "tests/test_employment_current_dates.py::test_owner_current_checkbox_is_preserved",
+    "tests/test_employment_current_dates.py::test_legacy_workday_filler_sets_each_current_flag_before_end_dates"
+  ],
+  "prevention": "Verify current flags and committed start/end dates per matched employer, including resumed prechecked rows and owner edits."
+}

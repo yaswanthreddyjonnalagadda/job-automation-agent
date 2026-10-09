@@ -19,6 +19,7 @@ import re
 import sqlite3
 
 import application_status
+from jd_analyzer import is_tracking_query_param, submission_identity_url
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -26,7 +27,50 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+import diagnostics
 logger = logging.getLogger(__name__)
+
+_SUBMISSION_EVENT_FIELDS = {
+    "SUBMISSION_AUTHORIZED": {"state": {"AUTHORIZED"}},
+    "SUBMISSION_DISPATCHED": {"state": {"DISPATCHED"}},
+    "SUBMISSION_CONFIRMED": {
+        "state": {"CONFIRMED"},
+        "reconciled": {True, False},
+        "evidence_kind": {None, "independent_page_or_email"},
+    },
+    "SUBMISSION_UNCERTAIN": {
+        "state": {"UNCERTAIN"},
+        "reconciled": {True, False},
+        "evidence_kind": {None, "independent_page_or_email"},
+    },
+    "SUBMISSION_BLOCKED": {
+        "reason": {
+            "invalid_authorization", "application_record_unavailable",
+            "application_record_read_failed", "application_record_missing",
+            "captcha_visible", "attestation_pending", "legal_answer_conflict",
+            "submit_control_missing", "automation_parked", "click", "enter", "form_submit",
+        },
+    },
+    "SUBMISSION_REPLAY_BLOCKED": {
+        "state": {"AUTHORIZED", "DISPATCHED", "CONFIRMED", "UNCERTAIN", "application_submitted"},
+        "source": {"application_start", "submit_gateway", "simulated_restart"},
+        "reason": {"durable_state_conflict", "identity_alias"},
+    },
+    "SUBMISSION_STORAGE_FAILURE": {
+        "reason": {"application_record_read_failed", "dispatch_record_failed"},
+    },
+    "MANUAL_HANDOFF_STARTED": {"execution_state": {"parked"}},
+}
+_SUBMISSION_EVENT_REQUIRED_FIELDS = {
+    "SUBMISSION_AUTHORIZED": {"state"},
+    "SUBMISSION_DISPATCHED": {"state"},
+    "SUBMISSION_CONFIRMED": {"state", "reconciled"},
+    "SUBMISSION_UNCERTAIN": {"state", "reconciled"},
+    "SUBMISSION_BLOCKED": {"reason"},
+    "SUBMISSION_REPLAY_BLOCKED": {"state"},
+    "SUBMISSION_STORAGE_FAILURE": {"reason"},
+    "MANUAL_HANDOFF_STARTED": {"execution_state"},
+}
 
 _SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -73,6 +117,45 @@ CREATE TABLE IF NOT EXISTS application_events (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_application ON application_events(application_id);
+
+CREATE TABLE IF NOT EXISTS submission_effects (
+    dedup_key TEXT PRIMARY KEY,
+    state TEXT NOT NULL CHECK (state IN ('AUTHORIZED', 'DISPATCHED', 'CONFIRMED', 'UNCERTAIN')),
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS submission_identity_aliases (
+    alias_key TEXT PRIMARY KEY,
+    dedup_key TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_submission_identity_aliases_primary
+    ON submission_identity_aliases(dedup_key);
+CREATE TABLE IF NOT EXISTS submission_safety_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dedup_key TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    payload TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_submission_safety_events_key
+    ON submission_safety_events(dedup_key, id);
+CREATE TRIGGER IF NOT EXISTS submission_safety_events_no_update
+    BEFORE UPDATE ON submission_safety_events
+    BEGIN SELECT RAISE(ABORT, 'submission safety events are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS submission_safety_events_no_delete
+    BEFORE DELETE ON submission_safety_events
+    BEGIN SELECT RAISE(ABORT, 'submission safety events are append-only'); END;
+
+CREATE TABLE IF NOT EXISTS application_checkpoints (
+    application_key TEXT PRIMARY KEY,
+    dedup_key TEXT,
+    schema_version INTEGER NOT NULL,
+    code_version TEXT,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_application_checkpoints_dedup ON application_checkpoints(dedup_key);
 
 CREATE TABLE IF NOT EXISTS ats_accounts (
     employer TEXT PRIMARY KEY,
@@ -165,8 +248,7 @@ def _when(text: Optional[str]) -> Optional[datetime]:
 def _strip_tracking(url: str) -> str:
     """A posting URL without tracking parameters or a trailing slash (as the Postgres tracker compares it)."""
     parsed = urlparse((url or "").strip().lower())
-    query = [(k, v) for k, v in parse_qsl(parsed.query) if not k.startswith(("utm_", "gh_src"))
-             and k not in {"src", "source", "ref", "referrer", "trackingid"}]
+    query = sorted((k, v) for k, v in parse_qsl(parsed.query) if not is_tracking_query_param(k))
     return urlunparse(parsed._replace(query=urlencode(query), path=parsed.path.rstrip("/"), fragment=""))
 
 
@@ -213,6 +295,11 @@ class JobTracker:
     # ------------------------------------------------------------------
     def record_event(self, dedup_key: str, kind: str, message: str = "",
                      screenshot_path: str = "", html_path: str = "", payload: Optional[dict] = None) -> None:
+        kind = kind if kind in diagnostics.EVENT_KINDS else "other"
+        message = "event: " + kind
+        payload = diagnostics.sanitize_event_payload(payload)
+        screenshot_path = screenshot_path if screenshot_path and diagnostics.is_safe_artifact(Path(screenshot_path)) else ""
+        html_path = html_path if html_path and diagnostics.is_safe_artifact(Path(html_path)) else ""
         with self._connect() as conn:
             app = self._app_id(conn, dedup_key)
             if app is None:
@@ -223,6 +310,334 @@ class JobTracker:
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (app, kind, message[:4000] if message else "", screenshot_path or None, html_path or None,
                  json.dumps(payload) if payload is not None else None, _now()))
+
+    @staticmethod
+    def _submission_state(row) -> Optional[str]:
+        if row is None:
+            return None
+        state = row["state"]
+        if state not in {"AUTHORIZED", "DISPATCHED", "CONFIRMED", "UNCERTAIN"}:
+            raise RuntimeError(f"Invalid persisted submission state: {state!r}")
+        return state
+
+    @staticmethod
+    def _submission_event(conn, dedup_key: str, kind: str, payload: Optional[dict]) -> None:
+        if kind not in _SUBMISSION_EVENT_FIELDS:
+            raise ValueError(f"Invalid submission safety event: {kind!r}")
+        fields = _SUBMISSION_EVENT_FIELDS[kind]
+        value = payload or {}
+        if type(value) is not dict or not _SUBMISSION_EVENT_REQUIRED_FIELDS[kind].issubset(value) or any(
+            key not in fields or type(item) not in {str, bool, type(None)} or item not in fields[key]
+            for key, item in value.items()
+        ):
+            raise ValueError(f"Invalid metadata for submission safety event: {kind!r}")
+        conn.execute(
+            """INSERT INTO submission_safety_events (dedup_key, kind, payload, created_at)
+               VALUES (?, ?, ?, ?)""",
+            (dedup_key, kind, json.dumps(value), _now()),
+        )
+
+    # Deliberately small: the table holds a handful of rows per application. A bound this far
+    # past any real chain length is a cycle-safety backstop, not a performance limit.
+    _MAX_IDENTITY_CHAIN = 64
+
+    @classmethod
+    def _resolve_root(cls, conn: sqlite3.Connection, key: str) -> str:
+        """The canonical root of `key`'s submission-effect identity: `key` itself if it is not
+        durably recorded as anyone's alias, or the terminal key reached by following recorded
+        alias edges transitively (`alias3 -> alias2 -> alias1 -> root` resolves to `root`,
+        regardless of how many hops deep `key` starts, and regardless of whether that root was
+        itself later annexed under a still-higher root). Every root has no outgoing edge, and a
+        merge only ever adds a new edge from a fresh root, so this walk cannot cycle in practice;
+        the hop bound is a defensive backstop, not a case this is expected to hit."""
+        current = key
+        seen = {key}
+        for _ in range(cls._MAX_IDENTITY_CHAIN):
+            row = conn.execute(
+                "SELECT dedup_key FROM submission_identity_aliases WHERE alias_key = ?", (current,)
+            ).fetchone()
+            if row is None:
+                return current
+            nxt = row["dedup_key"]
+            if nxt in seen:
+                return current   # defensive: would only trip on a cycle, which merges cannot create
+            seen.add(nxt)
+            current = nxt
+        return current
+
+    @classmethod
+    def _identity_group(cls, conn: sqlite3.Connection, key: str) -> set[str]:
+        """Every key durably recorded as the same submission-effect identity as `key`: its
+        canonical root, and every other key -- at any chain depth -- that also resolves to that
+        same root. A reverse breadth-first walk from the root through recorded alias edges, so a
+        root annexed under a still-higher root, or a multi-hop chain on either side, is still found
+        completely rather than only the direct children of one node."""
+        root = cls._resolve_root(conn, key)
+        # `key` is deliberately not pre-seeded into `group` before the walk: the walk always
+        # rediscovers it on its own (the forward chain from `key` to `root` is retraced backwards),
+        # and pre-seeding it caused the walk to see its own continuation as "nothing new" and stop
+        # one hop early whenever `key` was not `root` itself.
+        group = {root}
+        frontier = {root}
+        for _ in range(cls._MAX_IDENTITY_CHAIN):
+            if not frontier:
+                break
+            placeholders = ",".join("?" for _ in frontier)
+            rows = conn.execute(
+                f"SELECT alias_key FROM submission_identity_aliases WHERE dedup_key IN ({placeholders})",
+                tuple(frontier),
+            ).fetchall()
+            discovered = {r["alias_key"] for r in rows} - group
+            if not discovered:
+                break
+            group |= discovered
+            frontier = discovered
+        group.add(key)
+        return group
+
+    def submission_identity_group(self, key: str) -> tuple[str, ...]:
+        """Public, read-only form of `_identity_group` for callers outside this module (the
+        pre-flight replay check in apply_flow.py)."""
+        if not key:
+            return ()
+        with self._connect() as conn:
+            return tuple(self._identity_group(conn, key))
+
+    def write_checkpoint(self, application_key: str, payload: dict) -> None:
+        """Durably records `payload` (an `checkpoint.ApplicationCheckpoint.to_dict()`) as the
+        current checkpoint for `application_key`'s whole submission-effect identity group --
+        the same canonical-root resolution `begin_submission_dispatch` uses, so a checkpoint
+        written from any alias of an application is read back from every other alias too
+        (Phase 0-B3; ties checkpoint identity to the P0-B1 replay identity rather than
+        inventing a separate one). Replaces the entire row in one statement inside one
+        transaction: a reader can never observe a half-written payload."""
+        if not application_key:
+            raise ValueError("A persisted application identity is required for a checkpoint")
+        encoded = json.dumps(payload, sort_keys=True)
+        now = _now()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            canonical = self._resolve_root(conn, application_key)
+            existing = conn.execute(
+                "SELECT created_at FROM application_checkpoints WHERE application_key = ?", (canonical,)
+            ).fetchone()
+            created_at = existing["created_at"] if existing else now
+            conn.execute(
+                """INSERT INTO application_checkpoints
+                       (application_key, dedup_key, schema_version, code_version, payload, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(application_key) DO UPDATE SET
+                       dedup_key = excluded.dedup_key, schema_version = excluded.schema_version,
+                       code_version = excluded.code_version, payload = excluded.payload,
+                       updated_at = excluded.updated_at""",
+                (canonical, str(payload.get("dedup_key") or ""), int(payload.get("schema_version") or 0),
+                 str(payload.get("code_version") or ""), encoded, created_at, now),
+            )
+
+    def read_checkpoint(self, application_key: str) -> Optional[dict]:
+        """The current checkpoint for `application_key`'s identity group, or None if none was
+        ever written, or if the stored payload is corrupt. A corrupt/unparseable payload is
+        deliberately treated the same as "no checkpoint" rather than raised: a malformed
+        checkpoint must never crash the application workflow (Phase 0-B3) -- the caller falls
+        back to inspecting live state fresh, exactly as it already does with no checkpoint at
+        all (a pre-B3 application record)."""
+        if not application_key:
+            return None
+        with self._connect() as conn:
+            canonical = self._resolve_root(conn, application_key)
+            row = conn.execute(
+                "SELECT payload FROM application_checkpoints WHERE application_key = ?", (canonical,)
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            data = json.loads(row["payload"])
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("Corrupted checkpoint payload for %s -- treated as no checkpoint", canonical)
+            return None
+        return data if isinstance(data, dict) else None
+
+    def read_checkpoint_by_dedup_key(self, dedup_key: str) -> Optional[dict]:
+        """The current checkpoint for whichever `application_key` was last written with this
+        `dedup_key` (the `applications` row's own identity), for a caller -- the dashboard --
+        that only has that key, never the P0-B1 submission-effect identity a checkpoint is
+        actually filed under (Phase 0-B4). `dedup_key` and `application_key` are deliberately
+        separate identity schemes (`docs/security/phase0-b3-discovery.md`); this is a plain,
+        non-canonicalizing lookup by the `dedup_key` column `write_checkpoint` already stores
+        and indexes, not an alias-graph resolution -- it finds the most recently updated
+        checkpoint recorded with this `dedup_key`, nothing more."""
+        if not dedup_key:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM application_checkpoints WHERE dedup_key = ? "
+                "ORDER BY updated_at DESC LIMIT 1", (dedup_key,)
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            data = json.loads(row["payload"])
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("Corrupted checkpoint payload for dedup_key %s -- treated as no checkpoint", dedup_key)
+            return None
+        return data if isinstance(data, dict) else None
+
+    def get_submission_effect_state(self, dedup_key: str) -> Optional[str]:
+        with self._connect() as conn:
+            canonical = self._resolve_root(conn, dedup_key)
+            row = conn.execute(
+                "SELECT state FROM submission_effects WHERE dedup_key = ?", (canonical,)
+            ).fetchone()
+        return self._submission_state(row)
+
+    def record_submission_identity_alias(self, primary_key: str, alias_key: str) -> None:
+        """Durably remember that `alias_key` -- a different host/path seen while working the
+        application bound to `primary_key` (a login page, an ATS redirect, a review step) -- is the
+        same submission-effect identity. A later invocation started from that host/path then finds
+        the same effect history instead of a fresh one; so does a chain of further hops recorded
+        from `alias_key` onward, or `alias_key`'s own pre-existing aliases, resolved transitively.
+
+        Never merges two identities that cannot be proven related: an `alias_key` that already has
+        its own independent effect history, or is already recorded under a different root, keeps
+        that history untouched rather than being guessed into this one. `alias_key` is allowed to
+        already be an established root with its own recorded dependents (the annexation case) --
+        resolution for all of them is transitive, so they correctly observe the merged identity's
+        state afterward; see `_resolve_root` / `_identity_group`."""
+        if not primary_key or not alias_key or primary_key == alias_key:
+            return
+        with self._connect() as conn:
+            root = self._resolve_root(conn, primary_key)
+            if alias_key == root:
+                return
+            already_aliased = conn.execute(
+                "SELECT 1 FROM submission_identity_aliases WHERE alias_key = ?", (alias_key,)
+            ).fetchone()
+            if already_aliased is not None:
+                return
+            own_history = conn.execute(
+                "SELECT 1 FROM submission_effects WHERE dedup_key = ?", (alias_key,)
+            ).fetchone()
+            if own_history is not None:
+                return
+            conn.execute(
+                "INSERT INTO submission_identity_aliases (alias_key, dedup_key, created_at) VALUES (?, ?, ?)",
+                (alias_key, root, _now()),
+            )
+
+    def begin_submission_dispatch(self, dedup_key: str, aliases: tuple[str, ...] | list[str] = ()) -> str:
+        """Durably authorize and mark dispatch before the browser effect.
+
+        Every member of a merged submission identity resolves to, and operates atomically against,
+        the same canonical row: `dedup_key` is resolved transitively to its canonical root before
+        any read or write, so this is called with *any* member of a merged identity -- the original
+        key, a direct alias, a multi-hop sub-alias, or a root later annexed under a still-higher
+        root -- it blocks exactly as calling it with any other member would. No member can create a
+        second, independent dispatch merely because it is not the literal key an earlier call used.
+        """
+        if not dedup_key:
+            raise ValueError("A persisted application identity is required for submission")
+        blocked_state = None
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            canonical = self._resolve_root(conn, dedup_key)
+            # `aliases` here is the separate, legacy URL-normalization mechanism (equivalent
+            # application rows discovered by jd_analyzer/job_tracker URL matching, never inserted
+            # into submission_identity_aliases) -- resolved to its own canonical roots too, in case
+            # one of those legacy keys also happens to be tracked in this identity graph.
+            alias_roots = tuple(dict.fromkeys(
+                root for root in (self._resolve_root(conn, a) for a in aliases if a and a != dedup_key)
+                if root != canonical
+            ))
+            if alias_roots:
+                placeholders = ",".join("?" for _ in alias_roots)
+                alias_rows = conn.execute(
+                    f"SELECT state FROM submission_effects WHERE dedup_key IN ({placeholders})",
+                    alias_roots,
+                ).fetchall()
+                if alias_rows:
+                    blocked_state = self._submission_state(alias_rows[0])
+                    self._submission_event(
+                        conn, canonical, "SUBMISSION_REPLAY_BLOCKED",
+                        {"state": blocked_state, "reason": "identity_alias"},
+                    )
+            row = conn.execute(
+                "SELECT state FROM submission_effects WHERE dedup_key = ?", (canonical,)
+            ).fetchone()
+            state = self._submission_state(row)
+            if blocked_state is not None:
+                pass
+            elif state in {"DISPATCHED", "CONFIRMED", "UNCERTAIN"}:
+                self._submission_event(conn, canonical, "SUBMISSION_REPLAY_BLOCKED", {"state": state})
+                blocked_state = state
+            elif state not in (None, "AUTHORIZED"):
+                raise RuntimeError(f"Submission blocked by invalid state {state!r}")
+            else:
+                self._submission_event(conn, canonical, "SUBMISSION_AUTHORIZED", {"state": "AUTHORIZED"})
+                if state is None:
+                    conn.execute(
+                        "INSERT INTO submission_effects (dedup_key, state, updated_at) "
+                        "VALUES (?, 'AUTHORIZED', ?)",
+                        (canonical, _now()),
+                    )
+                conn.execute(
+                    "UPDATE submission_effects SET state = 'DISPATCHED', updated_at = ? WHERE dedup_key = ?",
+                    (_now(), canonical),
+                )
+                self._submission_event(conn, canonical, "SUBMISSION_DISPATCHED", {"state": "DISPATCHED"})
+        if blocked_state is not None:
+            raise RuntimeError(f"Submission replay blocked by durable state {blocked_state}")
+        return "DISPATCHED"
+
+    def finish_submission_effect(
+        self, dedup_key: str, state: str, *, reconciled: bool = False,
+        evidence_kind: Optional[str] = None,
+    ) -> None:
+        """Record the post-dispatch outcome without permitting an automatic reset."""
+        if state not in {"CONFIRMED", "UNCERTAIN"}:
+            raise ValueError(f"Invalid submission outcome: {state!r}")
+        event = f"SUBMISSION_{state}"
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            dedup_key = self._resolve_root(conn, dedup_key)
+            row = conn.execute(
+                "SELECT state FROM submission_effects WHERE dedup_key = ?", (dedup_key,)
+            ).fetchone()
+            current = self._submission_state(row)
+            permitted = current == "DISPATCHED" or (
+                current == "UNCERTAIN" and state == "CONFIRMED" and reconciled
+            )
+            if not permitted:
+                if current == state:
+                    return
+                raise RuntimeError(f"Invalid submission transition {current!r} -> {state}")
+            conn.execute(
+                "UPDATE submission_effects SET state = ?, updated_at = ? WHERE dedup_key = ?",
+                (state, _now(), dedup_key),
+            )
+            self._submission_event(
+                conn, dedup_key, event,
+                {"state": state, "reconciled": bool(reconciled), "evidence_kind": evidence_kind},
+            )
+
+    def record_submission_safety_event(self, dedup_key: str, kind: str, payload: Optional[dict] = None) -> None:
+        """Append a non-sensitive structured submission safety event."""
+        with self._connect() as conn:
+            dedup_key = self._resolve_root(conn, dedup_key)
+            self._submission_event(conn, dedup_key, kind, payload)
+
+    def submission_safety_events(self, dedup_key: str) -> list[dict]:
+        with self._connect() as conn:
+            dedup_key = self._resolve_root(conn, dedup_key)
+            rows = conn.execute(
+                """SELECT kind, payload, created_at FROM submission_safety_events
+                   WHERE dedup_key = ? ORDER BY id""",
+                (dedup_key,),
+            ).fetchall()
+        return [
+            {"kind": row["kind"], "payload": json.loads(row["payload"] or "{}"),
+             "created_at": _when(row["created_at"])}
+            for row in rows
+        ]
 
     def events(self, dedup_key: str, limit: int = 100) -> list[dict]:
         with self._connect() as conn:
@@ -239,7 +654,7 @@ class JobTracker:
                     item["payload"] = json.loads(item["payload"])
                 except (TypeError, ValueError):
                     pass
-            found.append(item)
+            found.append(diagnostics.sanitize_event(item))
         return found
 
     def document_matches(self, dedup_key: str, kind: str, file_path) -> bool:
@@ -294,6 +709,22 @@ class JobTracker:
                     and (record.title or "").strip().lower() == title.strip().lower():
                 return record
         return None
+
+    def submission_keys_for_url(self, url: str) -> list[str]:
+        """Existing application keys for canonical URL-equivalent postings."""
+        identity = submission_identity_url(url)
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT dedup_key, url FROM applications WHERE url IS NOT NULL AND url != ''"
+            ).fetchall()
+        matches = []
+        for row in rows:
+            try:
+                if submission_identity_url(row["url"]) == identity:
+                    matches.append(row["dedup_key"])
+            except ValueError:
+                continue
+        return matches
 
     def create(self, *, dedup_key: str, title: str, company: str, location: str = "", source_site: str = "",
                url: str = "", resume_path: Optional[str] = None, cover_letter_path: Optional[str] = None,

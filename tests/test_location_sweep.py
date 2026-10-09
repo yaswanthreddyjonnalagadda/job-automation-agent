@@ -96,6 +96,36 @@ def selected(page, selector):
     return page.locator(selector).evaluate("el => el.options[el.selectedIndex].text")
 
 
+def test_disabled_state_is_deferred_without_clearing_or_recording(page):
+    show(page, '<label for="state">State</label><input id="state" disabled value="No Selection">')
+    recorded = []
+    interaction.wipe_and_enforce_location_sweep(
+        page, state='Virginia', record_callback=lambda *args: recorded.append(args))
+    assert page.locator('#state').input_value() == 'No Selection'
+    assert page.locator('#state').is_disabled()
+    assert recorded == []
+
+
+def test_sap_country_row_enables_state_before_selection(page):
+    show(page, '''
+    <label for="country_input">Country</label>
+    <input id="country_input" class="rcmpaginatedselectinput" aria-owns="countries">
+    <button id="country_selectButton" onclick="document.querySelector('#countries').hidden=false">Open country</button>
+    <ul id="countries" hidden><li onclick="document.querySelector('#country_input').value=this.textContent;document.querySelector('#state_input').disabled=false;this.parentNode.hidden=true">United States</li></ul>
+    <label for="state_input">State</label>
+    <input id="state_input" disabled class="rcmpaginatedselectinput" aria-owns="states">
+    <button id="state_selectButton" onclick="document.querySelector('#states').hidden=false">Open state</button>
+    <ul id="states" hidden><li onclick="document.querySelector('#state_input').value=this.textContent;this.parentNode.hidden=true">Virginia</li></ul>
+    ''')
+    recorded = []
+    interaction.wipe_and_enforce_location_sweep(
+        page, country='United States', state='Virginia',
+        record_callback=lambda *args: recorded.append(args))
+    assert page.locator('#country_input').input_value() == 'United States'
+    assert page.locator('#state_input').input_value() == 'Virginia'
+    assert [answer for _, answer in recorded] == ['United States', 'Virginia']
+
+
 # The site's first entries on real forms: Afghanistan on some, "Aaland Islands"
 # on Chobani's, Albania on others. None of them may matter.
 @pytest.mark.parametrize("country_default,province_default", [
