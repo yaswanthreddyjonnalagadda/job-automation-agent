@@ -1,0 +1,12 @@
+{
+  "id": "f073",
+  "date": "2026-09-30",
+  "class": "A working site routine left behind when the main flow changed: only the old flow and a manual signal called it",
+  "symptom": "Ciena on Workday, 30 September: step 1 filled correctly, but My Experience was left with no jobs and no degrees; the run re-read the page until the loop guard stopped it. The owner remembered Workday filling right before.",
+  "site": "Workday",
+  "root_cause": "sites/workday.py's fill_experience_section / fill_education_section (unchanged, and working) were called only by the older step-by-step flow and by the dashboard's 'fill experience' signal. The reading page agent, which now runs Workday, had no step that adds the owner's jobs and degrees to an empty section; it only opens a closed entry the page complains about. Recent Workday runs passed My Experience only because Workday had kept the entries from an earlier application or the owner filled them.",
+  "why_tests_missed": "No run or test took a fresh Workday tenant through My Experience with the page agent; the replay guard reads questions, not whether a section gets its entries.",
+  "fix": "PageAgent.add_entries_the_site_way: a Work Experience or Education section with its heading and no entry boxes yet is filled by the site adapter's own filler from the owner's record (agent.history), once per section per run, and only where the adapter has a filler and the section is empty (so nothing the site filled is deleted).",
+  "tests": ["replay_guard.py"],
+  "prevention": "When the main flow changes, list every routine the old flow called and make the new flow call it or retire it on purpose; a site routine is reachable from the flow that runs the site."
+}

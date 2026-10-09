@@ -1,0 +1,15 @@
+{
+  "id": "f094",
+  "date": "2026-10-03",
+  "class": "Generic labels lose the identity of their subject or date",
+  "symptom": "Waystar self-identification Name received the university name, and date components reused an older value of 6.",
+  "site": "Workday self-identification",
+  "root_cause": "SCHOOL_UNIVERSITY matched bare Name without an education container. Historical answer lookup accepted context-free Month, Day, and Year labels.",
+  "why_tests_missed": "Coverage tested explicit personal and school labels and complete dates, not generic labels on a later application step.",
+  "fix": "Treat bare Name as personal unless education context identifies a school. Resolve repeated-entry dates first, then refuse historical lookup for unqualified numeric date-part labels.",
+  "tests": [
+    "tests/test_self_identification_fields.py::test_bare_name_is_personal_outside_an_education_entry",
+    "tests/test_self_identification_fields.py::test_unqualified_date_parts_do_not_reuse_historical_answers"
+  ],
+  "prevention": "Require subject and date context for generic labels rather than transporting answers by label alone."
+}

@@ -1,0 +1,19 @@
+{
+  "portal": "Rippling ATS (ats.rippling.com/<company>/jobs/<id>/apply)",
+  "studied": "2026-09-29",
+  "sample": "https://ats.rippling.com/commandlink/jobs/26978385-e41f-48b1-aee6-ebc37ffa13b0/apply",
+  "single_page": true,
+  "fields": {
+    "standard": "stable data-testid names: input-first_name, input-last_name, input-email, input-current_company, input-phone_number, input-linkedin_link, input-website_link; files input-resume and input-cover_letter (hidden inputs behind 'Drop or select (.doc / .docx / .pdf)')",
+    "custom_questions": {
+      "widget": "div role=combobox aria-autocomplete=list aria-haspopup=listbox aria-required=true, id=field-NN, whose ONLY name is aria-label='Select'",
+      "question_text": "a <p> about 7 levels up, not linked by label/for or aria-labelledby -- pair each box with the nearest question text above it",
+      "gotcha": "read by accessible name alone, every custom question is 'Select'"
+    },
+    "location": "input with aria-autocomplete=list (a places search) and a hidden input-externalPlaceId filled by picking a suggestion",
+    "phone_code": "input role=combobox placeholder 'Search' (country code) beside the phone number",
+    "choice_search": "input role=combobox placeholder 'Search'/'Select...' (pronouns, race) -- searchable single select",
+    "eeo": "div role=combobox labelled Gender, Are you Hispanic/Latino?, Veteran Status",
+    "consent": "radiogroup sms_opt_in with hidden styled radios ('Yes - I consent to receiving text messages' / 'No ...') -- the owner's decision"
+  }
+}

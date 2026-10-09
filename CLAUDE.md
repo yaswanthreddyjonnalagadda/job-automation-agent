@@ -62,10 +62,17 @@
   password to that same `ATS_PASSWORD` using a one-time code emailed to the
   owner and read from the owner's signed-in Gmail tab. Only on employer ATS
   domains (`safety.password_allowed`), once per site per run, never a
-  generated or different password. Any other broken login is surfaced to the
-  user.
+  generated or different password. A second owner-approved exception (30
+  September 2026): when a site says the account it made for the owner's email
+  must be verified, the agent opens the verification link that site emailed,
+  read from the owner's signed-in Gmail -- only a https link back to that same
+  site (and that employer's own tenant on a shared ATS host), never a
+  password-reset link, once per site per run
+  (`emailed_codes.verification_link_ok`). Any other broken login is surfaced
+  to the user.
 - **One rule for reading an emailed code.** Whether the agent may read a
-  one-time code from the owner's mail is decided in `emailed_codes.why_not()`
+  one-time code -- or the account-verification link above -- from the owner's
+  mail is decided in `emailed_codes.why_not()`
   and nowhere else: the owner has allowed mail reads
   (`check_gmail_for_confirmation`), the site is an employer's, no CAPTCHA is on
   the page (a code the site words as "to confirm you're a human" is still just
@@ -123,6 +130,13 @@ of them hold.
   call it; if the same decision exists in two modules, consolidate it
   rather than patching each copy. `safety.py` changes only with the
   owner's explicit approval on the pull request.
+- **Nothing that worked breaks unseen.** The pre-commit hook runs
+  `replay_guard.py`: every page saved from a real application is read with
+  the last commit and with the staged code (about 20 seconds, no browser).
+  A difference in how any question is read, grouped or answered blocks the
+  commit. Commit it (`REPLAY_OK=1 git commit ...`) only when every
+  difference is a correction, and list them in the commit message. A fix for
+  one portal that changes another portal's answers is not a fix.
 - **Tests first, all green.** A new behaviour or fix comes with a test that
   failed before it. `python -m pytest -q` passes locally and in CI, with no
   test weakened to make it pass.

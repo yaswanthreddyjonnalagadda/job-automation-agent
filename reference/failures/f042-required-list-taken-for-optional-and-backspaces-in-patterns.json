@@ -1,0 +1,17 @@
+{
+  "id": "f042",
+  "date": "2026-09-29",
+  "class": "A required mark drawn apart from its question, and patterns silently broken by a control character",
+  "symptom": "Rackspace (Workday) Application Questions: with the AI unavailable, the agent took the required AI-screening consent question ('Select One', its star on a line of its own) for optional and pressed Next three times into Workday's 'Errors Found' panel, until the loop guard stopped it with 'stuck in a validation loop'. While fixing it, three regular expressions were found to hold a backspace character where a word boundary was meant: 'browse' was never read as an upload button, 'I agree / accept / consent' never as a consent button, and a phone box labelled 'Country' never as a dial code.",
+  "site": "Workday (Rackspace); every site for the three patterns",
+  "root_cause": "carry_on_without_the_ai() judged 'required' only by a star in the question text; Workday draws the star apart and names the list '<question> Select One Required'. It did not read the page's own errors before pressing on. The broken patterns came from scripted edits whose escape sequences turned '\\b' into the backspace character.",
+  "why_tests_missed": "The no-AI tests had required questions marked with a star in the label; none had Workday's separate star or an errors panel. Nothing checked source files for control characters, and a regex holding one compiles and simply never matches.",
+  "fix": "carry_on_without_the_ai() also counts as required any list named '... Required' still unanswered, and stops when page_errors() finds errors; the stop names the questions ('needs your answer (the AI is unavailable): ...'). The six backspace characters in page_agent.py and browser_automation.py are word boundaries again, and tests/test_source_has_no_control_characters.py fails on any control character in a source file.",
+  "tests": [
+    "tests/test_carry_on_without_the_ai.py::test_a_workday_list_named_required_still_showing_select_one_stops_the_run",
+    "tests/test_carry_on_without_the_ai.py::test_an_errors_panel_on_the_page_stops_the_run",
+    "tests/test_carry_on_without_the_ai.py::test_the_stop_names_the_question",
+    "tests/test_source_has_no_control_characters.py"
+  ],
+  "prevention": "Decide 'required' from every mark a form uses (a star anywhere near, 'Required' in the name, aria-required, an error after Next), and check what the page says before pressing on. Write code edits through files, not through shell strings that process escapes, and keep a test that source holds no control characters."
+}

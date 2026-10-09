@@ -1,0 +1,16 @@
+{
+  "id": "f037",
+  "date": "2026-09-29",
+  "class": "Learning done only at the end, from what the last page shows",
+  "symptom": "An answer the owner gave on a middle page while the run waited for them (then pressed Continue) was used for that run only; the same question came back on the next form.",
+  "site": "Every multi-step form",
+  "root_cause": "note_owner_changes() kept the owner's answers in the run's memory so they would not be overwritten; they were learned only by learn_user_answers() at the hand-over, which reads the page on screen then -- the Review page -- where a question from step 3 is not.",
+  "why_tests_missed": "The learning tests read one page at hand-over; none answered on an earlier page during a pause.",
+  "fix": "note_owner_changes() keeps each changed answer at once (_keep_owner_answer): against this application for this employer, and in the saved answers when profile_setup.worth_keeping() says so; legal, visa and signed answers are not kept. waiting_questions() drops a question answered and saved under its own words.",
+  "tests": [
+    "tests/test_answers_given_mid_run.py",
+    "tests/test_answers_given_mid_run.py::test_a_general_answer_given_in_a_pause_is_saved_for_every_form",
+    "tests/test_answers_given_mid_run.py::test_a_legal_or_signed_answer_is_never_kept"
+  ],
+  "prevention": "Record what the user teaches at the moment they teach it, not at a later point that may not see it."
+}

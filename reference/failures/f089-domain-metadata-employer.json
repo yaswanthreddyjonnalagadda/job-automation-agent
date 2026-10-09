@@ -1,0 +1,15 @@
+{
+  "id": "f089",
+  "date": "2026-10-02",
+  "class": "Copied domain branding overrides employer identity",
+  "symptom": "An unrelated domain in a page title was recorded as the employer, including a trailing dot.",
+  "site": "Generic job pages",
+  "root_cause": "Domain-shaped site metadata was treated as a human company name without checking the page address.",
+  "why_tests_missed": "The existing copied-title regression failed on the base branch; matching-domain and tenant cases were missing.",
+  "fix": "Require domain branding to match the host or employer tenant and normalize it through URL identity.",
+  "tests": [
+    "tests/test_job_sources.py::test_a_page_title_is_not_used_as_a_job_title",
+    "tests/test_job_sources.py::test_domain_shaped_metadata_requires_matching_employer_evidence"
+  ],
+  "prevention": "Cross-check domain identity against the source address and retain ordinary human company metadata."
+}

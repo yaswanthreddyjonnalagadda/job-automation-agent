@@ -1,0 +1,12 @@
+{
+  "id": "f084",
+  "date": "2026-09-30",
+  "class": "A wrong answer the agent itself gave was never looked at again, and the owner was asked to fix it",
+  "symptom": "Meta, 30 September: after f083 the run waiting at hand-over still showed Female; the owner was told to click Male himself -- the agent's mistake handed to the owner.",
+  "site": "Every portal (self-identification: gender, race, veteran, disability)",
+  "root_cause": "correct_from_profile put right residence answers, the legal sponsorship/authorization answers and the AI's reported mismatches -- not self-identification. A self-identification choice that differs from the profile, set by the agent or the site, stayed.",
+  "why_tests_missed": "Self-identification was tested for being answered, never for being put right once wrong.",
+  "fix": "correct_from_profile also looks at every checked radio of a self-identification question: when the profile states the answer and the checked choice is not it, the choice is put right under safety.may_overrule -- never a choice the owner made while the agent waited (the observer tells which).",
+  "tests": ["replay_guard.py"],
+  "prevention": "Every answer the profile states is re-checked on every read of the page, and the agent puts right its own mistakes; the owner is told only what is truly theirs."
+}

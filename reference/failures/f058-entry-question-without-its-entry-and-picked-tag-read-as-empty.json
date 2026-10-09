@@ -1,0 +1,16 @@
+{
+  "id": "f058",
+  "date": "2026-09-29",
+  "class": "A question about one entry sent to the AI without the entry, and a picked value shown as a tag read as empty",
+  "symptom": "Steelcase (Avature), second run, 29 September: the AI answered 'Country of Institution' with India for the Eastern Illinois University degree, having been asked only 'Country of Institution'; and the Institution search box, which shows the picked school as a tag inside it, was read as empty, so the school was typed again on every pass and the tag was taken for a question of its own.",
+  "site": "Avature (Steelcase); any form with per-entry questions or search-and-pick boxes",
+  "root_cause": "The single-question AI call carried only the box's label, so the same words for two degrees got one answer (and the per-run memory would have given the second the first one's). parse_snapshot read a combobox's value only from its own line, and Avature draws the picked value as a child textbox named by the choice.",
+  "why_tests_missed": "The AI-question tests used questions that name their subject; the tag tests covered Workday's '1 item selected' text, not a tag drawn as a child text box.",
+  "fix": "For a box inside a job or degree entry, the question sent to the AI names the entry (repeated_entries.describe: 'Country of Institution (for: Masters of Science in Computer Technology, Eastern Illinois University)'). A text box inside a combobox, named other than the combobox and not a search prompt, is the combobox's picked value and not a control.",
+  "tests": [
+    "tests/test_repeated_entries.py::test_a_question_about_an_entry_box_names_the_entry",
+    "tests/test_repeated_entries.py::test_the_ai_is_asked_about_each_degree_by_name",
+    "tests/test_chosen_value_tags.py::test_a_picked_tag_inside_a_search_box_is_its_answer"
+  ],
+  "prevention": "Every question handed to a model carries the context that makes it one question (which entry, which section); and every way a site shows a chosen value -- text beside, a tag, a child box -- has a fixture."
+}

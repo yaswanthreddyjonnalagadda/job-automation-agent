@@ -26,12 +26,17 @@ class Record:
 
 @pytest.fixture
 def client(monkeypatch):
+    # These pages are for someone already set up; tests/test_profile_setup.py covers a new person. Without this
+    # the result depended on whether the machine running the tests happened to hold a real profile.
+    import profile_setup
+    monkeypatch.setattr(profile_setup, "needs_setup", lambda: False)
     started = []
     monkeypatch.setattr(web_ui, "_run_apply",
                         lambda url, open_url="": started.append((url, open_url)))
     monkeypatch.setattr(web_ui.threading, "Thread",
                         lambda target, args=(), daemon=None: type("T", (), {"start": lambda s: target(*args)})())
     web_ui._RUNS.clear()
+    web_ui.app.config["TESTING"] = True
     web_ui.app.config["TESTING"] = True
     c = web_ui.app.test_client()
     c.started = started

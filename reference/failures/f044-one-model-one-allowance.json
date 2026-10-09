@@ -1,0 +1,19 @@
+{
+  "id": "f044",
+  "date": "2026-09-29",
+  "class": "A rate-limited resource treated as one pool when the provider meters it in many",
+  "symptom": "Applications stopped with 'the AI is unavailable' after two or three a day. AI Studio showed gemini-3.8-flash at 33 of its 20 requests a day, and every other model at 0, including two Flash Lite models allowed 500 a day each.",
+  "site": "Every site (Gemini on the free tier)",
+  "root_cause": "gemini_integration sent every call to the one model GEMINI_MODEL named. Google counts the free allowance per model, so the key had roughly 1,000 more requests a day that were never used. The note that the allowance was spent lived in memory, so every new application asked the spent model again.",
+  "why_tests_missed": "The tests had one model and checked what happens when it is spent (fail fast), never whether another model could answer instead.",
+  "fix": "Two ladders of models in config.py: page (page plans, written answers; strongest first) and quick (one choice, one short question, a screenshot; biggest allowances first). _Messages.create tries each in order; a daily 429 rests the model until Google's midnight reset, a 404 for a week, a per-minute 429 moves on at once. The rests and today's calls are kept in data/_gemini_quota.json, shared by every run, and shown on Settings. A question asked twice in one run is sent once.",
+  "tests": [
+    "tests/test_gemini_model_ladder.py::test_a_spent_model_hands_over_to_the_next_in_the_same_call",
+    "tests/test_gemini_model_ladder.py::test_the_next_run_does_not_ask_a_spent_model_again",
+    "tests/test_gemini_model_ladder.py::test_quick_questions_start_with_the_models_with_big_allowances",
+    "tests/test_gemini_model_ladder.py::test_when_every_model_is_spent_the_run_is_told_at_once",
+    "tests/test_gemini_model_ladder.py::test_a_per_minute_limit_moves_on_without_waiting",
+    "tests/test_gemini_model_ladder.py::test_the_same_question_in_one_run_is_asked_once"
+  ],
+  "prevention": "Read how the provider meters a limit (per key, per model, per minute, per day) before designing the calls, keep what is spent on disk rather than in one process, and route each kind of call to the cheapest resource that does it well."
+}

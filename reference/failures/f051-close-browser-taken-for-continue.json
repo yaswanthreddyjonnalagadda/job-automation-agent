@@ -1,0 +1,14 @@
+{
+  "id": "f051",
+  "date": "2026-09-29",
+  "class": "A command the dashboard sends that the worker does not know was treated as 'carry on'",
+  "symptom": "Aristocrat, 29 September: the owner pressed Close browser; the run logged 'Received review signal: close' and went on reading pages, asking the AI about them, and reopening the tab.",
+  "site": "Dashboard (every run)",
+  "root_cause": "The dashboard's Close browser button writes 'close'; the flow's end-of-run checks knew only 'browser_closed' and 'left_form', and anything else fell through to 'continue'.",
+  "why_tests_missed": "The dashboard's buttons and the flow's decisions were tested apart; nothing checked that every decision the dashboard can send is one the flow handles.",
+  "fix": "apply_flow.RUN_ENDS includes 'close', used at all three places the flow waits for the owner.",
+  "tests": [
+    "tests/test_owner_ends_and_confirmations.py::test_every_decision_the_dashboard_sends_is_one_the_flow_knows"
+  ],
+  "prevention": "Keep the commands a sender can send and the ones a receiver handles checked against each other by a test, and have a receiver treat an unknown command as 'stop', never 'carry on'."
+}

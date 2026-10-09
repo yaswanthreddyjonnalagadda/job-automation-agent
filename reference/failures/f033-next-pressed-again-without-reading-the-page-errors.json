@@ -1,0 +1,18 @@
+{
+  "id": "f033",
+  "date": "2026-09-29",
+  "class": "Retrying an action the page has already refused, without reading why",
+  "symptom": "On OCC's Workday My Experience step the agent pressed Save and Continue about thirty times across several runs while the page stayed put; the hand-over said only that the page did not move on.",
+  "site": "Workday (OCC); any multi-step form that refuses Next with messages",
+  "root_cause": "When a press did not move the page, the loop counted identical pages and eventually gave up, but never read the page's own error messages. Here Workday said the resume upload field was required: the upload had failed (its Select files button opens no file window) while the agent believed it attached, so every press met the same refusal.",
+  "why_tests_missed": "The 'did not move on' tests used pages that showed no error text; none had the page answer a press with a message naming a field, and none checked that the agent's belief about an upload was corrected by the page.",
+  "fix": "page_agent.page_errors() reads what a page says is wrong, in its words. After a press that did not move the page, stuck_on_errors() acts on the first set of errors (an error about a file clears the belief that it is attached, so it is attached again) and passes them to the planner; the same errors after the next press stop the run with those messages. The drop-zone upload (a hidden file box beside the button) covers cover letters as well as resumes.",
+  "tests": [
+    "tests/test_page_errors.py",
+    "tests/test_page_errors.py::test_the_workday_errors_panel_is_read_in_its_own_words",
+    "tests/test_page_errors.py::test_the_same_error_twice_is_not_pressed_through",
+    "tests/test_page_errors.py::test_an_error_about_a_file_makes_the_agent_attach_it_again",
+    "tests/test_page_errors.py::test_a_file_goes_into_the_hidden_box_of_a_drop_zone"
+  ],
+  "prevention": "When an action does not change the state, read what the system says before trying again, let its message correct what the agent believes, and never retry the same refused action unchanged."
+}

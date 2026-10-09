@@ -7,6 +7,7 @@ design live in one place.
 from __future__ import annotations
 
 import json
+import re
 import logging
 import time
 from typing import Any
@@ -33,6 +34,26 @@ def explain(exc: Exception) -> str:
 
 class ClaudeIntegrationError(RuntimeError):
     pass
+
+
+# A model's way of saying it does not know, which must never be typed into a form as the answer.
+_NON_ANSWER = re.compile(
+    r"(?:n/?a|none|null|unknown|not applicable|no answer|-+|"
+    r"(?:not|no)\s+(?:provided|specified|mentioned|stated|given|available|listed|found|known|included)"
+    r"(?:\s+(?:in|on|by|from)\s+(?:the\s+)?(?:resume|cv|profile|candidate'?s? (?:resume|profile)|facts|information))?|"
+    r"(?:the\s+)?(?:resume|profile|candidate)\s+does\s+not\s+(?:say|mention|specify|provide|list|include)\b.*|"
+    r"[^.]{0,80}?\bdoes\s+not\s+(?:have|hold|possess|say|mention|specify|provide|list|include)\b.*|"
+    r"(?:i\s+am|i'm)\s+(?:unable|not able)\s+to\b.*|"
+    r"(?:i\s+)?(?:do not|don't|cannot|can't)\s+(?:know|determine|tell|find|answer|provide)\b.*|"
+    r"information\s+(?:not|un)\s*available)[.!]?", re.IGNORECASE)
+
+
+def is_non_answer(text: str) -> bool:
+    return bool(_NON_ANSWER.fullmatch((text or "").strip()))
+
+
+# How much of a job posting goes with each question and page: enough for the requirements, not every benefit.
+JOB_POSTING_CHARS = 5_000
 
 
 class ClaudeClient:
@@ -354,6 +375,9 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
         system = (
             "You answer application questions for a real candidate. "
             "Answer ONLY using truthful facts from their profile and resume. "
+            "The JOB POSTING says what the employer is asking about -- use it to understand the question and the "
+            "role, never as a fact about the candidate: a skill, tool or years of experience counts only if the "
+            "resume or profile shows it. "
             "If options are provided, the answer MUST be an exact string from the options list. "
             "If it is a text/essay question (e.g. 'Why are you interested in this role?'), provide a "
             "concise, professional 1-3 sentence response grounded in their background. "
@@ -379,7 +403,8 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
             f"FACTS:\n{chr(10).join(facts_lines)}\n\n"
             f"RESUME EXCERPT:\n{snippet}\n\n"
             f"TARGET JOB: {job_title or 'Engineer'} at {company or 'Company'}\n\n"
-            f"QUESTION: {question}\n"
+            + (f"JOB POSTING:\n{job_text.strip()[:JOB_POSTING_CHARS]}\n\n" if (job_text or "").strip() else "")
+            + f"QUESTION: {question}\n"
         )
         if options:
             user_message += f"\nAVAILABLE OPTIONS (choose exactly one):\n{json.dumps(options, indent=2)}"
@@ -388,6 +413,11 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
             raw = self._call(system=system, user_message=user_message, max_tokens=600)
             data = self._extract_json(raw)
             ans = str(data.get("answer") or "").strip()
+            if is_non_answer(ans):
+                # "Not provided in the resume" is the model saying it does not know; typed into Steelcase's
+                # Work Phone box (29 September) it would have gone to the employer as the owner's phone number.
+                logger.info("AI had no answer for %r (%r) -- left for the owner", question[:50], ans[:60])
+                return ""
             if options and ans:
                 for opt in options:
                     if opt.strip().lower() == ans.lower():
@@ -451,7 +481,9 @@ Respond with ONLY JSON:
 }
 
 Rules -- follow every one:
-1. Answer ONLY from FACTS: the profile, the resume text, the owner's earlier answers, the job. Never invent,
+1. Answer ONLY from FACTS: the profile, the resume text, the owner's earlier answers, the job. FACTS.job.description
+   is the posting: it tells you what the employer is asking about, never a fact about the applicant -- a skill,
+   tool or number of years counts only if the resume or profile shows it. Never invent,
    never guess. The profile comes first: where it has a field for something (name, address, city, postal code,
    phone, email, work authorization...), use the profile, never an earlier answer -- those can be old.
    owner_earlier_answers are for questions the profile does not cover. If FACTS don't answer a question, put it in leave_for_owner (required = whether the page

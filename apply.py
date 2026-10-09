@@ -24,6 +24,9 @@ from pathlib import Path
 from urllib.parse import unquote
 
 
+import diagnostics
+diagnostics.install_log_privacy()
+
 from config import DATA_DIR, get_app_config, get_user_profile
 from job_sources import resolve_job
 
@@ -41,35 +44,17 @@ def already_submitted(job: dict) -> bool:
 
     When the Postgres tracker is unreachable (e.g. Docker is not running) this
     falls back to the SQLite tracker so the run is never blocked by a DB outage."""
-    import db
+    import tracking
     try:
-        tracker = db.get_tracker()
+        tracker = tracking.open_tracker()
         found = tracker.find_submitted(url=job.get("url", ""), company=job.get("company", ""),
                                        title=job.get("title", ""))
-        if found:
-            logger.error("DUPLICATE: %s at %s was already submitted (%s) -- not applying again",
-                         found.title, found.company, found.updated_at)
-        return bool(found)
     except Exception as exc:
-        is_transient = getattr(db, "is_transient_connection_error", lambda e: False)
-        if is_transient(exc):
-            # Postgres is down (Docker not started etc.) -- fall back to SQLite.
-            logger.warning(
-                "Postgres unavailable (%s); falling back to SQLite for duplicate check",
-                str(exc).splitlines()[0][:120],
-            )
-            from job_tracker import JobTracker
-            from jd_analyzer import dedup_key_for_url
-            from config import DATA_DIR
-            sqlite_tracker = JobTracker(DATA_DIR / "applications.db")
-            key = dedup_key_for_url(job.get("url", ""))
-            record = sqlite_tracker.get(key)
-            if record and record.status == "submitted":
-                logger.error("DUPLICATE (SQLite): %s at %s was already submitted (%s) -- not applying again",
-                             job.get("title"), job.get("company"), record.updated_at)
-                return True
-            return False
         raise RuntimeError(f"Could not check for duplicate applications: {exc}") from exc
+    if found:
+        logger.error("DUPLICATE: %s at %s was already submitted (%s) -- not applying again",
+                     found.title, found.company, found.updated_at)
+    return bool(found)
 
 
 def skipped_for_sponsorship(job: dict) -> bool:
@@ -86,10 +71,10 @@ def skipped_for_sponsorship(job: dict) -> bool:
         return False
     logger.warning("SKIPPED: %s at %s does not sponsor visas -- %r", job.get("title"), job.get("company"), said)
     try:
-        from db import get_tracker
+        import tracking
         from jd_analyzer import dedup_key_for_url
 
-        tracker = get_tracker()
+        tracker = tracking.open_tracker()
         key = dedup_key_for_url(job.get("url", ""))
         tracker.create(dedup_key=key, title=job.get("title") or "Unknown role",
                        company=job.get("company") or "Unknown", location=job.get("location") or "",
@@ -104,8 +89,44 @@ def slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_")[:40] or "job"
 
 
+def saved_job(url: str) -> dict | None:
+    """The posting as an earlier run of it read and saved (data/_job_<company>_<title>.json), matched by the
+    posting's address without its tracking parameters."""
+    from safety import canonical_url
+    wanted = canonical_url(url)
+    newest = None
+    for path in DATA_DIR.glob("_job_*.json"):
+        try:
+            job = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(job, dict) and job.get("url") and job.get("title") \
+                and canonical_url(job["url"]) == wanted:
+            if newest is None or path.stat().st_mtime > newest[0]:
+                newest = (path.stat().st_mtime, job)
+    return newest[1] if newest else None
+
+
+def read_job(url: str) -> dict | None:
+    """The posting: read now, a second time if the first read found nothing, else as an earlier run saved it.
+
+    Secunetics (BambooHR), 29 September: the page is built by script, one read came back empty, and the run
+    stopped at 'Could not read a job description' although the same posting had been read an hour before and
+    was saved."""
+    for attempt in (1, 2):
+        job = resolve_job(url)
+        if job:
+            return job
+        logger.info("The posting could not be read (try %d of 2)", attempt)
+    job = saved_job(url)
+    if job:
+        logger.info("READ_FROM_EARLIER_RUN: %s @ %s -- the posting would not load now; using the copy saved "
+                    "when it was read before", job.get("title"), job.get("company"))
+    return job
+
+
 def run_one(url: str, auto: bool = True, open_url: str = "") -> int:
-    job = resolve_job(url)
+    job = read_job(url)
     if not job:
         logger.error("Could not read a job description from %s", url)
         return 1

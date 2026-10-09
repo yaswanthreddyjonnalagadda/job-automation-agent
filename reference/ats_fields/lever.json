@@ -1,0 +1,24 @@
+{
+  "portal": "Lever (jobs.lever.co/<company>/<id>/apply)",
+  "studied": "2026-09-29",
+  "sample": "https://jobs.lever.co/palantir/ac978161-6f46-4f6b-ad9e-a258e642751c/apply",
+  "single_page": true,
+  "fields": {
+    "standard": "plain HTML inputs with stable names: resume (file), name (full name, one box), email, phone, location, org (current company), urls[LinkedIn], urls[GitHub], urls[Portfolio]; required marked by '✱' in the label and the required attribute",
+    "custom_questions": "named cards[<card id>][fieldN]; the question text is the label beside them",
+    "location": {
+      "widget": "input.location-input (name=location) with a hidden input#selected-location (name=selectedLocation) and a dropdown of server results",
+      "pick": "type the city, wait for .dropdown-results to fill, click the result that matches; the click fills selectedLocation -- typed text alone leaves it empty"
+    },
+    "choice": "native <select> (e.g. 'How did you hear': 21 options, first 'Select...')",
+    "university": {
+      "widget": "native <select> with 3302 schools; first option is a notice, not a school; 'Other - School Not Listed' exists",
+      "pick": "exact official name ('Eastern Illinois University', never 'Northeastern Illinois University'); an abbreviation ('JNTU') matches nothing -- the list has 'Jawaharlal Nehru Technological University - Hyderabad' and '- Kakinada', so the profile must hold the full name and campus"
+    },
+    "multi_select": "a list of checkboxes sharing one cards[...] name (languages: 34 options incl. 'Choose not to disclose', 'Other'); required means at least one ticked",
+    "yes_no": "radio inputs Yes/No",
+    "long_answer": "textarea; 'ADDITIONAL INFORMATION' textarea name=comments is the cover letter box",
+    "consent": "radio 'Yes, I consent' / 'No, I do not consent', and a marketing-consent checkbox consent[marketing] -- the owner's decision",
+    "captcha": "hCaptcha (invisible until submit)"
+  }
+}

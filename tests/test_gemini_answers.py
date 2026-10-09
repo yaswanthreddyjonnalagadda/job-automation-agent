@@ -143,7 +143,7 @@ def test_the_checks_on_a_dropdown_answer_are_the_same_with_gemini(google, client
     google.default = ok_reply(json.dumps({"choice": "Masters", "equivalent": True, "reason": "same level"}))
     assert client.choose_option("Masters of Science", ["Bachelors", "Masters"], "Degree")["choice"] == "Masters"
     google.default = ok_reply(json.dumps({"choice": "Doctorate", "equivalent": True, "reason": "x"}))
-    refused = client.choose_option("Masters of Science", ["Bachelors", "Masters"], "Degree")
+    refused = client.choose_option("Masters of Science", ["Bachelors", "Masters"], "Highest degree")
     assert refused["choice"] == "" and refused["equivalent"] is False        # not on the page: never trusted
 
 
@@ -260,20 +260,27 @@ def test_gemini_mode_builds_the_split_brain_whatever_agent_brain_says(google):
         assert isinstance(brain, gemini.GeminiBrain)
 
 
-def test_the_other_modes_are_as_they_were(google):
+def test_the_other_modes_answer_with_their_own_provider_and_write_with_the_chosen_writers(google):
+    import ai_choice
     import apply_flow
     import session_planner
+    from claude_answers import ClaudeAnswerClient
+    from openai_integration import OpenAIClient
     job = SimpleNamespace(company="Praxis", title="Engineer")
-    assert isinstance(apply_flow.brain_for(make_config(google, form_answer_mode="profile"), job), ClaudeClient)
-    assert isinstance(apply_flow.brain_for(make_config(google, form_answer_mode="claude", agent_brain="api"), job),
-                      ClaudeClient)
+    profile = apply_flow.brain_for(make_config(google, form_answer_mode="profile"), job)
+    assert isinstance(profile, ai_choice.Brain) and isinstance(profile._answers, ClaudeClient)
+    claude = apply_flow.brain_for(make_config(google, form_answer_mode="claude", agent_brain="api"), job)
+    assert isinstance(claude, ai_choice.Brain) and isinstance(claude._answers, ClaudeAnswerClient)
+    openai = apply_flow.brain_for(make_config(google, form_answer_mode="openai", openai_api_key="sk-x"), job)
+    assert isinstance(openai, ai_choice.Brain) and isinstance(openai._answers, OpenAIClient)
     assert isinstance(apply_flow.brain_for(make_config(google, form_answer_mode="claude", agent_brain="session"), job),
                       session_planner.SessionPlanner)
+    assert isinstance(claude._documents, ai_choice.Writers)
 
 
 @pytest.mark.parametrize("mode, brain, kind", [
     ("profile", "session", "profile"), ("gemini", "session", "gemini"), ("gemini", "api", "gemini"),
-    ("claude", "session", "session"), ("claude", "api", "api"),
+    ("claude", "session", "session"), ("claude", "api", "api"), ("openai", "session", "openai"),
 ])
 def test_which_brain_a_configuration_means(mode, brain, kind):
     import apply_flow
@@ -342,3 +349,29 @@ def test_the_dropdown_matcher_asks_gemini_too_when_gemini_answers(google):
     other = JobApplicationAssistant.__new__(JobApplicationAssistant)
     other._config = make_config(google, form_answer_mode="claude")
     assert type(other._claude_client()) is ClaudeClient
+
+
+# --- a code reload keeps the owner's choice (Mutual of Enumclaw, 29 September, 19:09) ----------------------------------
+
+@pytest.mark.parametrize("mode, brain", [("profile", "session"), ("gemini", "session"), ("claude", "api"),
+                                         ("claude", "session"), ("openai", "session")])
+def test_a_code_reload_chooses_the_brain_the_way_the_start_does(google, mode, brain):
+    """The run started with 'form answers use the local profile planner' (FORM_ANSWER_MODE=profile); a code reload
+    read AGENT_BRAIN=session on its own and moved the pages to the Claude Code session. The reload now asks the same
+    brain_kind the start does, and keeps the brain in use when the settings still choose it."""
+    import apply_flow
+    job = SimpleNamespace(company="Praxis", title="Engineer")
+    settings = make_config(google, form_answer_mode=mode, agent_brain=brain, openai_api_key="sk-x")
+    started = apply_flow.brain_for(settings, job)
+    assert apply_flow.rechoose_brain(started, settings, job) is started
+    assert type(apply_flow.rechoose_brain(object(), settings, job)) is type(started)
+
+
+def test_a_changed_setting_moves_the_pages_on_a_code_reload(google):
+    import apply_flow
+    import session_planner
+    job = SimpleNamespace(company="Praxis", title="Engineer")
+    started = apply_flow.brain_for(make_config(google, form_answer_mode="profile", agent_brain="session"), job)
+    moved = apply_flow.rechoose_brain(started, make_config(google, form_answer_mode="claude", agent_brain="session"),
+                                      job)
+    assert isinstance(moved, session_planner.SessionPlanner)

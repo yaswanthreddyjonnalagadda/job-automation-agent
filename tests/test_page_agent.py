@@ -40,7 +40,7 @@ def page(browser):
 
 @pytest.fixture
 def resume_file(tmp_path):
-    path = tmp_path / "Yaswanth_Jonnalagadda_Resume_Example.pdf"
+    path = tmp_path / "Jane_Doe_Resume_Example.pdf"
     path.write_bytes(b"%PDF-1.4 test resume")
     return path
 
@@ -141,6 +141,18 @@ def make_agent(planner, resume_file, auto_submit=True, profile=None):
     return page_agent.PageAgent(assistant, planner, cfg, profile or config.get_user_profile(),
                                 SimpleNamespace(raw_text="Network engineer, 6 years"), job,
                                 resume_file=resume_file)
+
+
+def handed_over(outcome) -> bool:
+    """The run stopped at the last step for the owner to submit -- the agent never presses the last Submit
+    (29 September: the old AUTO_SUBMIT setting let it press Secunetics' 'Submit Application' itself)."""
+    return outcome.kind == "owner_needed" and any("ready for you to submit" in r for r in outcome.reasons)
+
+
+def owner_submits(page):
+    """What the owner does after the hand-over: sends the form as it stands."""
+    page.evaluate("document.querySelector('form').requestSubmit()")
+    page.wait_for_url("**/done", timeout=5_000)
 
 
 def stored(page, key):
@@ -284,7 +296,8 @@ def test_a_whole_application_is_read_answered_and_submitted(page, resume_file):
     serve(page)
     planner = Planner()
     outcome = make_agent(planner, resume_file).run(page)
-    assert outcome.kind == "submitted", outcome.reasons
+    assert handed_over(outcome), outcome.reasons
+    owner_submits(page)
     # The agent fills his name from the profile before anyone is asked, so it
     # is the name as he writes it, not the one the page was offered.
     assert stored(page, "first") == "Yaswanth Reddy"
@@ -302,7 +315,8 @@ def test_a_carried_over_no_to_sponsorship_is_corrected_from_the_profile(page, re
                                 '<option selected="selected">No</option>')
     agent = make_agent(Planner(), resume_file)
     outcome = agent.run(page)
-    assert outcome.kind == "submitted", outcome.reasons
+    assert handed_over(outcome), outcome.reasons
+    owner_submits(page)
     assert stored(page, "sponsor") == "Yes"
     assert any("corrected" in n and "sponsorship" in n for n in agent.notes)
 
@@ -362,7 +376,7 @@ def test_the_owner_allowed_signing_so_the_agent_signs_last_and_submits(page, res
     serve(page, certify=CERT)
     agent = make_agent(cert_planner(), resume_file)
     outcome = agent.run(page)
-    assert outcome.kind == "submitted", outcome.reasons
+    assert handed_over(outcome), outcome.reasons
     assert any(n.startswith("signed") for n in agent.notes)
 
 
@@ -376,12 +390,44 @@ def test_without_the_owners_permission_nothing_is_signed(page, resume_file):
     assert page.url.endswith("/apply/2")
 
 
+def test_an_unnamed_declaration_is_deferred_using_its_nearby_words(resume_file):
+    agent = make_agent(Planner(), resume_file)
+    box = page_agent.Control(ref="e1", role="checkbox", container="Application questions",
+                             context="By checking this box I agree to the terms that apply where I reside.")
+    assert agent.known_answer(box) == ("", "")
+    plan = agent.profile_plan([box], set(), [], "")
+    assert len(plan.answers) == 1
+    assert plan.answers[0].source == "profile.sign_attestations"
+    assert agent._is_signature(plan.answers[0], box)
+
+
 def test_nothing_is_signed_on_a_page_with_an_answer_that_did_not_stay(page, resume_file):
     broken = STEP_2.replace("onclick=\"shown.textContent='Virginia'; list.hidden = true\"", "")
     serve(page, step2=broken, certify=CERT)
     outcome = make_agent(cert_planner(), resume_file).run(page)
     assert outcome.kind == "owner_needed"
     assert not page.locator("#cert").is_checked()
+
+
+@pytest.mark.parametrize("label,attribute,filled,expected", [
+    ("Reference", "required", "", False),
+    ("Reference *", "", "", False),
+    ("Reference", "required", "Provided", True),
+    ("Reference", "", "", True),
+])
+def test_signing_checks_current_required_fields_not_written_history(page, resume_file, label, attribute,
+                                                                  filled, expected):
+    page.set_content(f'<label>{label}<input id="ordinary" {attribute}></label>' + CERT)
+    page.locator("#ordinary").fill(filled)
+    agent = make_agent(Planner(), resume_file)
+    agent.written[label] = "Old value that did not stay"
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    declaration = next(c for c in controls if c.role == "checkbox")
+    answer = page_agent.Answer(declaration.ref, declaration.question, "check", "checked", "profile.sign_attestations")
+    plan = page_agent.PagePlan()
+    assert bool(agent.sign(page, plan, [answer])) is expected
+    assert page.locator("#cert").is_checked() is expected
+    assert bool(plan.for_owner) is not expected
 
 
 # --- what is refused, whatever Claude proposes -------------------------------------------
@@ -489,7 +535,8 @@ def test_a_submit_button_on_a_step_before_the_last_just_moves_on(page, resume_fi
     held as if it sent the application, for want of a resume attached earlier."""
     serve(page, step1=STEP_1.replace('<button type="submit">Next</button>', '<button type="submit">Submit</button>'))
     outcome = make_agent(Planner(next_label="Submit"), resume_file).run(page)
-    assert outcome.kind == "submitted", outcome.reasons
+    assert handed_over(outcome), outcome.reasons          # it moved past step 1's "Submit" to the last step
+    owner_submits(page)
     assert stored(page, "sponsor") == "Yes"
 
 
@@ -582,13 +629,15 @@ def test_a_resume_attached_in_an_earlier_run_counts_at_the_last_step(page, resum
     agent = make_agent(SimpleNamespace(plan_page=no_upload), resume_file)
     agent.key = "k"
     agent.tracker = Tracker()
-    assert "resume is not attached" in agent.run(page).summary
+    agent.run(page)
+    assert agent._tailored_resume_missing(page)          # with no record of it, the resume counts as missing
 
     page.goto("https://jobs.example.com/apply/2")
     agent = make_agent(SimpleNamespace(plan_page=no_upload), resume_file)
     agent.key = "k"
     agent.tracker = Tracker([{"kind": "resume_attached", "message": resume_file.name}])
-    assert agent.run(page).kind == "submitted"
+    assert handed_over(agent.run(page))
+    assert not agent._tailored_resume_missing(page)      # the earlier run's record counts
 
 
 def test_an_already_attached_resume_is_not_uploaded_again(page, resume_file):
@@ -606,8 +655,9 @@ def test_an_upload_is_recorded_for_later_runs(page, resume_file):
     serve(page)
     agent = make_agent(Planner(), resume_file)
     agent.key, agent.tracker = "k", Tracker()
-    assert agent.run(page).kind == "submitted"
-    assert {"kind": "resume_attached", "message": resume_file.name} in agent.tracker._events
+    assert handed_over(agent.run(page))
+    assert {"kind": "resume_attached", "message": "resume document"} in agent.tracker._events
+    assert resume_file.name not in str(agent.tracker._events)
 
 
 def test_a_dropdown_that_shows_its_choice_beside_it_is_read_as_answered():
@@ -855,7 +905,7 @@ def test_the_cover_letter_is_attached_where_the_form_asks_for_one(page, resume_f
     (attach only where the form requires a letter), the section here is
     required; test_optional_cover_letter_is_skipped_when_not_required covers
     the optional case."""
-    letter = tmp_path / "Yaswanth_Jonnalagadda_Cover_Letter.pdf"
+    letter = tmp_path / "Jane_Doe_Cover_Letter.pdf"
     letter.write_bytes(b"%PDF-1.4 letter")
     page.route("https://jobs.example.com/**", lambda route: route.fulfill(
         status=200, content_type="text/html",
@@ -870,7 +920,8 @@ def test_the_cover_letter_is_attached_where_the_form_asks_for_one(page, resume_f
     agent = make_agent(planner, resume_file)
     agent.cover_letter = lambda: (letter.with_suffix(".txt"), letter)
     outcome = agent.run(page)
-    assert outcome.kind == "submitted", outcome.reasons
+    assert handed_over(outcome), outcome.reasons
+    owner_submits(page)
     assert stored(page, "resume") == resume_file.name
     assert stored(page, "cover") == letter.name          # attached without being told to
 
@@ -1055,9 +1106,11 @@ def test_an_add_button_is_not_pressed_over_and_over(page, resume_file):
     planner = SimpleNamespace(plan_page=lambda s, f, fb="": {
         "page_kind": "application_form", "answers": [],
         "next": {"ref": ref_of(s, "button", "Add Experience"), "label": "Add Experience", "kind": "next_step"}})
-    outcome = make_agent(planner, resume_file).run(page)
+    agent = make_agent(planner, resume_file)
+    agent.history = {"experience": [{"company": "Example", "title": "Engineer"}]}
+    outcome = agent.run(page)
     assert outcome.kind == "owner_needed"          # it stops rather than pressing forever
-    assert int(page.evaluate("document.body.dataset.n")) <= 4   # enough for three jobs, then it stops
+    assert 1 <= int(page.evaluate("document.body.dataset.n")) <= 4
 
 
 def test_a_tick_box_is_clicked_by_the_label_beside_it(page, resume_file):
@@ -1067,13 +1120,47 @@ def test_a_tick_box_is_clicked_by_the_label_beside_it(page, resume_file):
     page.set_content(
         '<div><span role="checkbox" aria-checked="false" aria-label="Current Job"></span>'
         '<div role="status" style="cursor:pointer" '
-        'onclick="document.body.dataset.ticked = 1">Current Job</div></div>')
+        'onclick="document.body.dataset.ticked = 1; '
+        'this.previousElementSibling.setAttribute(\'aria-checked\', \'true\')">Current Job</div></div>')
     agent = make_agent(Planner(), resume_file)
     controls = page_agent.parse_snapshot(agent.snapshot(page))
     box = next(c for c in controls if c.name == "Current Job")
     assert box.role == "checkbox"
     assert agent.do(page, page_agent.Answer(box.ref, "Current Job", "check", "Yes", "resume"), box)
     assert page.evaluate("document.body.dataset.ticked") == "1"
+    assert page.get_by_role("checkbox").get_attribute("aria-checked") == "true"
+
+
+def test_a_checkbox_click_without_a_state_change_is_not_an_answer(page, resume_file):
+    page.set_content('<div><span role="checkbox" aria-checked="false" aria-label="Current Job"></span>'
+                     '<div onclick="document.body.dataset.clicked = 1">Current Job</div></div>')
+    agent = make_agent(Planner(), resume_file)
+    box = next(c for c in page_agent.parse_snapshot(agent.snapshot(page)) if c.role == "checkbox")
+    assert not agent.do(page, page_agent.Answer(box.ref, box.question, "check", "Yes", "resume"), box)
+    assert page.evaluate("document.body.dataset.clicked") == "1"
+    assert page.get_by_role("checkbox").get_attribute("aria-checked") == "false"
+
+
+def test_a_new_agent_has_isolated_upload_and_entry_state(resume_file):
+    first = make_agent(Planner(), resume_file)
+    second = make_agent(Planner(), resume_file)
+    first._attached_here.add(("/application", "resume"))
+    first._entries["sample"] = "entry"
+    first._ensure_state()
+    assert first._attached_here == {("/application", "resume")}
+    assert second._attached_here == set()
+    assert second._entries == {}
+
+
+def test_an_add_button_is_not_pressed_without_owned_history(page, resume_file):
+    page.set_content('<button onclick="document.body.dataset.clicked = 1">Add Experience</button>')
+    agent = make_agent(Planner(), resume_file)
+    agent.history = {}
+    controls = page_agent.parse_snapshot(agent.snapshot(page))
+    button = next(c for c in controls if c.role == "button")
+    plan = page_agent.PagePlan(next_ref=button.ref, next_label=button.name, next_kind="next_step")
+    agent.press_next(page, plan, controls)
+    assert page.evaluate("document.body.dataset.clicked") is None
 
 
 def test_a_button_that_opens_a_file_dialog_is_given_the_resume(page, resume_file):
@@ -1548,6 +1635,22 @@ def test_a_form_that_asks_for_no_resume_is_still_ready_without_one(page, resume_
 
 
 def test_automatic_submission_still_needs_the_resume_whatever_the_form_shows(page, resume_file):
-    """The unattended path is not loosened: it never sends without the tailored resume."""
+    """The last Submit is never pressed from the page agent, whatever the settings say: the old AUTO_SUBMIT
+    let it press Secunetics' 'Submit Application' itself (29 September)."""
     _, gate = _gate_on(page, resume_file, _NO_RESUME_FIELD, auto_submit=True)
-    assert "resume is not attached" in gate
+    assert gate and "ready for you to submit" in gate
+
+
+
+def test_the_last_submit_is_never_pressed_from_here_whatever_the_settings(page, resume_file):
+    """Neither the old AUTO_SUBMIT nor verified auto-submit lets the page agent press the last Submit: sending
+    goes through the hand-over, where safety.evaluate_auto_submit decides (Secunetics, 29 September)."""
+    serve(page)
+    for settings in (dict(auto_submit=True), dict(auto_submit_verified_only=True)):
+        page.goto("https://jobs.example.com/apply/1")
+        agent = make_agent(Planner(), resume_file)
+        for name, value in settings.items():
+            setattr(agent.config, name, value)
+        outcome = agent.run(page)
+        assert handed_over(outcome), (settings, outcome.reasons)
+        assert not page.url.endswith("/done")

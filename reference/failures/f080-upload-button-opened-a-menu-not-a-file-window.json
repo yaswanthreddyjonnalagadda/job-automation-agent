@@ -1,0 +1,12 @@
+{
+  "id": "f080",
+  "date": "2026-09-30",
+  "class": "An upload button assumed to open a file window, when it opens a menu of sources",
+  "symptom": "Altamira on Jobvite, 30 September: 'Add Resume*' -> 'Select' opens Dropbox / File / Type or Paste Resume / Apply With LinkedIn. The agent clicked Select and waited 8 s for a file window twice ('Could not attach the resume'), the menu stayed open over the page, and the next click timed out: UNHANDLED ERROR / STALL.",
+  "site": "Jobvite; any site whose upload button offers sources (cloud drives, paste, a profile)",
+  "root_cause": "PageAgent.do's last upload route clicked the button inside expect_file_chooser and nothing else; Jobvite's hidden file inputs sit in menus appended to <body>, so neither the nearby-input search nor the inventory (which placed them under the page's top heading) tied them to 'Add Resume'. A failed attempt also left the menu open.",
+  "why_tests_missed": "Upload tests had a file input beside its button, or a button that opens the file window itself.",
+  "fix": "When the button opens no file window, the menu's item for a file on this computer ('File', 'Upload file', 'From device', 'My computer', 'Browse') is chosen and the resume goes to the window it opens -- never Dropbox, Google Drive or LinkedIn; a failed attempt closes what it opened (Escape). The resume step also tries the inventory's file input for the resume first (_attach_resume_to_its_input), the helper the inventory pass now shares.",
+  "tests": ["replay_guard.py"],
+  "prevention": "Treat 'press upload' as a small dialogue: a file window, or a menu whose local-file item leads to one; always undo a popup the agent opened when the step fails."
+}

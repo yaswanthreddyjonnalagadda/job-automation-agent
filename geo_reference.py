@@ -186,12 +186,12 @@ def _regions(parts: list[str]) -> tuple[set[str], set[str]]:
 
 
 def same_locality(a: str, b: str) -> bool:
-    """True when two spellings name the same town: "Fairfax, VA" and
-    "Fairfax, Virginia, United States".
+    """True when two spellings name the same town: "Springfield, IL" and
+    "Springfield, Illinois, United States".
 
     Both give the town first and a region after it. The town's name is the same
     words; the state, in any spelling, is the same state on both sides (named on
-    one side only is not enough: several states have a Fairfax); a country
+    one side only is not enough: several states have a Springfield); a country
     left out of one side is not a difference, one named on both must agree.
     """
     first, second = str(a or "").split(","), str(b or "").split(",")
@@ -230,6 +230,20 @@ def option_domain(options: Iterable[str], minimum: int = 5, share: float = 0.6) 
     if len(set(found)) < minimum:
         return None
     return best if len(found) / len(real) >= share else None
+
+
+def places_named_in(text: str) -> list[str]:
+    """Every country and US state a sentence names ("Do you currently reside in the United States?", "Are you based
+    in the US or Canada?"): spelled-out names, and codes written in capitals ("US", "VA"). A name inside a longer one
+    is not a place of its own, so "West Virginia" is never also read as "Virginia"."""
+    words = f" {normalize(text)} "
+    found = [name for name in place_names() if f" {name} " in words]
+    found = [name for name in found if not any(name != other and f" {name} " in f" {other} " for other in found)]
+    for token in re.findall(r"\b[A-Z](?:\.?[A-Z]){1,2}\b\.?", text or ""):
+        code = token.replace(".", "")
+        if country_code(code) or us_state_code(code):
+            found.append(code)
+    return found
 
 
 @lru_cache(maxsize=1)

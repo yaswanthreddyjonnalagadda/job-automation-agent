@@ -10,4 +10,11 @@ case "$branch" in
     exit 1
     ;;
 esac
+# A committed file must not import a project module that is not committed (28 September).
+py=python; [ -x venv/Scripts/python.exe ] && py=venv/Scripts/python.exe; [ -x venv/bin/python ] && py=venv/bin/python
+"$py" .githooks/check_imports.py || exit 1
+# A change must not alter how the pages already met are read or answered without saying so (29 September: a fix
+# for one portal kept breaking another). Replays every saved page with the last commit and with what is staged;
+# a difference blocks the commit until it is confirmed a correction:  REPLAY_OK=1 git commit ...
+"$py" replay_guard.py || exit 1
 exit 0

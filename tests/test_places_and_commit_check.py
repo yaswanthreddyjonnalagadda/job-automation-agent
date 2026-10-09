@@ -20,6 +20,7 @@ import pytest
 
 import config
 import geo_reference
+import option_match
 import page_agent
 import provenance
 import safety
@@ -166,6 +167,20 @@ def test_a_different_town_is_never_left_in_the_box_when_the_list_does_not_have_t
     controls, box = location_control(agent, page)
     assert agent.choose(page, box, "Fairfax, VA", controls) is False
     assert page.locator("#chosen").inner_text() == ""
+
+
+def test_locality_choices_never_fall_back_to_shared_words():
+    agent = make_agent()
+    for code, entry in geo_reference._data()["us_states"].items():
+        name = next((n for n in entry["names"] if "," not in n), None)
+        if name is None:
+            continue
+        wanted = f"Example Town, {code}"
+        wrong = [f"Example Town Heights, {name}", f"Other Town, {name}"]
+        assert agent._pick_label(wrong, wanted) is None
+        assert agent._pick_label(wrong + [f"Example Town, {name}"], wanted) == 2
+        assert option_match.best_option(wrong, wanted) is None
+        assert option_match.best_option(wrong + [f"Example Town, {name}"], wanted) == 2
 
 
 def test_typed_text_that_was_never_chosen_is_not_an_answer(page):

@@ -1,0 +1,72 @@
+{
+  "_about": "What a form question asks, as data (concept_matcher.py reads this beside its own table). A new wording of a known question is a line under more_wordings, not a code change; a new question the profile answers is an entry under concepts with the profile field that answers it. Patterns match the question after clean_text: lower case, punctuation and '(required)' removed. value=true: answered with a fact, so never used for a question put as Yes/No. These come first when two concepts match a question equally. Wordings added 30 September 2026 from the questions no concept matched on the pages saved from real applications.",
+  "concepts": {
+    "OPT_STATUS": {
+      "patterns": ["^\\W*(?:are|is)\\s+(?:you|your)\\b.*\\b(?:stem\\s+)?opt\\b", "^\\W*(?:are|is)\\s+(?:you|your)\\b.*\\boptional\\s+practical\\s+training\\b"],
+      "negative": "\\b(?:date|expir|when|end|start|how\\s+long|until)\\b",
+      "profile_field": "work_authorization",
+      "resolver": "yes_if_matches",
+      "pattern": "\\bopt\\b|optional\\s+practical\\s+training"
+    },
+    "ADDRESS_LINE_2": {
+      "patterns": ["^\\W*(?:street\\s+|home\\s+|mailing\\s+)?address\\s*(?:line\\s*)?2\\b", "\\baddress\\s+line\\s+two\\b", "^\\W*(?:apartment|apt|suite)\\b(?:\\s*(?:number|no|#))?\\W*$", "^\\W*(?:apartment|apt|suite)\\s*(?:or\\s+|/\\s*)?(?:unit|suite|apt)\\b", "^\\W*unit\\s*(?:number|no|#)\\W*$"],
+      "profile_field": "address_line2",
+      "value": true
+    },
+    "PREFERRED_NAME": {
+      "patterns": ["^\\W*preferred(?:\\s+first)?\\s+name\\b", "\\bpreferred\\s+or\\s+chosen\\s+name\\b", "\\bchosen\\s+name\\b", "\\bnick\\s*name\\b", "\\bknown\\s+as\\b"],
+      "profile_field": "preferred_name",
+      "value": true
+    },
+    "GENDER_IDENTITY": {
+      "patterns": ["\\bgender\\s+identity\\b"],
+      "profile_field": "gender_identity",
+      "fallback_field": "gender"
+    },
+    "SEXUAL_ORIENTATION": {
+      "patterns": ["\\bsexual\\s+orientation\\b"],
+      "profile_field": "sexual_orientation"
+    },
+    "TRANSGENDER": {
+      "patterns": ["\\btransgender\\b"],
+      "profile_field": "transgender"
+    },
+    "PRONOUNS": {
+      "patterns": ["\\bpronouns?\\b"],
+      "profile_field": "pronouns",
+      "value": true
+    },
+    "GPA": {
+      "patterns": ["\\bgpa\\b", "\\bgrade\\s+point\\s+average\\b", "\\bcumulative\\s+grade\\b"],
+      "profile_field": "gpa",
+      "value": true
+    },
+    "MINIMUM_SALARY": {
+      "patterns": ["\\bminimum\\s+(?:salary|pay|compensation)\\b", "\\blowest\\s+(?:salary|pay)\\b", "\\bsalary\\s+requirements?\\b"],
+      "profile_field": "salary_min",
+      "value": true
+    },
+    "CERTIFICATIONS": {
+      "patterns": ["\\bcertifications?\\b", "\\bprofessional\\s+licen[cs]es?\\b"],
+      "negative": "\\bi\\s+certify\\b|\\bcertify\\s+that\\b",
+      "profile_field": "certifications",
+      "value": true
+    },
+    "LANGUAGES_SPOKEN": {
+      "patterns": ["\\blanguages?\\s+(?:do\\s+you\\s+)?(?:speak|spoken|known)\\b", "\\blanguage\\s+skills?\\b", "\\bwhat\\s+languages\\b"],
+      "negative": "programming|coding|scripting|\\blevel\\b|proficien|fluency",
+      "profile_field": "languages",
+      "value": true
+    },
+    "SKILL_RATING": {
+      "patterns": ["\\brate\\s+your\\s+(?:skill|proficiency|experience|expertise|knowledge)", "\\bskill\\s+level\\s+(?:with|in)\\b", "\\bproficiency\\s+(?:level\\s+)?(?:with|in)\\b"],
+      "profile_field": "skill_levels",
+      "resolver": "skill_level"
+    }
+  },
+  "more_wordings": {
+    "PREVIOUSLY_EMPLOYED": ["\\bworked\\s+(?:with|for)\\s+us\\s+before\\b", "\\bhave\\s+you\\s+(?:ever\\s+)?worked\\s+(?:with|for)\\s+us\\b"],
+    "PREFERRED_CONTACT": ["\\bpreferred\\s+(?:method|way|mode)\\s+of\\s+contact\\b"],
+    "NOTICE_PERIOD": ["\\bdate\\s+available\\s+to\\s+start\\b", "\\bavailable\\s+start\\s+date\\b", "\\bearliest\\s+(?:possible\\s+)?start(?:\\s+date)?\\b", "\\bwhen\\s+can\\s+you\\s+start\\b"]
+  }
+}

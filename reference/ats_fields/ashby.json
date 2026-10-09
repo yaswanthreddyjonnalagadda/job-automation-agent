@@ -1,0 +1,22 @@
+{
+  "portal": "Ashby (jobs.ashbyhq.com)",
+  "studied": "2026-09-29",
+  "sample": "https://jobs.ashbyhq.com/skylo/3aff230b-63b6-48db-a40a-61be02866a41/application",
+  "single_page": true,
+  "fields": {
+    "question_box": "div.ashby-application-form-field-entry[data-field-path=<id>] holding label.ashby-application-form-question-title[for=<id>]; required marked by the class _required_ on the label (no star in the text)",
+    "text": "input type=text/email with placeholder ('Type here...', 'hello@example.com...')",
+    "yes_no": {
+      "widget": "div.ashby-application-form-input-yesno with two buttons (data-option=yes|no, aria-pressed=true|false) over a hidden checkbox named by the question id",
+      "pick": "click the button whose data-option (or text) is the answer; confirm aria-pressed=true on it",
+      "gotcha": "the checkbox that holds the answer is hidden (tabindex=-1): never judge the question unanswered from the checkbox alone"
+    },
+    "choice": "radio inputs with a <label> each (EEO: Gender, Race, Veteran Status); some forms use a combobox for Location",
+    "file": {
+      "widget": "input type=file accept=application/pdf,... ; TWO on the page: 'Autofill from resume' at the top, and the required 'Resume' field",
+      "fill": "set_input_files on the input inside the field entry whose label is 'Resume'; the autofill one is optional and re-fills the form"
+    },
+    "bot_trap": "a hidden textarea labelled 'Name' -- never fill a field that is not visible",
+    "captcha": "reCAPTCHA in an iframe"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "id": "f031",
+  "date": "2026-09-29",
+  "class": "One decision split across several steps, each reading the page its own way, with no record of what the page was",
+  "symptom": "Workday was the most used site and never got past step 1 on 48 runs (Create Account / Sign In): account creation failed 30 times and succeeded 5. On KBI Biopharma (28 September) an account was created, the run then tried to sign in on a page it could not read, asked the AI to fill 'Email Address' on the sign-in page, and stopped with nothing saved to show which page it was on.",
+  "site": "Workday tenants (*.myworkdayjobs.com), and any employer site with an account step",
+  "root_cause": "sign_in_step decided in pieces: Google if a control was named 'Sign in with Google' (OCC's button carries the words inside it, so it was missed); 'email first' if an email box and no password box; 'creating' if two password boxes or a Workday-only state said so; a separate check for an account on record. Each read the page its own way, none knew what the others had seen, a message the site gave (verify your email, wrong password, locked) was nobody's to read, and when nothing applied the page fell through to the planner as a form. No step saved the page it was deciding on.",
+  "why_tests_missed": "The sign-in tests each built one page for one piece (a Google button, an email-first page, an existing account); none walked the states in sequence, none used a recorded page, and none covered the messages a site gives after the form is sent.",
+  "fix": "account_state.py reads the account step from what the page shows (create form, sign-in form, email first, chooser, loading, code entry, verify email, account exists, wrong password, locked, signed in; messages outrank forms) and next_step() is the one table of what to do. sign_in_step follows it with the agent's existing actions, finds Google by the words on the button, and sets account_blocker for whatever only the owner can do, which stops the run with that reason instead of planning the sign-in page as a form. Every change of account state is logged (ACCOUNT_STATE) with a screenshot and the page text in the job's account/ folder.",
+  "tests": [
+    "tests/test_account_state.py",
+    "tests/test_account_state.py::test_real_pages_are_read_as_what_they_are",
+    "tests/test_account_state.py::test_what_the_site_says_outranks_the_form_it_says_it_on",
+    "tests/test_account_state.py::test_every_state_has_one_next_step",
+    "tests/test_account_state.py::test_google_comes_first_when_the_site_offers_it",
+    "tests/test_account_state.py::test_nothing_is_tried_twice_in_one_run"
+  ],
+  "prevention": "Model a multi-step flow as named states read from one place, with one table of transitions, before writing any action; log every transition with the page that caused it; and test the states on recorded real pages, including what the site says after each action, not only the forms."
+}

@@ -1,0 +1,17 @@
+{
+  "id": "f090",
+  "date": "2026-10-02",
+  "class": "Profile-first answers bypass the final declaration gate",
+  "symptom": "A declaration was checked even when a required state answer did not stay on the page.",
+  "site": "Application declarations",
+  "root_cause": "The agreement shortcut answered attestations during profile filling; the signing gate also checked only planner actions rather than current required fields.",
+  "why_tests_missed": "Existing signed-last and failed-answer tests failed on the base branch, and profile-first declaration routing lacked coverage.",
+  "fix": "Defer declarations to sign and check current required fields from both the accessibility snapshot and DOM inventory before signing.",
+  "tests": [
+    "tests/test_page_agent.py::test_the_owner_allowed_signing_so_the_agent_signs_last_and_submits",
+    "tests/test_page_agent.py::test_nothing_is_signed_on_a_page_with_an_answer_that_did_not_stay",
+    "tests/test_page_agent.py::test_signing_checks_current_required_fields_not_written_history",
+    "tests/test_page_agent.py::test_an_unnamed_declaration_is_deferred_using_its_nearby_words"
+  ],
+  "prevention": "Apply declarations only through one final validation gate using observed field state."
+}

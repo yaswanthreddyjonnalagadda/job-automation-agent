@@ -1,0 +1,15 @@
+{
+  "id": "f122",
+  "date": "2026-10-08",
+  "site": "Cross-portal local output directory (diagnostic retention cleanup)",
+  "class": "A filename-only allowlist could not tell a permanent record from an ephemeral one sharing its name",
+  "symptom": "cleanup_expired_diagnostics() entered every job's output/<job>/pages/ folder and deleted page_NN.txt files older than the retention window. That name is used for two unrelated things: PageAgent's own genuinely ephemeral, run-scoped snapshots (already retained/pruned separately by page_agent.keep_latest_runs()), and the project's old-style, flat, PERMANENT real-application-page recordings that replay_guard.py and tests/test_page_agent.py depend on. 65 of 135 output/<job>/pages/ directories lost their flat recordings before this was noticed; output/ is gitignored, so there was no git-based recovery.",
+  "root_cause": "The traversal allowed descending into any 'pages' directory and then matched files purely by name pattern (page_\\d+\\.txt). Filename-only matching cannot distinguish an ephemeral, already-retained-elsewhere snapshot from a permanent recording that happens to share the same convention; the function needed to know which directory shape it was looking at, not just the filename.",
+  "why_tests_missed": "test_cleanup_removes_only_old_diagnostics covered evidence_*/account folders and a fixed list of protected filenames, but nothing exercised a pages/ directory at all -- flat or run-scoped -- so the one path that actually matched production data was never asserted either way.",
+  "fix": "cleanup_expired_diagnostics() no longer descends into any 'pages' directory, at any depth, under any retention setting; retention for the genuinely ephemeral run-scoped snapshots stays solely the job of the existing, separate, count-based page_agent.keep_latest_runs(). Two regression tests assert both shapes (flat page_NN.txt and pages/<run>/page_NN.txt) survive cleanup_expired_diagnostics() unconditionally, including at days=0.",
+  "tests": [
+    "tests/test_diagnostic_retention.py::test_flat_page_recordings_in_pages_are_never_deleted_however_old",
+    "tests/test_diagnostic_retention.py::test_run_scoped_page_snapshots_under_pages_are_also_left_to_keep_latest_runs"
+  ],
+  "prevention": "Before any new cleanup/retention code is allowed to delete by filename pattern, enumerate every existing thing on disk that could share that pattern for an unrelated reason -- including older, pre-existing data the current feature's author may not have been looking for -- and write a test asserting each one survives, not just the cases the new feature was written to handle."
+}

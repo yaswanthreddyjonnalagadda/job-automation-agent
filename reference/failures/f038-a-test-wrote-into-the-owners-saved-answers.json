@@ -1,0 +1,16 @@
+{
+  "id": "f038",
+  "date": "2026-09-29",
+  "class": "Test state shared with the owner's real state, through a path the isolation did not know",
+  "symptom": "29 September: 'First Name = Yash R.' appeared in the owner's real data/profile_answers.json, written by a test run; the agent then read it back, and a test began to fail.",
+  "site": "The test suite",
+  "root_cause": "conftest redirected module paths written 'data/...' only; profile_setup.ANSWERS_PATH is the full path (config.DATA_DIR / ...), and page_agent read the same file through a path built inside a function, so a test's learned answer went to the owner's file and was read back from it.",
+  "why_tests_missed": "The isolation check covered relative data/ paths; nothing checked full paths under data/ or that reader and writer used one path.",
+  "fix": "conftest redirects full-path module attributes under data/ as well (the profile stays readable) and loads modules that name them through DATA_DIR; page_agent reads the saved answers through profile_setup.ANSWERS_PATH. The stray entry was removed from the owner's file (backup kept locally).",
+  "tests": [
+    "tests/test_tests_leave_the_owners_data_alone.py",
+    "tests/test_tests_leave_the_owners_data_alone.py::test_learning_an_answer_in_a_test_leaves_the_real_file_as_it_was",
+    "tests/test_tests_leave_the_owners_data_alone.py::test_the_agent_reads_the_saved_answers_where_setup_writes_them"
+  ],
+  "prevention": "Name each data file in one place, and have the test setup redirect by where a path points, not by how it is spelled; check the owner's files are byte-identical after a full test run."
+}

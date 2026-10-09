@@ -214,6 +214,79 @@ def test_confirmation_page_and_portal_list_are_recognised(agent, page):
     assert agent.submission_confirmed(page, "Engineer NOC I") is False
 
 
+# ---------------------------------------------------------------- confirmation false positives
+# Pass 4, Finding 6 (adversarial review, 7 October 2026): a loose "phrase in body" substring
+# search over the WHOLE page matched incidental text on an unrelated FAQ/error page -- e.g.
+# "Application received after 5pm will be reviewed next day" -- and marked a failed/misdirected
+# run CONFIRMED. The fix requires the phrase to BE a short heading/alert element's whole text,
+# not merely appear somewhere in a longer sentence anywhere on the page.
+@pytest.mark.parametrize("body", [
+    "<h2>Application received after 5pm will be reviewed next day</h2>"
+    "<p>Please allow 2 business days for a response.</p>",
+    "<h3>Status inquiry for previously submitted application</h3>"
+    "<p>Enter your confirmation number below to check your status.</p>",
+    "<h1>Frequently Asked Questions</h1>"
+    "<p>Your application submitted after the deadline will not be considered.</p>",
+    "<h2>Need help?</h2><p>If your application was sent to the wrong department, contact HR.</p>",
+])
+def test_incidental_mentions_on_an_unrelated_page_are_not_a_confirmation(agent, page, body):
+    page.set_content(f"<html><body>{body}</body></html>")
+    assert agent.submission_confirmed(page) is False
+
+
+@pytest.mark.parametrize("body", [
+    "<h1>Thank You for Applying!</h1>",
+    "<h1>Thank you, Jane, for applying to the Software Engineer role at Acme!</h1>",
+    "<h2>Your application has been submitted</h2>",
+    "<div role=alert>Application submitted.</div>",
+    "<h2>We've received your application</h2>",
+    "<h1>Application was successfully submitted</h1>",
+])
+def test_a_real_confirmation_heading_is_still_recognised(agent, page, body):
+    page.set_content(f"<html><body>{body}</body></html>")
+    assert agent.submission_confirmed(page) is True
+
+
+# ---------------------------------------------------------------- hidden confirmation templates
+# P0-B1 hardening follow-up, 7 October 2026: innerText measurably still returned a display:none
+# element's text in this runtime (verified directly, not assumed from the specification) -- a
+# conditionally-rendered SPA "success" template, present in the DOM but hidden until an API call
+# resolves, could trigger a false CONFIRMED through the exact wording match alone. Policy:
+# display:none, the hidden attribute, visibility:hidden/collapse, and full opacity are all
+# treated as not-visible (self or an ancestor); off-screen positioning and zero-size-but-
+# displayed elements are deliberately not specially detected (documented limitation, not a
+# silent gap -- too fragile to distinguish from legitimately positioned real content without
+# false-negating it). Fail-closed direction is preserved: every case below is a miss (UNCERTAIN),
+# never a wrongly-accepted confirmation.
+@pytest.mark.parametrize("body", [
+    "<h1 style='display:none'>Thank you for applying!</h1>",
+    "<div role='alert' style='display:none'>Application submitted.</div>",
+    "<div role='status' style='display:none'>Application submitted.</div>",
+    "<div style='display:none'><h1>Thank you for applying!</h1></div>",   # hidden ancestor
+    "<h2 hidden>Thank you for applying!</h2>",
+    "<div hidden><h2>Thank you for applying!</h2></div>",                 # hidden attribute on ancestor
+    "<h2 style='visibility:hidden'>Thank you for applying!</h2>",
+    "<h2 style='opacity:0'>Thank you for applying!</h2>",
+    # SPA shape: a toggled ancestor hides an otherwise-plainly-displayed child template.
+    "<div style='display:none'><h1 style='display:block'>Thank you for applying!</h1></div>",
+])
+def test_a_hidden_confirmation_template_is_not_a_confirmation(agent, page, body):
+    page.set_content(f"<html><body>{body}</body></html>")
+    assert agent.submission_confirmed(page) is False
+
+
+def test_a_success_template_becomes_a_confirmation_once_actually_shown(agent, page):
+    """The SPA case this hardening is really about: a template already in the DOM, hidden until
+    a state change reveals it (React/Vue toggling display rather than mounting/unmounting).
+    Before the toggle it must not confirm; after it, the same element must."""
+    page.set_content(
+        "<html><body><h1 id='s' style='display:none'>Thank you for applying!</h1></body></html>"
+    )
+    assert agent.submission_confirmed(page) is False
+    page.evaluate("document.getElementById('s').style.display = 'block'")
+    assert agent.submission_confirmed(page) is True
+
+
 # ---------------------------------------------------------------- site adapters stay separate
 def test_each_platform_gets_its_own_adapter():
     assert adapter_for("https://career2.successfactors.eu/careers?company=igt").name == "successfactors"

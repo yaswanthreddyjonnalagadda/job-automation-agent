@@ -1,0 +1,22 @@
+{
+  "id": "f063",
+  "date": "2026-09-29",
+  "class": "Every list, search box and date filled one way, and an option matched by loose words",
+  "symptom": "Live runs on 29 September left basic fields empty or wrong: a Greenhouse country list offering 'United States +1' was not matched to 'United States', a degree list offering 'Master' was not matched to 'Masters of Science', a Lever location search was typed into but no suggestion picked, a BambooHR state menu and date boxes were left for the owner; the owner asked why the agent could not answer basic questions.",
+  "site": "Greenhouse (react-select), Lever and Rippling (server-suggested locations), BambooHR (button menus), Ashby, and any portal with mm/dd/yyyy or month/year date boxes",
+  "root_cause": "The agent had one way to fill a list -- type the answer and look for a row with the same words -- and one date shape. Portals build these controls differently (reference/ats_fields/): react-select opens only on a real press, a location list arrives from the server a moment later and redraws, a menu has its own search box, a date box takes the format its placeholder shows. And the words of an option were compared loosely, or not at all when a dial code or the portal's own word for a degree stood beside the answer.",
+  "why_tests_missed": "The tests used native selects and rows spelled exactly as the profile spells them; none drew a list the way a portal does (opening on a press, arriving late, redrawing), offered the answer in another portal's words, or asked for a date in another shape.",
+  "fix": "option_match.best_option is the one matcher for every list: the same words; the same place in any spelling with a dial code set aside (geo_reference); the same answer in the portal's own words (reference/answer_equivalents.json); the whole answer then only more after punctuation -- never 'contains' ('Virginia' is not 'West Virginia'), and no pick when two are equally good. form_fields.choose opens each kind of list the way it opens (a native select, an Ant list through interaction.resolve_ant_dropdown, a real press, typing, waiting for the rows to settle, clicking the row, again if the list redraws) and confirms the box shows the answer; it never presses Enter. choose_several ticks a checkbox group; fill_date writes the date in the shape the box takes. inventory_pass fills lists, search boxes and dates the usual reading left empty.",
+  "tests": [
+    "tests/test_fillers.py::test_the_option_that_is_the_answer",
+    "tests/test_fillers.py::test_react_select_takes_the_right_country_not_the_first_row",
+    "tests/test_fillers.py::test_a_location_is_picked_from_the_servers_suggestions",
+    "tests/test_fillers.py::test_a_button_menu_takes_the_exact_state",
+    "tests/test_fillers.py::test_a_native_select_takes_the_portals_word_for_the_degree",
+    "tests/test_fillers.py::test_a_list_without_the_answer_is_left_alone",
+    "tests/test_fillers.py::test_tick_all_that_apply",
+    "tests/test_fillers.py::test_a_date_goes_in_the_way_the_box_takes_it",
+    "tests/test_fillers.py::test_a_run_chooses_the_country_in_a_react_select_and_stops_before_submitting"
+  ],
+  "prevention": "Study how each target portal draws its controls before writing the filler, and build test pages in those shapes (late, redrawing, opened by a press). Keep one matcher for every list, with the portals' vocabularies as data, and make 'contains' impossible by construction."
+}

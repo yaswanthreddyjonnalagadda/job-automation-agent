@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+import diagnostics
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -60,6 +61,7 @@ class UserProfile:
     target_titles: tuple[str, ...] = ()
     prefix: str = ""
     address_line1: str = ""
+    address_line2: str = ""       # apartment, suite, unit -- empty when there is none
     city: str = ""
     state: str = ""
     county: str = ""  # some ATS forms require county separately
@@ -124,6 +126,18 @@ class UserProfile:
     preferred_language: str = ""
     people_managed: str = ""
     outside_business_interests_with_competitors: str = ""
+    # Asked by many forms, and only yours to answer (30 September: with none of these in the profile the AI
+    # guessed them). Empty = the question comes to you once, and your answer is kept.
+    preferred_name: str = ""           # empty = you have none: the box is left blank
+    gender_identity: str = ""          # empty = your `gender` answers "gender identity" too
+    sexual_orientation: str = ""
+    transgender: str = ""
+    pronouns: str = ""
+    gpa: str = ""
+    certifications: tuple[str, ...] = ()
+    languages: tuple[str, ...] = ()
+    # "Skill: level" on a 1-5 scale, for "rate your skill with ..." questions: ("Cisco: 5", "Palo Alto: 4").
+    skill_levels: tuple[str, ...] = ()
     # Degrees from the resume, newest first: (degree level, field, school, year).
     education: tuple[tuple[str, str, str, str], ...] = ()
     # The same degrees with the dates forms ask for: (school, started, finished).
@@ -159,9 +173,32 @@ class UserProfile:
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
+# Google's free tier gives every model its own allowance (AI Studio's Rate Limit page, 29 September 2026): each
+# Flash about 20 requests a day, each Flash Lite about 500, Gemma thousands but only ~16,000 tokens a minute.
+# One model alone ran out after two or three applications. So each kind of call has a ladder of models, tried
+# in order; one that is spent rests until Google's daily reset and the next answers (gemini_integration.py).
+# "page": planning a whole page and writing open answers -- the stronger models first.
+# "quick": one dropdown choice, one short question, a screenshot -- the models with big allowances first.
+# GEMINI_PAGE_MODELS / GEMINI_QUICK_MODELS in .env (comma-separated) replace these lists.
+DEFAULT_GEMINI_PAGE_MODELS = ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+                              "gemini-3-flash-preview", "gemini-2.5-flash", "gemini-3.5-flash-lite",
+                              "gemini-3.1-flash-lite", "gemma-4-31b-it")
+DEFAULT_GEMINI_QUICK_MODELS = ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite",
+                               "gemma-4-31b-it", "gemma-4-26b-a4b-it", "gemini-3.8-flash", "gemini-3.7-flash",
+                               "gemini-3.6-flash", "gemini-3.5-flash")
+# Where the free allowances start again: midnight in Google's Pacific time.
+GEMINI_QUOTA_RESET_TZ = "America/Los_Angeles"
+GEMINI_QUOTA_RESET_UTC_OFFSET_HOURS = -8     # used if this computer has no time-zone database
+
+
+def _models_from_env(name: str, default: tuple) -> tuple:
+    listed = tuple(m.strip() for m in os.getenv(name, "").split(",") if m.strip())
+    return listed or default
+
 
 @dataclass(frozen=True)
 class AppConfig:
+    diagnostic_retention_days: int = field(default_factory=diagnostics.retention_days)
     anthropic_api_key: str = field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", ""))
     anthropic_model: str = field(
         default_factory=lambda: os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
@@ -174,6 +211,22 @@ class AppConfig:
         default_factory=lambda: os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_GEMINI_MODEL)
     gemini_base_url: str = field(
         default_factory=lambda: os.getenv("GEMINI_BASE_URL", "").strip() or DEFAULT_GEMINI_BASE_URL)
+    gemini_page_models: tuple = field(
+        default_factory=lambda: _models_from_env("GEMINI_PAGE_MODELS", DEFAULT_GEMINI_PAGE_MODELS))
+    gemini_quick_models: tuple = field(
+        default_factory=lambda: _models_from_env("GEMINI_QUICK_MODELS", DEFAULT_GEMINI_QUICK_MODELS))
+    # The same two ladders when Claude or OpenAI answers the forms (FORM_ANSWER_MODE=claude / openai), chosen
+    # on Settings. Empty means the provider's one model (ANTHROPIC_MODEL / OPENAI_MODEL).
+    claude_page_models: tuple = field(default_factory=lambda: _models_from_env("CLAUDE_PAGE_MODELS", ()))
+    claude_quick_models: tuple = field(default_factory=lambda: _models_from_env("CLAUDE_QUICK_MODELS", ()))
+    openai_page_models: tuple = field(default_factory=lambda: _models_from_env("OPENAI_PAGE_MODELS", ()))
+    openai_quick_models: tuple = field(default_factory=lambda: _models_from_env("OPENAI_QUICK_MODELS", ()))
+    openai_base_url: str = field(
+        default_factory=lambda: os.getenv("OPENAI_BASE_URL", "").strip() or "https://api.openai.com/v1")
+    # Who writes the resume and the cover letter, chosen on Settings, as "provider:model" (e.g.
+    # "gemini:gemini-3.5-flash"), and who writes them if that fails. Unset: Claude, then Gemini, then OpenAI.
+    resume_writer: str = field(default_factory=lambda: os.getenv("RESUME_WRITER", "").strip())
+    resume_writer_fallback: str = field(default_factory=lambda: os.getenv("RESUME_WRITER_FALLBACK", "").strip())
     # OpenAI API key for resume tailoring fallback (optional).
     openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", "").strip())
     openai_model: str = field(
@@ -253,6 +306,12 @@ class AppConfig:
     # correction at hand-over; "leave" leaves it for the owner. A value the
     # owner entered is never changed either way. See site_prefill_policy().
     site_prefill_policy: str = field(default_factory=lambda: site_prefill_policy())
+
+
+# Profile fields where an empty value is itself the answer -- there is none -- rather than "not stated yet".
+# A form's box for one of these is left blank; any other empty field is a question for the owner.
+BLANK_MEANS_NONE = frozenset({"middle_name", "preferred_name", "prefix", "security_clearance_level",
+                              "phone_home", "phone_work", "portfolio_url", "address_line2"})
 
 
 def get_user_profile() -> UserProfile:

@@ -1,0 +1,10 @@
+{
+  "id": "f114", "date": "2026-10-04", "site": "Local dashboard",
+  "class": "Application launches from stale deployment copies",
+  "symptom": "Applications launched from an old architecture directory after fixes were committed and tested in the reliability checkout.",
+  "root_cause": "Several independently started dashboards used their own working directories, and startup neither identified nor rejected an old loaded runtime.",
+  "why_tests_missed": "Dashboard tests covered routes and actions, not startup against an already running dashboard from a different or changed source tree.",
+  "fix": "Use one canonical entry point and port with a source-identity endpoint; startup reuses only the identical loaded checkout and refuses stale or unversioned servers.",
+  "tests": ["tests/test_runtime_identity.py::test_launcher_refuses_a_different_or_stale_runtime", "tests/test_runtime_identity.py::test_launcher_refuses_an_unversioned_old_dashboard", "tests/test_runtime_identity.py::test_launcher_reuses_only_the_same_loaded_runtime"],
+  "prevention": "Verify runtime identity after deployment and redirect legacy desktop entry points to the corrected canonical dashboard."
+}

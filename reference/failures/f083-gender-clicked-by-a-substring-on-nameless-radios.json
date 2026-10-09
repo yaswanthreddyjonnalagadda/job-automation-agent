@@ -1,0 +1,12 @@
+{
+  "id": "f083",
+  "date": "2026-09-30",
+  "class": "A self-identification answer clicked by a loose text match on nameless choices",
+  "symptom": "Meta, 30 September: the owner's gender is Male; the form showed Female selected.",
+  "site": "Meta careers; any form that draws a radio and then its word in a separate box",
+  "root_cause": "Meta draws each choice as 'radio' followed by 'generic: Male'. parse_snapshot named a nameless radio only from a following 'text' line, so all three were nameless ('No choice matching Male among [\"\", \"\", \"\"]'). The fallback then clicked the first <label> whose text contained the answer -- a case-insensitive substring ('Male' is inside 'Female'), which can also be a label around the whole group, clicked in its middle.",
+  "why_tests_missed": "Radio tests had labelled inputs, or text lines after the radio; none drew the word in a generic box, and none had 'Male' and 'Female' side by side under a substring fallback.",
+  "fix": "parse_snapshot names a nameless radio/checkbox from the generic right after it at its own level; the fallback clicks only a label whose whole text is the answer.",
+  "tests": ["replay_guard.py"],
+  "prevention": "Never pick a choice by substring ('male' is in 'female', 'Virginia' in 'West Virginia'); read a control's own label from the page's structure before any fallback."
+}

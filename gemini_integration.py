@@ -9,6 +9,16 @@ GeminiClient is a ClaudeClient with a different model behind it: the same prompt
 that comes back, the same checks on it (a dropdown answer that is not one of the offered choices is dropped).
 Only the transport differs, so a prompt fixed once is fixed for both.
 
+Many models, one allowance each (29 September 2026). Google's free tier counts requests per model: one Flash
+model gives about 20 a day, and the agent used to ask only that one, so it ran out after two or three
+applications while the other models' allowances went unused. Now every call has a ladder of models
+(config.DEFAULT_GEMINI_PAGE_MODELS / DEFAULT_GEMINI_QUICK_MODELS): a page plan or an open answer starts with the
+strongest models; a single dropdown choice or short question starts with the Flash Lite models, which allow about
+500 a day. A model that says its day is spent rests until Google's midnight reset, and that is written to
+data/_model_quota.json (model_ladder.py), so the next application does not ask it again. A model Google does not know rests for a
+week. A per-minute limit moves straight on to the next model; only when every model is paused for the minute is
+the wait made. The same question asked twice in one run is answered once.
+
 What leaves the machine: with FORM_ANSWER_MODE=gemini every page the agent reads, with the facts it answers from
 (the profile and the resume text), goes to Google; the resume and the cover letter are written by Claude from the
 same facts. BEHAVIOUR.md says so. The key travels in a header, never in an address, and is never logged.
@@ -23,8 +33,10 @@ from typing import Any, Optional
 
 import requests
 
+import model_ladder
 from claude_integration import ClaudeClient, ClaudeIntegrationError
 from config import DEFAULT_GEMINI_BASE_URL, DEFAULT_GEMINI_MODEL
+from model_ladder import Failed, Missing, NoFreeTier, Paused, Spent
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +46,7 @@ ANSWERS = frozenset({"plan_page", "read_page", "choose_option", "answer_screenin
 DOCUMENTS = frozenset({"tailor_resume", "generate_cover_letter"})
 
 MIN_OUTPUT_TOKENS = 4_096       # Gemini counts its thinking in the limit: a 400-token answer would be cut off
+GEMMA_MAX_OUTPUT_TOKENS = 8_192
 MAX_RATE_LIMIT_WAIT = 65.0      # the longest wait for a per-minute limit that is worth making
 
 
@@ -51,41 +64,12 @@ class GeminiStatusError(GeminiError):
 
 
 class GeminiRateLimited(GeminiStatusError):
-    """A per-minute or daily limit: worth waiting for."""
+    """Every model is paused for the minute: worth waiting for."""
 
 
 class GeminiDailyLimit(GeminiStatusError):
-    """The key's allowance for the day is spent. Not worth waiting for: asking again only waits a minute
+    """Every model's allowance for the day is spent. Not worth waiting for: asking again only waits a minute
     and fails, three times over, on every question (KBI, 28 September: 3 minutes a question)."""
-
-
-# When the daily allowance was found spent. Calls in the next hour fail at once, without asking Google.
-_DAILY_SPENT_AT = 0.0
-DAILY_LIMIT_MEMORY = 3600.0
-
-
-def _daily_quota(reply) -> bool:
-    """A 429 whose quota is counted per day (Google's QuotaFailure names it, e.g. '...PerDay...')."""
-    try:
-        return "perday" in (reply.text or "").replace("_", "").lower()
-    except Exception:
-        return False
-
-
-def _limit_error(reply) -> GeminiStatusError:
-    global _DAILY_SPENT_AT
-    if _daily_quota(reply):
-        _DAILY_SPENT_AT = time.time()
-        return GeminiDailyLimit("the key's daily allowance is used up -- it comes back tomorrow "
-                                "(or raise the quota at aistudio.google.com)", 429)
-    time.sleep(_retry_delay(reply))       # the wait Google asked for, before the caller's own backoff
-    return GeminiRateLimited("quota or per-minute limit reached (wait, or check the key's quota "
-                             "at aistudio.google.com)", 429)
-
-
-def _refuse_if_daily_limit_spent() -> None:
-    if _DAILY_SPENT_AT and time.time() - _DAILY_SPENT_AT < DAILY_LIMIT_MEMORY:
-        raise GeminiDailyLimit("the key's daily allowance is used up -- not asking again this hour", 429)
 
 
 class GeminiConnectionError(GeminiError):
@@ -97,6 +81,45 @@ class GeminiTimeout(GeminiConnectionError):
 
 
 _KEY_CHARACTERS = re.compile(r"[A-Za-z0-9._-]+")
+
+
+# --- which models ------------------------------------------------------------------------------------------
+
+_resting = model_ladder.resting
+_pacific = model_ladder._pacific
+next_reset = model_ladder.next_reset
+
+
+def models_for(config: Any, tier: str) -> list[str]:
+    """The owner's Gemini ladder for one kind of call. A config without ladders (older settings) has one model."""
+    return model_ladder.ladder_for(config, "gemini", tier) or [DEFAULT_GEMINI_MODEL]
+
+
+def usage_today(config: Any) -> list[dict]:
+    """Each Gemini model the agent may use, with today's calls and whether it is resting -- for the dashboard."""
+    page, quick = models_for(config, "page"), models_for(config, "quick")
+    rows = model_ladder.usage(page + quick)
+    for row in rows:
+        row["page"], row["quick"] = row["model"] in page, row["model"] in quick
+    return rows
+
+
+# --- reading Google's replies --------------------------------------------------------------------------------
+
+def _no_free_tier(reply) -> bool:
+    """A 429 saying the limit itself is 0: the model is not on this key's free tier at all."""
+    try:
+        return bool(re.search(r"limit:\s*0\b", reply.text or ""))
+    except Exception:
+        return False
+
+
+def _daily_quota(reply) -> bool:
+    """A 429 whose quota is counted per day (Google's QuotaFailure names it, e.g. '...PerDay...')."""
+    try:
+        return "perday" in (reply.text or "").replace("_", "").lower()
+    except Exception:
+        return False
 
 
 def key_problem(key: str) -> Optional[str]:
@@ -169,47 +192,76 @@ def _as_reply(data: dict) -> SimpleNamespace:
     return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)], stop_reason=finish)
 
 
-class _Messages:
-    """`client.messages.create(...)` as ClaudeClient calls it, answered by Gemini."""
+def _payload(model: str, system: str, messages: list[dict], max_tokens: int, json_reply: bool) -> dict:
+    contents = [{"role": "model" if m.get("role") == "assistant" else "user", "parts": _parts(m["content"])}
+                for m in messages]
+    settings: dict[str, Any] = {"temperature": 0, "maxOutputTokens": max(int(max_tokens), MIN_OUTPUT_TOKENS)}
+    if model.startswith("gemma"):
+        # Gemma takes no separate instructions and no JSON switch: the instructions lead the message, and
+        # the JSON is read out of the text as it is for every model.
+        if system and contents:
+            contents[0]["parts"].insert(0, {"text": system + "\n\n"})
+        settings["maxOutputTokens"] = min(settings["maxOutputTokens"], GEMMA_MAX_OUTPUT_TOKENS)
+        return {"contents": contents, "generationConfig": settings}
+    if json_reply:
+        settings["responseMimeType"] = "application/json"
+    return {"systemInstruction": {"parts": [{"text": system}]}, "contents": contents, "generationConfig": settings}
 
-    def __init__(self, config: Any):
+
+class _Messages:
+    """`client.messages.create(...)` as ClaudeClient calls it, answered by the first Gemini model able to.
+
+    `model` is ignored: the owner's ladder for the current tier decides. json_reply=False is for the
+    documents, which come back as prose."""
+
+    def __init__(self, config: Any, json_reply: bool = True):
         self._config = config
+        self._json_reply = json_reply
+        self.tier = "page"
 
     def create(self, *, model: str, max_tokens: int, system: str, messages: list[dict],
                timeout: Optional[float] = None, **_ignored: Any) -> SimpleNamespace:
-        _refuse_if_daily_limit_spent()
         key = str(getattr(self._config, "gemini_api_key", "") or "")
         base = str(getattr(self._config, "gemini_base_url", "") or DEFAULT_GEMINI_BASE_URL).rstrip("/")
-        payload = {
-            "systemInstruction": {"parts": [{"text": system}]},
-            "contents": [{"role": "model" if m.get("role") == "assistant" else "user",
-                          "parts": _parts(m["content"])} for m in messages],
-            "generationConfig": {"temperature": 0, "maxOutputTokens": max(int(max_tokens), MIN_OUTPUT_TOKENS),
-                                 "responseMimeType": "application/json"},
-        }
-        try:
-            reply = requests.post(f"{base}/models/{model}:generateContent", json=payload,
-                                  headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-                                  timeout=timeout)
-        except requests.exceptions.Timeout:
-            raise GeminiTimeout("Gemini did not answer in time") from None
-        except requests.exceptions.RequestException as exc:
-            raise GeminiConnectionError(f"could not reach Gemini ({type(exc).__name__})") from None
 
-        if reply.status_code == 429:
-            raise _limit_error(reply)
-        if reply.status_code >= 500:
-            raise GeminiConnectionError(f"Gemini is busy or down ({reply.status_code})")
-        if reply.status_code >= 400:
-            message = _scrub(_google_message(reply), key)
-            if reply.status_code == 404:        # a model Google has retired (gemini-2.5-flash, for new keys)
-                message += " -- set GEMINI_MODEL in .env to a model this key can use"
-            raise GeminiStatusError(message, reply.status_code)
-        try:
-            data = reply.json()
-        except ValueError:
-            raise GeminiConnectionError("Gemini sent an answer that could not be read") from None
-        return _as_reply(data)
+        def send(name: str) -> SimpleNamespace:
+            try:
+                reply = requests.post(f"{base}/models/{name}:generateContent",
+                                      json=_payload(name, system, messages, max_tokens, self._json_reply),
+                                      headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+                                      timeout=timeout)
+            except requests.exceptions.Timeout:
+                raise Failed(GeminiTimeout("Gemini did not answer in time")) from None
+            except requests.exceptions.RequestException as exc:
+                raise Failed(GeminiConnectionError(f"could not reach Gemini ({type(exc).__name__})")) from None
+            if reply.status_code == 429:
+                if _no_free_tier(reply):
+                    raise NoFreeTier(GeminiStatusError(f"{name} has no free allowance on this key", 429))
+                if _daily_quota(reply):
+                    raise Spent(GeminiDailyLimit("the daily allowance is used up", 429))
+                raise Paused(GeminiRateLimited("per-minute limit reached", 429), wait=_retry_delay(reply))
+            if reply.status_code >= 500:
+                raise Failed(GeminiConnectionError(f"Gemini is busy or down ({reply.status_code})"))
+            if reply.status_code >= 400:
+                message = _scrub(_google_message(reply), key)
+                if reply.status_code == 404:        # a model Google has retired, or never gave this key
+                    raise Missing(GeminiStatusError(
+                        message + f" -- {name} is not available to this key; the next model is used "
+                        "(choose the models on Settings, or GEMINI_MODEL / GEMINI_PAGE_MODELS in .env)", 404))
+                raise Failed(GeminiStatusError(message, reply.status_code))
+            try:
+                data = reply.json()
+            except ValueError:
+                raise Failed(GeminiConnectionError("Gemini sent an answer that could not be read")) from None
+            return _as_reply(data)
+
+        return model_ladder.climb(
+            models_for(self._config, self.tier), send, label="GEMINI", tier=self.tier,
+            all_spent=lambda: GeminiDailyLimit(
+                "every model's daily allowance is used up -- they come back at midnight Pacific time "
+                "(or add billing at aistudio.google.com)", 429),
+            all_paused=lambda: GeminiRateLimited(
+                "every model is at its per-minute limit (waited, asking again)", 429))
 
 
 class GeminiClient(ClaudeClient):
@@ -224,10 +276,14 @@ class GeminiClient(ClaudeClient):
     def __init__(self, config: Any):
         self._config = config
         self._client = SimpleNamespace(messages=_Messages(config))
+        self._remembered: dict = {}
 
     @property
     def _model(self) -> str:
         return str(getattr(self._config, "gemini_model", "") or DEFAULT_GEMINI_MODEL)
+
+
+model_ladder.put_on_ladders(GeminiClient, ClaudeClient)
 
 
 def _refuse(name: str):
@@ -241,56 +297,11 @@ for _name in DOCUMENTS:                 # the resume and the cover letter never 
     setattr(GeminiClient, _name, _refuse(_name))
 
 
-class _MessagesText(_Messages):
-    """Like _Messages but without the JSON responseMimeType constraint.
-
-    ClaudeClient's document methods (tailor_resume, generate_cover_letter, …)
-    return prose, not structured JSON.  Forcing Gemini into JSON mode breaks
-    them, so GeminiDocumentClient uses this transport instead.
-    """
-
-    def create(self, *, model: str, max_tokens: int, system: str, messages: list[dict],
-               timeout: Optional[float] = None, **_ignored: Any) -> SimpleNamespace:
-        _refuse_if_daily_limit_spent()
-        key = str(getattr(self._config, "gemini_api_key", "") or "")
-        base = str(getattr(self._config, "gemini_base_url", "") or DEFAULT_GEMINI_BASE_URL).rstrip("/")
-        payload = {
-            "systemInstruction": {"parts": [{"text": system}]},
-            "contents": [{"role": "model" if m.get("role") == "assistant" else "user",
-                          "parts": _parts(m["content"])} for m in messages],
-            "generationConfig": {"temperature": 0, "maxOutputTokens": max(int(max_tokens), MIN_OUTPUT_TOKENS)},
-        }
-        try:
-            reply = requests.post(f"{base}/models/{model}:generateContent", json=payload,
-                                  headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-                                  timeout=timeout)
-        except requests.exceptions.Timeout:
-            raise GeminiTimeout("Gemini did not answer in time") from None
-        except requests.exceptions.RequestException as exc:
-            raise GeminiConnectionError(f"could not reach Gemini ({type(exc).__name__})") from None
-
-        if reply.status_code == 429:
-            raise _limit_error(reply)
-        if reply.status_code >= 500:
-            raise GeminiConnectionError(f"Gemini is busy or down ({reply.status_code})")
-        if reply.status_code >= 400:
-            message = _scrub(_google_message(reply), key)
-            if reply.status_code == 404:
-                message += " -- set GEMINI_MODEL in .env to a model this key can use"
-            raise GeminiStatusError(message, reply.status_code)
-        try:
-            data = reply.json()
-        except ValueError:
-            raise GeminiConnectionError("Gemini sent an answer that could not be read") from None
-        return _as_reply(data)
-
-
 class GeminiDocumentClient(GeminiClient):
     """Gemini client allowed to write documents (resume, cover letter).
 
-    Used only as a *fallback* when Claude is unavailable.  It uses plain-text
-    mode (no JSON constraint) because the document prompts return prose, not
-    structured data.
+    Used only as a *fallback* when Claude is unavailable.  It asks for prose (no JSON constraint) because the
+    document prompts return prose, not structured data, and climbs the page ladder.
 
     GeminiClient has the DOCUMENTS methods replaced with _refuse stubs via
     setattr, so subclasses inherit them.  We restore the original ClaudeClient
@@ -304,11 +315,11 @@ class GeminiDocumentClient(GeminiClient):
 
     def __init__(self, config: Any):
         self._config = config
-        self._client = SimpleNamespace(messages=_MessagesText(config))
+        self._client = SimpleNamespace(messages=_Messages(config, json_reply=False))
+        self._remembered = {}
 
     def _call(self, *, system: str, user_message: str, max_tokens: int = 2000) -> str:
         """Single-attempt call -- fails fast so the provider fallback loop moves on."""
-        from claude_integration import ClaudeIntegrationError
         try:
             response = self._client.messages.create(
                 model=self._model,
@@ -331,9 +342,8 @@ class GeminiDocumentClient(GeminiClient):
 # Restore the original ClaudeClient implementations for every DOCUMENTS method:
 # setattr on the parent class makes those _refuse stubs inherited, so we pin
 # the real implementations directly onto this subclass.
-from claude_integration import ClaudeClient as _ClaudeClient
 for _name in DOCUMENTS:
-    setattr(GeminiDocumentClient, _name, getattr(_ClaudeClient, _name))
+    setattr(GeminiDocumentClient, _name, getattr(ClaudeClient, _name))
 
 
 class GeminiBrain:
@@ -350,7 +360,9 @@ class GeminiBrain:
                                    "(make a key at aistudio.google.com)")
             problem = key_problem(config.gemini_api_key)
             if problem:
-                logger.warning("GEMINI: %s", problem)
+                logger.warning("GEMINI: check the bare API key for spaces or quotes; "
+                               "expected AIza with 39 characters or the supported AQ. format. "
+                               "Copy the complete key from aistudio.google.com.")
             answers = GeminiClient(config)
         self._answers = answers
         self._documents = documents if documents is not None else ClaudeClient(config)

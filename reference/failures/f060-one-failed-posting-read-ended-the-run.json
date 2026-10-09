@@ -1,0 +1,16 @@
+{
+  "id": "f060",
+  "date": "2026-09-29",
+  "class": "One failed read of a flaky source ended the whole run, with the answer already saved from before",
+  "symptom": "Secunetics (BambooHR), 29 September 16:39: the run stopped at 'Could not read a job description' and nothing opened. The same posting had been read at 14:38 and saved; read again a few minutes later it came back in 6 seconds.",
+  "site": "BambooHR (any posting built by script: Dayforce, BambooHR ...)",
+  "root_cause": "run_one asked resolve_job once; a script-built page that rendered empty that one time returned nothing, and nothing else was tried -- not a second read, not the copy an earlier run saved in data/_job_*.json.",
+  "why_tests_missed": "resolve_job was tested for pages it can and cannot read, never for a page that fails once and then works, nor for the saved copy.",
+  "fix": "apply.read_job reads the posting a second time when the first read finds nothing, then takes the copy an earlier run saved of the same posting (matched with safety.canonical_url, so tracking parameters do not matter). Only a posting never read before stops the run.",
+  "tests": [
+    "tests/test_posting_read_again.py::test_a_second_read_is_tried",
+    "tests/test_posting_read_again.py::test_the_copy_saved_by_an_earlier_run_is_used_when_the_page_will_not_load",
+    "tests/test_posting_read_again.py::test_a_posting_never_read_still_stops_the_run"
+  ],
+  "prevention": "Every network read on the way into a run is retried once and falls back to the last good copy it already holds; a single empty answer from a script-built page is not a fact."
+}

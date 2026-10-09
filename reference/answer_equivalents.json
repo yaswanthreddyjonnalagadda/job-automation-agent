@@ -1,0 +1,47 @@
+{
+  "_about": "Words that mean the same answer on different portals (reference/ats_fields/README.md). Each group is one answer; a list offering any member of the answer's group takes that member. Places are not here: they come from geo.json through geo_reference.py.",
+  "degree_level": [
+    ["Master", "Master's", "Masters", "Master's Degree", "Masters Degree", "Master of Science", "Masters of Science", "Master's of Science", "MS", "M.S.", "MSc", "M.Sc.", "Master of Engineering", "M.Eng", "MEng", "Graduate Degree"],
+    ["Bachelor", "Bachelor's", "Bachelors", "Bachelor's Degree", "Bachelors Degree", "Bachelor of Science", "Bachelor of Technology", "Bachelor of Engineering", "BS", "B.S.", "BSc", "B.Sc.", "BTech", "B.Tech", "B.Tech.", "BE", "B.E.", "Undergraduate Degree"],
+    ["Associate", "Associate's", "Associates", "Associate's Degree", "Associate Degree"],
+    ["Doctorate", "Ph.D.", "PhD", "Doctoral Degree", "Doctor of Philosophy"],
+    ["High School", "High School Diploma", "GED", "Secondary School"]
+  ],
+  "language_level": [
+    ["Native", "Native Speaker", "Native or Bilingual", "Mother Tongue", "Bilingual"],
+    ["Fluent", "Advanced", "Full Professional Proficiency", "Professional Working Proficiency", "Proficient"],
+    ["Intermediate", "Conversational", "Limited Working Proficiency"],
+    ["Beginner", "Basic", "Elementary", "Elementary Proficiency"]
+  ],
+  "degree_status": [
+    ["Graduated", "Completed", "Degree Received", "Degree Awarded"],
+    ["Now attending", "Currently Attending", "In Progress", "Attending"],
+    ["Incomplete", "Did Not Complete", "Not Completed", "Withdrawn"]
+  ],
+  "months": [
+    ["January", "Jan", "01", "1"], ["February", "Feb", "02", "2"], ["March", "Mar", "03", "3"],
+    ["April", "Apr", "04", "4"], ["May", "05", "5"], ["June", "Jun", "06", "6"], ["July", "Jul", "07", "7"],
+    ["August", "Aug", "08", "8"], ["September", "Sep", "Sept", "09", "9"], ["October", "Oct", "10"],
+    ["November", "Nov", "11"], ["December", "Dec", "12"]
+  ],
+  "gender": [
+    ["Male", "Man"],
+    ["Female", "Woman"]
+  ],
+  "veteran_status": [
+    ["I am not a veteran", "I am not a protected veteran", "Not a veteran", "Not a protected veteran", "I am not a veteran or protected veteran"]
+  ],
+  "_broader_about": "An answer a list does not offer is looked for as its broader term: 'South Asian' is taken as 'Asian' on a form that offers only 'Asian'. Never the other way: 'Asian' never picks one of East, South or Southeast Asian.",
+  "broader": {
+    "South Asian": "Asian",
+    "East Asian": "Asian",
+    "Southeast Asian": "Asian",
+    "Central Asian": "Asian",
+    "Asian Indian": "Asian",
+    "Electrical and Electronics Engineering": "Electrical Engineering",
+    "Electrical & Electronics Engineering": "Electrical Engineering"
+  },
+  "decline_to_answer": [
+    ["I prefer not to answer", "Prefer not to answer", "I prefer not to answer this question", "I prefer not to say", "Prefer not to say", "I don't wish to answer", "I do not wish to answer", "I don't want to answer", "Decline to answer", "I decline to answer", "Decline to self-identify", "I decline to self-identify", "Decline to self identify", "Decline to state", "I choose not to disclose", "Choose not to disclose", "I choose not to answer", "Not specified", "I'd rather not say", "Rather not say"]
+  ]
+}

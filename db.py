@@ -36,6 +36,10 @@ import psycopg
 from psycopg.types.json import Json
 from psycopg.rows import dict_row
 
+import application_status
+from jd_analyzer import is_tracking_query_param, submission_identity_url
+
+import diagnostics
 logger = logging.getLogger(__name__)
 
 
@@ -136,8 +140,7 @@ CREATE INDEX IF NOT EXISTS idx_learned_form_recipes_host
 def _strip_tracking(url: str) -> str:
     """A posting URL without tracking parameters or a trailing slash."""
     parsed = urlparse((url or "").strip().lower())
-    query = [(k, v) for k, v in parse_qsl(parsed.query) if not k.startswith(("utm_", "gh_src"))
-             and k not in {"src", "source", "ref", "referrer", "trackingid"}]
+    query = sorted((k, v) for k, v in parse_qsl(parsed.query) if not is_tracking_query_param(k))
     return urlunparse(parsed._replace(query=urlencode(query), path=parsed.path.rstrip("/"), fragment=""))
 
 
@@ -202,6 +205,11 @@ class PostgresTracker:
         """Appends to an application's history: a status change, an error, a
         screenshot/HTML snapshot, or an auto-submit decision. This is the audit
         trail the dashboard reads."""
+        kind = kind if kind in diagnostics.EVENT_KINDS else "other"
+        message = "event: " + kind
+        payload = diagnostics.sanitize_event_payload(payload)
+        screenshot_path = screenshot_path if screenshot_path and diagnostics.is_safe_artifact(Path(screenshot_path)) else ""
+        html_path = html_path if html_path and diagnostics.is_safe_artifact(Path(html_path)) else ""
         with self._connect() as conn:
             conn.execute(self._EVENTS_DDL)
             app = conn.execute("SELECT id FROM applications WHERE dedup_key = %s", (dedup_key,)).fetchone()
@@ -215,6 +223,43 @@ class PostgresTracker:
                  html_path or None, Json(payload) if payload is not None else None),
             )
 
+    def _local_submission_tracker(self):
+        from config import DB_PATH
+        from job_tracker import JobTracker
+        return JobTracker(DB_PATH)
+
+    def get_submission_effect_state(self, dedup_key: str) -> Optional[str]:
+        return self._local_submission_tracker().get_submission_effect_state(dedup_key)
+
+    def begin_submission_dispatch(self, dedup_key: str, aliases: tuple[str, ...] | list[str] = ()) -> str:
+        return self._local_submission_tracker().begin_submission_dispatch(dedup_key, aliases)
+
+    def finish_submission_effect(
+        self, dedup_key: str, state: str, *, reconciled: bool = False,
+        evidence_kind: Optional[str] = None,
+    ) -> None:
+        return self._local_submission_tracker().finish_submission_effect(
+            dedup_key, state, reconciled=reconciled, evidence_kind=evidence_kind
+        )
+
+    def record_submission_safety_event(self, dedup_key: str, kind: str, payload: Optional[dict] = None) -> None:
+        return self._local_submission_tracker().record_submission_safety_event(dedup_key, kind, payload)
+
+    def submission_safety_events(self, dedup_key: str) -> list[dict]:
+        return self._local_submission_tracker().submission_safety_events(dedup_key)
+
+    def write_checkpoint(self, application_key: str, payload: dict) -> None:
+        # Same residual assumption as the submission-effect state above: durable checkpoint
+        # state always lives in one local SQLite file, never in Postgres, regardless of which
+        # tracker backend is configured (Phase 0-B3; documented honestly rather than silently).
+        self._local_submission_tracker().write_checkpoint(application_key, payload)
+
+    def read_checkpoint(self, application_key: str) -> Optional[dict]:
+        return self._local_submission_tracker().read_checkpoint(application_key)
+
+    def read_checkpoint_by_dedup_key(self, dedup_key: str) -> Optional[dict]:
+        return self._local_submission_tracker().read_checkpoint_by_dedup_key(dedup_key)
+
     def events(self, dedup_key: str, limit: int = 100) -> list[dict]:
         with self._connect() as conn:
             conn.execute(self._EVENTS_DDL)
@@ -223,7 +268,7 @@ class PostgresTracker:
                    WHERE a.dedup_key = %s ORDER BY e.created_at DESC LIMIT %s""",
                 (dedup_key, limit),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [diagnostics.sanitize_event(dict(r)) for r in rows]
 
     def document_matches(self, dedup_key: str, kind: str, file_path) -> bool:
         """True when the local file is byte-for-byte a document stored for this
@@ -309,6 +354,22 @@ class PostgresTracker:
                     and (record.title or "").strip().lower() == title.strip().lower():
                 return record
         return None
+
+    def submission_keys_for_url(self, url: str) -> list[str]:
+        """Existing application keys for canonical URL-equivalent postings."""
+        identity = submission_identity_url(url)
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT dedup_key, url FROM applications WHERE url IS NOT NULL AND url != ''"
+            ).fetchall()
+        matches = []
+        for row in rows:
+            try:
+                if submission_identity_url(row["url"]) == identity:
+                    matches.append(row["dedup_key"])
+            except ValueError:
+                continue
+        return matches
 
     def create(
         self,
@@ -400,7 +461,13 @@ class PostgresTracker:
             conn.execute("DELETE FROM applications WHERE id = %s", (application_id,))
         return True
 
-    def update_status(self, dedup_key: str, status: str, notes: Optional[str] = None) -> None:
+    def update_status(self, dedup_key: str, status: str, notes: Optional[str] = None,
+                      by_owner: bool = False) -> None:
+        current = self.get(dedup_key)
+        if current is not None and not application_status.may_replace(current.status, status, by_owner):
+            logger.info("KEPT: %s stays %s -- a run does not move an application that has gone back to %s",
+                        dedup_key[:12], current.status, status)
+            return
         with self._connect() as conn:
             conn.execute(
                 """
@@ -500,6 +567,27 @@ class PostgresTracker:
         logger.info("Stored %s (%d bytes) for %s", kind, len(content), dedup_key[:12])
         return row["id"]
 
+
+    def documents_for(self, application_id: int) -> list[dict]:
+        """An application's stored documents, newest first (without their bytes), for the dashboard."""
+        with self._connect() as conn:
+            rows = conn.execute("SELECT id, kind, filename, byte_size, created_at FROM documents "
+                                "WHERE application_id = %s ORDER BY created_at DESC", (application_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def document(self, document_id: int) -> Optional[dict]:
+        """One stored document: filename, content_type and its bytes."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT filename, content_type, content FROM documents WHERE id = %s",
+                               (document_id,)).fetchone()
+        return dict(row) if row else None
+
+    def answers_for(self, application_id: int) -> list[dict]:
+        """What was answered on an application's forms, by question, for the dashboard."""
+        with self._connect() as conn:
+            rows = conn.execute("SELECT question, answer, host, answered_by FROM form_answers "
+                                "WHERE application_id = %s ORDER BY question", (application_id,)).fetchall()
+        return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
     # Form answers -- the reusable memory of what was answered where

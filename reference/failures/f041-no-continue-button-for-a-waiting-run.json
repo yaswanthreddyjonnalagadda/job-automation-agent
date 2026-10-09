@@ -1,0 +1,16 @@
+{
+  "id": "f041",
+  "date": "2026-09-29",
+  "class": "Two parts that meet through a file, each waiting for the other to make it",
+  "symptom": "Rackspace: the run stopped for the owner, and the dashboard showed no Continue button; Resume refused because the run was still going, so the owner had no way to let it carry on.",
+  "site": "The dashboard",
+  "root_cause": "The agent waits for data/_signal_<run>.txt to appear, and pressing Continue is what writes it; the dashboard showed its 'Waiting for a decision' card only for signal files that already existed. So the button appeared only after the answer it sends had been sent. Nothing marked a run as waiting.",
+  "why_tests_missed": "No test put a run into the wait and looked at the dashboard at the same time; the signal tests wrote the file directly.",
+  "fix": "wait_for_signal() writes data/_waiting_<run>.txt while it waits and removes it when the wait ends; web_ui.waiting_runs() lists those notes, labelled with the job's title and company, each with Continue (writing the signal file), Reload agent code, Skip and Close browser.",
+  "tests": [
+    "tests/test_continue_button.py",
+    "tests/test_continue_button.py::test_waiting_shows_the_button_and_continue_ends_the_wait",
+    "tests/test_continue_button.py::test_the_card_on_the_page_carries_a_continue_button"
+  ],
+  "prevention": "When two processes hand over through a file, the waiting side announces that it waits; test the hand-over end to end, the waiting side and the UI together."
+}

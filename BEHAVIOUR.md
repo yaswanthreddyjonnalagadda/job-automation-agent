@@ -1,9 +1,9 @@
 # What the assistant does, and what it never does
 
 The agent prepares a job application end to end and then **stops before the
-final Submit button**. Clicking Submit is the user's — unless the user turns on
-verified auto-submit (below), which is off by default and refuses on any
-uncertainty.
+final Submit button**. Only the verified auto-submit gateway may click it,
+which is off by default and refuses on any uncertainty. Otherwise the visible
+browser is handed to the user, who can submit manually.
 
 ## What it may do
 
@@ -16,7 +16,7 @@ the result, and hand the finished application over.
 
 | Rule | Where it is enforced | Test |
 |---|---|---|
-| Never clicks Submit | `browser_automation.py` has no `click_submit`; `refuse_to_submit()` answers a `submit` signal; wizard navigation skips any submit-labelled button; the web UI has no Submit button | `test_the_agent_has_no_way_to_click_submit`, `test_wizard_navigation_never_presses_a_submit_button` |
+| Ordinary automation cannot click a final Submit | `SubmissionGuardV0` intercepts recognized submit-capable clicks, forced/event/JavaScript clicks, Enter, and form submission; structurally associated submit buttons are also held unless clearly labeled Next/Continue. Only the verified gateway can authorize an automated final click. Handoff parks automation and records it before the guard is relaxed; failed persistence keeps the guard armed | `tests/test_submission_firewall.py`, `tests/test_submission_effect_state.py`, `test_the_agent_has_no_way_to_click_submit`, `test_wizard_navigation_never_presses_a_submit_button` |
 | Signs attestations and e-signatures only when the owner allows it (`sign_attestations` in the profile; the owner's decision of 2026-09-17), last on the page and only when every other answer came from the profile | `safety.is_attestation()` finds them; `page_agent.PageAgent.sign()` signs or leaves them; pending ones are listed for the user | `test_signature_fields_are_left_for_the_user`, `test_attestation_checkboxes_are_left_for_the_user` |
 | Never guesses | answers come from `UserProfile` or the posting; an empty profile field means the question is left for the user; a dropdown answer must match an offered option, found in the whole list (a long list is scrolled through, not judged by its first rows), and counts as given only once the list shows it | `test_people_managed_is_left_blank_when_the_profile_is_silent`, `test_field_of_study_is_never_swapped_for_another_subject`, `test_the_country_far_down_the_list_is_the_one_chosen`, `test_an_answer_the_list_does_not_offer_is_left_for_the_owner` |
 | Never overwrites the user | `safety.AgentValues` records what the agent wrote and `provenance.py` observes what a person typed or chose; a value the owner entered is never changed. A value the *site* filled in is left alone too, except the owner's own details (name, country, state, city, and the sponsorship/authorization answers) where they contradict the profile -- see "Values the site filled in" below. `safety.may_overrule()` is the only place this is decided | `test_a_users_answer_is_never_overwritten`, `test_site_prefilled_values_count_as_the_users`, `test_the_owners_own_choice_is_never_overwritten`, `test_a_country_the_owner_typed_is_never_corrected`, `test_one_rule_decides_who_may_be_overruled` |
@@ -25,6 +25,23 @@ the result, and hand the finished application over.
 | Never bypasses a CAPTCHA | `safety.captcha_visible()` detects one, stops the sign-in/account step, and reports it | `test_captcha_is_detected_not_solved` |
 | Never submits duplicates | `apply.already_submitted()` and `db.find_submitted()` match by URL (ignoring tracking parameters) and by company+title | `test_a_previously_submitted_job_is_refused` |
 | Never claims unsupported facts | `safety.unsupported_claims()` rejects a tailored resume or letter that invents a figure, date or certification | `test_invented_numbers_and_certifications_are_caught` |
+
+## Your profile comes first
+
+Anyone can run the agent on their own computer (the owner's decision of 29 September
+2026). Until a profile is saved, the dashboard opens **Set up your profile** instead
+of the applications list: upload a resume, check the profile drafted from it, save.
+The draft takes only what the resume plainly says (name, email, phone, LinkedIn, city,
+years); with an AI key it also copies the work history and education, told to copy
+and never infer. Nothing is guessed, and first, middle and last names are shown split
+for you to correct.
+
+Every application then answers in this order: **your profile, your saved answers, the
+AI, and only then you.** A blank box in the profile means "ask" -- the agent never
+fills it with a guess. Any question it has to leave for you appears under **Your saved
+answers** on the dashboard; answer it once there and it is used on every form that
+asks it. Resumes and cover letters are named after you (`Jane_Doe_Resume_Acme.pdf`).
+Everything stays on your computer, in `data/`.
 
 ## What it learns from you
 
@@ -36,6 +53,123 @@ An answer you typed outranks one the agent drafted, and a remembered answer is
 only reused when it is among the options the new form actually offers. What
 the site filled in by itself (a resume parser's guess) is not learned as
 yours.
+
+A general question you answer in a few words -- "Are you willing to work night
+shifts?", "What is your notice period?" -- also joins **Your saved answers**, so every
+employer's form gets it and you can see and change it on the dashboard. What is kept
+there: not an answer about the one employer ("Have you worked for Acme?", "for us",
+"here", referrals), not an essay, not a legal, visa or work-authorization answer (those
+come from your profile every time), not a signed statement, and never over an answer
+you saved yourself. Yes and No answers are learned too; they used to be skipped.
+
+"Have you worked at <company>?" -- however it is worded: as an employee, a
+contractor, an intern or a consultant, "provided services to", "a former employee of",
+"for us", "here" -- is answered from your own work history: **No**, unless that company
+is one you worked for, which your profile and your resume say (then **Yes**). A
+question that names no one in particular ("a government agency", "a competitor") is
+not answered this way. An answer you saved yourself still comes first.
+
+When the agent stops in the middle and you answer on the form, then press Continue,
+each answer you gave is kept at once -- not only at the Review page -- under the same
+rules: a general one joins **Your saved answers**, one about that employer is kept for
+that employer, and legal, visa and signed answers are not kept. It then leaves the
+dashboard's "Waiting for your answer" list.
+
+### Addresses, jobs and degrees (30 September, UKG)
+
+- Your country is chosen first, then your state, then your city, and only then the
+  street and ZIP: a form that redraws its address block when the state is chosen
+  cleared the ZIP and street typed before it.
+- A job's or degree's "From month" / "To year" box gets just that part of its date, and
+  a month list takes it in its own words ("Feb", "02"): the whole "February 2025" matched
+  no month and the box was left on "Choose...".
+- A degree already on the page is recognised by its school as well as its degree
+  ("Master of Science (MS)" at your school is your master's), and "Add Education" /
+  "Add Experience" is pressed only while you have more degrees or jobs than the page
+  shows -- it had added an empty entry and filled it with the same master's again.
+- An optional box in a job or degree entry that your records do not fill (an
+  education "Description") is left empty rather than written up by the AI.
+- While the agent is working, the dashboard says so; an application appears under
+  "Needs you", with Continue, Resume, Skip, Close browser and Reload, only once the
+  agent has stopped for you.
+- A degree's From and To come from your profile's education dates when your work
+  history holds only its end; you are not asked for dates your profile already has.
+- A date in a job or degree entry that contradicts that entry's own record (the site's
+  resume import put "Sep 2026" as a finished job's end) is put right by the agent, and
+  the end of the job you still have is emptied. Only dates: a school or degree name the
+  site spells another way is left as it is. A value you set yourself is never changed.
+- A box your profile says has no answer (no apartment or suite: Profile page, "Apartment
+  / suite / unit") stays empty, and is emptied if the AI wrote into it before.
+- A skills box that already holds tags (each with its own remove "x") counts as filled:
+  the agent does not type into it and does not stop for it.
+- "Are you currently in OPT / STEM OPT status?" is answered from the work authorization
+  your profile states (H-1B: No); with none stated, it is left for you.
+- A major the list does not offer is taken as its broader field ("Electrical and
+  Electronics Engineering" as "Electrical Engineering"), never the other way.
+- Once an application is under way, the agent never presses the site's own menu (its
+  header, navigation or footer: "Find Opportunities", "My Presence"). If the page falls
+  back to the job board, it returns to the job's own page and resumes the application
+  from there, instead of searching the board.
+
+### Tick boxes
+
+Your decision of 30 September: agreement and acknowledgement boxes are ticked ("I have
+read and agree", "I acknowledge", "By checking this box", terms and conditions, privacy
+notices, "I agree to sign electronically") -- a declaration only while "Sign 'I certify
+this is true' declarations for me" is on, the rest while "Accept privacy notices" is on.
+A box about text messages (SMS, text messages, WhatsApp) is never ticked, and one already
+ticked is cleared, unless your preferred contact is text. Any other tick box is ticked only
+by a yes or no, or by an answer that is its own words: the answer of the question beside
+it ("Male", a phone number) never ticks it -- UKG's "I decline to say" boxes were ticked
+that way. Your name, email, phone and address always come from your profile, over any
+saved answer, and are never kept as saved answers from a form.
+
+### Questions are recognised from data, and answered only from you
+
+Which fact a question asks for is recognised from `reference/concepts.json` as well
+as the built-in table, so a new wording of a known question is a line of data, not a
+change to the agent. The Profile page has fields for what forms ask and only you can
+say: preferred first name, gender identity, sexual orientation, transgender,
+pronouns, GPA, certifications, languages, and skill levels (1-5, for "rate your skill
+with ..."). A question about who you are is answered only from these, never by the AI;
+while a field is empty the question comes to you once, and your answer is kept. An
+empty middle or preferred name means you have none, and the box is left blank. A
+question for one part of a date ("Date available to start work: Month") gets that
+part. Nothing about you is written into the agent's code as a default any more
+(a job start of "February 2025", a graduation of "December 2022", "LinkedIn",
+"Email"): what your profile does not say is asked.
+
+### The answer bank: answered once, answered on every portal
+
+Before, an answer the agent (or the AI) gave was never used again, and one of yours
+only on the same site in nearly the same words -- so a question answered on a Workday
+form was a new question on Greenhouse. Now every question that was answered on an
+application **you sent** -- by the AI, or by the agent and read back on the page --
+and every answer **you** gave, anywhere, is kept in one answer bank
+(`data/_answer_bank.json`, on your computer only) and reused on every portal. It is
+rebuilt when a run starts and after each time you press Continue.
+
+It is asked **last**: your profile, your saved answers and your own earlier answers on
+that site always come first, so changing your profile is never hidden behind an old
+copy. It keeps only questions your profile cannot answer, and never: a declaration or
+signature, a legal, visa or sponsorship question, an essay, a question that names the
+employer, a box of one job or one degree ("Company", "School"), a date (a start date
+goes stale), a two-word label ("Month", "Location"), or what older runs recorded that
+was not an answer (a press such as "open it"). When a question has several answers,
+yours wins over the agent's and the newest over older ones. To stop an answer being
+reused, put its question under `forgotten` in that file.
+
+The answer keeps its meaning, not one portal's words: a Yes or No stays Yes or No
+("No, I do not have a disability" is kept as No), a choice as chosen, several ticks as
+a list. It goes into whatever the next form draws -- a text box, a list, a
+type-to-search list, Yes/No buttons, tick boxes -- through the same matcher as every
+other answer, so "Masters Degree" still finds "Master's".
+
+**Dates** go into every date box one way: in the format the box shows (a date picker,
+a month picker, "MM/DD/YYYY", "dd.mm.yyyy", "YYYY-MM-DD", "MM/YYYY"), whatever form the
+answer is in ("December 2022", "12/15/2022", "2022-12-15"). "Immediately", "2 weeks" or
+"30 days notice" are counted from today. An answer that is not a date is no longer
+written into a date box as today's date: the box is left for the AI or you.
 
 Fixed facts live in `config.py` (`UserProfile`) and are filled on every
 application without asking: citizenship, clearance, years of experience,
@@ -100,46 +234,112 @@ with no resume field is unaffected.
 
 ## Which model answers the form, and which writes the documents
 
-`FORM_ANSWER_MODE` decides who works out the answers on each application page:
+You make two separate choices on **Settings**, under "Which AI does what". They
+are separate because answering the forms takes many small requests on every
+application, while writing the resume takes a few large ones once per job; one
+never uses the other's models, so it cannot use up the other's allowance.
 
-* `profile` -- nobody: every answer comes from your saved profile and answer
-  library, and Claude only writes the documents;
-* `claude` -- Claude plans each page, through the Anthropic API or, with
-  `AGENT_BRAIN=session`, through the Claude Code session;
-* `gemini` -- Google's Gemini plans each page (your decision of 25 September
-  2026, after the Anthropic account reached its usage limit). `AGENT_BRAIN` is
-  not consulted.
+**1. Answering the forms** (`FORM_ANSWER_MODE`):
 
-Claude writes the resume and the cover letter first. When Claude cannot (its
-usage limit is reached, or it is down), the next writer with a key in `.env` is
-tried, in this order: Gemini (`GEMINI_API_KEY`), then OpenAI (`OPENAI_API_KEY`,
-model `OPENAI_MODEL`). Only when all of them fail is your generic resume attached,
-and the run's log says which one wrote it ("Tailored resume written ... via
-Gemini"). So when Claude is out of credit, your resume text and the job posting
-go to Google, or to OpenAI if you have set that key. Leave a key out of `.env` and
-that company is never sent it. Everything that answers a question goes to Gemini
-in `gemini` mode: planning a page, reading a screenshot, matching a dropdown
-choice, screening answers.
+* Profile only (`profile`) -- no AI: every answer comes from your saved profile
+  and saved answers;
+* Google Gemini (`gemini`), Anthropic Claude (`claude`) or OpenAI (`openai`) --
+  that provider reads each page and answers what your profile and saved answers
+  do not. With `claude`, `AGENT_BRAIN=session` still hands the pages to the
+  Claude Code session instead.
+
+For the provider you pick you choose its models, in order, in two lists: one
+for whole pages and written answers (stronger models do these better), one for
+quick choices and short questions (lighter models with bigger allowances are
+enough). The first in a list answers; when it runs out, the next takes over.
+The dropdowns list only models that write text (no embedding, voice, image or
+video models), as your key offers them -- the agent asks each provider, so a new
+model appears and a retired one disappears without a code change. Each shows
+whether it has been used today, is spent, or cannot be used with your key.
+
+**2. Writing the resume and cover letter** (`RESUME_WRITER`,
+`RESUME_WRITER_FALLBACK`): a first choice of provider and model, and one to use
+if the first cannot write it. With no choice, the providers with a key write it
+in the order Claude, Gemini, OpenAI. A choice whose key is missing is skipped
+and the log says so.
+
+Saved choices apply to the next application without restarting the dashboard:
+each run now starts from `.env` as it is, not as the dashboard read it when it
+started.
+
+A job gets one tailored resume. It is saved in the database the moment it is
+written, before the browser opens, so a run that fails or is stopped anywhere
+afterwards does not lose it: Resume, a retry and a restart all attach that same
+resume without asking any AI again ("REUSED_RESUME" in the log). Only when
+tailoring failed and your generic resume went out is tailoring tried again on
+the next attempt.
+
+The run's log says who wrote the resume ("Tailored resume written ... via Gemini
+(gemini-3.8-flash)"). Only when every writer you chose fails is your generic
+resume attached. Whichever writes it, what your resume does not show is taken out
+before it is sent. Only the providers you chose, and have a key for, are sent your
+resume and the job posting. OpenAI is reached over its web API directly, so no
+extra package is needed.
 
 A page your profile answers completely is filled and moved on without asking the
-AI at all, which saves credits. The page still goes to the AI when there is no
+AI at all, which saves credits. A job posting whose way on is a plain "Apply" is
+opened without asking the AI, even when it also has a job search box or a
+language picker -- nothing on a posting is yours to answer. A field a site hides
+to catch programs ("This input is for robots only") is never filled and never
+sent to the AI. The page still goes to the AI when there is no
 plain Next/Continue to press (for example only "Add Experience"), or when a
-dropdown still shows "Choose an option" or "Select". The agent reads the page's
-step counter itself ("Step 1 of 2"), so a "Submit" button on a step with more
-to come only saves that step. It also finds a plain resume upload box by itself.
+dropdown still shows "Choose an option" or "Select". A step counter is context,
+not permission to press a submit-capable control: when a button is recognized
+as a final-submit control, even an intermediate "Submit" is left for you to
+handle rather than being clicked based on the counter. Ordinary "Next" and
+"Continue" navigation remains available. It reads only the step the page is *on*: a progress
+bar that lists finished steps ("completed step 1 of 5 ... current step 5 of 5")
+is read as step 5 of 5, and when the page does not make clear which step it is
+on, a "Submit" is treated as the last one and the agent stops for you. On a step
+about your resume ("Select your resume") a required upload is taken for the
+resume even when its box never says "resume" -- Avature's "From Device" with a
+"Choose another file" button, for example. (On 29
+September Aristocrat's Review page was read as "step 1 of 5" and its final
+Submit was pressed -- the application went without your review. That can no
+longer happen this way.) It also finds a plain resume upload box by itself.
 
-What leaves your computer: in `gemini` mode every page the agent reads, together
-with the facts it answers from (your profile and the text of your resume), goes
-to Google; the documents go to Anthropic. Nothing else changes: the agent's own
-rules -- attestations, sponsorship, CAPTCHAs, submitting only when every check
-passes -- decide what is done with an answer, whoever proposed it. The key
-(`GEMINI_API_KEY`) travels in a request header, never in an address, and is never
-written to a log. If it is missing, the run says so before it starts; if it does
-not look like a Google key (`AIza` and 39 characters, or `AQ.` and longer) it says
-that too, without printing it. If Google has retired the model (`GEMINI_MODEL`),
-the message says so and where to change it. When Google refuses or is busy the agent waits and asks
-again (it waits as long as Google asks for a per-minute limit), and a page it
-still cannot get an answer for is handed to you as before.
+What leaves your computer: every page the agent reads, together with the facts it
+answers from (your profile, the text of your resume and the job posting -- the
+first 5,000 characters), goes to the provider you chose for answering; the resume
+and the job posting go to the writer you chose. Nothing else changes: the agent's
+own rules -- attestations, sponsorship, CAPTCHAs, submitting only when every check
+passes -- decide what is done with an answer, whoever proposed it. Keys travel in
+request headers, never in an address, and are never written to a log. If the
+Gemini key is missing the run says so before it starts; if it does not look like
+a Google key (`AIza` and 39 characters, or `AQ.` and longer) it says that too,
+without printing it.
+
+How a list of models is used, for every provider: when a model says its
+allowance is spent, the next one answers, and the spent one is not asked again
+until it can answer -- Google's free allowances reset at midnight Pacific time; an
+account out of credit (Anthropic or OpenAI) is looked at again after an hour.
+That holds for later applications too. A per-minute limit moves straight to the
+next model; the agent waits only when every model is paused for the minute. A
+model your key cannot use, or one with no free allowance on your key, is skipped
+for a week, and the log says so. The same question asked twice in one run is sent
+once. Settings shows each model's calls today and whether it is resting. On
+Google's free tier each Flash model allows about 20 requests a day and each Flash
+Lite about 500, so the defaults put Flash first for whole pages and Flash Lite
+first for quick choices. When no model can answer, a page is handed to you as
+before.
+
+The AI that answers a form is given the job posting as well as your profile and
+resume, so an answer fits what the employer is asking about. It is told the posting
+describes the job, never you: a skill, tool or number of years counts only if your
+resume or profile shows it. Legal and visa questions are still never sent to it. On
+Google's free tier, what is sent may be used by Google to improve its products; a
+project with billing turned on is not.
+
+When the AI cannot be asked -- its daily allowance is spent, it is busy, or there is
+no credit -- a page is not a reason to stop if every required question on it (marked
+*) is answered: the optional ones are left blank, the resume is attached, the agent
+presses Next, and the hand-over lists what it left blank. A required question still
+open stops the run for you, as before.
 
 ## An account that already exists
 
@@ -151,9 +351,25 @@ Gmail this browser is signed in to (a separate tab, closed straight after),
 and enters it and your existing password. It never generates or chooses a
 different password.
 
+The same is done when a sign-in is refused on an account the site knows: the
+account is on record, or the site took your email and then asked for that
+account's password (iCIMS signs in this way). Before, only an "account already
+exists" message led to the reset; a refused sign-in stopped the run and asked you
+for the username and password (Mutual of Enumclaw, 29 September). A "wrong email
+or password" on an account the site has not shown it knows is still yours: it may
+mean there is no account there.
+
+A refusal is remembered across runs, so a refused password is never typed again.
+When a later run reaches that site's password page with the refusal on record, the
+agent goes straight to the reset instead of stopping with "sign-in paused" as it
+did before. If the reset cannot finish -- the site emails a link rather than a code,
+no code step appears, or no code reaches your Gmail -- the dashboard says which, and
+what to do: set the password on the site to the one in Settings, then press Continue.
+
 It happens only on employer ATS domains (never Google, Microsoft, Apple,
 LinkedIn, Indeed, Dice or the other blocked sites, per `safety.password_allowed`),
-once per site per run, and only after the page itself says the account exists.
+once per site per run whichever way it got there, and only for an account the site
+has shown it knows.
 It stops and leaves the login to you if the site sends a link instead of a code,
 no code arrives, the code is refused twice, the site will not take the existing
 password as the new one, or a CAPTCHA shows. The password and the code are never
@@ -162,7 +378,7 @@ written to the logs.
 ## When a one-time code may be read from your mail
 
 One rule, in `emailed_codes.py`, decides every case where the agent reads a
-one-time code from your mail -- the code step of a form, the code step of
+one-time code (or an account-verification link) from your mail -- the code step of a form, the code step of
 sign-in or account setup, and the password reset of an existing account -- and
 `passcode_from_gmail` asks it before it opens your mail, so no step can go
 around it. The agent reads a code only when **all** of these hold:
@@ -190,6 +406,59 @@ hours. A code is never written to the logs. Before this the reset did not ask
 whether you had allowed mail reads, and the code step of a form did not ask about
 the site; they now all do.
 
+## The account step, one state at a time
+
+An account section the application page itself calls optional ("Create a Career Profile
+account (optional)" at the foot of Meta's form) is part of the application, not an account
+step: the agent does not make that account, leaves its password boxes empty, and goes on
+with the form (Meta, 30 September).
+
+The exception belongs to that section's password fields only. A following section,
+a sibling group, or a separate required sign-in keeps its own requirements.
+An AI request with an ambiguous password label is kept for review unless every
+matching field is optional; a field reference must also match the question.
+Verification codes never inherit the optional-password exception. If required and
+optional password forms share a page, the agent asks you to complete the required
+sign-in rather than risk typing into the optional account. Unknown password fields
+also retain the normal account checks.
+
+Before it does anything on an account page, the agent reads which step the page is
+at: a new-account form, a sign-in form, a sign-in that asks for the email first, a
+choice of ways in, a page still loading, a box for an emailed code, a message saying
+to verify the email, that the email already has an account, that the password was
+refused, or that the account is locked -- or already signed in. What the site says
+counts before what the form looks like. Then one table decides:
+
+- **Sign in with Google** when the site offers it and it has not been tried here yet.
+- **Create the account** on a new-account form -- once per site per run; if the email
+  already has an account there, it goes to sign-in instead of making another.
+- **Sign in** on a sign-in form, once per site per run, with the password from
+  Settings; give the email first where the site asks for it on its own.
+- **Enter an emailed code** under the rules below.
+- **Reset a refused password** of an account the site knows, to the same password,
+  with the code emailed to you -- once per site per run (see "An account that already
+  exists").
+- **Open the verification link** when the site says the new account must be verified
+  (also when it says so on its sign-in form, as Workday does: "Verify your account before
+  you sign in"). Your decision of 30 September 2026: the agent reads the email the site
+  sent from your Gmail, under the same rule as a one-time code (you allowed mail reads, an
+  employer site, no CAPTCHA, the day's limit), and opens its link in a tab of its own
+  browser -- only a https link back to that same site, and on a shared host such as
+  Workday only that employer's own. Never a password-reset link, and never a link through
+  a tracking address (those are left to you). Once per site per run; then it signs in.
+  Code or link is read from the page: a box for the emailed code means the code is read
+  and typed (the one-time-code rule, unchanged); no such box, and the site says the
+  account must be verified, means the link.
+- **Stop and tell you** when only you can act: a verification link it could not find or
+  that did not work (the dashboard says which), a refused password the reset did not cure (or on an account the site has
+  not shown it knows), a locked account, or sign-in held back to protect the
+  account. The run says exactly what to do; press Continue when it is done. It no
+  longer treats a sign-in page it could not get past as a form to fill in.
+
+Every change of state is written to the run's log (`ACCOUNT_STATE`) with a
+screenshot and the page's text in the job's `account/` folder, so a sign-in that
+did not work shows what the site said.
+
 ## Creating an account
 
 On an employer's create-account form the agent ticks two kinds of box and no
@@ -205,7 +474,23 @@ tick a box it must, it does not press Create Account: it stops and says which bo
 An account counts as created only when the site shows Candidate Home or the
 application. Landing on a Sign In page proves nothing (the site shows it when the
 account was made, when it was not, and when it still needs verifying), so nothing
-is saved as an account then, and the sign-in waits (see the next section).
+is saved as an account then: the agent signs in (see below).
+
+The order is always: your email, then the password and its retype, then Create
+Account. The email box is found by what it is labelled ("Email Address", however
+the page attaches that label), not by how it is coded, and the agent checks the box
+really holds your email before it types a password -- and again right before it
+presses Create Account, since Workday redraws the form as it fills. If it finds no
+email box, or the box will not keep your email, it does not press Create Account:
+the passwords are never sent alone. Sign-in works the same way: email first, checked,
+then the password.
+
+After creating the account it signs in once with your email and `ATS_PASSWORD` (your
+decision of 28 September 2026). If the site then emails a one-time code, the agent
+reads it from your Gmail under the rules in "When a one-time code may be read from
+your mail". If the site rejects the sign-in -- which on Workday can simply mean the
+new account's email is not verified yet -- that counts as a rejected sign-in (next
+section): it stops and tells you to verify the account, then press Continue.
 
 ## Signing in without locking your accounts
 
@@ -222,9 +507,9 @@ Whether a new account must have its email verified first is the employer's setti
 So the agent keeps count across runs (`data/_login_attempts.json`, on your machine):
 * after a rejected sign-in it does not try again until you press Continue, and after
   two rejections on one account in 24 hours it stops for the day whatever you press;
-* after it creates an account and the site does not sign it in, it does not try to
-  sign in: it tells you to verify the account from the email it was sent, then press
-  Continue;
+* after it creates an account it signs in once; that sign-in counts like any other,
+  so if the site rejects it the agent tells you to verify the account from the email
+  it was sent, then press Continue;
 * it never asks Workday for a password reset (it cannot follow the emailed link, and
   each request spends one of the five); elsewhere it asks at most once a day;
 * it makes at most two attempts a day to create an account on one site.
@@ -250,13 +535,90 @@ is not typed again. A phone box that holds only its country's dial code ("+1")
 is still empty, and is filled. That dial-code picker is never "corrected" to your
 country: a "+1" is the prefix your number takes, not where you live.
 
+## Choices whose words sit beside them
+
+Some forms draw each choice as a button with its word in a separate box beside it (Meta's
+"Male", "Female", "I choose not to disclose"). The agent reads that word as the button's
+name and picks the button that is your answer. A choice is never picked because its text
+merely contains your answer -- "Male" is inside "Female". Before, Meta's gender showed
+Female for an owner whose profile says Male (30 September). If a self-identification answer (gender, race,
+veteran, disability) on the page differs from your profile and you did not choose it
+yourself, the agent puts it right; a choice you made stands.
+
+## Which locations you would like
+
+When a form asks which of its locations you would like to work or apply in ("Please
+select one or more locations where you'd like to apply."), your decision of 30 September
+2026 applies: a place in your state (Virginia, from your profile) first; after that,
+anywhere is fine. A tick-all-that-apply list gets your state's places and, because your
+profile is open to relocation, every other place too. A pick-one list or row of buttons
+gets the first place in your state, or, if none is offered, the first place listed. The
+rule reads your profile (state, preferred locations, open to relocation) -- change those
+and it follows. A question about where you live now, or whether you would relocate, is not
+this question; and a question you or the site already answered is left alone.
+
+## An upload button that opens a menu
+
+Some sites' upload buttons open a menu of sources instead of a file window (Jobvite:
+Dropbox / File / Type or Paste Resume / Apply With LinkedIn). The agent picks the item for
+a file on this computer ("File", "Upload file", "From device") and gives it your tailored
+resume -- never Dropbox, Google Drive or LinkedIn -- and closes the menu again if that
+fails, so it never leaves one open over the form (Altamira, 30 September).
+
+## Your jobs and degrees on Workday
+
+When Workday's My Experience shows an empty Work Experience or Education section, the
+agent adds each of your jobs and degrees from your record the way Workday takes them
+(titles, companies, dates, degree and field-of-study lists). It only adds to an empty
+section -- anything Workday already filled in is left as it is. Before, only the older
+flow did this, and a new Workday application reached My Experience with nothing added
+(Ciena, 30 September). Where the employer's Workday draws School as a list, your
+school is picked from that list by its name -- never the first row -- and a school the
+list does not offer is left for you; no extra, empty entry is added. A date box the agent
+cannot place (a bare "Year" under From or To) keeps what was written. When Workday refuses a jobs or
+degrees section -- an extra, empty entry, or boxes its error list names -- the agent has
+Workday's filler clear that section and enter your record again, once per section. A
+school is picked by the row that is one of your names for it (your record, your profile,
+and the substitutes you listed, such as "JNTU Hyderabad" -> "Jawaharlal Nehru
+Technological University Hyderabad") -- never a row that only starts the same way.
+
+An AI that says it cannot answer ("I am unable to answer...", "... does not have a
+Twitter account") is never typed into a form; the box is left empty. A box for a web address
+(LinkedIn, Facebook, Twitter, GitHub, Website, Portfolio, a "URL") takes only a web
+address, whatever the AI says. And an open list's own entries (Workday's Field of Study
+list, left open) are never read as questions of their own.
+
+## Job boards are not the employer's site
+
+A link to a job board (Adzuna, ZipRecruiter, Glassdoor, Monster and the like, as well
+as LinkedIn, Indeed and Dice) is refused with a note to use the employer's own careers
+page, and the agent never signs in to or makes an account on a job board -- with Google
+or a password -- even if a run lands on one. Before, an Adzuna link was accepted and the
+run tried to sign in to Adzuna (30 September).
+
+A Google sign-in is recognised however the site words it: "Login with Google",
+"Sign-in using Google", "Sign up with Google", "Continue with Google" -- as a button or a
+link. Before, Adzuna's "Login with Google" was missed.
+
+## Where you live is not where you were born
+
+Your address answers only questions about where you live now. A question about
+the country, state or city of your birth or origin, where a passport or licence was
+issued, or a visa is never answered from your address: it is left for you (or your
+profile, where it says). Before, "What is the Country of your birth?" was answered with
+your country of residence (Forterra, 30 September).
+
+A job read from its link is named by what the page says about itself -- its title,
+and the employer's own site name -- not by the job site's address: a Rippling
+posting was recorded as "Unknown Role at Ats", and its resume file was named for "Ats".
+
 ## A town the form spells another way
 
-Your profile says "Fairfax, VA"; a form's own search may offer "Fairfax, Virginia,
+Your profile says "Springfield, IL"; a form's own search may offer "Springfield, Illinois,
 United States" and find nothing for "VA". The agent treats them as one town -- the
 same name, the same state in any spelling, a country left out or named on both
-sides in agreement -- and clicks that row. Another Fairfax (a different state, or
-"Fairfax Station") is never taken for it. Where a list cannot be read and the agent
+sides in agreement -- and clicks that row. Another Springfield (a different state, or
+"Springfield Gardens") is never taken for it. Where a list cannot be read and the agent
 has to type and press Enter as a last resort, the answer counts only if the box
 still holds it after leaving the box, and a row that turns out to be a different
 town is taken out again and left for you.
@@ -331,12 +693,52 @@ with no AI wording.
   before you submit". It is in your name: read it, and change it if it is not how
   you would say it.
 
+## Questions the job site publishes
+
+Greenhouse publishes each application's questions -- the words, whether each is
+required, and every choice a list offers. The agent reads them with the job, before
+the form is opened. When a list on the form shows no choices until it is clicked,
+your answer (from your profile, then your saved answers) is matched to the exact
+choice Greenhouse published for that question, and the AI, when it is asked, is
+given the same list. Nothing is sent to Greenhouse: the list is public.
+
+## When the form will not go on
+
+When pressing Next (Save and Continue) leaves the page where it was, the agent reads
+what the page says is wrong, in its own words ("The field Upload a file is required",
+"Please select a state"). The first time it acts on it -- a message about a file makes
+it attach the file again -- and tries once more. If the page says the same thing after
+that, it stops and shows you those messages, instead of pressing again. Files are put
+into a drop zone's own file box when its "Select files" button opens no file window
+(Workday's), for a cover letter as for a resume.
+
 ## When you press Continue
+
+When it stops for required boxes only you can fill, you do not need to press Continue: it watches
+the form, and once nothing required is blank and nothing has changed for about 15 seconds (you have
+stopped typing), it carries on by itself -- as it already did after a CAPTCHA or a signature.
+
+A run waiting for you has, beside **Continue**, two more ways on:
+
+- **Resume** -- carries on from the page it is on with the agent's latest logic: new code
+  is loaded into the waiting run and the page is read again; the browser and everything
+  already filled stay as they are.
+- **Reload** -- starts the application fresh: after you confirm, the waiting run and its
+  browser close (nothing is submitted, and what the site itself saved stays saved) and
+  the application starts again from its posting with the latest logic. The tailored
+  resume already made is reused.
 
 Pressing Continue on the dashboard gives the agent its three tries at moving on
 afresh. Before, a page that had tripped the loop guard tripped it again on the
 first press after your Continue, whatever you had put right in between. The guard
 still stops a page that will not move on after three presses, and reports it.
+
+When the run stops for a CAPTCHA, you do not need to press Continue: the agent
+watches the page for the whole wait and carries on by itself once the CAPTCHA has
+been seen and is then gone. Before, it looked once as the wait began; a puzzle that
+redraws itself (hCaptcha's) could be missed at that moment, and the run then waited
+for a Continue after you had solved it (Mutual of Enumclaw, 29 September). It never
+carries on for a CAPTCHA it has not seen.
 
 ## A job that will not sponsor
 
@@ -385,9 +787,16 @@ that had not got past account creation.
 
 ## Verified auto-submit (opt in, off by default)
 
+The ordinary page agent never presses an application's last Submit, whatever
+`.env` says: the old `AUTO_SUBMIT` setting is ignored everywhere. At the last
+step it stops and hands the application to you; only the verified gateway below
+may send it automatically. If a run stops on an error while the page already
+says the application was received, it is recorded as submitted by you.
+
 Set `AUTO_SUBMIT_VERIFIED_ONLY=true` in `.env` to allow it. Even then, the
 agent submits only when `safety.evaluate_auto_submit()` returns an eligible
-`AutoSubmitDecision`, which requires **all** of:
+`AutoSubmitDecision`, accepted by `SubmissionGuardV0` only with its structured
+evidence and required-field comparisons valid, which requires **all** of:
 
 * the job title, company and canonical URL match the tracked application
   (tracking parameters are not a difference);
@@ -396,7 +805,7 @@ agent submits only when `safety.evaluate_auto_submit()` returns an eligible
 * every required field on the form **exactly** matches approved data — a value
   the agent wrote from your profile/resume, an explicitly approved answer from
   `data/_approved_answers.json`, or an existing value that equals a profile
-  value. Near-misses are refusals: "Fairfax County" never matches "Fairfax";
+  value. Near-misses are refusals: "Springfield County" never matches "Springfield";
 * nothing uncertain is present: no blanks, form errors or warnings, no
   ambiguous dropdown choice, no unsupported custom question, no attestation,
   e-signature or consent checkbox, no CAPTCHA, no identity check.
@@ -407,15 +816,167 @@ report and every reason), and an audit row in `application_events`. The click
 itself is re-checked for a CAPTCHA or attestation that appeared in between.
 Afterwards the application is recorded **submitted** only once a confirmation
 page, portal entry or confirmation email is found — clicking is not evidence.
+A confirmation page is recognized by a heading or alert region whose own text
+essentially is a known confirmation phrase, not by that wording merely
+appearing anywhere on the page: an unrelated FAQ or error page that happens
+to mention "application received" or "previously submitted application" in
+an ordinary sentence is not read as confirming this run. A real confirmation
+this does not recognize is left **needs_user_review**, not guessed at --
+never the other way around.
+
+Immediately before the click, a local SQLite transaction writes the durable
+`DISPATCHED` state and append-only authorization/dispatch safety events. The
+state uses a separate canonical effect key derived from the application URL:
+known tracking parameters, fragments, query ordering, trailing slashes, host
+case, and HTTP-to-HTTPS variation do not create a fresh effect identity.
+Existing application keys for an equivalent normalized URL and the prior raw
+URL key are checked as legacy aliases. A host or path the browser actually
+visits while working a bound application -- a login page, an ATS redirect, a
+review step -- is durably remembered as that same effect identity, so a later
+invocation started from that host or path finds the same history instead of a
+fresh one; it cannot create a new submission authority merely because its own
+URL hashes to a different key. Two identities are never merged on a guess: a
+URL that already has its own independent dispatch history, or that has no
+provable relationship (by normalization or a remembered redirect) to an
+existing bound application, is treated as its own separate identity, never
+folded into another one. The state survives new processes,
+browser contexts and tabs, including when the normal application tracker uses
+PostgreSQL. URLs that do not identify a specific posting fail closed. If the
+dispatch transaction cannot commit, no click is attempted. A confirmed result
+becomes `CONFIRMED`; an ambiguous result becomes `UNCERTAIN`. Either state,
+and an unresolved `DISPATCHED` state found
+after restart, blocks another automated submission until reconciliation --
+including when that state is only reachable through a remembered redirect
+alias rather than the literal key on hand, at any chain depth (a redirect of
+a redirect, or an identity discovered to be the same one after the fact):
+every member of a merged identity resolves to, and is checked against, the
+exact same durable record, never a copy of it. A URL that LinkedIn, Facebook,
+Google, Microsoft, or Twitter's own click-tracking parameters decorate
+(`trk`, `fbclid`, `gclid`, `msclkid`, `twclid`, and the like) does not create
+a fresh identity either, nor does a login/SSO host visited along the way --
+both are tied to the one bound identity the same as any other redirect.
+Reconciliation can read page/status/confirmation evidence through the
+read-only probe, but that probe has no submit operation.
+
+Human handoff parks execution and appends `MANUAL_HANDOFF_STARTED` before
+relaxing the browser guard. If durable handoff recording fails, automation
+remains parked and the guard stays armed; the person must not treat that as a
+successful handoff.
+
+Submission safety events accept only known event types and allowlisted
+metadata fields and values; arbitrary payload objects are rejected.
+
+Final-control recognition starts from the centralized submit-label
+vocabulary plus deterministic form-submit semantics, and now also denies by
+default a labelled, enabled, form-associated control whose own label is
+neither a known submit word nor a known non-final one (add/remove/edit/
+cancel/back/save-for-later/a dropdown opener/...) when it is the only such
+control left in its form -- a custom "Confirm & Send"/"Finalize"-style
+button with no native submit type is covered without needing its exact
+wording known in advance. An icon-only or otherwise unlabeled control
+remains a limitation. This is still not a universal semantic or
+network-effects firewall. The browser containment guard is active on every
+tab and popup in the browser context automatically, including ones opened
+after the browser session starts, not only pages the agent explicitly reads.
 
 Every decision, eligible or not, is written to the audit trail and shown on the
 dashboard with its reasons.
+
+## Only you drive the dashboard
+
+The dashboard answers only requests addressed to this computer (127.0.0.1 or
+localhost), and a form is accepted only when it comes from the dashboard's own page
+with the token it was given -- a new one each time the dashboard starts. A website you
+happen to have open cannot start an application, change your saved answers or delete
+anything through it.
+
+## Progress
+
+The dashboard's **Progress** page shows how far applications get: started, reached
+Review, submitted, replied, interviews -- overall and for each job site -- and the
+most common reasons runs stopped before Review. After you submit, set what happened
+on the application's page (**Interviewing**, **Rejected** or **Offer**) and the last
+steps fill in. It reads only what the tracker already keeps.
 
 ## Statuses
 
 `prepared` → `form_filled` → `ready_to_submit` → `submitted`,
 with `needs_user_review` whenever a person has to look, and `skipped` for a
 job that was declined.
+
+Once an application has gone -- `submitted`, then `interviewing`, `offer` or
+`rejected` -- a run never moves it back to an unfinished status; you can still
+change any status yourself on the dashboard, and your change stands. Marking the
+application a run is working on as submitted (or interviewing, offer, rejected,
+skipped) ends that run: it has nothing left to do. **Close browser** on the
+dashboard ends the run too (it used to be read as "carry on").
+
+When a site says the application was received ("We've received your
+application", "Your application has been submitted"), the agent records it as
+submitted, even when the same page offers to make an account to track it. A page
+that says something is still left to finish the application is not a
+confirmation.
+
+Besides reading the page the way a screen reader does, the agent takes an
+inventory of every field on it -- in every frame and inside components that hide
+their fields (Shadow DOM) -- by what each field is, not by what it is called. The
+resume goes in the file input that sits under the page's resume section, whatever
+its button says ('Attach', 'Choose File*', 'From Device'), and never in an
+'autofill from resume' upload. A list drawn as a button ('State –Select–') is
+answered by the exact item ('Virginia', never 'West Virginia'). A field that is
+hidden, or says to leave it blank, or is named like a honeypot, is never filled.
+
+Each kind of list is filled the way its portal builds it, and counts as answered
+only when the box then shows the answer: a plain list is set directly; a searchable
+list (Greenhouse's country, a school) is opened with a real click, the answer typed,
+and the matching row clicked once the rows stop changing -- again if the list
+redraws; a location the site suggests (Lever, Rippling) is picked from its
+suggestions, not left as typed text; a menu with its own search box (BambooHR's
+state) is searched and its item clicked; "check all that apply" ticks each of your
+answers. Enter is never pressed in a list: it takes whichever row happens to be
+first. The row chosen must be your answer: the same words; the same place however
+the site spells it ("United States +1" for United States); the same answer in the
+site's own words ("Master" for "Masters of Science", "Graduated" for "Completed" --
+the pairs are in `reference/answer_equivalents.json`); or your whole answer followed
+only by more after a comma or bracket ("No, I do not have a disability" for No). Never
+a row that merely contains it ('Virginia' is not 'West Virginia'), and when two rows
+fit equally well, neither is picked and the question is yours. A date goes in the
+way its box takes it: a date picker, "mm/dd/yyyy", or "MM/YYYY".
+
+Questions drawn one straight after another as Yes/No buttons, 1–5 ratings or tick
+boxes are each read as their own question, by the question written above them.
+Before, a run of them was read as one question, so answering the first (Paylocity's
+"background check") made the next five look answered, and the agent pressed Next
+until the loop guard stopped it (29 September). Tick boxes under one "select any
+that apply" question are that question's choices: every one your answer names is
+ticked, and a choice that only resembles your answer never is. The same question asked
+twice is kept as two. An answer is looked for only among its own question's choices,
+never in another question's. "(required)" written after a question counts as
+required, and when the page will not move on, the stop names each required question
+still blank.
+
+"Do you currently reside in the United States?" is answered from where your profile
+says you live, and a box asking for "City, State" gets both ("Springfield,
+Illinois"), not the state alone.
+Before the last press, every visible required field still empty is named to you,
+so a page is never called complete with something required left out. How each
+portal builds its fields is in `reference/ats_fields/`.
+
+On a form that repeats the same boxes for each job or each degree ("Company,
+Position title, Start date, End date ..." again and again), every box is answered
+from *that* job's or degree's record in your work history -- never from one value
+for all of them. An entry that already shows a company (or degree), perhaps put
+there by the site's own resume reader, takes that company's record; the others take
+the remaining jobs in order. Your current job's end date is left blank, and if the
+site filled one in, the agent tells you to clear it. What your records do not hold
+-- the country of a school, a degree's status -- is left for the AI or you, not
+copied from another box. The same holds when the AI plans the page: for a box in a
+job or degree entry, the entry's record wins over the AI's proposal.
+
+An application's page lists its documents with the one **In use** first;
+files from an earlier attempt are marked **Earlier attempt** -- the employer
+received only what was attached when the application was sent. A stored resume is
+reused however small it is, as long as it is a whole PDF.
 
 ## Layout
 
@@ -429,7 +990,7 @@ job that was declined.
 | `job_sources.py` | reading a posting (Workday, Greenhouse, Lever, Ashby, Eightfold, schema.org, plain page) |
 | `apply_flow.py` | one application from start to hand-over |
 | `apply.py` / `web_ui.py` | entry points |
-| `db.py` / `job_tracker.py` | tracker (Postgres, SQLite fallback) |
+| `tracking.py` / `job_tracker.py` / `db.py` | which tracker (one place), SQLite (no server), Postgres |
 | `tests/` | the rules as tests: `venv\Scripts\python -m pytest tests -q` |
 
 Workday's repeated-entry wizard (`fill_experience_section`, the date spinners,
@@ -458,11 +1019,41 @@ so your own Chrome windows are left alone, and the "Restore pages?" bubble Chrom
 showed after a forced stop is turned off. If it cannot find the window it logs
 "Could not find the agent's browser window" rather than failing silently.
 
+It only ever runs where you can see it. On Windows, a program opens its windows on
+the desktop it was started on, and an AI assistant in an IDE runs its terminal on a
+private desktop of its own, so a dashboard started from there opened every browser
+where you could not see it. The dashboard now refuses to start anywhere but your
+own desktop (`WinSta0\Default`): it prints why and exits. The browser is refused
+the same way, so `python apply.py` started from such a terminal stops before any
+browser opens. Start the dashboard yourself: double-click `Start Dashboard.bat`,
+or run `python web_ui.py` in a terminal you opened.
+
 ## Operational detail
 
+* **Searchable prompts** — a Workday selection widget can appear as a text box.
+  The agent opens its picker and clicks the matching option; typing search text
+  alone does not count as an answer. The picker is handled in the input's own
+  frame. A missing choice remains unresolved.
+* **Declarations are signed last** — profile filling leaves declarations for the
+  signing step. That step checks the current required fields, including answers
+  that disappeared after filling, before signing on the owner's behalf.
+* **Locations must match** — a town and region must identify the requested place;
+  shared words never justify selecting a different town from a dropdown.
+* **Early uploads** — resume uploads work before the main page loop starts, with
+  upload and entry state initialized separately for every agent.
+* **Custom checkboxes** — when a page exposes only the checkbox's adjacent label,
+  the agent resolves the checkbox by its name and verifies its actual checked state.
+* **Employer names** — domain-shaped page metadata must agree with the employer
+  address or ATS tenant. Unrelated copied branding is ignored.
 * **Retries** — flaky page actions are retried (`with_retries`, `action_retries`).
 * **Progress is saved** — the form's own Save button is clicked before handing
   over, so a part-finished application survives a reload.
+* **Reload code** — a waiting run takes up edited code without closing its browser.
+  Every part of the agent it uses is reloaded, each after the parts it relies on;
+  before, only a few were, so new code could meet an old helper and stop the run.
+  If any file has a syntax error, the run keeps the whole version it started with.
+  Who answers the form pages is decided the same way as when the run started (Settings'
+  form-answering choice); before, a reload could move them to the Claude Code session.
 * **Structured logs** — each run also writes `logs/run_<timestamp>.jsonl`.
 * **No secrets in logs** — every log line passes through `safety.redact()`,
   which masks API keys, passwords, email addresses and phone numbers. The page text
@@ -471,3 +1062,82 @@ showed after a forced stop is turned off. If it cannot find the window it logs
 * **Dashboard** — each application's page shows progress, what is still
   outstanding, the field-by-field comparison, evidence links and the full event
   history. It is served on 127.0.0.1 only.
+
+Workday hierarchical prompts: explore only marked category nodes (bounded depth and visits), select a matching offered leaf, and verify its committed value. A category is never accepted as the answer.
+
+Generic field labels: bare Name denotes the applicant outside an education container. Unqualified Month/Day/Year spinbuttons never reuse answer-library or historical values; dates inside work/education entries still use their own record.
+
+Workday split date controls: changing a segment uses bounded spin controls when possible, then a composite digit stream when needed, and checks every segment while preserving neighboring values. Internal gaps remain unresolved rather than being filled with invented dates.
+
+Education subjects: select only the recorded subject or an owner-approved substitute, by clicking its actual option and verifying the committed label. Workday prompts stay tied to the same education row when the input moves, and scroll their own virtual list to inspect later options. Structured profile subjects override older resume extraction for an unambiguously matched school.
+Resume uploads on a resumed form check for the already listed filename in the upload field's frame before adding a file; an empty file input beside a saved attachment is not evidence that a new upload is needed.
+
+A Continue signal is consumed only after its file contains a nonempty answer. An empty file created by a writer still in progress leaves the agent waiting, with its normal timeout and browser checks.
+
+Each repeated job’s current-employment checkbox takes that job’s own yes/no value, even when its surrounding heading is read as a choice group. A contradictory site-filled current flag is corrected under the existing provenance policy; owner-entered choices remain protected. From/To groups qualify split Month/Year controls so former jobs receive their own end dates. The Workday entry filler sets each row’s current flag before locating its end-date controls.
+
+Workday skills prompts search one approved skill at a time, click a matching row only inside that widget's popup, and verify the committed tag. Existing tags remain in place. Unavailable skills are noted, the search text is cleared, and the menu is closed; an optional empty skills catalogue does not block progression.
+Unnamed layout groups without their own choices do not inherit the preceding field's question and cannot be used to select unrelated checkboxes elsewhere on the page.
+The Workday menu status "Options Expanded/Collapsed" is not a second form question. Empty skills menus are dismissed by clicking the section heading when Escape is ignored; unsupported optional skills are retained as intentionally blank for that page.
+Numeric/date spinbuttons always use verified spinner entry, including when the planner calls the action "choose". Composite dates preserve their neighboring segments under either action.
+# Dependent location pickers
+
+The address sweep commits SuccessFactors country and state choices through their own offered menu rows and verifies the selected value. A location control that remains disabled is deferred without clearing it, force-enabling it, or recording a successful answer. This prevents an uncommitted country from crashing the run on its dependent State field.
+
+## Field reading, modals, and runtime identity
+
+Composite phone widgets produce one number question: the actual child textbox retains the phone heading and the dial-code button does not become its label. Questions in paragraphs retain their wording across embedded terms/privacy links, and radio captions drawn as adjacent paragraphs are read as choices. Policy sweeps leave dialogs containing entry fields to the normal filling and validation flow, and report dismissal only when the dialog hides. The existing page fingerprint breaker still bounds genuine repeated navigation without progress.
+
+Text-message consent in a Yes/No picker or radio group follows the same contact-preference policy as a checkbox, preserving an exact approved saved answer when present. Mentioning a mobile number inside a consent question does not make it a phone-number field.
+
+Start Dashboard uses the checkout's local Python runtime and one canonical dashboard port. The dashboard exposes its loaded directory and source identity at /runtime; startup reuses only the same unchanged checkout, and refuses an old or different server rather than silently starting with stale code. Deployment redirects the owner's old dashboard entry point and old bookmarks to the corrected canonical runtime.
+
+Source identity includes the runtime modules and portal adapters. A dashboard whose code changed since it loaded refuses to start or resume a worker until restarted. Each application log records the source identity used to launch it; the runtime identity endpoint retains the directory/interpreter comparison without copying local paths into diagnostics.
+# Active dialog recovery
+
+Grouped native choices covered by a decorative layer use their own associated label when direct checking fails. The fallback clicks once and does not search for a matching label in another question.
+
+The navigation loop guard recognizes changes to visible field values and committed selections on the same wizard step. Its diagnostics store a digest rather than personal answer values; passwords are excluded. An unchanged form still trips the existing loop limit. Preferred-name presence checkboxes use a boolean derived from the profile rather than the name text.
+
+Completed degrees can match broader completed education categories when the exact degree is absent: a master's or doctorate can use Post-Graduate Degree, and a bachelor's can use College/University Graduate. A broad category never selects a specific degree, and incomplete studies do not stand in for a completed degree. Immediate availability can use Not Applicable specifically for a notice-period menu when Immediate is absent. Identity verification offering email and phone chooses the saved contact preference; this does not bypass verification-code, credential, or CAPTCHA policy.
+
+While a visible dialog is open, the page reader focuses on that dialog and excludes background posting controls. After an owner completes CAPTCHA, the existing form's Continue remains the next action; a covered background Apply cannot take priority. Once the dialog closes, the reader returns to the page.
+
+## Diagnostic privacy (P0-B5)
+
+Persisted diagnostics use one privacy layer. HTML is a structural projection:
+field values, scripts, bootstrap state, arbitrary text, document content and
+active attributes are omitted. Saved accessibility text retains roles, known
+labels and boolean state. Live form perception and application answers are
+unchanged. Review/validation JSON masks values; review the actual form in the
+browser to inspect your answers.
+
+Screenshots conservatively cover the entire document with an opaque temporary
+mask, including frames, previews and shadow content. They preserve capture
+geometry rather than readable page pixels. Values and input/change events are
+untouched, and capture removes temporary nodes in finally. If setup or sanitation
+fails, the artifact is omitted; raw capture is never a fallback.
+
+Runtime logs omit dynamic personal values, filenames, URLs and exception bodies.
+An invalid Gemini key still produces a fixed format hint without logging the key.
+Dashboard stdout/stderr exports retain only safe operation categories. Console
+exports retain only message type/error category (latest 200 entries). Structured
+application events keep action, evidence, result/category and counts. Existing
+submission safety event enums and human-handoff/checkpoint authority are unchanged.
+
+Evidence/log viewers retain resolved-root containment and require B5 manifests
+binding safe artifacts to their bytes. Legacy unmarked diagnostics are withheld.
+HTML is served as plain text with nosniff and a restrictive CSP.
+
+DIAGNOSTIC_RETENTION_DAYS defaults to 7, accepts 0..30, and uses 7 for invalid
+values. Cleanup runs at runtime/dashboard startup and when a zero-retention
+worker finishes. Zero retains current-use artifacts until that cleanup boundary.
+Cleanup is bounded and best effort, follows no symlinks, and deletes only known
+diagnostics under output/, runs/ and logs/. Documents, DBs, profiles, checkpoints,
+source material, application records and unrelated files remain. The ten-run
+page-recording cap remains in force.
+
+Artifact limits: DOM 2 MiB; accessibility/text/JSON and runtime logs 1 MiB;
+console 512 KiB (the category-only projection is much smaller); screenshots
+16 MiB; manifests 64 KiB. Oversized sanitized text may be truncated with a
+manifest flag; oversized JSON becomes valid truncation metadata.

@@ -4,6 +4,7 @@
   "target_words": {
     "why": [50, 100],
     "example": [80, 150],
+    "list": [1, 40],
     "other": [30, 80]
   },
   "avoid": [

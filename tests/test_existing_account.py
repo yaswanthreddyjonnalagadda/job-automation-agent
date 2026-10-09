@@ -68,7 +68,7 @@ function render() {
     };
   } else if (v === 'linksent') {
     $('title').textContent = 'Check your email';
-    el.innerHTML = '<p>We have emailed you a link to reset your password. Click the link in the email.</p>';
+    el.innerHTML = '<p>' + (cfg.linkText || 'We have emailed you a link to reset your password. Click the link in the email.') + '</p>';
   } else if (v === 'code') {
     $('title').textContent = 'Enter your code';
     el.innerHTML = "<p>We've sent a 6-digit verification code to your email.</p>"
@@ -136,9 +136,10 @@ def agent(monkeypatch):
 
 
 def serve(page, *, password=OLD_PASSWORD, start="create", mode="code", reject_new=False, host=HOST,
-          message=EXISTS, show_on_load=False):
+          message=EXISTS, show_on_load=False, link_text=""):
     cfg = json.dumps({"password": password, "email": EMAIL, "start": start, "mode": mode,
-                      "rejectNew": reject_new, "createMessage": message, "showOnLoad": show_on_load})
+                      "rejectNew": reject_new, "createMessage": message, "showOnLoad": show_on_load,
+                      "linkText": link_text})
     body = SITE.replace("%CFG%", cfg).replace("%CODE%", CODE)
     page.route(f"https://{host}/**", lambda route: route.fulfill(status=200, content_type="text/html", body=body))
     page.goto(f"https://{host}/careers/apply")
@@ -291,3 +292,42 @@ def test_the_auth_gate_acts_on_an_exists_alert_already_on_the_page(page, agent):
     serve(page, password=ATS_PASSWORD, show_on_load=True)
     assert agent.handle_auth_gate(page, EMAIL) is True
     assert site(page)["view"] == "home"
+
+
+# --- a refused sign-in on an account the site knows (Mutual of Enumclaw, iCIMS, 29 September) ------------------------
+
+def test_a_refused_sign_in_is_reset_to_the_existing_password_and_signed_in(page, agent):
+    serve(page, password=OLD_PASSWORD, start="signin")
+    assert agent.attempt_auto_login(page, EMAIL, ATS_PASSWORD, create_if_missing=False) is False
+    assert agent.recover_rejected_sign_in(page, EMAIL) is True
+    state = site(page)
+    assert state["password"] == ATS_PASSWORD and state["resets"] == [ATS_PASSWORD]
+    assert state["signIns"] == [False, True] and state["view"] == "home"
+    assert agent.gmail_calls == [""] and state["codeRequests"] == 1
+
+
+def test_one_reset_per_site_per_run_whichever_route_asked_for_it(page, agent):
+    serve(page, password=OLD_PASSWORD, reject_new=True)
+    assert agent.sign_in_to_existing_account(page, EMAIL) is False       # the 'account exists' route: one reset
+    serve(page, password=OLD_PASSWORD, start="signin")
+    assert agent.attempt_auto_login(page, EMAIL, ATS_PASSWORD, create_if_missing=False) is False
+    assert agent.recover_rejected_sign_in(page, EMAIL) is False          # the sign-in route: not a second one
+    assert site(page)["codeRequests"] == 0 and agent.gmail_calls == [""]
+
+
+def test_a_refused_sign_in_is_never_reset_on_a_site_that_is_off_limits(page, agent):
+    serve(page, password=OLD_PASSWORD, start="signin", host="www.linkedin.com")
+    assert agent.recover_rejected_sign_in(page, EMAIL) is False
+    state = site(page)
+    assert state["codeRequests"] == 0 and state["attempts"] == [] and agent.gmail_calls == []
+
+
+@pytest.mark.parametrize("wording", [
+    "We have emailed you a link to reset your password. Click the link in the email.",
+    "Please check the email address for instructions to reset your password.",        # iCIMS's login
+])
+def test_a_reset_by_link_is_handed_to_the_owner_saying_so(page, agent, wording):
+    serve(page, password=OLD_PASSWORD, start="signin", mode="link", link_text=wording)
+    assert agent.attempt_auto_login(page, EMAIL, ATS_PASSWORD, create_if_missing=False) is False
+    assert agent.recover_rejected_sign_in(page, EMAIL) is False
+    assert agent.gmail_calls == [] and "link" in agent._login_paused

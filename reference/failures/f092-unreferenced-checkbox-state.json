@@ -1,0 +1,15 @@
+{
+  "id": "f092",
+  "date": "2026-10-03",
+  "class": "A label reference is mistaken for its checkbox",
+  "symptom": "Clicking an adjacent label changed an ARIA checkbox but the action was reported as failed.",
+  "site": "Custom checkboxes without their own accessibility reference",
+  "root_cause": "The parsed checkbox inherited its adjacent label reference; state verification read the label instead of the checkbox.",
+  "why_tests_missed": "The older fixture only recorded a click without updating aria-checked. Repairing the fixture exposed the production reference mismatch.",
+  "fix": "Resolve a unique checkbox with its exact accessible name when the referenced element is not a checkbox, then verify the actual checked state.",
+  "tests": [
+    "tests/test_page_agent.py::test_a_tick_box_is_clicked_by_the_label_beside_it",
+    "tests/test_page_agent.py::test_a_checkbox_click_without_a_state_change_is_not_an_answer"
+  ],
+  "prevention": "Model real widget state in tests and verify the semantic control rather than the click target."
+}

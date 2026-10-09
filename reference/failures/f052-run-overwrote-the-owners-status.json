@@ -1,0 +1,16 @@
+{
+  "id": "f052",
+  "date": "2026-09-29",
+  "class": "A background worker overwrote a value the owner had just set",
+  "symptom": "Aristocrat, 29 September: the owner marked the application submitted; a minute later the still-running run set it back to 'needs you', and the run kept working on an application the owner had called finished.",
+  "site": "Dashboard (every tracker)",
+  "root_cause": "update_status wrote whatever it was given, from a run or from the owner alike, and marking an application finished did nothing to the run working on it.",
+  "why_tests_missed": "Status changes were tested one writer at a time; none had the owner and a run change the same application.",
+  "fix": "application_status.may_replace(): a run never moves an application that has gone (submitted, interviewing, offer, rejected) back to an unfinished status; the owner's change (by_owner=True) always stands. Marking the live application finished from the dashboard ends its run.",
+  "tests": [
+    "tests/test_owner_ends_and_confirmations.py::test_who_may_change_a_status",
+    "tests/test_owner_ends_and_confirmations.py::test_the_tracker_keeps_the_owners_submitted",
+    "tests/test_owner_ends_and_confirmations.py::test_marking_the_live_application_submitted_stops_its_run"
+  ],
+  "prevention": "Give every shared record an owner-wins rule in the one place it is written, and end work the owner has called finished."
+}

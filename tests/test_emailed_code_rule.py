@@ -216,6 +216,40 @@ def test_the_form_code_step_obeys_the_same_rule_on_a_site_it_may_not_enter_anyth
     assert page.locator("#c").input_value() == ""
 
 
+SMS_CODE_STEP = """<html><body><h2>Verify your identity</h2>
+<p>We texted a 6-digit code to your phone number ending in 1234.</p>
+<label for="c">Enter the 6-digit one-time code</label>
+<input id="c"><button>Submit</button></body></html>"""
+
+AUTHENTICATOR_CODE_STEP = """<html><body><h2>Two-factor authentication</h2>
+<p>Enter the one-time code from your authenticator app.</p>
+<label for="c">One-time code</label>
+<input id="c"><button>Verify</button></body></html>"""
+
+
+@pytest.mark.parametrize("body", [SMS_CODE_STEP, AUTHENTICATOR_CODE_STEP])
+def test_a_code_from_an_unauthorized_channel_is_never_read_from_mail(context, body):
+    """P0-B2, 7 October 2026: ACCOUNT_CODE's own wording match ("one-time code"/"authentication
+    code") is not enough on its own -- the page's own channel wording (texted to a phone, or an
+    authenticator app) must refuse before passcode_from_gmail is ever called, on an employer site
+    where the owner has allowed mail reads and no CAPTCHA is showing: every other condition that
+    would normally allow a read is satisfied here, isolating the channel check itself."""
+    import page_agent
+    page = employer_page(context, body)
+    assistant = assistant_for(ALLOWED)
+    called = []
+    assistant.passcode_from_gmail = lambda *a, **k: (called.append(1), "482913")[1]
+    agent = page_agent.PageAgent(assistant, SimpleNamespace(), SimpleNamespace(auto_submit=False, ats_email=""),
+                                 ALLOWED, SimpleNamespace(raw_text="x"),
+                                 SimpleNamespace(title="t", company="c", url=URL), resume_file=None)
+    snapshot = agent.snapshot(page)
+    controls = page_agent.parse_snapshot(snapshot)
+    assert agent.complete_account_code(page, controls, snapshot) is False
+    assert called == []                                    # the mail was never even opened
+    assert page.locator("#c").input_value() == ""
+    assert agent.account_blocker and "authoriz" in agent.account_blocker.lower()
+
+
 def test_no_step_refuses_a_code_for_how_the_site_words_it():
     """Read the sources: the words a site uses for its code step decide nothing anywhere (a CAPTCHA does,
     and safety.py's detection of one is the only place that knows its wording)."""
@@ -224,3 +258,265 @@ def test_no_step_refuses_a_code_for_how_the_site_words_it():
     for name in ("page_agent.py", "browser_automation.py", "emailed_codes.py"):
         text = (root / name).read_text(encoding="utf-8")
         assert "HUMAN_CHECK" not in text and "not a robot" not in text, name
+
+
+
+# --- the account-verification link (the owner's decision of 30 September 2026) ----------------------------------------
+
+@pytest.mark.parametrize("link, text, ok", [
+    ("https://ciena.wd5.myworkdayjobs.com/en-US/Ciena_Careers/activate/abc", "Verify Account", True),
+    ("https://www.google.com/url?q=https://ciena.wd5.myworkdayjobs.com/activate/abc&sa=D", "Verify", True),
+    ("https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternal/activate/abc", "Verify", False),     # another employer
+    ("https://u123.ct.sendgrid.net/ls/click?upn=abc", "Verify your account", False),          # a tracking redirect
+    ("https://ciena.wd5.myworkdayjobs.com/en-US/Ciena_Careers/passwordreset/abc", "Reset password", False),
+    ("http://ciena.wd5.myworkdayjobs.com/activate/abc", "Verify", False),                     # not https
+    ("https://evil-myworkdayjobs.com.attacker.net/activate", "Verify", False),
+])
+def test_only_this_sites_own_verification_link_is_opened(link, text, ok):
+    import emailed_codes
+    assert emailed_codes.verification_link_ok(link, text, "https://ciena.wd5.myworkdayjobs.com/en-US/Ciena_Careers/login") is ok
+
+
+# --- the code's own delivery channel (P0-B2, 7 October 2026) --------------------------------------
+#
+# ACCOUNT_CODE (page_agent.complete_account_code) matched a box by words like "verification code"
+# or "one-time code" alone, with nothing excluding a code the page itself says was sent by SMS/text
+# or must come from an authenticator app -- channels why_not's own permission (the owner's Gmail)
+# has nothing to do with. A page reading "Enter the one-time code we texted to your phone" matched
+# that wording and would have had passcode_from_gmail search an inbox the real code was never going
+# to reach.
+
+@pytest.mark.parametrize("context", [
+    "We texted a 6-digit code to your phone number ending in 1234.",
+    "Enter the code we sent via SMS.",
+    "A verification code was sent to your mobile phone.",
+    "Enter the 6-digit code from your authenticator app.",
+    "Open Google Authenticator and enter the code shown there.",
+    "Enter your Authy code to continue.",
+    "Enter the TOTP code from your authenticator.",
+    "Insert your security key and press the button on it.",
+    "Tap your hardware key to verify.",
+])
+def test_a_non_email_channel_is_never_treated_as_readable_mail(context):
+    assert emailed_codes.code_channel_is_email(context) is False
+
+
+@pytest.mark.parametrize("context", [
+    "",
+    "We sent a verification code to your email. Check your inbox.",
+    "Enter the one-time code we emailed you.",
+    "A verification code was sent to j***@example.com",
+    "Enter the 8-character code to confirm you're a human.",
+])
+def test_an_email_or_unlabeled_channel_is_still_treated_as_readable_mail(context):
+    assert emailed_codes.code_channel_is_email(context) is True
+
+
+# --- the three-way channel report, and local vs. page-wide scope (the follow-up, 7 October 2026) ---
+
+@pytest.mark.parametrize("context, channel", [
+    ("We sent a verification code to your email. Check your inbox.", "EMAIL"),
+    ("A verification code was sent to j***@example.com", "EMAIL"),
+    ("We texted a 6-digit code to your phone.", "NON_EMAIL"),
+    ("Enter the code from your authenticator app.", "NON_EMAIL"),
+    ("Enter the 8-character code to confirm you're a human.", "UNKNOWN"),   # no channel named
+    ("", "UNKNOWN"),
+    ("We emailed your verification code. We also texted the code to your phone.", "UNKNOWN"),  # contradictory
+])
+def test_code_channel_reports_the_evidence_honestly(context, channel):
+    assert emailed_codes.code_channel(context) == channel
+
+
+@pytest.mark.parametrize("context", [
+    "We emailed your verification code. We also texted the code to your phone.",
+    "Check your inbox -- or enter the code from your authenticator app if you prefer.",
+    "A verification code was sent to j***@example.com. SMS delivery is also available.",
+])
+def test_contradictory_local_evidence_is_never_read_as_email(context):
+    """code_channel() reports this as UNKNOWN (genuinely ambiguous), and
+    code_channel_is_email() treats it the same as a confirmed non-email channel -- never guessed,
+    even though an email channel is ALSO named in the same local context."""
+    assert emailed_codes.code_channel(context) == "UNKNOWN"
+    assert emailed_codes.code_channel_is_email(context) is False
+
+
+def test_unknown_with_no_channel_named_is_still_the_preserved_default():
+    """The other way UNKNOWN arises -- no channel named at all -- keeps this project's existing,
+    deliberate default (allowed), distinguishing it from the contradictory case above even though
+    code_channel() itself reports both as the same "UNKNOWN" value."""
+    context = "Enter the 8-character code to confirm you're a human."
+    assert emailed_codes.code_channel(context) == "UNKNOWN"
+    assert emailed_codes.code_channel_is_email(context) is True
+
+
+def test_account_state_mfa_and_emailed_codes_channel_share_one_core_vocabulary():
+    """Avoids semantic drift (the follow-up's own explicit requirement, 7 October 2026):
+    account_state._MFA imports emailed_codes.NON_EMAIL_CHANNEL_CORE directly rather than
+    maintaining its own, independent copy of the same words."""
+    import account_state
+    assert emailed_codes.NON_EMAIL_CHANNEL_CORE.pattern in account_state._MFA.pattern
+
+
+# --- the real production path: PageAgent.complete_account_code() (the follow-up, 7 October 2026) ---
+
+def _gmail_mock(calls):
+    return lambda *a, **k: (calls.append(1), "482913")[1]
+
+
+def _complete_code_through(context, html):
+    """Runs the real complete_account_code() against `html`, with passcode_from_gmail mocked to
+    prove whether Gmail would actually have been opened. Returns (outcome, gmail_was_called,
+    account_blocker)."""
+    import page_agent
+    page = employer_page(context, html)
+    assistant = assistant_for(ALLOWED)
+    calls = []
+    assistant.passcode_from_gmail = _gmail_mock(calls)
+    agent = page_agent.PageAgent(assistant, SimpleNamespace(), SimpleNamespace(auto_submit=False, ats_email=""),
+                                 ALLOWED, SimpleNamespace(raw_text="x"),
+                                 SimpleNamespace(title="t", company="c", url=URL), resume_file=None)
+    snapshot = agent.snapshot(page)
+    controls = page_agent.parse_snapshot(snapshot)
+    outcome = agent.complete_account_code(page, controls, snapshot)
+    return outcome, bool(calls), agent.account_blocker
+
+
+# A/B/C: an email-delivered code must not be blocked by unrelated SMS/phone/mobile-app wording
+# elsewhere on the same page -- the original false-negative this follow-up exists to fix.
+_EMAIL_CODE_WITH_UNRELATED_NOISE = [
+    ("A_unrelated_sms_consent_after",
+     '<h2>Verify your email</h2><p>We sent a verification code to your email.</p>'
+     '<label for="c">Verification Code</label><input id="c">'
+     '<p>Would you like to receive job updates via SMS?</p>'
+     '<input type="checkbox" id="smsconsent">'),
+    ("B_unrelated_phone_field",
+     '<h2>Verify your email</h2><p>We sent a verification code to your email.</p>'
+     '<label for="c">Verification Code</label><input id="c">'
+     '<label for="ph">Phone Number</label><input id="ph">'),
+    ("C_unrelated_mobile_app_text",
+     '<h2>Senior Engineer</h2><p>Experience with mobile app development preferred.</p>'
+     '<p>We sent a verification code to your email.</p>'
+     '<label for="c">Verification Code</label><input id="c">'),
+]
+
+
+@pytest.mark.parametrize(("case_id", "html"), _EMAIL_CODE_WITH_UNRELATED_NOISE)
+def test_email_code_is_still_read_despite_unrelated_page_wide_noise(context, case_id, html):
+    outcome, gmail_called, blocker = _complete_code_through(context, html)
+    assert gmail_called, case_id       # Gmail path IS allowed and IS called
+    assert not blocker, case_id        # no owner blocker caused by unrelated wording
+
+
+# D/E/F/G: every non-email channel remains blocked, using the real production path end to end.
+_NON_EMAIL_CODE_CASES = [
+    ("D_sms_code",
+     '<h2>Verify your identity</h2><p>We texted a 6-digit code to your phone.</p>'
+     '<label for="c">One-time code</label><input id="c">'),
+    ("E_authenticator_app_code",
+     '<h2>Two-factor authentication</h2><p>Enter the one-time code from your authenticator app.</p>'
+     '<label for="c">One-time code</label><input id="c">'),
+    ("F_totp_authy_google_authenticator",
+     '<h2>Verify</h2><p>Open Google Authenticator and enter the code shown there.</p>'
+     '<label for="c">Verification code</label><input id="c">'),
+    ("G_security_key",
+     '<h2>Verify</h2><p>Insert your security key and enter the code it displays.</p>'
+     '<label for="c">Verification code</label><input id="c">'),
+]
+
+
+@pytest.mark.parametrize(("case_id", "html"), _NON_EMAIL_CODE_CASES)
+def test_non_email_channels_are_never_read_through_the_real_path(context, case_id, html):
+    outcome, gmail_called, blocker = _complete_code_through(context, html)
+    assert outcome is False, case_id
+    assert not gmail_called, case_id   # Gmail is never opened
+    assert blocker and "authoriz" in blocker.lower(), case_id   # precise owner handoff remains
+
+
+def test_unknown_channel_preserves_the_existing_default_through_the_real_path(context):
+    """H: no delivery channel named at all -- the existing, deliberate default (allowed)."""
+    html = '<h2>Verify</h2><label for="c">Verification code</label><input id="c">'
+    outcome, gmail_called, blocker = _complete_code_through(context, html)
+    assert gmail_called
+    assert not blocker
+
+
+def test_contradictory_local_evidence_fails_closed_through_the_real_path(context):
+    """I: the same local verification context names both an email and a non-email channel --
+    never guessed, through the real production path."""
+    html = ('<h2>Verify</h2><p>We emailed your verification code. We also texted the code to '
+            'your phone.</p><label for="c">Verification code</label><input id="c">')
+    outcome, gmail_called, blocker = _complete_code_through(context, html)
+    assert outcome is False
+    assert not gmail_called
+    assert blocker
+
+
+# --- authentication MODE vs. delivery/completion MECHANISM (8 October 2026) ------------------
+#
+# "two-factor"/"2-step verification" name an authentication MODE ("a second factor is
+# required"), never a delivery MECHANISM ("how that factor reaches you") -- and a second factor
+# can legitimately be delivered by email, which this project is authorized to read. These words
+# were removed from NON_EMAIL_CHANNEL_CORE entirely rather than replaced with another generic
+# MFA-heading heuristic: only the actual mechanism (an authenticator app, TOTP, Authy, Google
+# Authenticator, a security key, a push approval, or SMS/phone delivery) determines whether the
+# agent has an authorized way to complete the step.
+
+@pytest.mark.parametrize("context, channel", [
+    ("Two-factor authentication. We sent a verification code to your email.", "EMAIL"),
+    ("2-step verification. Check your inbox for the code.", "EMAIL"),
+    ("Two-factor authentication. Enter the code from your authenticator app.", "NON_EMAIL"),
+    ("Two-factor authentication. We texted the code to your phone.", "NON_EMAIL"),
+    ("Two-factor authentication. Enter verification code.", "UNKNOWN"),
+])
+def test_authentication_mode_wording_alone_never_decides_the_channel(context, channel):
+    assert emailed_codes.code_channel(context) == channel
+
+
+def test_mode_wording_does_not_contribute_a_non_email_signal():
+    """"two-factor"/"2-step verification" must not even partially match NON_EMAIL_CHANNEL_CORE
+    -- confirmed directly against the compiled pattern, not just its net classification
+    effect, so a future, differently-shaped MFA phrase cannot reintroduce this by accident."""
+    assert not emailed_codes.NON_EMAIL_CHANNEL_CORE.search("Two-factor authentication")
+    assert not emailed_codes.NON_EMAIL_CHANNEL_CORE.search("2-step verification")
+
+
+@pytest.mark.parametrize(("case_id", "html"), [
+    ("A_two_factor_plus_email",
+     '<h2>Two-factor authentication</h2><p>We sent a verification code to your email.</p>'
+     '<label for="c">Verification Code</label><input id="c">'),
+    ("B_two_step_plus_inbox",
+     '<h2>2-step verification</h2><p>Check your inbox for the code.</p>'
+     '<label for="c">Verification Code</label><input id="c">'),
+])
+def test_email_second_factor_is_still_read_through_the_real_path(context, case_id, html):
+    outcome, gmail_called, blocker = _complete_code_through(context, html)
+    assert gmail_called, case_id       # Gmail IS called
+    assert not blocker, case_id
+
+
+@pytest.mark.parametrize(("case_id", "html"), [
+    ("C_two_factor_plus_authenticator_app",
+     '<h2>Two-factor authentication</h2><p>Enter the code from your authenticator app.</p>'
+     '<label for="c">Verification Code</label><input id="c">'),
+    ("D_two_factor_plus_sms",
+     '<h2>Two-factor authentication</h2><p>We texted a code to your phone.</p>'
+     '<label for="c">Verification Code</label><input id="c">'),
+    ("E_two_factor_plus_security_key",
+     '<h2>Two-factor authentication</h2><p>Insert your security key and enter the code it displays.</p>'
+     '<label for="c">Verification Code</label><input id="c">'),
+])
+def test_unsupported_second_factor_mechanisms_are_never_read_through_the_real_path(context, case_id, html):
+    outcome, gmail_called, blocker = _complete_code_through(context, html)
+    assert outcome is False, case_id
+    assert not gmail_called, case_id   # Gmail is NEVER called
+    assert blocker, case_id
+
+
+def test_two_factor_with_no_named_mechanism_preserves_the_existing_unknown_policy(context):
+    """F: generic MFA wording with no code-delivery mechanism named at all -- the existing,
+    already-established UNKNOWN policy (allowed) is preserved, not silently changed."""
+    html = ('<h2>Two-factor authentication</h2>'
+            '<label for="c">Verification code</label><input id="c">')
+    outcome, gmail_called, blocker = _complete_code_through(context, html)
+    assert gmail_called
+    assert not blocker

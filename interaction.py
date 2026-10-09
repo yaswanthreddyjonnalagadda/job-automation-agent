@@ -20,6 +20,7 @@ from playwright.sync_api import Page
 
 import safety
 from perception import is_ant_single_select
+from submission_guard import SubmissionGuardV0
 
 logger = logging.getLogger(__name__)
 
@@ -55,17 +56,39 @@ def fill_and_dispatch(locator: Any, value: str, timeout: Optional[float] = None,
 def click_resiliently(locator: Any, timeout_ms: int = 4_000) -> bool:
     """Clicks an element resiliently, trying normal click, forced click, and JS dispatch."""
     try:
+        denial_count = SubmissionGuardV0.click_denial_count(locator)
+    except Exception:
+        denial_count = None
+    try:
         locator.click(timeout=timeout_ms)
+        if SubmissionGuardV0.click_was_denied(locator, denial_count):
+            logger.warning("SUBMISSION_GUARD_V0_DENIED: refusing click fallback")
+            return False
         return True
     except Exception:
+        if SubmissionGuardV0.click_was_denied(locator, denial_count):
+            logger.warning("SUBMISSION_GUARD_V0_DENIED: refusing click fallback")
+            return False
         try:
             locator.click(force=True, timeout=min(timeout_ms, 2_000))
+            if SubmissionGuardV0.click_was_denied(locator, denial_count):
+                logger.warning("SUBMISSION_GUARD_V0_DENIED: refusing JavaScript click fallback")
+                return False
             return True
         except Exception:
+            if SubmissionGuardV0.click_was_denied(locator, denial_count):
+                logger.warning("SUBMISSION_GUARD_V0_DENIED: refusing JavaScript click fallback")
+                return False
             try:
                 locator.evaluate("el => el.click()")
+                if SubmissionGuardV0.click_was_denied(locator, denial_count):
+                    logger.warning("SUBMISSION_GUARD_V0_DENIED: JavaScript click was intercepted")
+                    return False
                 return True
             except Exception as exc:
+                if SubmissionGuardV0.click_was_denied(locator, denial_count):
+                    logger.warning("SUBMISSION_GUARD_V0_DENIED: JavaScript click was intercepted")
+                    return False
                 logger.debug("click_resiliently failed: %s", exc)
                 return False
 
@@ -479,6 +502,14 @@ def wipe_and_enforce_location_sweep(
 
     def choose(field: dict, wanted: str, same) -> None:
         loc = locate(field)
+        # Dependent controls may remain disabled until a country is committed.
+        # Never attempt to clear or force-enable them.
+        from playwright.sync_api import expect
+        try:
+            expect(loc).to_be_enabled(timeout=3_000)
+        except Exception:
+            logger.info("LOCATION_SWEEP: %s is disabled -- deferred", field['id'])
+            return
         if field["tagName"] == "select":
             texts = []
             try:
@@ -495,6 +526,10 @@ def wipe_and_enforce_location_sweep(
                 el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
                 el.dispatchEvent(new Event('blur', { bubbles: true, cancelable: true }));
             }""")
+        elif 'rcmpaginatedselectinput' in (loc.get_attribute('class') or ''):
+            from sites.successfactors import SuccessFactorsAdapter
+            if not SuccessFactorsAdapter().choose_location(page, loc, wanted, same):
+                return
         elif is_ant_single_select(loc):
             # Read whole, chosen by label, confirmed -- never typed and
             # Entered, which takes the list's first row.
@@ -658,9 +693,13 @@ def sweep_modals_and_policies(page_or_tab: Any, profile: Any = None) -> bool:
                 if not modal.is_visible():
                     continue
 
-                # Safety: Skip authentication dialogs (password inputs present) or file inputs
+                # Entry dialogs belong to the form-filling path. The policy
+                # sweep must not advance them before their fields are verified.
                 has_password = modal.evaluate("""el => {
-                    return Boolean(el.querySelector('input[type="password"]'));
+                    return Boolean(el.querySelector('input[type="password"], input[type="file"]')) ||
+                        [...el.querySelectorAll('input,textarea,select,[contenteditable="true"]')].some(e =>
+                            e.getBoundingClientRect().width > 0 &&
+                            !['hidden','checkbox','radio','button','submit'].includes(e.type));
                 }""")
                 if has_password:
                     continue
@@ -750,7 +789,6 @@ def sweep_modals_and_policies(page_or_tab: Any, profile: Any = None) -> bool:
                                 continue
                             if click_resiliently(c_btn, timeout_ms=3_000):
                                 confirm_clicked = True
-                                logger.info("Modal & Policy Interceptor: confirmed modal with %r", label)
                                 break
                     except Exception:
                         continue
@@ -778,7 +816,9 @@ def sweep_modals_and_policies(page_or_tab: Any, profile: Any = None) -> bool:
                         except Exception:
                             pass
 
-                    dismissed_any = True
+                    if not modal.is_visible():
+                        dismissed_any = True
+                        logger.info("Modal & Policy Interceptor: dismissed modal with %r", label)
         except Exception as exc:
             logger.debug("sweep_modals_and_policies encountered: %s", exc)
 

@@ -1,0 +1,12 @@
+{
+  "id": "f077",
+  "date": "2026-09-30",
+  "class": "A site routine that knew one tenant's shape of a field, and counted entries by it",
+  "symptom": "Ciena on Workday, 30 September: every Education entry's School or University stayed empty ('required'), an extra, empty Education 3 appeared whose Degree was then 'required', and Save and Continue was refused three times -- the loop guard stopped the run.",
+  "site": "Workday tenants whose School is a search-and-pick list (--school) rather than a text box (--schoolName)",
+  "root_cause": "fill_education_section filled and counted entries only by input[id$='--schoolName']. On Ciena the School is a searchable list (formField-school, --school): it was never filled, and _ensure_entry_slot, seeing no --schoolName boxes, pressed Add Another for every index, leaving an empty extra entry. The page agent then typed the school into the list's search box, which Workday does not take as a choice.",
+  "why_tests_missed": "The Workday education tests used a tenant with a --schoolName text box.",
+  "fix": "Entries are counted by whichever School box the tenant draws (text or list); a text box is filled, a list is picked from with select_from_searchable_input(keyboard=False) -- only a row whose text matches is clicked, never ArrowDown+Enter; a school the list does not offer is left for the owner with a note.",
+  "tests": ["replay_guard.py"],
+  "prevention": "A site routine checks which shape the field has on this tenant (text, list, date parts) and counts repeated entries by something every entry has; a pick-one list is always picked by a matching row."
+}

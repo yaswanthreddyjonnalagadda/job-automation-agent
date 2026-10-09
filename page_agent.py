@@ -34,18 +34,29 @@ import json
 import logging
 import re
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import urlparse
 
 import concept_matcher
+import checkpoint
 import emailed_codes
 import geo_reference
+import account_state
+import job_sources
+import answer_bank
+from claude_integration import JOB_POSTING_CHARS, is_non_answer
+import employment_history
+import form_fields
+from field_requirements import account_password_fields
+import location_choice
+import option_match
+import repeated_entries
 import login_guard
 import open_answers
-from config import resume_to_attach, site_prefill_policy
+from config import BLANK_MEANS_NONE, resume_to_attach, site_prefill_policy
 from interaction import (
     click_resiliently,
     commit_draft_cards,
@@ -64,6 +75,8 @@ from perception import (
 import provenance
 import safety
 
+import diagnostics
+diagnostics.install_log_privacy()
 logger = logging.getLogger("page_agent")
 
 MAX_PAGES = 30          # steps in one run before handing over
@@ -75,6 +88,18 @@ ANSWER_ROLES = {"textbox", "searchbox", "combobox", "listbox", "radio", "checkbo
 PRESS_ROLES = {"button", "link", "menuitem", "tab"}
 OPTION_ROLES = {"option", "menuitemradio", "menuitem", "treeitem", "listitem", "gridcell"}
 
+# An upload menu's item for a file on this computer -- never Dropbox, Google Drive, OneDrive or a LinkedIn profile.
+_FILE_ON_THIS_COMPUTER = re.compile(r"^\s*(?:file|upload(?:\s+a)?\s+file|upload\s+from\s+(?:this\s+)?(?:device|computer)|"
+                                    r"from\s+(?:this\s+|my\s+)?(?:device|computer)|my\s+(?:device|computer)|"
+                                    r"local\s+file|browse(?:\s+files?)?|attach\s+file)\s*$", re.IGNORECASE)
+
+# A box that asks for a web address (its label is the site or the word itself, not a question about it), and what a
+# web address looks like.
+_WEB_ADDRESS_BOX = re.compile(r"^\W*(?:your\s+)?(?:linked\s?in|facebook|twitter|x\s*\(twitter\)|git\s?hub|instagram|"
+                              r"portfolio|personal\s+website|website|web\s*site|blog|url)(?:\s+(?:url|link|profile|"
+                              r"profile\s+url|address|page))?\W*$", re.IGNORECASE)
+_WEB_ADDRESS = re.compile(r"(?:https?://|www\.)\S+|[\w-]+(?:\.[\w-]+)+(?:/\S*)?", re.IGNORECASE)
+
 # Never pressed, whatever the page or Claude says.
 NEVER_PRESS = re.compile(
     r"finish later|save (and|&) (exit|finish later|close)|save for later|withdraw|log ?out|sign ?out|\bcancel\b|"
@@ -85,7 +110,7 @@ NEVER_PRESS = re.compile(
 # dialog belongs to Windows, not to the page: nothing on the page can close it,
 # and a whole run sat frozen behind it until it was killed.
 OPENS_A_FILE_DIALOG = re.compile(
-    r"autofill|upload|attach|choose (a )?file|browse|import (your )?(profile|resume|cv)", re.IGNORECASE)
+    r"autofill|upload|attach|choose (a )?file|\bbrowse\b|import (your )?(profile|resume|cv)", re.IGNORECASE)
 
 # Workday answered a page press with "Something went wrong. Please refresh the
 # page and then try again." -- a passing fault, and the page says what to do.
@@ -101,6 +126,14 @@ CONFIRMATION_TEXT = re.compile(
     r"your application is complete|"
     r"(?<!if )(?<!jobs )(?<!positions )(?:you've|you have) (?:successfully |already )?applied(?! before|\?|\s+to check)",
     re.IGNORECASE)
+# The words that say, beyond doubt, the application has already arrived.
+RECEIVED_TEXT = re.compile(
+    r"we('ve| have) received your application|your application (has been|was) (received|submitted|sent)|"
+    r"application (was |has been )?successfully submitted|successfully submitted your application", re.IGNORECASE)
+# ... and the ones that say it has not: something is left to do before it counts.
+STILL_TO_DO_TEXT = re.compile(
+    r"\b(to|and|then) (complete|finish|continue|submit) (your|the|this) application\b|"
+    r"\bbefore (your|the) application (is|can be) (complete|submitted|considered)", re.IGNORECASE)
 
 # What a site says when the account behind a sign-in cannot be used.
 ACCOUNT_ERROR = re.compile(
@@ -199,6 +232,18 @@ _LINE = re.compile(r'^(?P<indent>\s*)- (?P<role>[\w/-]+)(?: "(?P<name>(?:[^"\\]|
                    r'(?::\s?(?P<value>.*))?$')
 
 
+# Text that introduces a question of choices: it asks ('?'), leads in (':'), or is marked required. Between two runs
+# of radio buttons or tick boxes, such text starts the next question.
+_INTRODUCES_CHOICES = re.compile(r"\?|:\s*$|\(\s*required\s*\)|\*\s*$|\b(?:select|check|choose|tick|pick)\b|"
+                                 r"all that apply", re.IGNORECASE)
+# A tick box whose label is a statement of the owner's, not a choice among others.
+_STATEMENT = re.compile(r"\s*i\s+(?:agree|consent|acknowledge|understand|have\s+read|certify|authori[sz]e|accept|"
+                        r"confirm|attest|would\s+like|wish\s+to\s+receive|opt\s+in|allow)\b", re.IGNORECASE)
+# The note a site writes under a question left unanswered: it belongs to that question, it starts nothing.
+_REQUIRED_NOTE = re.compile(r"\s*(?:(?:this\s+)?(?:question|field|answer|selection)\s+(?:is\s+)?)?required\.?\s*",
+                            re.IGNORECASE)
+
+
 def _unquote(text: str) -> str:
     text = (text or "").strip()
     if len(text) >= 2 and text[0] == text[-1] == '"':
@@ -214,11 +259,24 @@ def parse_snapshot(snapshot: str) -> list[Control]:
     last_text = ""
     last_text_indent = -1
     radio_context = ""   # the question above a run of radio buttons with no group of their own
+    # Radio buttons and tick boxes with no group of their own belong to the question written above them. A run of
+    # them used to end only where something other than a choice came next, so questions drawn one straight after
+    # another became one: Paylocity's "Do you currently reside in the United States?" took the next question's
+    # Yes/No as well, and a "background check" answer made five more questions look answered (29 September).
+    # Question text that appears between two choices now starts the next question.
+    text_since_choice = ""      # question-like text seen since the last radio/tick box
+    last_choice_indent = -1
+    checkbox_context, checkbox_run = "", 0
+    checkbox_runs: dict[int, tuple[int, str]] = {}    # id(tick box) -> (its run, the text that introduced it)
     unclickable = None   # a tick box with no reference: (role, name, checked, lines left to find it)
     last_control_indent = -1
     entry_box: Optional[tuple[int, Control]] = None   # an empty-looking text box whose value may follow as a child line
     toggle_row: list[tuple[Control, bool]] = []       # buttons side by side that may be one question's choices
     toggle_indent, toggle_question = -1, ""
+    inside_choice: list[int] = []   # indents of the list options (and open lists) the current line sits inside
+    paragraph_scopes: list[int] = []
+    paragraph_questions: dict[int, str] = {}
+    textbox_wrappers: set[str] = set()
     for raw in (snapshot or "").splitlines():
         # A line whose text holds a colon comes wrapped in quotes:
         #   - 'heading "Apply: Network Engineer" [level=1] [ref=e2]'
@@ -230,6 +288,10 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         if not m:
             continue
         indent, role = len(m.group("indent")), m.group("role")
+        while paragraph_scopes and paragraph_scopes[-1] >= indent:
+            paragraph_questions.pop(paragraph_scopes.pop(), None)
+        if role == 'paragraph':
+            paragraph_scopes.append(indent)
         name = _unquote(m.group("name") or "")
         attrs = m.group("attrs") or ""
         value = _unquote(m.group("value") or "")
@@ -244,6 +306,14 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         preceding_text = last_text
         while stack and stack[-1][0] >= indent:
             stack.pop()
+        while inside_choice and inside_choice[-1] >= indent:
+            inside_choice.pop()
+        if role in ("radio", "checkbox") and inside_choice:
+            # A tick or radio drawn inside a list's own option is that choice's picture, not a question: Workday's
+            # Field of Study list, left open on the page, was read as a question per subject -- "Accounting",
+            # "Advertising", "African Languages" ... -- and answered one by one for three minutes (Ciena, 30 Sept).
+            stack.append((indent, "", None))
+            continue
         parent_group = next((label for _i, label, _ctl in reversed(stack) if label), "")
         owner = next((ctl for _i, _l, ctl in reversed(stack) if ctl is not None), None)
 
@@ -256,12 +326,52 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         # every pass and reported "could not set". The first such child is its value.
         if entry_box is not None and indent <= entry_box[0]:
             entry_box = None
+        if entry_box is not None and role == 'text' and value and not entry_box[1].name \
+                and re.search(r'\b(?:phone|mobile|telephone)\b', value, re.I) \
+                and not re.search(r'\d', value):
+            entry_box[1].context = value
+            entry_box = None  # A composite widget's heading, not its value.
         if entry_box is not None and role == "text" and value and not entry_box[1].value:
             entry_box[1].value = value
+            continue
+        # A search-and-pick box shows what was picked as a tag inside it, named by the choice:
+        #   - combobox "Institution" [ref=e179]:
+        #     - textbox "Eastern Illinois University" [ref=e1006]:
+        #       - button: ×
+        # (Avature, Steelcase, 29 September). Read as empty, the school was typed again on every pass and the
+        # tag was taken for a question of its own. The tag is the box's answer.
+        if role in ("textbox", "searchbox") and name and owner is not None and owner.role == "combobox" \
+                and not owner.value and not _same_question(name, owner.name) \
+                and not re.fullmatch(r"(?:search|type|select|choose|start typing)\b.*", name, re.IGNORECASE):
+            owner.value = name
+            stack.append((indent, "", None))
             continue
 
         if role in ("text", "paragraph", "heading", "strong", "emphasis", "generic") and (value or name):
             candidate_text = (value or name).strip()[:200]
+            if paragraph_scopes:
+                scope_indent = paragraph_scopes[-1]
+                if re.match(r'^(?:do|does|are|is|have|has|will|would|can|did)\b', candidate_text, re.I):
+                    paragraph_questions.setdefault(scope_indent, candidate_text)
+                candidate_text = paragraph_questions.get(scope_indent, candidate_text)
+            if owner is not None and owner.role == 'textbox' and not owner.name \
+                    and re.search(r'\b(?:phone|mobile|telephone)\b', candidate_text, re.I):
+                owner.context = candidate_text
+            # The dial-code button inside a phone widget is not its field label.
+            if re.fullmatch(r'\+\d{1,4}', candidate_text) and owner is not None \
+                    and owner.role == 'textbox' and re.search(r'phone|mobile|telephone', owner.question, re.I):
+                continue
+            # Workday's search-and-pick boxes show the choice as a tag beside an empty search box:
+            # "1 item selected, United States of America (+1)". That is the box's answer, not a label.
+            # Read as empty, Rackspace's Country Phone Code was "corrected" four times and the run stopped
+            # with "could not set" (29 September).
+            tagged = _SELECTED_TAG.fullmatch(candidate_text)
+            if tagged:
+                box = _last_entry_box(controls)
+                if box is not None and not box.value and int(tagged.group(1)) > 0 and tagged.group(2):
+                    box.value = tagged.group(2).strip()
+                stack.append((indent, "", None))
+                continue
             # Keep the field label when an accessibility tree emits its
             # required marker as a later child ("First Name" then "(required)").
             if not re.fullmatch(r"\(?\s*required\s*\)?|\*", candidate_text, re.IGNORECASE):
@@ -271,8 +381,20 @@ def parse_snapshot(snapshot: str) -> list[Control]:
             # their own: each is followed by its text ("I AM NOT A PROTECTED
             # VETERAN"). That text is the button's name.
             if controls and not controls[-1].name and controls[-1].role in ("radio", "checkbox", "switch") \
-                    and not controls[-1].value and role == "text":
+                    and not controls[-1].value and (role == "text" or (role in ('generic', 'paragraph') and indent == last_control_indent)):
+                # Meta draws each choice as a radio and then its word in a box beside it ("radio" / "generic: Male"):
+                # that word, right after the radio at its own level, is the radio's name. Left nameless, "Male" was
+                # matched to nothing and the Female button was the one clicked (30 September).
                 controls[-1].name = candidate_text
+            # After a choice: text that reads as a question starts the next one. Not the choice's own label -- the
+            # same words as its name, or any text right after a choice that has no name of its own (Federal
+            # Recovery Service draws "Facebook", "Indeed" ... beside unnamed radios) -- and not the site's
+            # "Question Required" note.
+            last_choice = controls[-1] if controls and controls[-1].role in ("radio", "checkbox") else None
+            if last_choice is not None and last_choice.name and not _REQUIRED_NOTE.fullmatch(candidate_text) \
+                    and not _same_question(candidate_text, last_choice.name) \
+                    and _INTRODUCES_CHOICES.search(candidate_text):
+                text_since_choice = candidate_text
             # Ant Design / React custom comboboxes render their selected value as a
             # trailing generic/text element right after the combobox input.
             if controls and controls[-1].role in ("combobox", "listbox") and not controls[-1].value \
@@ -307,6 +429,18 @@ def parse_snapshot(snapshot: str) -> list[Control]:
                 owner.selected_option = name or value
         elif role in ("radio", "checkbox", "switch") and not ref_m and (name or value):
             unclickable = (role, name or value, "[checked]" in attrs, 6)
+        chip = _TAG_CHOICE.match((name or value or "").strip()) if role in OPTION_ROLES else None
+        if chip:
+            box = _last_entry_box(controls)
+            if box is not None and not box.value:
+                box.value = chip.group(1).strip()
+            stack.append((indent, "", None))
+            continue
+        if ref_m and role == "listbox" and (_TAG_LIST.fullmatch((name or "").strip())
+                or re.fullmatch(r"Options? (?:Expanded|Collapsed)", (name or "").strip(), re.IGNORECASE)):
+            # The list of chosen tags ("items selected") belongs to the box before it; it is not a question.
+            stack.append((indent, "", None))
+            continue
         if role in OPTION_ROLES and owner is not None and owner.role in ("combobox", "listbox"):
             owner.options.append(name or value)
             if "[selected]" in attrs:
@@ -328,8 +462,14 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         )
         if ref_m and (role in ANSWER_ROLES or role in PRESS_ROLES or role in OPTION_ROLES
                       or role in ("radiogroup", "group", "list", "region") or clickable_generic):
-            if role == "radio" and not (controls and controls[-1].role == "radio"):
-                radio_context = last_text
+            # The tick box before this one, list items aside: Meta puts each tick box in a list item of its own, and
+            # counting the list item, every box began a run of one -- the question over them was lost (30 September).
+            # (Named groups still end a run: they are where one question stops and the next begins.)
+            before = next((c for c in reversed(controls) if c.role != "listitem"), None)
+            if role == "radio" and (not (controls and controls[-1].role == "radio") or text_since_choice):
+                radio_context = text_since_choice or last_text
+            if role == "checkbox" and (not (before and before.role == "checkbox") or text_since_choice):
+                checkbox_context, checkbox_run = text_since_choice or last_text, checkbox_run + 1
             shown = value if value and not value.endswith(":") else ""
             # Some widgets put the chosen value in a box beside the control
             # rather than in it ("Yes." next to "Would you relocate to London?",
@@ -353,12 +493,22 @@ def parse_snapshot(snapshot: str) -> list[Control]:
                     clickable_generic or not name or Control.GENERIC_NAMES.match(name.strip())
                     or re.fullmatch(r"(?:yes|no|select one) required", name.strip(), re.IGNORECASE))
                 else "")
+            if role in ('textbox', 'searchbox') and owner is not None and owner.role == 'textbox' \
+                    and (not owner.name or _same_question(owner.name, name)):
+                textbox_wrappers.add(owner.ref)
+                if not name and re.search(r'phone|mobile|telephone', owner.question, re.I):
+                    control.context = owner.question
             if control.role in ("textbox", "searchbox") and is_honeypot(control.name):
                 # A decoy for robots: not a question, never answered, never "still blank".
                 stack.append((indent, "", None))
                 continue
             controls.append(control)
             last_control_indent = indent
+            text_since_choice = ""
+            if control.role in ("radio", "checkbox"):
+                last_choice_indent = indent
+            if control.role == "checkbox":
+                checkbox_runs[id(control)] = (checkbox_run, checkbox_context)
             if control.role == "button" and not clickable_generic and (not toggle_row or indent == toggle_indent):
                 if not toggle_row:
                     toggle_indent, toggle_question = indent, preceding_text
@@ -367,9 +517,56 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         # A named group is both a question for what is inside it and, when it
         # has a reference, a control the agent can act on.
         stack.append((indent, name if role in ("group", "radiogroup", "region") else "", control))
+        if role in ("option", "menuitem", "menuitemradio", "treeitem", "listbox"):
+            inside_choice.append(indent)
     if toggle_row:
         _settle_toggle_row(toggle_row, toggle_question)
-    return controls
+    _group_tick_boxes(controls, checkbox_runs)
+    for control in controls:
+        if control.role == "group" and not control.name and not control.holds_choices:
+            control.context = ""  # A layout wrapper cannot inherit the preceding field's question.
+    return [c for c in controls if c.ref not in textbox_wrappers and not is_bot_trap(c)]
+
+
+def _group_tick_boxes(controls: list[Control], runs: dict[int, tuple[int, str]]) -> None:
+    """Two or more tick boxes under one question that asks for a choice ("Please select any certifications you may
+    have.", "Check all that apply") are that question's choices, as radio buttons are: before, each was read as a
+    question of its own named by its label, and a required group was never asked (Paylocity, 29 September).
+    A single tick box, or a run holding a declaration or signature, is left as it was."""
+    members: dict[int, list[Control]] = {}
+    for control in controls:
+        run = runs.get(id(control))
+        if run is not None and not control.group:
+            members.setdefault(run[0], []).append(control)
+    asked: dict[str, int] = {}
+    for run, boxes in members.items():
+        question = runs[id(boxes[0])][1]
+        # Boxes that each say something the owner agrees to ("I agree to ...", "I consent to ...") are separate
+        # questions even under one heading: grouped, only the first would be ticked.
+        # And a box named by the same words is labelled by them, so they are not a question over the others
+        # (Chobani's "Notification:" opt-in).
+        if len(boxes) < 2 or not question or not _INTRODUCES_CHOICES.search(question) \
+                or any(safety.is_attestation(box.name) or safety.is_privacy_consent(box.name)
+                       or _STATEMENT.match(box.name or "") or _same_question(box.name, question) for box in boxes):
+            continue
+        # The same question twice (Paylocity's form asked for certifications in two lists) is two questions:
+        # one name for both made the second list look answered by the first.
+        asked[question] = asked.get(question, 0) + 1
+        for box in boxes:
+            box.group = question if asked[question] == 1 else f"{question} [{asked[question]}]"
+
+
+# A field a site hides from people to catch programs: "Enter website. This input is for robots only, do not
+# enter if you're human." Filled, it marks the application as a bot's; asked about, it spent an AI request
+# (Writer, 28 September). It is not the owner's question, so it is not read as a control at all.
+_BOT_TRAP = re.compile(
+    r"\b(?:for robots only|robots? only|do not (?:enter|fill|type)[^.]{0,40}\bif you(?:'| a)re (?:a )?human|"
+    r"if you are (?:a )?human,? (?:leave|do not))", re.IGNORECASE)
+
+
+def is_bot_trap(control: "Control") -> bool:
+    return control.role in ANSWER_ROLES and bool(
+        _BOT_TRAP.search(" ".join(filter(None, (control.name, control.question, control.context)))))
 
 
 # What a button that does something is called -- never an answer to a question.
@@ -426,6 +623,12 @@ def _section_holds_a_file(snapshot: str, section: str) -> bool:
 
 
 _UPLOAD_VERB = re.compile(r"attach|upload|choose|add|browse|file|import", re.IGNORECASE)
+# A page or step that is about the resume, in the words sites use for it.
+_RESUME_PAGE = re.compile(r"upload a file|resume upload|\b(select|choose|upload|attach|add|submit)\s+(your\s+|a\s+)?"
+                          r"(resume|cv|curriculum vitae)\b", re.IGNORECASE)
+# A button that opens the computer's file picker.
+_FILE_BUTTON = re.compile(r"\b(select|choose|pick)\s+(another\s+|a\s+|your\s+)?files?\b|\battach\b|\bupload\b|\bbrowse\b",
+                          re.IGNORECASE)
 _RESUME_WORDS = re.compile(r"resume|\bcv\b", re.IGNORECASE)
 # A resume/CV label marked required, as the snapshot shows it: seen even when the
 # upload beside it is not one the agent recognises.
@@ -473,6 +676,14 @@ def _detail_field(question: str) -> str:
     if not question or re.search(r"employer|company|school|university|reference|referr|emergency|previous|"
                                  r"supervisor|manager|work address", question, re.IGNORECASE):
         return ""
+    # A place of birth, origin, issuance or a visa is not where the owner lives ("Country of Birth").
+    if re.search(concept_matcher.NOT_WHERE_YOU_LIVE, question, re.IGNORECASE):
+        return ""
+    # "Country Phone Code" asks for a dial code, not where the owner lives: read as the country, Rackspace's
+    # "United States of America (+1)" was "corrected" to "United States" and the run stopped (29 September).
+    if re.search(r"phone|dial|calling|mobile|telephone|\bcode\b", question, re.IGNORECASE) \
+            and not re.search(r"\b(zip|postal)\b", question, re.IGNORECASE):
+        return ""
     for pattern, field in _DETAIL_FIELDS:
         if pattern.search(question):
             return field
@@ -518,9 +729,23 @@ _STANDING_ANSWERS: tuple[tuple[re.Pattern, str], ...] = (
 
 # What a button that moves an application on is called, and what is never
 # pressed on the agent's own initiative.
-FORWARD_LABEL = re.compile(r"^(apply|apply now|start application|begin application|apply manually|create account|next|continue|save and continue|save & continue|save and next|next step|"
+FORWARD_LABEL = re.compile(r"^(apply|apply now|start application|begin application|apply manually|create account|next|continue|continue to application|continue application|save and continue|save & continue|save and next|next step|"
                            r"submit|submit application|review|review and submit|proceed|"
                            r"save and proceed|begin)$", re.IGNORECASE)
+
+
+_ADD_ENTRY = re.compile(r"^\s*\+?\s*add\s+(?:another\s+|a\s+|new\s+|more\s+)?(education|degree|school|experience|"
+                        r"work(?:\s+experience)?|employment|job|position)\b", re.IGNORECASE)
+_TEXT_MESSAGES = re.compile(r"\bsms\b|text\s+messag|\btexts?\b.{0,40}\b(?:phone|mobile|cell)|mobile\s+messag|"
+                            r"whatsapp|\btexting\b", re.IGNORECASE)
+_AGREEMENT = re.compile(r"\bi\s+(?:have\s+read|acknowledge|agree|understand|accept|consent|certify|confirm|attest)\b|"
+                        r"\bby\s+(?:checking|ticking|selecting)\s+this\s+box\b|\bterms\s+(?:and|&)\s+conditions\b|"
+                        r"\bprivacy\s+(?:policy|notice|statement)\b|\backnowledg", re.IGNORECASE)
+_TICK_WORDS = frozenset({"yes", "no", "true", "false", "checked", "unchecked", "1", "0", "y", "n"})
+# The owner's identity and contact facts: the profile says them, over any saved answer.
+_PROFILE_OWNS = frozenset({"FIRST_NAME", "LAST_NAME", "MIDDLE_NAME", "FULL_NAME", "EMAIL", "PHONE_MOBILE",
+                           "STREET_ADDRESS", "CITY", "STATE_PROVINCE", "POSTAL_CODE", "COUNTRY"})
+_REQUIRED_STAR = re.compile(r"^\s*[*✱]|[*✱]\s*:?\s*$")
 
 
 def required_questions(snapshot: str) -> set[str]:
@@ -585,6 +810,104 @@ def _learnable_recipe_question(question: str) -> bool:
     ))
 
 
+_ERROR_TEXT = re.compile(
+    r"is required and must have a value|\bis required\b|\bare required\b|must have a value|"
+    r"^please (enter|select|provide|upload|choose|complete|fill)|^(error|errors found)\b|\binvalid\b|"
+    r"must be (a|an|at|in|between|less|more)\b|not a valid", re.IGNORECASE)
+_NOT_AN_ERROR = re.compile(r"indicates a required field|^\*|^required$|^error$|^errors found$", re.IGNORECASE)
+_UPLOAD_ERROR = re.compile(r"upload|attach|resume|\bcv\b|file", re.IGNORECASE)
+
+
+def page_errors(snapshot: str) -> list[str]:
+    """What the page says is wrong with the form, in its own words, once each.
+
+    OCC's Workday My Experience said "The field Upload a file (5MB max) is required and must have a value."
+    in an Errors Found panel, and the agent pressed Save and Continue some thirty times without reading it."""
+    found: list[str] = []
+    for line in (snapshot or "").splitlines():
+        if "/url:" in line:
+            continue
+        for quoted, trailing in re.findall(r'"((?:[^"\\]|\\.)*)"|:\s+(.+)$', line.strip()):
+            text = " ".join((quoted or trailing or "").split()).strip('"')
+            if 8 <= len(text) <= 200 and _ERROR_TEXT.search(text) and not _NOT_AN_ERROR.search(text) \
+                    and not text.lower().startswith("error ") and text not in found:
+                found.append(text)
+    return found[:8]
+
+
+RUNS_KEPT = 10     # the page recordings of the most recent runs of one application
+
+
+def keep_latest_runs(folder: Path, keep: int = RUNS_KEPT) -> None:
+    """Deletes all but the `keep` most recent run folders (named by their start time) under `folder`."""
+    runs = sorted((p for p in Path(folder).iterdir() if p.is_dir() and re.fullmatch(r"\d{8}_\d{6}", p.name)),
+                  key=lambda p: p.name)
+    import shutil
+    for old in runs[:-keep] if keep > 0 else runs:
+        shutil.rmtree(old, ignore_errors=True)
+
+
+_SELECTED_TAG = re.compile(r"(\d+)\s+items?\s+selected(?:,\s*(.+))?", re.IGNORECASE)
+_TAG_CHOICE = re.compile(r"(.+?),\s*press (?:delete|backspace) to (?:clear|remove)", re.IGNORECASE)
+_TAG_LIST = re.compile(r"\d*\s*items?\s+selected", re.IGNORECASE)
+
+
+def _last_entry_box(controls: list) -> Optional["Control"]:
+    """The search-and-pick box a chosen-value tag belongs to: the last box read."""
+    for control in reversed(controls[-3:]):
+        if control.role in ("textbox", "searchbox", "combobox"):
+            return control
+    return None
+
+
+def published_choices(question: str, published: list) -> list[str]:
+    """The choices the job site publishes for this question (Greenhouse's question list), or [].
+
+    A list that draws its choices only when clicked showed the agent nothing to match an answer to (f007, f021);
+    the published list gives the exact wording it takes, before it is opened."""
+    for entry in published or ():
+        if isinstance(entry, dict) and entry.get("options") and _same_question(str(entry.get("question") or ""),
+                                                                                question or ""):
+            return [str(o) for o in entry["options"]]
+    return []
+
+
+_STEP = re.compile(r"\b(current\s+|completed\s+)?(?:step|page)\s*(\d+)\s*(?:of|/)\s*(\d+)\b", re.IGNORECASE)
+
+
+def current_step(snapshot: str) -> Optional[tuple[int, int]]:
+    """The step the page is ON, as (step, total) -- or None when the page does not say which.
+
+    Workday's progress bar reads "completed step 1 of 5 ... completed step 4 of 5, current step 5 of 5". The
+    first "step N of M" on the page was taken for the current one, so on Aristocrat's Review page (step 5 of
+    5, 29 September) the agent read "1 of 5", took the last "Submit" for a mid-form one and pressed it: the
+    application was sent without the owner's review. A counter marked current wins; one marked completed is
+    never the current step; several unmarked counters that disagree say nothing -- and a page that does not
+    say which step it is on has no steps to come, so its Submit is the last and the agent stops for the owner.
+    """
+    marked, plain = [], []
+    for match in _STEP.finditer(snapshot or ""):
+        kind, step, total = (match.group(1) or "").strip().lower(), int(match.group(2)), int(match.group(3))
+        if not 0 < step <= total:
+            continue
+        if kind == "current":
+            marked.append((step, total))
+        elif not kind:
+            plain.append((step, total))
+    if marked:
+        return marked[-1] if len(set(marked)) == 1 else None
+    distinct = set(plain)
+    return plain[0] if len(distinct) == 1 else None
+
+
+def _open_is_required(question: str, controls: list["Control"], required: set[str]) -> bool:
+    """Whether a question still open is marked required -- by a star, or by the page's own required list."""
+    if question.rstrip().endswith("*") or any(_same_question(question, marked) for marked in required):
+        return True
+    control = next((c for c in controls if _same_question(c.question, question.rstrip("*").strip())), None)
+    return control is not None and ("*" in control.question or "*" in (control.name or ""))
+
+
 def _same_question(a: str, b: str) -> bool:
     """The same question, whatever asterisks, punctuation or truncation differ."""
     a, b = _plain(a), _plain(b)
@@ -615,7 +938,7 @@ def _holds_dial_code(control: "Control") -> bool:
 
 
 def _same_answer(a: str, b: str) -> bool:
-    # "Fairfax, VA" is "Fairfax, Virginia, United States": one town, two spellings.
+    # "Springfield, IL" is "Springfield, Illinois, United States": one town, two spellings.
     if geo_reference.same_locality(a, b):
         return True
     a, b = _plain(a), _plain(b)
@@ -643,6 +966,22 @@ def _same_answer(a: str, b: str) -> bool:
     if "asian" in a and "asian" in b and "caucasian" not in a and "caucasian" not in b:
         return True
     return False
+
+
+def _fill_value_committed(shown: str, want: str) -> bool:
+    """Whether a text field's actual, committed value (`shown`, read back after the fill) is
+    close enough to what was intended (`want`) to count as written (Phase 0-B4). The same
+    fuzzy match `PageAgent.not_stuck()`'s independent, page-cycle-later re-check already uses
+    for an ordinary answer (`page_agent.py`'s own `not_stuck`), reused here so an immediate
+    post-fill check and that later, independent check never disagree about what "stuck"
+    means."""
+    shown_l, want_l = shown.strip().lower(), want.strip().lower()
+    if not shown_l:
+        return False
+    if want_l in shown_l or shown_l in want_l or _same_answer(shown_l, want_l):
+        return True
+    digits = re.sub(r"\D", "", want_l)
+    return len(digits) >= 7 and digits[-10:] in re.sub(r"\D", "", shown_l)
 
 
 def still_loading(snapshot: str) -> bool:
@@ -774,14 +1113,30 @@ def label_above(snapshot: str, ref: str) -> str:
     return ""
 
 
+_CLICK_LABEL_JS = """e => {
+  const label = (e.id && document.querySelector(`label[for="${CSS.escape(e.id)}"]`)) || e.closest('label')
+      || (e.nextElementSibling && e.nextElementSibling.tagName !== 'INPUT' ? e.nextElementSibling : null);
+  if (!label) throw new Error('no label beside the box');
+  label.click();
+}"""
+
+
+def _is_checked(loc) -> Optional[bool]:
+    """Whether a tick box shows as ticked -- a native box or one drawn with aria-checked."""
+    try:
+        return bool(loc.evaluate("e => e.checked === true || e.getAttribute('aria-checked') === 'true'"))
+    except Exception:
+        return None
+
+
 def closest_choice(choices: list[str], wanted: str) -> Optional[int]:
     """The choice that says what the profile says, where the words differ.
 
     The profile says "I am not a veteran"; the form offers "I am not a
     protected veteran". A choice that reverses the meaning ("I identify as
     ...") is never taken: a yes/no in the answer must appear in the choice too.
-    A town is the choice that names the same town in another spelling ("Fairfax,
-    VA" is "Fairfax, Virginia, United States", and no other Fairfax).
+    A town is the choice that names the same town in another spelling ("Springfield,
+    IL" is "Springfield, Illinois, United States", and no other Springfield).
     """
     for i, choice in enumerate(choices):
         if geo_reference.same_locality(wanted, choice):
@@ -790,15 +1145,19 @@ def closest_choice(choices: list[str], wanted: str) -> Optional[int]:
     if not want:
         return None
     negative = bool(re.search(r"\b(not|no|never|none)\b", _plain(wanted)))
-    best, best_score = None, 0.0
+    best, best_score, tied = None, 0.0, False
     for i, choice in enumerate(choices):
         words = set(_plain(choice).split())
         if not words or negative != bool(re.search(r"\b(not|no|never|none)\b", _plain(choice))):
             continue
         score = len(want & words) / len(want)
         if score > best_score:
-            best, best_score = i, score
-    return best if best_score >= 0.6 else None
+            best, best_score, tied = i, score, False
+        elif score == best_score and best is not None:
+            tied = True
+    # Two choices as close as each other is no answer: "Asian" is equally "East Asian", "South Asian" and "Southeast
+    # Asian", and the first was ticked (Lucid, 30 September).
+    return best if best_score >= 0.6 and not tied else None
 
 
 _PROSE = re.compile(r"^\s*- (paragraph|heading|text|strong|emphasis)\b")
@@ -815,11 +1174,50 @@ def _shorten(line: str) -> str:
 def compact_snapshot(snapshot: str, limit: int = 60_000) -> str:
     """The snapshot without its empty containers and link addresses, which
     carry no meaning for answering a form and cost most of the space."""
-    kept = [_shorten(line) for line in (snapshot or "").splitlines()
+    kept = [_shorten(line) for line in _answered_lists_shown_short((snapshot or "").splitlines())
             if not re.match(r"^\s*- generic( \[active\])? \[ref=[\w-]+\]:?$", line)
             and not re.match(r"^\s*- /url:", line)]
     text = "\n".join(kept)
     return text if len(text) <= limit else text[:limit] + "\n... (page continues)"
+
+
+def _answered_lists_shown_short(lines: list[str]) -> list[str]:
+    """A list that already shows a real choice is sent with that choice alone; an open list keeps its choices.
+
+    UKG, 30 September: most of the page sent to the AI was list choices -- 257 majors twice, every country and
+    state, twelve months per date box -- and each page call took one to five minutes. The AI needs a list's
+    choices only while it is still to be answered."""
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        head = re.match(r"^(\s*)- (?:combobox|listbox)\b", line)
+        i += 1
+        if not head:
+            continue
+        indent = len(head.group(1))
+        options = []
+        while i < len(lines) and len(lines[i]) - len(lines[i].lstrip()) > indent:
+            options.append(lines[i])
+            i += 1
+        chosen = [o for o in options if "[selected]" in o and not option_match.is_placeholder(
+            (re.search(r'option "([^"]*)"', o) or [None, ""])[1])]
+        # A list drawn as a box shows its choice on its own line ('combobox "Degree": Master of Science (MS)').
+        shown = line.rsplit("]:", 1)[1].strip() if "]:" in line else ""
+        pad = re.match(r"^\s*", options[0]).group(0) if options else ""
+        if (chosen or (shown and not option_match.is_placeholder(shown))) and len(options) > len(chosen) + 1:
+            out += chosen + [f"{pad}- text: ({len(options) - len(chosen)} other choices)"]
+        elif len(options) > _OPEN_LIST_SHOWN:
+            # Still to be answered: enough choices to show what kind they are; the answer is matched against the
+            # whole list when it is chosen (option_match), so it need not be copied from here.
+            out += options[:_OPEN_LIST_SHOWN] + [f"{pad}- text: ({len(options) - _OPEN_LIST_SHOWN} more choices)"]
+        else:
+            out += options
+    return out
+
+
+_OPEN_LIST_SHOWN = 80
 
 
 def answered_fields(controls: list[Control]) -> list[dict]:
@@ -910,6 +1308,7 @@ class PageAgent:
         self.failed: list[str] = []                # answers tried and not given; answer_what_is_known runs before apply_answers resets it
         self._letter: Optional[tuple[Path, Path]] = None
         self._letter_attached = False
+        self._uncertain_entry_sections: set = set()
         self._code_tries = 0
         self._last_code = ""
         self._pressed: dict[str, int] = {}
@@ -927,6 +1326,20 @@ class PageAgent:
         self._google_reloads: dict[str, int] = {}   # times a site's dead Google button was answered with a fresh load
         self._emailed_in: set[str] = set()      # sites where the email has been given on its own page
         self._created_at: set[str] = set()      # sites where an account has been created
+        # Sites that took the email and then asked for its password: they know the account. Kept when a run
+        # resumes (unlike _emailed_in), because it is what the site said, not something the agent tried.
+        self._account_known: set[str] = set()
+        # Questions whose answer from the profile is not among their choices: they go to the AI (or the owner) with
+        # the choices, instead of the same answer failing on every pass (Lucid, 29 September: three passes).
+        self._misfit: set[tuple[str, str]] = set()   # (question, the answer its list refused)
+        self._reset_asked: set[str] = set()     # sites where a reset to the ATS password was asked for this run
+        self._verify_asked: set[str] = set()    # sites whose emailed verification link was looked for this run
+        self.account_blocker = ""               # what only the owner can do at the account step, or ""
+        self._account_seen: dict[str, tuple] = {}   # the last account state logged, per site
+        self._account_waits: dict[str, int] = {}    # reads of an account step still drawing its form
+        self._last_press_errors: tuple = ()          # what the page said was wrong after the last press
+        self._run_stamp = time.strftime("%Y%m%d_%H%M%S")   # this run's folder for its page recordings
+        self.required_left: list[str] = []            # required questions the AI could not be asked about
         self.unanswered_path: Path = UNANSWERED_FILE
         self._logged_unanswered: set[tuple[str, str]] = set()   # (question, site) already counted this run
         self._profile_answer_library: Optional[dict] = None
@@ -939,6 +1352,7 @@ class PageAgent:
         self._chosen_instead: dict[str, str] = {}     # ref -> the owner-approved alternative chosen in place of the value
         self._reused_recipes: dict[str, tuple[str, str, str, str, str]] = {}
         self._current_host = ""
+        self._ensure_state()
 
     @staticmethod
     def fill_and_dispatch(locator, value: str, timeout: Optional[float] = None, **kwargs):
@@ -982,6 +1396,9 @@ class PageAgent:
         if owner_acted:
             login_guard.owner_resumed(getattr(self, "_current_host", "") or "")
         self._google_reloads = {}   # ... and give a dead Google button its fresh loads again
+        self.account_blocker = ""
+        self._account_seen = {}
+        self._account_waits = {}
         self._retried_after_error = False
         self._code_tries = 0        # a resumed run may fetch a fresh code
         self._asked_for_new_code = False
@@ -1008,17 +1425,24 @@ class PageAgent:
         """Code reloaded into a run that is already going keeps its old object:
         anything added since starts empty rather than failing."""
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
+                              ("_entries", dict), ("_entry_blank", set), ("history", dict), ("_attached_here", set),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
                               ("_google_reloads", dict), ("_peeked", dict),
-                              ("_emailed_in", set), ("_created_at", set), ("_letter_attached", bool), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set), ("_list_retries", int), ("_shapes", dict),
+                              ("_emailed_in", set), ("_created_at", set), ("_account_known", set), ("_reset_asked", set), ("_verify_asked", set), ("_misfit", set), ("_letter_attached", bool), ("_uncertain_entry_sections", set), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set), ("_list_retries", int), ("_shapes", dict),
                               ("_refreshed", bool),
                               ("_paused_state", dict), ("_signed_in_at", set), ("written", dict),
                               ("_profile_answer_library", lambda: None),
                               ("_resume_autofill_attempted", bool), ("_pending_memories", list),
                               ("_choice_methods", dict), ("_reused_recipes", dict), ("_chosen_instead", dict),
-                              ("_current_host", str)):
+                              ("_current_host", str), ("account_blocker", str), ("_account_seen", dict),
+                              ("_account_waits", dict), ("_last_press_errors", tuple),
+                              ("_run_stamp", lambda: time.strftime("%Y%m%d_%H%M%S")), ("required_left", list)):
             if not hasattr(self, name):
                 setattr(self, name, default())
+        # A degree's dates the resume reader did not keep come from the profile (repeated_entries.with_profile);
+        # here as well as where the run starts, so a run that is already going gets them on Resume.
+        if self.history and getattr(self, "profile", None) is not None:
+            self.history = repeated_entries.with_profile(self.history, self.profile)
 
     # -- the page --------------------------------------------------------------
     @staticmethod
@@ -1028,7 +1452,12 @@ class PageAgent:
     def snapshot(self, page) -> str:
         # The one place the page is read: a secret box's value never leaves it (it is saved to disk
         # and handed to the planner from here).
-        return hide_secrets(self.tab(page).locator("body").aria_snapshot(mode="ai", timeout=20_000))
+        tab = self.tab(page)
+        # An open dialog owns the interaction. Background posting controls may
+        # remain in the accessibility tree even though its overlay blocks them.
+        dialogs = tab.locator('[role="dialog"]:visible, dialog[open]:visible')
+        scope = dialogs.last if dialogs.count() else tab.locator("body")
+        return hide_secrets(scope.aria_snapshot(mode="ai", timeout=20_000))
 
     def locate(self, page, ref: str):
         return self.tab(page).locator(f"aria-ref={ref}")
@@ -1057,7 +1486,7 @@ class PageAgent:
         return tab
 
     # -- signing in ------------------------------------------------------------------
-    GOOGLE_SIGN_IN = re.compile(r"(sign|log) ?in with google|continue with google|google sign[- ]?in", re.IGNORECASE)
+    GOOGLE_SIGN_IN = account_state.GOOGLE_SIGN_IN     # one wording, the account step's
     # ADP's Google button is sometimes dead for a whole page load (its script throws
     # "Cannot read properties of undefined (reading 'googlePlusSocialURL')" and every
     # press is ignored); a fresh load of the page brings it back. This many fresh loads,
@@ -1078,120 +1507,290 @@ class PageAgent:
             return Control(ref="", role="button", name="Sign in with Google")
         return next((c for c in controls if c.role in PRESS_ROLES and self.GOOGLE_SIGN_IN.search(c.name or "")), None)
 
+    # --- account-creation lifecycle (Phase 0-B3, closure correction) ----------------------
+    #
+    # Account creation is the one consequential, non-idempotent action in the account/auth
+    # flow with no durable guard of its own (discovery: docs/security/phase0-b3-discovery.md
+    # section 8). `_created_at` only lives in memory, so a process that dies between pressing
+    # Create Account and the next verified page read loses the only record that an attempt
+    # was ever made. These methods give that one gap a small, durable, fail-closed lifecycle
+    # -- intended (about to dispatch) -> attempted (dispatched) -> resolved (live evidence
+    # shows the create form is behind us) -- without creating a second submission-style
+    # transaction system: final submission stays exclusively P0-B1's.
+    #
+    # Closure correction: the first round (1) let the generic once-per-pass checkpoint
+    # (apply_flow.write_recovery_checkpoint) silently blank the marker by reconstructing a
+    # fresh checkpoint instead of merging -- fixed by routing every checkpoint write through
+    # checkpoint.merge_update(), which never drops a field it was not explicitly told to
+    # change; (2) treated a checkpoint-store read/write failure the same as "nothing pending"
+    # -- fail-open for a non-idempotent action -- fixed by distinguishing "no tracker
+    # configured" (preserved, unchanged) from "a configured tracker's read/write failed"
+    # (fail closed: Create Account is not dispatched); (3) cleared the marker on anything
+    # that merely failed to classify as CREATE_FORM, including the genuinely ambiguous
+    # LOADING/NONE/ways-in states -- fixed by requiring one of a specific, deterministic
+    # P0-B2 account-state result that actually proves the create form is behind us.
+
+    # Kinds that prove the create form is behind us -- not merely "did not classify as
+    # CREATE_FORM" (LOADING, NONE, EMAIL_FIRST, and CHOOSER all prove nothing: LOADING is
+    # explicitly "still drawing itself," and the rest are generic/fallback reads that could
+    # just as easily describe a page mid-navigation as a genuine resolution). Every kind
+    # here is a specific, deterministic account_state.py result distinct from CREATE_FORM.
+    _ACCOUNT_CREATION_RESOLVED_KINDS = frozenset({
+        account_state.SIGNED_IN, account_state.CODE_ENTRY, account_state.VERIFY_EMAIL,
+        account_state.ACCOUNT_EXISTS, account_state.MFA_REQUIRED, account_state.LOCKED,
+        account_state.WRONG_PASSWORD, account_state.SIGN_IN_FORM,
+    })
+
+    def _application_key(self) -> str:
+        """The P0-B1 submission-effect identity this run's checkpoint is filed under, so a
+        checkpoint and a submission effect always agree on one application identity (task
+        section 3). Falls back to the application-row key when no submission_key was bound
+        (a test double, or a code path that never set one) so a checkpoint write never
+        silently no-ops for want of an identity."""
+        return str(getattr(self.assistant, "submission_key", "") or self.key or "")
+
+    def _pending_account_creation(self, host: str) -> tuple[bool, bool]:
+        """(pending, storage_unavailable). `storage_unavailable` is True only when a durable
+        tracker IS configured (it supports `read_checkpoint`) but reading it raised -- never
+        when no tracker is configured at all, which is this project's intentionally
+        supported tracker-less/test-double path and is left exactly as it was. A caller must
+        treat `storage_unavailable` as fail-closed: a non-idempotent action must not be
+        dispatched merely because its durable guard could not be consulted. Read fresh from
+        durable storage on every call, with no in-memory cache -- the same restart-safety
+        pattern `login_guard.py` already uses for its own durable, cross-process state."""
+        key = self._application_key()
+        if not key or self.tracker is None or not hasattr(self.tracker, "read_checkpoint"):
+            return False, False
+        try:
+            payload = self.tracker.read_checkpoint(key)
+        except Exception:
+            logger.warning("Could not read the account-creation checkpoint on %s -- "
+                           "treating Create Account as unsafe to dispatch", host)
+            return False, True
+        if not payload:
+            return False, False
+        return str(payload.get("pending_action") or "") == f"account_creation_dispatched@{host}", False
+
+    def _mark_account_creation_dispatched(self, host: str) -> bool:
+        """Durably records that Create Account is about to be pressed on `host`, BEFORE it is
+        pressed -- so a process that dies between the click and the next verified page read
+        leaves behind evidence a resumed run can see, instead of silently pressing it again
+        (task section 9: 'Do not create another account automatically').
+
+        Returns True once the durable marker is confirmed written, or when no tracker is
+        configured at all (nothing to fail: the project's intentionally supported
+        tracker-less/test-double path, unchanged by this correction). Returns False when a
+        configured tracker's read or write actually fails -- the caller must not proceed to
+        dispatch Create Account in that case: 'could not establish the durable guard' must
+        never mean 'still perform the non-idempotent action anyway.'"""
+        key = self._application_key()
+        if not key or self.tracker is None or not hasattr(self.tracker, "write_checkpoint"):
+            return True
+        existing = None
+        if hasattr(self.tracker, "read_checkpoint"):
+            try:
+                existing = self.tracker.read_checkpoint(key)
+            except Exception:
+                logger.warning("Could not read the existing checkpoint before recording "
+                               "account-creation dispatch for %s", host)
+                return False
+        updated = checkpoint.merge_update(
+            existing, application_key=key, dedup_key=self.key or "",
+            employer=getattr(self.job, "company", "") or "",
+            page_url=str(getattr(self.job, "url", "") or ""),
+            pending_action=f"account_creation_dispatched@{host}",
+        )
+        try:
+            self.tracker.write_checkpoint(key, updated)
+        except Exception:
+            logger.warning("Could not durably record account-creation dispatch for %s", host)
+            return False
+        return True
+
+    def _resolve_pending_account_creation(self, host: str) -> None:
+        """Clears the durable account-creation marker -- called only when the caller has
+        already established the current `account_state` read is one of
+        `_ACCOUNT_CREATION_RESOLVED_KINDS`: positive, deterministic evidence the create form
+        is behind us, not merely an absence of CREATE_FORM. Resolving is the safe direction
+        (it can at worst cause one unnecessary owner hand-off on a later, unrelated create
+        attempt for the same application), so a read/write failure here only logs -- it does
+        not need the dispatch path's fail-closed treatment."""
+        key = self._application_key()
+        if not key or self.tracker is None or not hasattr(self.tracker, "read_checkpoint") \
+                or not hasattr(self.tracker, "write_checkpoint"):
+            return
+        try:
+            existing = self.tracker.read_checkpoint(key)
+        except Exception:
+            return
+        if not existing or str(existing.get("pending_action") or "") != f"account_creation_dispatched@{host}":
+            return
+        updated = checkpoint.merge_update(existing, application_key=key, pending_action="")
+        try:
+            self.tracker.write_checkpoint(key, updated)
+        except Exception:
+            logger.warning("Could not durably clear account-creation dispatch marker for %s", host)
+
     def sign_in_step(self, page, controls: list[Control]) -> bool:
         """Signs in where the page asks for it. True when something was done.
 
-        Google first, always, when the site offers it -- the owner's standing
-        instruction. NVIDIA's (Workday) page offered "Sign in with Google",
-        "Sign in with LinkedIn" and "Sign in with email"; the agent took email
-        and got nowhere. LinkedIn, Indeed, Facebook, Apple and Microsoft are
-        never used. Otherwise the employer-account password, once per site.
+        What the page is, and what to do about it, is decided in account_state: one reading of the page and
+        one table, instead of each step below reading the page its own way (KBI, 28 September). The actions
+        are the agent's own. Google first, always, when the site offers it -- the owner's standing
+        instruction; LinkedIn, Indeed, Facebook, Apple and Microsoft are never used; otherwise the
+        employer-account password, once per site. Whatever only the owner can do is set in
+        `account_blocker`, and the run stops for it rather than reading the sign-in page as a form.
         """
         tab = self.tab(page)
         email = getattr(self.config, "ats_email", "") or getattr(self.profile, "email", "")
         host = urlparse(tab.url).netloc
+        self.account_blocker = ""
+        try:
+            snapshot = self.snapshot(page)
+        except Exception:
+            return False
+        state = account_state.read_state(snapshot, password_boxes=self._password_boxes(tab))
+        if state.kind in self._ACCOUNT_CREATION_RESOLVED_KINDS:
+            self._resolve_pending_account_creation(host)
         try:
             candidate_state = self.assistant.adapter(tab).candidate_account_state(tab)
         except Exception:
             candidate_state = ""
-        if candidate_state == "verification":
-            logger.info("LOGIN: Workday Candidate Home needs verification; leaving it for account-code handling")
+        if candidate_state == "verification" and state.kind != account_state.CODE_ENTRY:
+            state = account_state.AccountState(account_state.VERIFY_EMAIL, "the site's own account page says so",
+                                               state.google_offered, state.password_boxes, state.form_error)
+        try:
+            exists = self.assistant.account_on_record() is True
+        except Exception:
+            exists = False
+        memory = account_state.Memory(
+            google_tried=host in self._google_tried, google_refused=host in self._google_failed,
+            created=host in self._created_at, signed_in_tried=host in self._signed_in_at,
+            email_given=host in self._emailed_in, account_exists=exists or host in self._account_known,
+            reset_tried=host in self._reset_asked,
+            verify_tried=host in self._verify_asked,
+            refused_before=bool(email) and login_guard.refused_before(host, email),
+            held=str(getattr(self.assistant, "_login_paused", "") or ""))
+        step = account_state.next_step(state, memory)
+        self._note_account_state(page, host, state, step)
+
+        # The account helpers select credentials across the page. Until they
+        # can target a specific form, do not let a mixed page fill the optional
+        # account's password while trying to complete a required sign-in.
+        if state.password_boxes and step.action in (account_state.CREATE, account_state.SIGN_IN,
+                                                    account_state.RESET_PASSWORD) \
+                and any(field.optional_account for field in account_password_fields(snapshot)):
+            self.account_blocker = "Complete the required sign-in section; the optional account will stay blank."
             return False
-        google = next((c for c in controls if c.role in PRESS_ROLES and self.GOOGLE_SIGN_IN.search(c.name or "")), None)
-        if google is not None and host not in self._google_tried and host not in self._google_failed and email:
-            self._google_tried.add(host)
-            logger.info("LOGIN: this site offers Google sign-in -- using it")
+
+        # Never an account on a job board, with Google or a password: the owner applies on the employer's own site
+        # (job_sources.job_board). Adzuna, 30 September: its easy-apply sat behind an Adzuna login.
+        board = job_sources.job_board(tab.url) if step.action not in (account_state.NOTHING, account_state.WAIT) else ""
+        if board:
+            self.account_blocker = board
+            return False
+        if step.action == account_state.FOR_OWNER:
+            self.account_blocker = step.why
+            return False
+        if step.action == account_state.VERIFY_BY_LINK:
+            self._verify_asked.add(host)
+            verify = getattr(self.assistant, "verify_account_by_email_link", None)
             try:
-                # Through the snapshot's reference, so a sign-in box inside a
-                # frame is reached as well.
-                button = self.locate(page, google.ref).element_handle(timeout=5_000)
-                if self.assistant._sign_in_with_google(tab, button, email, host,
-                                                       lambda: self._google_still_offered(page)):
-                    logger.info("LOGIN: signed in with Google")
-                elif getattr(self.assistant, "google_press_ignored", False) \
-                        and self._google_reloads.get(host, 0) < self.GOOGLE_RELOADS:
-                    # The site did not react at all: its button is dead until the
-                    # page is loaded again. That says nothing about the account.
-                    self._google_reloads[host] = self._google_reloads.get(host, 0) + 1
-                    self._google_tried.discard(host)
-                    logger.info("LOGIN: %s did not react to its Google button -- loading the page again (%d of %d)",
-                                host, self._google_reloads[host], self.GOOGLE_RELOADS)
-                    tab.reload(wait_until="domcontentloaded", timeout=30_000)
-                    self.settle(page, 3_000)
-                else:
-                    # The site would not take it (NVIDIA: "Account is Inactive").
-                    # Its own sign-in is used from here on.
-                    self._google_failed.add(host)
-                    self.assistant.google_refused_on = set(self._google_failed)
-                    logger.info("LOGIN: %s did not accept the Google account -- using its own sign-in", host)
-                return True
+                verified = bool(verify and verify(tab))
             except Exception as exc:
-                logger.warning("LOGIN: Google sign-in did not go through (%s)", str(exc).splitlines()[0][:100])
-                return True   # the page has changed; read it again
-        # A sign-in that asks for the email on its own page first (Workday's
-        # does, after "Sign in with email"): give it, and press on. The password
-        # is never typed here -- that is the sign-in code's, below.
-        is_app_form = any(
-            re.search(r"first\s*name|last\s*name|phone|resume|education|work\s*history", f"{c.name} {c.question}", re.IGNORECASE)
-            for c in controls if c.role in ("textbox", "searchbox", "combobox")
-        )
-        if not is_app_form and not self._password_box(tab) and email and host not in self._emailed_in:
-            box = next((c for c in controls
-                        if c.role in ("textbox", "searchbox") and not c.answer
-                        and re.search(r"e-?mail|user ?name", f"{c.name} {c.question}", re.IGNORECASE)), None)
-            if box is not None:
-                self._emailed_in.add(host)
-                logger.info("LOGIN: this sign-in asks for the email first -- giving it")
+                logger.warning("VERIFY_LINK: %s", str(exc).splitlines()[0][:120])
+                verified = False
+            if verified:
+                # A fresh sign-in is due: the one refused was for an account not yet verified.
+                self._signed_in_at.discard(host)
                 try:
-                    fill_and_dispatch(self.locate(page, box.ref), email, timeout=8_000)
-                    go = next((c for c in controls if c.role in PRESS_ROLES and re.match(
-                        r"^(sign ?in|log ?in|continue|next|submit)$",
-                        " ".join((c.name or "").split()), re.IGNORECASE)), None)
-                    if go is not None:
-                        self.locate(page, go.ref).click(timeout=8_000)
-                    else:
-                        self.locate(page, box.ref).press("Enter", timeout=5_000)
-                    return True
-                except Exception as exc:
-                    logger.warning("LOGIN: could not give the email (%s)", str(exc).splitlines()[0][:100])
-        # Workday's explicit Candidate Home state wins over password-box
-        # counts: the page can retain a stale sign-in form beside registration.
-        making_account = candidate_state in ("registration", "registration_error") or self._password_boxes(tab) >= 2
-        page_text = ""
-        if making_account:
-            try:
-                page_text = tab.inner_text("body", timeout=2_000)
-            except Exception:
-                page_text = ""
-            try:
-                account_exists = self.assistant.account_on_record() is True
-            except Exception:
-                account_exists = False
-            if account_exists and self.assistant._create_account_control(tab) is not None:
-                current_errors = re.search(
-                    r"passwords? (?:do not|don't) match|please check (?:the )?box|field is required|"
-                    r"(?:email|password).{0,30}(?:invalid|required)", page_text, re.IGNORECASE,
-                )
-                if not current_errors:
-                    # An account already exists here: sign in rather than
-                    # register again, even when a registration form is showing.
-                    logger.info("LOGIN: account already exists -- opening sign-in instead of registering")
-                    if self.assistant._goto_login_page(tab):
-                        return True
-                else:
-                    logger.info("LOGIN: visible registration errors override the unverified account record")
-        if making_account and host in self._created_at:
-            if not re.search(r"invalid|valid email|error|required", page_text, re.IGNORECASE):
+                    tab.reload(wait_until="domcontentloaded", timeout=30_000)
+                except Exception:
+                    pass
+                self.settle(page, 2_000)
+                # Observability only (P0-B2, 7 October 2026): some sites' verification link also
+                # signs the account in (a "magic link"), others only verify and still require a
+                # separate sign-in afterward. Both are already handled correctly either way -- the
+                # discard above just allows a fresh attempt, and the next read of the page decides
+                # whether one is actually needed -- this only makes which kind of link it was
+                # visible in the log, rather than leaving both to look identical.
+                try:
+                    after = account_state.read_state(self.snapshot(page), password_boxes=self._password_boxes(tab))
+                    logger.info("VERIFY_LINK: %s -- %s", "also signed the account in" if after.kind ==
+                                account_state.SIGNED_IN else "verified only; sign-in is still its own step",
+                                after)
+                except Exception:
+                    pass
+                return True
+            self.account_blocker = str(getattr(self.assistant, "_login_paused", "") or "") \
+                or account_state.next_step(state, replace(memory, verify_tried=True)).why
+            return False
+        if step.action == account_state.RESET_PASSWORD:
+            if email and self._reset_refused_password(tab, host, email):
+                return True
+            # Why the reset stopped, in the assistant's words; else what the table says now that it was tried.
+            self.account_blocker = str(getattr(self.assistant, "_login_paused", "") or "") \
+                or account_state.next_step(state, replace(memory, reset_tried=True)).why \
+                or "the site refused the password and the reset to your ATS password did not go through: set it " \
+                   "on the site to the password in Settings, then press Continue"
+            return False
+        if step.action == account_state.WAIT:
+            waited = self._account_waits.get(host, 0)
+            if waited >= 3:
+                self.account_blocker = "the account step never showed its form: look at the page, then press Continue"
                 return False
-            logger.info("LOGIN: retrying account creation after the site left a validation error")
-        if self._password_box(tab) and (making_account or host not in self._signed_in_at):
-            (self._created_at if making_account else self._signed_in_at).add(host)
-            logger.info("LOGIN: %s on %s", "creating the account" if making_account else "signing in", host)
+            self._account_waits[host] = waited + 1
+            self.settle(page, 3_000)
+            return True
+        if step.action == account_state.OPEN_SIGN_IN:
+            logger.info("LOGIN: %s -- opening sign-in instead of making another account", step.why)
             try:
+                return bool(self.assistant._goto_login_page(tab) or self._press_named(tab, r"^\s*(sign in|log in)\s*$"))
+            except Exception as exc:
+                logger.warning("LOGIN: could not open sign-in (%s)", str(exc).splitlines()[0][:100])
+                return False
+        if step.action == account_state.GOOGLE and email:
+            return self._sign_in_with_google_step(page, tab, host, email, controls)
+        if step.action == account_state.GIVE_EMAIL and email:
+            return self._give_email_first(page, host, email, controls)
+        if step.action in (account_state.CREATE, account_state.SIGN_IN):
+            making_account = step.action == account_state.CREATE
+            if making_account:
+                pending, unavailable = self._pending_account_creation(host)
+                if unavailable:
+                    self.account_blocker = (
+                        "account creation could not be safely recorded; retry after checkpoint "
+                        "storage is available")
+                    return False
+                if pending:
+                    self.account_blocker = (
+                        f"an earlier attempt may already have pressed Create Account on {host} and the run "
+                        "stopped before the result was confirmed -- check whether the account now exists "
+                        "before trying again, then press Continue")
+                    return False
+            (self._created_at if making_account else self._signed_in_at).add(host)
+            if not making_account and host in self._emailed_in:
+                self._account_known.add(host)       # it took the email and asked for this account's password
+            logger.info("LOGIN: %s on %s", "creating the account" if making_account else "signing in", host)
+            if making_account and not self._mark_account_creation_dispatched(host):
+                self.account_blocker = (
+                    "account creation could not be safely recorded; retry after checkpoint "
+                    "storage is available")
+                return False
+            try:
+                self.assistant._last_login_rejected = False     # only a refusal of this attempt counts below
                 if self.assistant.handle_auth_gate(tab, email):
                     return True
             except Exception as exc:
                 logger.warning("LOGIN: %s", str(exc).splitlines()[0][:120])
+            # The password just typed was refused: what to do about a refusal is the table's (account_state),
+            # asked now rather than after the sign-in page has been read as a form of questions for the owner.
+            if not making_account and getattr(self.assistant, "_last_login_rejected", False):
+                refused = account_state.AccountState(account_state.WRONG_PASSWORD, "the site refused the password")
+                known = replace(memory, account_exists=memory.account_exists or host in self._account_known)
+                if account_state.next_step(refused, known).action == account_state.RESET_PASSWORD \
+                        and self._reset_refused_password(tab, host, email):
+                    return True
             # Held back on purpose (login_guard): the owner is told why, and what to do.
             reason = str(getattr(self.assistant, "_login_paused", "") or "")
             if reason:
@@ -1199,12 +1798,223 @@ class PageAgent:
                 if note not in self.notes:
                     self.notes.append(note)
                     logger.info("LOGIN: %s", note[:200])
+                self.account_blocker = note
+            return False
         return False
+
+    def _reset_refused_password(self, tab, host: str, email: str) -> bool:
+        """Resets a refused password to the same ATS password with the code emailed to the owner, and signs in
+        (CLAUDE.md §5). Asked for once per site per run; the limits on it (employer sites only, the owner's
+        permission to read the mail, no CAPTCHA, login_guard) are the assistant's."""
+        self._reset_asked.add(host)
+        recover = getattr(self.assistant, "recover_rejected_sign_in", None)
+        if recover is None:
+            return False
+        try:
+            if recover(tab, email):
+                logger.info("LOGIN: the password was reset to your ATS password and the sign-in went through on %s",
+                            host)
+                return True
+        except Exception as exc:
+            logger.warning("RECOVERY: %s", str(exc).splitlines()[0][:120])
+        return False
+
+    def _note_account_state(self, page, host: str, state, step) -> None:
+        """Logs each change of account state, and saves a screenshot and the page text for it.
+
+        KBI's run stopped on its sign-in step and left nothing to show which page it was on."""
+        seen = (state.kind, step.action)
+        if self._account_seen.get(host) == seen or state.kind == account_state.NONE:
+            return
+        self._account_seen[host] = seen
+        logger.info("ACCOUNT_STATE: %s -> %s%s", state, step.action, f" ({step.why[:100]})" if step.why else "")
+        if self.job_dir is None:
+            return
+        try:
+            folder = Path(self.job_dir) / "account"
+            folder.mkdir(parents=True, exist_ok=True)
+            stem = folder / f"{time.strftime('%Y%m%d_%H%M%S')}_{state.kind}"
+            diagnostics.capture_safe_screenshot(self.tab(page), stem.with_suffix(".png"))
+            diagnostics.write_safe_text(stem.with_suffix(".txt"),
+                diagnostics.sanitize_snapshot(self.snapshot(page)))
+        except Exception as exc:
+            logger.debug("Could not save the account page: %s", str(exc).splitlines()[0][:100])
+
+    @staticmethod
+    def _press_named(tab, pattern: str) -> bool:
+        """Presses the first visible button or link whose name, as a person reads it, matches."""
+        wanted = re.compile(pattern, re.IGNORECASE)
+        for role in ("button", "link"):
+            found = tab.get_by_role(role, name=wanted)
+            for i in range(min(found.count(), 5)):
+                if found.nth(i).is_visible():
+                    found.nth(i).click(timeout=8_000)
+                    return True
+        return False
+
+    def _sign_in_with_google_step(self, page, tab, host: str, email: str, controls: list[Control]) -> bool:
+        """Google sign-in, found by the words a person reads on the button.
+
+        OCC's "Sign in with Google" button carries its words inside it, not as a label, and was not found."""
+        self._google_tried.add(host)
+        logger.info("LOGIN: this site offers Google sign-in -- using it")
+        try:
+            google = next((c for c in controls if c.role in PRESS_ROLES and self.GOOGLE_SIGN_IN.search(c.name or "")),
+                          None)
+            if google is not None:
+                button = self.locate(page, google.ref).element_handle(timeout=5_000)
+            else:
+                # A button, or a link (Adzuna's "Login with Google" is a link).
+                found = tab.get_by_role("button", name=self.GOOGLE_SIGN_IN).or_(
+                    tab.get_by_role("link", name=self.GOOGLE_SIGN_IN))
+                button = found.first.element_handle(timeout=5_000)
+            if self.assistant._sign_in_with_google(tab, button, email, host, lambda: self._google_still_offered(page)):
+                logger.info("LOGIN: signed in with Google")
+            elif getattr(self.assistant, "google_press_ignored", False) \
+                    and self._google_reloads.get(host, 0) < self.GOOGLE_RELOADS:
+                # The site did not react at all: its button is dead until the
+                # page is loaded again. That says nothing about the account.
+                self._google_reloads[host] = self._google_reloads.get(host, 0) + 1
+                self._google_tried.discard(host)
+                logger.info("LOGIN: %s did not react to its Google button -- loading the page again (%d of %d)",
+                            host, self._google_reloads[host], self.GOOGLE_RELOADS)
+                tab.reload(wait_until="domcontentloaded", timeout=30_000)
+                self.settle(page, 3_000)
+            else:
+                # The site would not take it (NVIDIA: "Account is Inactive").
+                # Its own sign-in is used from here on.
+                self._google_failed.add(host)
+                self.assistant.google_refused_on = set(self._google_failed)
+                logger.info("LOGIN: %s did not accept the Google account -- using its own sign-in", host)
+            return True
+        except Exception as exc:
+            logger.warning("LOGIN: Google sign-in did not go through (%s)", str(exc).splitlines()[0][:100])
+            return True   # the page has changed; read it again
+
+    def _give_email_first(self, page, host: str, email: str, controls: list[Control]) -> bool:
+        """A sign-in that asks for the email on its own page first (Workday's does, after "Sign in with
+        email"): give it, and press on. The password is never typed here -- that is handle_auth_gate's."""
+        box = next((c for c in controls if c.role in ("textbox", "searchbox") and not c.answer
+                    and re.search(r"e-?mail|user ?name", f"{c.name} {c.question}", re.IGNORECASE)), None)
+        if box is None:
+            return False
+        self._emailed_in.add(host)
+        logger.info("LOGIN: this sign-in asks for the email first -- giving it")
+        try:
+            fill_and_dispatch(self.locate(page, box.ref), email, timeout=8_000)
+            go = next((c for c in controls if c.role in PRESS_ROLES and re.match(
+                r"^(sign ?in|log ?in|continue|next|submit)$", " ".join((c.name or "").split()), re.IGNORECASE)), None)
+            if go is not None:
+                self.locate(page, go.ref).click(timeout=8_000)
+            else:
+                self.locate(page, box.ref).press("Enter", timeout=5_000)
+            return True
+        except Exception as exc:
+            logger.warning("LOGIN: could not give the email (%s)", str(exc).splitlines()[0][:100])
+            return False
 
     # A code emailed to the owner for their own account or email address.
     ACCOUNT_CODE = re.compile(
         r"(verification|security|confirmation|one[- ]?time|access)\s*code|passcode|\botp\b|"
         r"code (was )?(sent|emailed) to", re.IGNORECASE)
+
+    # A section for the owner's jobs or degrees, the record that fills it, the site filler's name, and the labels the
+    # site's error list names for a box of it.
+    _ENTRY_SECTIONS = (
+        ("Work Experience", "experience", "fill_experience_section",
+         ("job title", "company", "location", "from", "to", "role description")),
+        ("Education", "education", "fill_education_section",
+         ("school or university", "school", "degree", "field of study", "from", "to (actual or expected)",
+          "overall result (gpa)")),
+    )
+
+    def add_entries_the_site_way(self, page, snapshot: str) -> bool:
+        """A section for the owner's jobs or degrees that is still empty -- its heading and its own Add button, no
+        entry yet -- is filled by the site's own entry filler from the owner's record (Workday: sites/workday.py
+        enters each job's and degree's boxes, dates and lists the way Workday takes them).
+
+        Ciena on Workday, 30 September: the page agent had no such step -- only the older flow and the dashboard's
+        'fill experience' signal called the filler -- so My Experience was left with no jobs and no degrees, and the
+        run went round the page until the loop guard stopped it. Once per section per run; a site without a filler
+        is left to the page as before."""
+        tab = self.tab(page)
+        host = host_of(tab.url)
+        history = getattr(self, "history", {}) or {}
+        done = self.__dict__.setdefault("_entries_added", set())
+        redone = self.__dict__.setdefault("_entries_redone", set())
+        try:
+            adapter = self.assistant.adapter(tab)
+        except Exception:
+            return False
+        # The fields the site's own error list names ("Error - School or University"), lower case.
+        refused = {m.strip().lower() for m in re.findall(r"Error\s*[-\u2013]\s*([A-Za-z][A-Za-z /()]{1,40}?)(?=[\"\n:]|\s+The\b)",
+                                                         snapshot or "")}
+        added = False
+        for heading, record, filler, labels in self._ENTRY_SECTIONS:
+            entries = [e for e in (history.get(record) or []) if isinstance(e, dict)]
+            if not entries or not hasattr(adapter, filler) or not hasattr(adapter, "entry_count"):
+                continue
+            if not re.search(rf'- heading "{re.escape(heading)}"', snapshot or "", re.IGNORECASE):
+                continue
+            shown = adapter.entry_count(tab, heading)
+            if shown is None:
+                continue
+            if shown == 0:
+                if (host, heading) in done:
+                    continue
+                done.add((host, heading))
+                logger.info("ENTRIES: %s is empty -- adding your %d %s the site's way", heading, len(entries),
+                            "jobs" if record == "experience" else "degrees")
+            else:
+                # Entries the site refused, or more or fewer than the record holds (an extra, empty one): the site's
+                # filler clears the section and enters the record again -- once per section per run. Ciena, 30
+                # September: an extra empty degree and a job's start month kept Save and Continue refused.
+                wrong = shown != len(entries) or bool(refused & set(labels))
+                if not wrong or (host, heading) in redone:
+                    continue
+                redone.add((host, heading))
+                logger.info("ENTRIES: %s shows %d of your %d %s%s -- entering them again the site's way", heading,
+                            shown, len(entries), "jobs" if record == "experience" else "degrees",
+                            " and the site refused some" if refused & set(labels) else "")
+            try:
+                getattr(self.assistant, filler)(tab, entries)
+                added = True
+            except Exception as exc:
+                logger.warning("ENTRIES: could not add the %s entries: %s", heading, str(exc).splitlines()[0][:120])
+                continue
+            # Verify the fill actually produced the right number of entries (Phase 0-B4) --
+            # the section was marked done/redone above, before the filler ran, so a second
+            # attempt is never made this run even if it throws; nothing previously re-checked
+            # afterward whether it actually worked (discovery:
+            # docs/security/phase0-b4-discovery.md section 8). The existing once-per-run
+            # bound on retrying is left exactly as it was -- this only makes a mismatch
+            # visible (logged, and surfaced for the checkpoint's `uncertain_actions`) rather
+            # than silently invisible for the rest of the run.
+            try:
+                now_shown = adapter.entry_count(tab, heading)
+            except Exception:
+                now_shown = None
+            if now_shown is not None and now_shown != len(entries):
+                logger.warning("ENTRIES: %s shows %d of your %d %s after filling -- needs a look",
+                               heading, now_shown, len(entries),
+                               "jobs" if record == "experience" else "degrees")
+                self._uncertain_entry_sections.add(f"entries:{heading}@{host}")
+                if self.tracker is not None and self.key and hasattr(self.tracker, "record_event"):
+                    try:
+                        self.tracker.record_event(
+                            self.key, "action_outcome_unknown", f"{heading}: entry count did not match after filling",
+                            payload={"action": "fill_entries", "target_kind": record, "evidence_kind": "entry_count"})
+                    except Exception as exc:
+                        logger.debug("Could not record the uncertain entry fill: %s", exc)
+        return added
+
+    def uncertain_action_labels(self) -> tuple[str, ...]:
+        """Short, secret-safe labels (Phase 0-B4) for consequential actions this pass
+        attempted but could not positively verify -- currently just repeated-entry fills
+        whose post-fill count didn't match. Fed into the durable checkpoint's
+        `uncertain_actions` field by `apply_flow.write_recovery_checkpoint`; never a question,
+        an answer, or any other applicant-specific content."""
+        return tuple(sorted(self._uncertain_entry_sections))
 
     def open_entry_for_missing_field(self, page, snapshot: str, controls: list[Control]) -> bool:
         """Opens a collapsed entry the page is complaining about.
@@ -1315,6 +2125,41 @@ class PageAgent:
                 if c.role in ("textbox", "searchbox", "spinbutton") and not c.disabled
                 and self.ACCOUNT_CODE.search(f"{c.question} {c.container}")]
 
+    _NEARBY_CODE_CONTROL_ROLES = frozenset((
+        "textbox", "searchbox", "spinbutton", "combobox", "checkbox", "radio", "button", "link",
+    ))
+
+    @staticmethod
+    def _nearby_code_text(snapshot: str, ref: str, max_lines: int = 4) -> str:
+        """Up to `max_lines` of the plain explanatory text immediately preceding the box named
+        `ref` in the snapshot -- the sentence a verification-code step's own wording usually sits
+        in ("We sent a verification code to your email") when that is not already part of the
+        box's own accessible label. Stops at the first heading or other interactive control,
+        never crossing into an earlier, unrelated question's own text (a checkbox for an "SMS
+        updates?" consent question, for example) -- that boundary is what keeps this local to the
+        code step itself rather than scanning the whole page (the P0-B2 follow-up finding, 7
+        October 2026: the first version of this channel check used the entire snapshot, and an
+        unrelated SMS-consent checkbox anywhere on the same page as a genuinely email-delivered
+        code blocked a read that should have been allowed)."""
+        lines = (snapshot or "").splitlines()
+        idx = next((i for i, line in enumerate(lines) if f"[ref={ref}]" in line), None)
+        if idx is None:
+            return ""
+        collected: list[str] = []
+        i = idx - 1
+        while i >= 0 and len(collected) < max_lines:
+            stripped = lines[i].strip()
+            if not stripped:
+                break
+            role_match = re.match(r"^-\s*'?([\w-]+)", stripped)
+            role = (role_match.group(1) if role_match else "").lower()
+            if role == "heading" or role in PageAgent._NEARBY_CODE_CONTROL_ROLES:
+                break
+            collected.append(stripped)
+            i -= 1
+        collected.reverse()
+        return " ".join(collected)
+
     def complete_account_code(self, page, controls: list[Control], snapshot: str) -> bool:
         """Enters a one-time code emailed to the owner for their own account.
 
@@ -1331,6 +2176,17 @@ class PageAgent:
                  if c.role in ("textbox", "searchbox", "spinbutton") and not c.answer and not c.disabled
                  and self.ACCOUNT_CODE.search(f"{c.question} {c.container}")]
         if not boxes or self._code_tries >= 3:
+            return False
+        local_context = f"{boxes[0].question} {boxes[0].container} " \
+                        f"{self._nearby_code_text(snapshot, boxes[0].ref)}"
+        if not emailed_codes.code_channel_is_email(local_context):
+            note = ("a code is required, but the page says it is sent by SMS/text or must come from "
+                    "an authenticator app -- the agent has no authorized way to read either: complete "
+                    "it yourself, then press Continue")
+            if note not in self.notes:
+                self.notes.append(note)
+            self.account_blocker = note
+            logger.info("CODE: %s", note)
             return False
         why = emailed_codes.why_not(self.profile, page.url, captcha=safety.captcha_visible(page),
                                     email=getattr(self.config, "ats_email", "") or "")
@@ -1416,7 +2272,8 @@ class PageAgent:
         """
         if self._profile_answer_library is not None:
             return self._profile_answer_library
-        path = Path("data/profile_answers.json")
+        import profile_setup
+        path = Path(profile_setup.ANSWERS_PATH)     # the one place that names the saved answers
         try:
             loaded = json.loads(path.read_text(encoding="utf-8-sig")) if path.is_file() else {}
             self._profile_answer_library = loaded if isinstance(loaded, dict) else {}
@@ -1448,13 +2305,17 @@ class PageAgent:
             return str(value or "").strip()
         return ""
 
+    @staticmethod
+    def _attestation_text(control: Control) -> str:
+        return f"{control.question} {control.name} {control.container} {control.context}".strip()
+
     def _attestation_answer(self, control: Control) -> tuple[str, str]:
         """The globally authorised consent/signature answer for a control.
 
         These are kept out of ``known_answer`` so ``sign()`` can still apply
         declarations last, after every ordinary field on the page is filled.
         """
-        question = f"{control.question} {control.name}".strip()
+        question = self._attestation_text(control)
         if safety.is_privacy_consent(question) and getattr(self.profile, "accept_application_privacy_prompts", False):
             return "checked", "profile.accept_application_privacy_prompts"
         if not safety.is_attestation(question) or not getattr(self.profile, "sign_attestations", False):
@@ -1523,9 +2384,9 @@ class PageAgent:
         # a step with more to come only saves that step (Schwab's step 2 of 5). Without it, a page
         # answered from the profile alone called its "Submit" the last and stopped for a resume
         # that belonged to a later step.
-        counter = re.search(r"\b(?:step|page)\s*(\d+)\s*(?:of|/)\s*(\d+)\b", snapshot or "", re.IGNORECASE)
-        step = f"{counter.group(1)} of {counter.group(2)}" if counter else ""
-        steps_remain = bool(counter) and int(counter.group(1)) < int(counter.group(2))
+        counter = current_step(snapshot)
+        step = f"{counter[0]} of {counter[1]}" if counter else ""
+        steps_remain = bool(counter) and counter[0] < counter[1]
         return PagePlan(
             page_kind="job_description" if opening else "application_form",
             step=step or "profile-only",
@@ -1536,6 +2397,25 @@ class PageAgent:
                 "final_submit" if safety.is_submit_label(label) and not steps_remain else "next_step"
             ),
         )
+
+    def posting_plan(self, controls: list[Control], required: set[str], still_open: list[str],
+                     snapshot: str = "") -> Optional[PagePlan]:
+        """A job posting whose way on is a plain Apply: press it, without asking the AI.
+
+        The posting page's own boxes -- a job search, a language picker, "email me jobs like this" -- looked like
+        open questions, so the page went to the AI, which answered "click Apply" (Embry-Riddle, 28 September:
+        three requests of a 20-a-day allowance). Nothing on a posting is the owner's to answer. Only when no
+        question still open is required, so a form whose last button happens to say "Apply" still goes the
+        usual way."""
+        if any(_open_is_required(q, controls, required) for q in still_open):
+            return None
+        plan = self.profile_plan(controls, required, [], snapshot)
+        if plan.next_kind != "open_application" or plan.for_owner:
+            return None
+        if still_open or _blank_choice_on_page(controls):
+            logger.info("POSTING_PAGE: '%s' opens the application -- the page's other boxes are not questions, "
+                        "no AI call", plan.next_label)
+        return plan
 
     def profile_forward(self, controls: list[Control]) -> Optional[Control]:
         """The safest clearly-labelled application action on a local-plan page."""
@@ -1561,8 +2441,64 @@ class PageAgent:
         supervisor is answered this way: those belong to one entry, not to him.
         """
         question = control.question
+        if control.role in ('checkbox', 'switch') and re.search(
+                r'\b(?:i have|use|have a)\b.*\bpreferred name\b', question, re.I):
+            preferred = str(getattr(self.profile, 'preferred_name', '') or '').strip()
+            return ('checked' if preferred else 'unchecked'), 'profile.preferred_name'
+        if re.search(r'verify.*identity|identity.*verif', question, re.I) and control.options:
+            channels = {channel: [label for label in control.options
+                                  if re.search(rf'\b{channel}\b', label, re.I)]
+                        for channel in ('email', 'phone')}
+            if channels['email'] and channels['phone']:
+                preferred = str(getattr(self.profile, 'preferred_contact_method', '') or '').lower()
+                channel = 'phone' if preferred in ('phone', 'sms', 'text', 'text message') else 'email'
+                if len(channels[channel]) == 1:
+                    return channels[channel][0], 'profile.preferred_contact_method'
+        if control.role in ('radio', 'radiogroup', 'group', 'combobox', 'listbox') \
+                and _TEXT_MESSAGES.search(question) \
+                and re.search(r'consent|agree|receiv|opt.?in|send', question, re.I):
+            explicit = self.library_answer(question, exact_only=True)
+            if explicit:
+                return explicit, 'profile.answer_library'
+            prefers = str(getattr(self.profile, 'preferred_contact_method', '') or '').strip().lower()
+            return ('Yes' if prefers in ('sms', 'text', 'text message') else 'No'), \
+                'profile.preferred_contact_method'
+        # Tick boxes of the owner's standing decision (30 September): agreements and acknowledgements are ticked
+        # ("I have read and agree", "I acknowledge", "By checking this box", terms, privacy) -- a declaration only
+        # with sign_attestations, the rest with accept_application_privacy_prompts; a text-message consent never,
+        # unless the owner's preferred contact is text. Text messages are looked at first: "I agree to receive
+        # text messages" is not an agreement to tick.
+        if control.role in ("checkbox", "switch"):
+            said = self._attestation_text(control)
+            if _TEXT_MESSAGES.search(said):
+                prefers = str(getattr(self.profile, "preferred_contact_method", "") or "").strip().lower()
+                return ("checked" if prefers in ("sms", "text", "text message") else "unchecked"), \
+                    "profile.preferred_contact_method"
+            if _AGREEMENT.search(said):
+                if safety.is_attestation(said):
+                    return "", ""  # Declarations are handled last by sign().
+                elif getattr(self.profile, "accept_application_privacy_prompts", False):
+                    return "checked", "profile.accept_application_privacy_prompts"
         if not question or safety.is_attestation(question):
             return "", ""
+
+        # A box inside a repeated Work or Education entry belongs to that job or that degree: it is answered from
+        # that entry's own record, never from one value for the whole person (Steelcase, 29 September: a job's
+        # "End date" took the education end date, and both degrees took the first one's school).
+        entry = getattr(self, "_entries", {}).get(control.ref)
+        if entry is not None:
+            value, source, blank = repeated_entries.answer(entry, getattr(self, "history", {}) or {})
+            if blank:
+                if not isinstance(getattr(self, "_entry_blank", None), set):
+                    self._entry_blank = set()
+                self._entry_blank.add(control.ref)
+                shown = (control.value or entry.values.get(entry.label.lower()) or "").strip()
+                if shown:
+                    note = (f"{(repeated_entries.record_for(entry, self.history) or {}).get('company', 'your current job')} "
+                            f"is your current job, but its {entry.label!r} shows {shown!r} -- clear it")
+                    if note not in self.notes:
+                        self.notes.append(note)
+            return value, source
 
         # 0. Privacy & Recruiting Communications consent checkbox (authorized by profile.accept_application_privacy_prompts)
         if getattr(self.profile, "accept_application_privacy_prompts", True):
@@ -1573,9 +2509,23 @@ class PageAgent:
                 if control.role in ("checkbox", "switch"):
                     return "checked", "profile.accept_application_privacy_prompts"
 
+        if control.role == "spinbutton" and _plain(question) in {"month", "day", "year"}:
+            # Repeated-entry dates were resolved above. A component label alone
+            # cannot identify today's date, a birth date, or any historical date.
+            return "", ""
+
         # 1. Saved exact answer library (e.g. from data/profile_answers.json) takes priority
         explicit = self.library_answer(question, exact_only=True)
         if explicit:
+            # Who the owner is -- name, email, phone, address -- is the profile's to say, whatever a saved answer
+            # holds: a saved "Last Name": "c" was typed into UKG's Last name (30 September).
+            owned = concept_matcher.match_concept(question=question, container=control.container,
+                                                  context=control.context, name=control.name)
+            if owned in _PROFILE_OWNS:
+                val, src = concept_matcher.resolve_profile_value(concept=owned, profile=self.profile,
+                                                                 options=control.options, question=question)
+                if val:
+                    return val, src
             return explicit, "profile.answer_library"
 
         # 2. Universal Concept & Synonym Engine (zero-cost, zero-heavy-RAM, cross-ATS)
@@ -1592,17 +2542,27 @@ class PageAgent:
                 concept=concept,
                 profile=self.profile,
                 options=control.options,
+                question=question,
             )
             if val:
                 return val, src
             if concept == "MIDDLE_NAME":
                 replacement = "N/A" if "*" in question or "required" in question.lower() else ""
                 return replacement, "profile.middle_name"
+            if str(src).startswith("profile.") and str(src).split(".", 1)[1] in BLANK_MEANS_NONE:
+                return "", src               # the profile's word that there is none (no preferred name)
 
         # 3. Regex patterns from data/profile_answers.json
         regex_explicit = self.library_answer(question)
         if regex_explicit:
             return regex_explicit, "profile.answer_library"
+
+        # 3b. "Have you worked at <company>?" -- from the person's own work history: "No" unless the company is
+        # one they worked for (the owner's rule, 29 September).
+        worked = employment_history.answer(question, getattr(self.job, "company", "") or "",
+                                           self._past_employers())
+        if worked:
+            return worked, "profile.work_history"
 
         field = _name_field(question) or _detail_field(question)
         if field:
@@ -1631,11 +2591,13 @@ class PageAgent:
             value = str(held or "").strip()
             if value:
                 return value, f"profile.{standing}"
-        if re.search(r"\b(country|nation)\b", question, re.IGNORECASE):
+        # Where the owner lives, only when the question asks that: the concept matcher decides (a third, looser copy
+        # here answered "What is the Country of your birth?" with the country of residence -- Forterra, 30 September).
+        if concept_matcher.match_concept(question) == "COUNTRY":
             value = str(getattr(self.profile, "country", "") or "").strip()
             if value:
                 return value, "profile.country"
-        if re.search(r"mobile|cell|phone number", question, re.IGNORECASE) and not re.search(
+        if not _TEXT_MESSAGES.search(question) and re.search(r"mobile|cell|phone number", question, re.IGNORECASE) and not re.search(
                 r"home|work|employer", question, re.IGNORECASE):
             value = str(getattr(self.profile, "phone_mobile", "") or getattr(self.profile, "phone", "") or "").strip()
             if value:
@@ -1663,10 +2625,6 @@ class PageAgent:
             value = str(getattr(self.profile, "willing_to_submit_to_pre_employment_background_check", "") or "").strip()
             if value:
                 return value, "profile.willing_to_submit_to_pre_employment_background_check"
-        if re.search(r"worked for occ as an intern or employee", question, re.IGNORECASE):
-            return str(getattr(self.profile, "worked_for_occ", "") or "").strip(), "profile.worked_for_occ"
-        if re.search(r"provided services to occ as a consultant or contractor", question, re.IGNORECASE):
-            return str(getattr(self.profile, "provided_services_to_occ", "") or "").strip(), "profile.provided_services_to_occ"
         if re.search(r"bonus expectations", question, re.IGNORECASE):
             return str(getattr(self.profile, "bonus_expectations", "") or "").strip(), "profile.bonus_expectations"
         if re.search(r"willing and able to work.*office location.*3 days|minimum of 3 days per week", question,
@@ -1736,6 +2694,12 @@ class PageAgent:
                         return said, "owner_earlier_answer"
             except Exception:
                 pass
+        # The answer bank: this question answered on any earlier application -- by the owner, or by the agent on one
+        # the owner then sent -- on any portal (answer_bank.py). Last, so the profile and the owner's own answers
+        # always come first; its answer goes into whatever this form draws through the same matcher as any other.
+        banked = answer_bank.lookup(question, getattr(self.job, "company", "") or "")
+        if banked and banked.get("value"):
+            return str(banked["value"]), f"answer_bank.{banked.get('source', 'confirmed')}"
         return "", ""
 
     def answer_what_is_known(self, page, controls: list[Control],
@@ -1748,14 +2712,15 @@ class PageAgent:
 
         # Topological sorting: Country -> State -> City -> Others
         def _ctrl_prio(ctrl):
-            q_txt = (ctrl.question or "").lower()
-            if re.search(r"^\s*country(/region)?( of residence)?\s*:?\s*\*?\s*$", q_txt):
-                return 0
-            if re.search(r"^\s*\*?\s*(state|province)(/province)?(/region)?\s*:?\s*\*?\s*$", q_txt):
-                return 1
-            if re.search(r"^\s*\*?\s*(city|town)\s*:?\s*\*?\s*$", q_txt):
-                return 2
-            return 3
+            # Country, then state, then city, then the rest: a form redraws what depends on them, and a ZIP or
+            # street typed before the state is cleared when it is chosen (UKG, 30 September). Which box is which
+            # comes from the one reading of questions, whatever the label's stars and spacing ("*State /
+            # Province") -- hand-written patterns here missed UKG's and filled the state last.
+            if getattr(self, "_entries", {}).get(ctrl.ref) is not None:
+                return 3                     # a job's or a degree's place belongs to that entry, in page order
+            concept = concept_matcher.match_concept(question=ctrl.question or "", container=ctrl.container,
+                                                    context=ctrl.context, name=ctrl.name)
+            return _RESIDENCE_ORDER.get(concept_matcher.confirm_concept(concept, ctrl.options), 3)
 
         sorted_controls = sorted(controls, key=_ctrl_prio)
 
@@ -1778,7 +2743,20 @@ class PageAgent:
                 handled_groups.add(group_key)
             if control.question in self.owner_answers:
                 continue
+            if not control.options and control.role in ("combobox", "listbox", "button"):
+                control.options = published_choices(control.question, self._published_questions())
             value, source = self.known_answer(control)
+            # A list that refused this very answer is not offered it again; a different answer -- after a fix or a
+            # profile change -- is tried. Remembered by question alone, UKG's OPT question kept the "Graduated" that
+            # failed at 13:48 and never took the "No" its reloaded code knew (30 September).
+            if (control.question, value) in self._misfit:
+                star = "*" if any(_same_question(control.question, q) for q in required) else ""
+                open_questions.append(control.question + star)
+                continue
+            if not value and control.ref in getattr(self, "_entry_blank", ()):
+                continue                     # the end date of the job the owner still has: blank is the answer
+            if not value and self._profile_says_none(source):
+                continue                     # the profile says there is none (no middle name): blank is the answer
             if not value:
                 # Every box still empty is left open, not only the starred
                 # ones: a form that marks nothing as required still has
@@ -1790,15 +2768,26 @@ class PageAgent:
             # A radio group has one correct option.  ``choose`` selects that
             # option by its label; ``check`` would blindly tick whichever
             # radio happened to be visited first.
-            if control.role in ("checkbox", "switch") and not control.group:
-                action = "check" if value.strip().lower() not in ("no", "false", "0") else "uncheck"
+            # A tick box answered for itself ("checked": a consent the profile allows) is ticked itself, grouped or
+            # not; a group's answer names its choices.
+            # A tick box is ticked by a yes or no, or by its own words -- never by the fact of the question beside
+            # it: UKG's "I decline to say" boxes took "Male", "Asian" and "I am not a veteran" and were ticked, and
+            # a consent box took the phone number (30 September).
+            if control.role in ("checkbox", "switch") and not control.group \
+                    and value.strip().lower() not in _TICK_WORDS \
+                    and option_match.best_option([control.name], value) is None:
+                continue
+            if control.role in ("checkbox", "switch") and (
+                    not control.group or value.strip().lower() in ("checked", "true", "unchecked", "false")
+                    or (control.ref in getattr(self, "_entries", {}) and value.strip().lower() in ("yes", "no"))):
+                action = "check" if value.strip().lower() not in ("no", "false", "0", "unchecked") else "uncheck"
             try:
                 answer = Answer(control.ref, control.question, action, value, source)
                 if self.do(page, answer, control):
                     filled += 1
                     self.written[control.question] = answer.value
                     self._remember(control, answer)
-                    logger.info("KNEW: %s = %r (%s)", control.question[:44], value[:34], source)
+                    logger.info('FIELD_ACTION: application field handled')
                     # Quiescence check: if Country was updated, let network settle before filling dependent fields
                     if re.search(r"^\s*country(/region)?( of residence)?\s*:?\s*\*?\s*$", control.question or "", re.I):
                         logger.info("LOCATION_SWEEP: Country answered; waiting for network quiescence...")
@@ -1811,6 +2800,8 @@ class PageAgent:
                     star = "*" if any(_same_question(control.question, q) for q in required) else ""
                     open_questions.append(control.question + star)
                     self.failed.append(f"{control.question[:60]} = {value[:40]!r}")
+                    if action == "choose":
+                        self._misfit.add((control.question, value))
             except Exception as exc:
                 star = "*" if any(_same_question(control.question, q) for q in required) else ""
                 open_questions.append(control.question + star)
@@ -1819,6 +2810,74 @@ class PageAgent:
                             str(exc).splitlines()[0][:100])
         return filled, open_questions
 
+
+    def stuck_on_errors(self, page) -> str:
+        """After a press that did not move the page on: what its own errors say to do.
+
+        The first time, the errors are acted on -- an error about a file makes the agent attach it again (it
+        believed it attached) -- and passed to the planner as feedback. The same errors after the next press
+        mean pressing again will not help: "stop:" and the page's own words, for the owner."""
+        try:
+            errors = page_errors(self.snapshot(page))
+        except Exception:
+            return ""
+        if not errors:
+            return ""
+        key = tuple(sorted(errors))
+        if key == getattr(self, "_last_press_errors", ()):
+            return "stop:the form will not go on; it says: " + "; ".join(errors[:4])
+        self._last_press_errors = key
+        if any(_UPLOAD_ERROR.search(e) for e in errors):
+            logger.info("The form says a file is missing -- attaching it again")
+            self.resume_uploaded = False
+            self._letter_attached = False
+        logger.info("THE FORM SAYS: %s", "; ".join(errors[:4])[:200])
+        return "the form says: " + "; ".join(errors[:4])
+
+    def carry_on_without_the_ai(self, controls: list[Control], required: set[str], still_open: list[str],
+                                snapshot: str, why: str) -> Optional["PagePlan"]:
+        """The page plan when the AI cannot be asked, or None when the page needs it.
+
+        Blue Cross and Blue Shield of Louisiana (29 September): My Experience needed only the resume, which the
+        agent attaches itself; the questions left open were optional (Skills, Phone Extension). The AI's daily
+        allowance was spent, and the run stopped although nothing on the page needed an answer. Now, with every
+        required question answered and a plain way forward, the optional ones are left blank and the run goes on;
+        a required question still open stops it, as before."""
+        self.required_left = []
+        required_open = [q for q in still_open
+                         if q.rstrip().endswith("*") or any(_same_question(q.rstrip(" *"), r) for r in required)]
+        # Workday names a required list "<question> Select One Required": the star it draws is on a line of its
+        # own, so the question was taken for optional and Next was pressed into the same error three times
+        # (Rackspace's AI-screening consent, 29 September).
+        required_open += [c.question for c in controls
+                          if c.role in ("button", "combobox", "listbox") and not c.disabled and not c.answer
+                          and re.search(r"\brequired\s*$", c.name or "", re.IGNORECASE)
+                          and c.question not in required_open]
+        errors = page_errors(snapshot)
+        if required_open or errors:
+            self.required_left = required_open or errors
+            return None
+        plan = self.profile_plan(controls, required, [], snapshot)
+        if not plan.next_ref or _blank_choice_on_page([c for c in controls if "*" in (c.question or "")]):
+            return None
+        logger.info("NO AI (%s): only optional questions are left (%s) -- leaving them blank and going on",
+                    why.splitlines()[0][:80] if why else "unavailable", "; ".join(q[:40] for q in still_open[:4]) or "none")
+        if still_open:
+            note = "left blank without the AI (optional): " + "; ".join(q[:50] for q in still_open[:6])
+            if note not in self.notes:
+                self.notes.append(note)
+        return plan
+
+    def _past_employers(self) -> list[str]:
+        """Who the person has worked for, from the profile and the resume (read once per run)."""
+        if getattr(self, "_employers_cache", None) is None:
+            self._employers_cache = employment_history.past_employers(
+                self.profile, getattr(self.resume, "raw_text", "") or "")
+        return self._employers_cache
+
+    def _published_questions(self) -> list:
+        analysis = getattr(self.job, "analysis", None)
+        return list((analysis or {}).get("published_questions") or []) if isinstance(analysis, dict) else []
 
     def facts(self, controls: list[Control]) -> dict:
         profile = asdict(self.profile) if hasattr(self.profile, "__dataclass_fields__") else dict(vars(self.profile))
@@ -1842,11 +2901,15 @@ class PageAgent:
                     continue
         return {
             "today": date.today().isoformat(),
-            "job": {"title": getattr(self.job, "title", ""), "company": getattr(self.job, "company", "")},
+            "job": {"title": getattr(self.job, "title", ""), "company": getattr(self.job, "company", ""),
+                    # The posting itself, so an answer fits what the employer asks for (the owner's request,
+                    # 29 September); the planner is told it describes the job, not the applicant.
+                    "description": (getattr(self.job, "raw_text", "") or "")[:JOB_POSTING_CHARS]},
             "profile": profile,
             "phone_with_country_code": f"{code} {phone}".strip() if code and not phone.startswith("+") else phone,
             "resume_text": (getattr(self.resume, "raw_text", "") or "")[:12_000],
             "owner_earlier_answers": earlier[:40],
+            "questions_the_site_publishes": self._published_questions()[:60],
             "documents": {"resume": self.resume_file.name if self.resume_file else "",
                           "cover_letter": "can be written for this job" if self.cover_letter else ""},
         }
@@ -1854,15 +2917,28 @@ class PageAgent:
     # -- one page -----------------------------------------------------------------
     def run(self, page) -> Outcome:
         """Works through the application until it is submitted or needs the owner."""
+        lock_factory = getattr(self.assistant, "_execution_lock", None)
+        if callable(lock_factory):
+            with lock_factory():
+                if getattr(self.assistant, "_submission_execution_state", "active") != "active":
+                    return Outcome("needs_user", page, ["automation is parked for human handoff"])
+                return self._run_locked(page)
+        return self._run_locked(page)
+
+    def _run_locked(self, page) -> Outcome:
         self._ensure_state()
         tries = 0
         stick_tries = 0      # re-reads of one page because an answer did not stay
         last_fingerprint = ""
         feedback = ""
         for _ in range(MAX_PAGES * MAX_TRIES_PER_PAGE):
+            if getattr(self.assistant, "_submission_execution_state", "active") != "active":
+                return Outcome("needs_user", page, ["automation is parked for human handoff"])
             tab = self.tab(page)
             if tab.is_closed():
                 return Outcome("gave_up", page, ["the browser window was closed"])
+            if hasattr(self.assistant, "protect_submission"):
+                self.assistant.protect_submission(tab)
             self._current_host = urlparse(getattr(tab, "url", "")).netloc.lower()
             if not self._resume_autofill_attempted and self.resume_file \
                     and hasattr(self.assistant, "autofill_from_resume"):
@@ -1916,13 +2992,32 @@ class PageAgent:
             if self._shapes[hash(shape)] > MAX_READS_PER_PAGE:
                 return Outcome("owner_needed", page, ["this page keeps asking the same things and is not "
                                                       "moving on -- the rest of it needs you"])
+            # A confirmation is read before anything else on the page: Workday's says "We've Received Your
+            # Application!" over a form to make a Candidate Home account, and was taken for a sign-in page --
+            # the application went unrecorded and the run went on asking about an account (Aristocrat, 29 Sept).
+            if self._site_confirms(tab):
+                if self.final_pressed:
+                    return Outcome("submitted", page, ["the site confirmed the application"])
+                return Outcome("owner_needed", page, ["the site says this application was already sent"])
             if self.sign_in_step(page, controls):
                 self.settle(page)
                 continue
+            if self.account_blocker:
+                # Only the owner can do this (a verification link, a locked account, a refused password):
+                # say so, rather than read the sign-in page as a form to answer.
+                return Outcome("owner_needed", page, [self.account_blocker])
             if self.complete_account_code(page, controls, snapshot):
                 self.settle(page)
                 continue
+            if self.account_blocker:
+                # complete_account_code() found a code it has no authorized channel to read
+                # (SMS/text or an authenticator app): say so precisely, rather than let the box
+                # fall through to the ordinary question-answering path or a generic stuck loop.
+                return Outcome("owner_needed", page, [self.account_blocker])
             if self.open_entry_for_missing_field(page, snapshot, controls):
+                self.settle(page, 1_500)
+                continue
+            if self.add_entries_the_site_way(page, snapshot):
                 self.settle(page, 1_500)
                 continue
             if self.wake_loading_control(page, snapshot):
@@ -1950,6 +3045,19 @@ class PageAgent:
                 still_open = [q for q in still_open
                               if not any(_same_question(c.question, q) and c.answer for c in controls)]
                 self._commit_learned_memory(controls)
+            # "Select one or more locations where you'd like to apply": the owner's rule (location_choice.py).
+            if self.answer_location_choices(page, controls):
+                self.settle(page, 600)
+                snapshot = self.read_when_loaded(page)
+                controls = parse_snapshot(snapshot)
+            # Fields the accessibility snapshot does not show as questions -- a hidden resume input, a list drawn as a
+            # button -- found by what they are (form_fields.py).
+            if self.inventory_pass(page):
+                self.settle(page, 600)
+                snapshot = self.read_when_loaded(page)
+                controls = parse_snapshot(snapshot)
+                still_open = [q for q in still_open
+                              if not any(_same_question(c.question, q) and c.answer for c in controls)]
             plan = None
             if self.uses_profile_planner():
                 # Autonomous mode is intentionally deterministic.  It never
@@ -1957,6 +3065,8 @@ class PageAgent:
                 # choice to Claude/the session; unknown *required* questions
                 # are returned as a clear profile-data gap instead.
                 plan = self.profile_plan(controls, required, still_open, snapshot)
+            if plan is None:
+                plan = self.posting_plan(controls, required, still_open, snapshot)
             if plan is None:
                 # 1. Profile-first: if the profile already answered everything on
                 # this page (still_open is empty), build the plan from the
@@ -1987,21 +3097,38 @@ class PageAgent:
 
                         newly_answered = 0
                         for ctrl in list(controls):
-                            if not ctrl.question or ctrl.answer or ctrl.disabled:
+                            if not ctrl.question or ctrl.answer or ctrl.disabled \
+                                    or ctrl.ref in getattr(self, "_entry_blank", ()):
                                 continue
                             if not any(_same_question(ctrl.question, q) for q in still_open):
                                 continue
                             if safety.is_attestation(ctrl.question) or safety.is_legal_status_question(ctrl.question):
                                 continue
+                            if concept_matcher.is_self_identification(
+                                    f"{ctrl.question} {ctrl.container} {ctrl.context}"):
+                                continue            # who the owner is: never the AI's to answer
+                            if self._optional_entry_box(ctrl, still_open):
+                                continue            # an optional box of a job or degree: left blank, not written up
+                            if self._profile_says_none(self.known_answer(ctrl)[1]):
+                                continue            # the profile says there is none: never the AI's to fill
                             if is_secret_box(ctrl.question) or is_honeypot(ctrl.question):
                                 continue            # a password or a robots' decoy is never the AI's to answer
+                            if ctrl.role in ("textbox", "searchbox") \
+                                    and form_fields.tags_beside(self.locate(page, ctrl.ref)):
+                                continue            # a tag box that already holds tags (UKG's Skills) is answered
                             try:
                                 # A text box tells how long an answer it takes and what it
                                 # asks beside the label ("max 150 words", "0/500").
                                 box = open_answers.read_box(self.locate(page, ctrl.ref)) \
                                     if ctrl.role in ("textbox", "searchbox") else {}
+                                # A list is asked about with its choices: one that draws them only when opened
+                                # is opened and read first, or the AI writes an essay for a pick-one question.
+                                if not ctrl.options and ctrl.role in ("combobox", "listbox"):
+                                    field = self._inventory_field(page, ctrl)
+                                    if field is not None:
+                                        ctrl.options = form_fields.read_choices(field)
                                 val = self.claude.answer_single_question(
-                                    question=ctrl.question,
+                                    question=self._question_for(ctrl),
                                     options=ctrl.options,
                                     resume_text=self._resume_text_cache,
                                     profile=self.profile,
@@ -2037,7 +3164,8 @@ class PageAgent:
                             snapshot = self.read_when_loaded(page)
                             controls = parse_snapshot(snapshot)
                             still_open = [q for q in still_open
-                                          if not any(_same_question(c.question, q) and c.answer for c in controls)]
+                                          if not any(_same_question(c.question, q) and (
+                                              c.answer or c.ref in self._entry_blank) for c in controls)]
                             self._commit_learned_memory(controls)
 
                     if not still_open:
@@ -2067,10 +3195,15 @@ class PageAgent:
                                                                         self.facts(controls), asked))
                     except Exception as exc:
                         message = str(exc)
-                        if "out of credit" in message or "credit balance" in message.lower():
-                            return Outcome("owner_needed", page, [message.split(": ", 1)[-1][:200]])
-                        return Outcome("owner_needed", page,
-                                                             [f"could not read this page ({message.splitlines()[0][:120]})"])
+                        plan = self.carry_on_without_the_ai(controls, required, still_open, snapshot, message)
+                        if plan is None and self.required_left:
+                            return Outcome("owner_needed", page, [
+                                "needs your answer (the AI is unavailable): " + q[:160] for q in self.required_left[:4]])
+                        if plan is None:
+                            if "out of credit" in message or "credit balance" in message.lower():
+                                return Outcome("owner_needed", page, [message.split(": ", 1)[-1][:200]])
+                            return Outcome("owner_needed", page,
+                                           [f"could not read this page ({message.splitlines()[0][:120]})"])
             logger.info("READ: %s%s -- %d to answer, %d for you, next: %s %r", plan.page_kind.replace("_", " "),
                         f" ({plan.step})" if plan.step else "", len(plan.answers), len(plan.for_owner),
                         plan.next_kind.replace("_", " "), plan.next_label[:40])
@@ -2117,8 +3250,8 @@ class PageAgent:
                 return Outcome("owner_needed", page, ["the site says this application was already sent"])
 
             given = (self.correct_from_profile(page, plan, controls)
-                     + self.apply_answers(page, plan, controls)
-                     + self.attach_documents(page, snapshot, controls))
+                     + self.attach_documents(page, snapshot, controls)
+                     + self.apply_answers(page, plan, controls))
 
             # Read back what is on the page now, whoever filled it, and check
             # every answer the agent gave is really there.
@@ -2158,8 +3291,14 @@ class PageAgent:
                 missing_required = []
                 for control in after:
                     question = control.question
-                    marked_required = "*" in question or any(_same_question(question, item) for item in required)
-                    if not question or not marked_required:
+                    # A star that marks a question stands at its start or end ("Email address *", "* Company"),
+                    # not inside it: UKG's password rule "Special characters (e.g. !@#$%^&*)" was named a blank
+                    # required field (30 September).
+                    marked_required = bool(_REQUIRED_STAR.search(question or "")) \
+                        or any(_same_question(question, item) for item in required)
+                    # A "question" with no words is layout, not a question: UKG drew a row of required stars
+                    # ("* * * * *") and the run stopped for it as a blank required field (30 September).
+                    if not question or not marked_required or not re.search(r"[A-Za-z]{2}", question):
                         continue
                     answered = bool(control.answer)
                     if control.role in ("radio", "checkbox", "switch") and control.group:
@@ -2176,8 +3315,22 @@ class PageAgent:
                         continue
                     if not answered and any(_same_question(question, item) for item in given_questions):
                         answered = True
+                    if not answered and control.role in ("textbox", "searchbox") \
+                            and form_fields.tags_beside(self.locate(page, control.ref)):
+                        answered = True         # a tag box holding tags (UKG's Skills): its text box stays empty
                     if not answered and question not in missing_required:
                         missing_required.append(question)
+                # Whatever the page draws it as: a required field a person can see, still empty, is named -- the
+                # snapshot alone missed BambooHR's State and reported the page complete (Secunetics).
+                try:
+                    for blank in form_fields.blank_required(form_fields.inventory(self.tab(page))):
+                        question = re.sub(r"[\s*✱:]+$", "", blank.question or blank.label)
+                        if question and re.search(r"[A-Za-z]{2}", question) \
+                                and not any(_same_question(question, m) for m in missing_required) \
+                                and not any(_same_question(question, g) for g in given_questions):
+                            missing_required.append(question)
+                except Exception as exc:
+                    logger.debug("Field inventory at the last step failed: %s", exc)
                 blockers += [f"required field is still blank: {question}" for question in missing_required]
             if blockers:
                 return Outcome("owner_needed", page, blockers)
@@ -2188,7 +3341,14 @@ class PageAgent:
                             "open each one's list and choose from it -- " + "; ".join(rejected))
                 logger.info("REFUSED BY THE PAGE: %s", "; ".join(rejected)[:160])
             moved, page, feedback = self.press_next(page, plan, after) if not rejected else ("retry", page, feedback)
+            if moved == "retry":
+                stuck = self.stuck_on_errors(page)
+                if stuck.startswith("stop:"):
+                    return Outcome("owner_needed", page, [stuck[5:]])
+                if stuck:
+                    feedback = stuck
             if moved == "moved":
+                self._last_press_errors = ()
                 stick_tries = 0
             if moved == "submitted":
                 return Outcome("submitted", page, ["the site confirmed the application"])
@@ -2217,6 +3377,19 @@ class PageAgent:
             if control is None:
                 logger.info("SKIPPED: %r is not on the page", answer.question[:60])
                 continue
+            # A box inside a job or degree entry takes that entry's record, whatever the page plan proposed; the
+            # plan's value stands only where the record holds nothing (a school's country, say).
+            entry = getattr(self, "_entries", {}).get(control.ref)
+            if entry is not None and answer.action in ("fill", "choose") \
+                    and not str(answer.source or "").startswith("work history"):
+                value, source, blank = repeated_entries.answer(entry, getattr(self, "history", {}) or {})
+                if blank:
+                    logger.info('FIELD_ACTION: application field handled')
+                    processed_refs.add(control.ref)
+                    continue
+                if value and not _same_answer(answer.value, value):
+                    logger.info('FIELD_ACTION: application field handled')
+                    answer = Answer(answer.ref, answer.question, answer.action, value, source)
             refusal = self.refusal(page, answer, control, current_controls)
             if refusal:
                 known_val, _ = self.known_answer(control)
@@ -2257,8 +3430,7 @@ class PageAgent:
                 self.written[control.question or answer.question] = answer.value
                 self.assistant.values.record(self.tab(page), f"aria:{control.question}", answer.value,
                                              answer.source or "agent")
-                logger.info("ANSWERED: %r -> %r (from %s)", (control.question or answer.question)[:60],
-                            answer.value[:50], answer.source or "?")
+                logger.info('FIELD_ACTION: application field handled')
                 self._remember(control, answer)
 
             processed_refs.add(control.ref)
@@ -2315,7 +3487,7 @@ class PageAgent:
 
     @staticmethod
     def _is_signature(answer: Answer, control: Optional[Control]) -> bool:
-        texts = [answer.question] + ([control.question, control.name] if control else [])
+        texts = [answer.question] + ([PageAgent._attestation_text(control)] if control else [])
         return any(safety.is_attestation(t) and not safety.is_privacy_consent(t) for t in texts if t)
 
     def sign(self, page, plan: PagePlan, signing: list[Answer],
@@ -2328,17 +3500,42 @@ class PageAgent:
                 plan.for_owner.append({"question": answer.question, "reason": reason, "required": True})
             return []
 
+        if not signing:
+            return []
         if not getattr(self.profile, "sign_attestations", False):
             return leave("a declaration or signature -- you haven't allowed the agent to give it")
         self.settle(page, 800)
-        now = parse_snapshot(self.snapshot(page))
+        snapshot = self.snapshot(page)
+        now = parse_snapshot(snapshot)
         # Every answer given on this page must be showing before anything is signed.
         problems = list(getattr(self, "failed", [])) + self.not_stuck(list(given_here), now)
         problems += safety.legal_answer_conflicts(answered_fields(now), self.profile)
+        required = required_questions(snapshot)
+        for control in now:
+            if control.disabled or safety.is_attestation(self._attestation_text(control)):
+                continue
+            if control.question not in required and not _REQUIRED_STAR.search(control.question):
+                continue
+            if control.role not in ("textbox", "searchbox", "combobox", "radio", "checkbox", "switch", "spinbutton", "radiogroup"):
+                continue
+            # File attachments are checked by the submission gate; snapshots can
+            # expose a file chooser as a textbox without its uploaded filename.
+            if self.locate(page, control.ref).evaluate("e => e.tagName === 'INPUT' && e.type === 'file'"):
+                continue
+            answered = bool(control.answer)
+            if control.role in ("radio", "checkbox", "radiogroup"):
+                answered = answered or any(c.checked and _same_question(c.question, control.question) for c in now)
+            if not answered:
+                problems.append(f"{control.question[:60]} is still unanswered")
+        fields = form_fields.inventory(self.tab(page))
+        for field in form_fields.blank_required(fields):
+            if not safety.is_attestation(f"{field.question} {field.label}"):
+                problems.append(f"{field.question[:60]} is still unanswered")
         for item in plan.for_owner:
             question = str(item.get("question") or "")
             if (bool(item.get("required")) or "*" in question) and not any(
-                    _same_question(c.question, question) and c.answer for c in now):
+                    _same_question(c.question, question) and c.answer for c in now) and not any(
+                    f.kind == "file" and f.value and _same_question(f.question or f.label, question) for f in fields):
                 problems.append(f"{question[:60]} is still unanswered")
         if problems:
             return leave("not signed while something on the page is wrong or missing: " + "; ".join(problems)[:200])
@@ -2369,6 +3566,97 @@ class PageAgent:
             logger.info("SIGNED: %s", note)
         return given
 
+    def _attach_resume_to_its_input(self, tab, fields=None) -> bool:
+        """The resume put straight into the page's own file input, found by the section it sits in -- no button, no
+        file window. Jobvite (Altamira, 30 September): its 'Select' button opens a Dropbox / File / LinkedIn menu, the
+        agent waited for a file window that never came, and the menu left open over the page stopped the run -- the
+        page's hidden file input takes the file directly."""
+        if not self.resume_file or self.resume_uploaded:
+            return False
+        try:
+            fields = fields if fields is not None else form_fields.inventory(tab)
+        except Exception as exc:
+            logger.debug("Field inventory failed: %s", exc)
+            return False
+        target = form_fields.resume_input(fields)
+        if target is not None:
+            from browser_automation import JobApplicationAssistant
+            if JobApplicationAssistant._file_already_attached(target.frame, Path(self.resume_file).name):
+                self.resume_uploaded = True
+                self.resume_seen = True
+                return False  # A resumed run sees an empty input beside the saved attachment.
+        here = (urlparse(getattr(tab, "url", "")).path, target.name or target.label) if target else None
+        if target is None or target.value or here in self._attached_here:
+            return False
+        if not form_fields.attach_resume(tab, self.resume_file, fields):
+            return False
+        self._attached_here.add(here)
+        self._resume_went_on(self.resume_file)
+        self.resume_seen = True
+        for asked in {target.question, target.label, target.section} - {""}:
+            self.written[asked] = Path(self.resume_file).name   # the page's own words for it: answered
+        where = target.section or target.question or target.label or target.name
+        logger.info('ATTACHED: application document')
+        return True
+
+    def inventory_pass(self, page) -> list[str]:
+        """What the field inventory finds that the snapshot does not: the resume's file input (told apart by the
+        section it sits in -- 'Attach', 'Choose File*', 'From Device' say nothing), and lists a page draws as a
+        button ('State –Select–'). Returns what was done."""
+        tab = self.tab(page)
+        try:
+            fields = form_fields.inventory(tab)
+        except Exception as exc:
+            logger.debug("Field inventory failed: %s", exc)
+            return []
+        done: list[str] = []
+        if self._attach_resume_to_its_input(tab, fields):
+            done.append("resume")
+        try:
+            controls = parse_snapshot(self.snapshot(page))
+        except Exception:
+            controls = []
+        # A label that appears on several boxes belongs to repeated entries (a job's 'End date'): those are the
+        # entry-aware path's (repeated_entries.py), never answered from here by label alone.
+        seen_labels: dict[str, int] = {}
+        for f in fields:
+            key = option_match.plain(f.label or f.question)
+            seen_labels[key] = seen_labels.get(key, 0) + 1
+        fillable = ("button_list", "select", "combobox", "date")
+        for f in fields:
+            if f.kind not in fillable or f.trap or not f.visible or f.disabled or not f.empty:
+                continue
+            if seen_labels.get(option_match.plain(f.label or f.question), 0) > 1:
+                continue
+            if f.kind != "button_list":
+                question = re.sub(r"[\s*✱:]+$", "", f.label or f.question)
+                if not question:
+                    continue
+                value, source = self.known_answer(Control(ref=f"inv:{f.id}", role="combobox", name=question,
+                                                          options=list(f.options)))
+                if not value:
+                    continue
+                done_it = form_fields.fill_date(tab, f, value) if f.kind == "date" else form_fields.choose(tab, f, value)
+                if done_it:
+                    logger.info('FIELD_ACTION: application field handled')
+                    self.written[question] = value
+                    done.append(question)
+                continue
+            question = re.sub(r"[\s*✱:]+$", "", f.label or f.question)
+            # The snapshot shows it as a question and can answer it the usual way -- unless what it shows is the
+            # hidden one-option <select> that only mirrors the button (BambooHR): that has nothing to choose.
+            if not question or any(_same_question(c.question, question)
+                                   and ((c.role in ANSWER_ROLES and not (c.role in ("combobox", "listbox")
+                                                                         and len(c.options) <= 1))
+                                        or is_workday_choice_button(c)) for c in controls):
+                continue
+            value, source = self.known_answer(Control(ref=f"inv:{f.id}", role="combobox", name=question))
+            if value and form_fields.choose_from_button_list(tab, f, value):
+                logger.info('FIELD_ACTION: application field handled')
+                self.written[question] = value
+                done.append(question)
+        return done
+
     def attach_documents(self, page, snapshot: str, controls: list[Control]) -> list[tuple[Answer, Control]]:
         """Attaches the resume and the cover letter where the form asks for them.
 
@@ -2386,6 +3674,10 @@ class PageAgent:
         for what, matches, action in wanted:
             if action == "upload_resume" and (self.resume_uploaded or not self.resume_file):
                 continue
+            if action == "upload_resume" and self._attach_resume_to_its_input(self.tab(page)):
+                given.append((Answer("", "resume", action, Path(self.resume_file).name, "document"),
+                              Control(ref="", role="button", name="resume")))
+                continue
             if action == "upload_cover_letter":
                 # Task 4.3: Ensure cover letter generation is strictly lazy-loaded:
                 # only trigger if an explicit, required cover letter target or text area is actively detected
@@ -2399,12 +3691,15 @@ class PageAgent:
                 if self._letter_attached or self.cover_letter is None:
                     continue
             control = _upload_control(controls, matches) or self._file_input_for(page, controls, matches)
+            # A required upload that never says "resume" beside it, on a page or step that is about the resume:
+            # Avature's "Select your resume" step shows "From Device *  No file selected  [Choose another file]"
+            # (Steelcase, 29 September) -- the agent pressed Continue three times with nothing attached.
             if control is None and action == "upload_resume" and (
-                    re.search(r"upload a file|resume upload", snapshot or "", re.IGNORECASE)
+                    _RESUME_PAGE.search(snapshot or "")
                     and re.search(r"required|error", snapshot or "", re.IGNORECASE)):
                 generic_uploads = [c for c in controls
                                    if c.role in PRESS_ROLES | {"button"}
-                                   and re.search(r"select files?|choose files?|attach|upload", c.name or "", re.IGNORECASE)]
+                                   and _FILE_BUTTON.search(c.name or "")]
                 if len(generic_uploads) == 1:
                     control = generic_uploads[0]
             if control is None:
@@ -2423,11 +3718,15 @@ class PageAgent:
             except Exception as exc:
                 done = False
                 logger.info("Could not attach the %s: %s", what, str(exc).splitlines()[0][:100])
+                try:
+                    self.tab(page).keyboard.press("Escape")   # a menu it opened instead is not left over the page
+                except Exception:
+                    pass
             if done:
                 given.append((answer, control))
                 if action == "upload_cover_letter":
                     self._letter_attached = True
-                logger.info("ATTACHED: the %s (%s)", what, Path(path).name)
+                logger.info('ATTACHED: application document')
         return given
 
     def _file_input_for(self, page, controls: list[Control], section: re.Pattern) -> Optional[Control]:
@@ -2505,6 +3804,26 @@ class PageAgent:
                     getattr(self.profile, "full_name", ""))))
             if not (privacy_ok or signing_ok):
                 return "a declaration or signature -- you haven't allowed the agent to give it"
+        # A blank the profile states on purpose (no middle name) is the answer: the AI's is refused. SK AX USA (ADP),
+        # 30 September: the site's resume reader put "Reddy" in Middle Name, the agent cleared it as the profile says,
+        # the AI was asked about the now-empty box and wrote "Reddy" back, and the run stopped on the tug of war.
+        if action == "fill" and answer.value.strip() and not str(answer.source or "").startswith("profile.") \
+                and self._profile_says_none(self.known_answer(control)[1]):
+            return "your profile says there is none, so the box stays empty"
+        # An optional box inside a job or degree entry that the owner's record does not fill is left blank: UKG's
+        # education "Description" got the AI's "I have six years of experience ..." (30 September).
+        if action == "fill" and not str(answer.source or "").startswith(("profile.", "owner", "work history")) \
+                and self._optional_entry_box(control, ()):
+            return "an optional box of a job or degree entry -- left blank rather than written up"
+        # A tag box that already holds tags is answered: its text box stays empty beside the chips, and the page
+        # plan kept asking to type into UKG's Skills (a fill timeout each time, 30 September).
+        if action in ("fill", "choose") and control.role in ("textbox", "searchbox", "combobox") \
+                and form_fields.tags_beside(self.locate(page, control.ref)):
+            return "a tag box that already holds tags -- left as it is"
+        # Who the owner is (gender identity, orientation, race, disability, veteran status): only their own answer.
+        if concept_matcher.is_self_identification(f"{question} {control.container} {control.context}") \
+                and not str(answer.source or "").startswith(("profile.", "owner", "answer_bank.you")):
+            return "a question about who you are -- only your own answer is given, never the AI's guess"
         try:
             if (self.locate(page, control.ref).get_attribute("type", timeout=2_000) or "").lower() == "password":
                 return "a password -- the agent never types those here"
@@ -2544,7 +3863,7 @@ class PageAgent:
             known_val, known_src = self.known_answer(control)
             if known_val and _same_answer(current, known_val):
                 # Use exact comparison for the planner's value against the profile value:
-                # _same_answer considers "Yaswanth" ≈ "Yaswanth Reddy" via prefix matching,
+                # _same_answer considers "Jane" ≈ "Jane Marie" via prefix matching,
                 # but the profile's canonical value must be preserved exactly.
                 if _plain(answer.value) != _plain(known_val):
                     return f"already answered from your profile ({current!r}) -- not changing to {answer.value!r}"
@@ -2579,8 +3898,8 @@ class PageAgent:
         """
         # (question, right answer, profile field, must match exactly)
         fixes: list[tuple[str, str, str, bool]] = []
-        # The owner's name as they write it. Forms were filled "Yaswanth" /
-        # "Reddy Jonnalagadda", split from the full name.
+        # The owner's name as they write it. Forms were filled "Jane" /
+        # "Marie Doe", split from the full name.
         for control in controls:
             if control.role not in ("textbox", "searchbox") or control.disabled or _holds_dial_code(control):
                 continue
@@ -2596,7 +3915,7 @@ class PageAgent:
                 fixes.append((control.question, replacement, "profile.middle_name", True))
                 continue
             if wanted and shown.lower() != wanted.lower():
-                # Exactly: "Yaswanth" is not "Yaswanth Reddy", though one
+                # Exactly: "Jane" is not "Jane Marie", though one
                 # begins the other.
                 fixes.append((control.question, wanted, f"profile.{field}", True))
         # Where the owner lives, on any kind of control: a country, state or
@@ -2660,6 +3979,27 @@ class PageAgent:
             if any(_same_question(question, q) for q, _v, _s, _e in fixes):
                 continue
             fixes.append((question, value, source, False))
+        # Who the owner is (gender, race, veteran, disability) shown otherwise than the profile says: put right, under
+        # the one rule for who may be overruled -- never a choice the owner made. Meta, 30 September: the agent's own
+        # (since fixed) fallback chose Female for an owner whose profile says Male, and nothing ever looked again.
+        for control in controls:
+            question = control.question
+            if control.role != "radio" or not control.checked or not control.name or not question \
+                    or not concept_matcher.is_self_identification(question) \
+                    or any(_same_question(question, q) for q, _v, _s, _e in fixes):
+                continue
+            value, source = self.known_answer(control)
+            if not value or not str(source).startswith("profile.") \
+                    or self.assistant._best_option([control.name], [value]) is not None:
+                continue
+            who = provenance.origin(self.locate(page, control.ref), value=control.name,
+                                    agent_wrote=self._ours(question, control.name))
+            if not safety.may_overrule(who, policy):
+                if who != provenance.OWNER:
+                    self.notes.append(f"left {question[:70]!r} as {control.name[:40]!r}; your {source} says "
+                                      f"{value[:40]!r}")
+                continue
+            fixes.append((question, value, source, False))
 
         given: list[tuple[Answer, Control]] = []
         for question, value, source, exact in fixes:
@@ -2688,7 +4028,114 @@ class PageAgent:
                 note = f"corrected {control.question[:70]!r} from {was[:40]!r} to {value[:40]!r} (from your {source})"
                 self.notes.append(note)
                 logger.info("CORRECTED: %s", note)
+        return given + self._correct_entries(page, controls, policy) + self._clear_none_boxes(page, controls, policy)
+
+    def _clear_none_boxes(self, page, controls: list[Control], policy: str) -> list[tuple[Answer, Control]]:
+        """A box the profile says has no answer (BLANK_MEANS_NONE) that holds one anyway is emptied.
+
+        UKG, 30 September: before the profile knew "Address 2", the AI wrote "Fairfax, VA" into it; the new rule
+        stopped it being written again but left it there. Emptied under safety.may_overrule -- never the owner's."""
+        given: list[tuple[Answer, Control]] = []
+        for control in controls:
+            shown = (control.answer or "").strip()
+            if control.role not in ("textbox", "searchbox") or control.disabled or not shown \
+                    or control.ref in (getattr(self, "_entries", {}) or {}):
+                continue
+            value, source = self.known_answer(control)
+            if value or not self._profile_says_none(source):
+                continue
+            written = str((self.written or {}).get(control.question) or "").strip()
+            who = provenance.origin(self.locate(page, control.ref), value=shown, agent_wrote=written == shown)
+            if not safety.may_overrule(who, policy):
+                continue
+            try:
+                done = self._empty_box(page, control)
+            except Exception as exc:
+                done = False
+                logger.info("Could not empty %r: %s", control.question[:60], str(exc).splitlines()[0][:100])
+            if done:
+                given.append((Answer(control.ref, control.question, "fill", "", source), control))
+                self.written[control.question] = ""
+                self.corrected.add(control.question)
+                note = f"emptied {control.question[:70]!r} ({shown[:40]!r}): your {source} says there is none"
+                self.notes.append(note)
+                logger.info("CORRECTED: %s", note)
         return given
+
+    def _correct_entries(self, page, controls: list[Control], policy: str) -> list[tuple[Answer, Control]]:
+        """A box in a job or degree entry that holds what that entry's record says it should not.
+
+        UKG, 30 September: the site's resume import put "Sep 2026" as the end of the current job and of a job that
+        ended in July 2021, and the agent's own AI text sat in a degree's optional Description. The agent only
+        told the owner to fix them. Each box is put right from its own entry's record -- or emptied, when the right
+        answer is nothing (the job the owner still has; a box the agent filled that should have stayed empty) --
+        under the one rule for who may be overruled (safety.may_overrule): never a value the owner set."""
+        given: list[tuple[Answer, Control]] = []
+        entries = getattr(self, "_entries", {}) or {}
+        for control in controls:
+            entry = entries.get(control.ref)
+            shown = (control.answer or "").strip().strip('"')
+            if entry is None or control.disabled or not shown or option_match.is_placeholder(shown):
+                continue
+            value, source, blank = repeated_entries.answer(entry, getattr(self, "history", {}) or {})
+            # Dates and each job's current flag are put right from the record. A school's or degree's name has many right spellings
+            # ("Jawaharlal Nehru Technological University" is "JNTU"), and a label like "Role Description" is not
+            # the job's title -- replayed on every saved page, those would have overwritten right answers.
+            current_box = control.role in ("checkbox", "switch") and entry.section == "work" \
+                and value.lower() in ("yes", "no")
+            if value and not repeated_entries.is_date(value) and not current_box:
+                continue
+            if current_box and control.checked == (value.lower() == "yes"):
+                continue
+            written = str((self.written or {}).get(control.question) or "").strip()
+            if value:
+                if _same_answer(shown, value) or option_match.best_option([shown], value) is not None:
+                    continue
+            elif not (blank or (written and written == shown and self._optional_entry_box(control, ())
+                                and repeated_entries.understands(entry))):
+                # Unknown is not empty: a bare "Year" the record cannot place (From or To?) keeps what was written.
+                # Ciena, 30 September: the JNTU "To" year, filled from the profile, was emptied as "should be empty".
+                continue
+            who = provenance.origin(self.locate(page, control.ref), value=shown, agent_wrote=written == shown)
+            if not safety.may_overrule(who, policy):
+                if who != provenance.OWNER:
+                    self.notes.append(f"left {entry.label!r} in {repeated_entries.describe(entry, self.history)!r} "
+                                      f"as {shown[:40]!r}; it should be {value or 'empty'!r}")
+                continue
+            try:
+                if value:
+                    action = ("check" if value.lower() == "yes" else "uncheck") if current_box else (
+                        "choose" if control.role in ("combobox", "listbox") else "fill")
+                    answer = Answer(control.ref, control.question, action, value, source)
+                    done = self.do(page, answer, control)
+                else:
+                    answer = Answer(control.ref, control.question, "fill", "", source or "work history")
+                    done = self._empty_box(page, control)
+            except Exception as exc:
+                done = False
+                logger.info("Could not correct %r: %s", control.question[:60], str(exc).splitlines()[0][:100])
+            if done:
+                given.append((answer, control))
+                self.written[control.question] = value
+                self.corrected.add(control.question)
+                where = repeated_entries.describe(entry, self.history) or f"entry {entry.index + 1}"
+                note = f"corrected {entry.label!r} in {where!r} from {shown[:40]!r} to {value[:40] or 'empty'!r}"
+                self.notes.append(note)
+                logger.info("CORRECTED: %s", note)
+        return given
+
+    def _empty_box(self, page, control: Control) -> bool:
+        """Empties a text box, or sets a list back to its own "Choose..." row; True when it then shows nothing."""
+        loc = self.locate(page, control.ref)
+        if control.role in ("combobox", "listbox"):
+            blank = next((o for o in control.options or () if option_match.is_placeholder(o)), None)
+            if blank is None:
+                return False
+            loc.select_option(label=blank, timeout=5_000)     # fires input and change itself
+        else:
+            fill_and_dispatch(loc, "", timeout=5_000)
+        shown = loc.evaluate("e => e.tagName === 'SELECT' ? (e.options[e.selectedIndex] || {}).text || '' : e.value")
+        return not str(shown or "").strip() or option_match.is_placeholder(str(shown))
 
     def _control_for(self, question: str, value: str, controls: list[Control]) -> Optional[Control]:
         matches = [c for c in controls if c.role in ANSWER_ROLES and _same_question(c.question, question)]
@@ -2723,10 +4170,34 @@ class PageAgent:
         for question, value in now.items():
             if any(w and (_plain(w) in _plain(value) or _plain(value) in _plain(w))
                    for w in self.written.values()):
-                continue   # the site tidied up what the agent wrote ("22030" -> "22030, Fairfax, VA")
+                continue   # the site tidied up what the agent wrote ("62701" -> "62701, Springfield, IL")
             if question in self._paused_state and value != self._paused_state[question]:
                 self.owner_answers[question] = value
-                logger.info("YOURS: %r is now %r -- the agent leaves it as you set it", question[:60], value[:40])
+                logger.info('FIELD_PRESERVED: existing value retained')
+                self._keep_owner_answer(page, question, value)
+
+    def _keep_owner_answer(self, page, question: str, value: str) -> None:
+        """Saves, at once, an answer the owner gave while the run waited for them.
+
+        It used to live only in this run's memory: answers were learned at the Review page, from what that page
+        shows, and a question answered on step 3 is not on it -- so the same question came back on the next
+        form. The rules are the learning step's: never a legal, visa or signed answer; a general question
+        answered in a few words joins the saved answers (profile_setup.worth_keeping); every answer is also
+        kept against this application, for this employer's next form."""
+        if safety.is_attestation(question) or safety.is_legal_status_question(question) or safety.is_attestation(value):
+            return
+        if self.tracker is not None and self.key and hasattr(self.tracker, "record_answer"):
+            try:
+                self.tracker.record_answer(self.key, self._learning_host() or urlparse(self.tab(page).url).netloc,
+                                           question, value, answered_by="user")
+            except Exception as exc:
+                logger.debug("Could not keep %r for this employer: %s", question[:50], exc)
+        try:
+            import profile_setup
+            if profile_setup.remember_answer(question, value, getattr(self.job, "company", "") or ""):
+                logger.info('ANSWER_LIBRARY: approved answer retained')
+        except Exception as exc:
+            logger.debug("Could not add %r to the saved answers: %s", question[:50], exc)
 
     def _owner_gave(self, question: str) -> bool:
         return any(_same_question(question, q) for q in self.owner_answers)
@@ -2744,6 +4215,22 @@ class PageAgent:
 
     def do(self, page, answer: Answer, control: Control) -> bool:
         tab = self.tab(page)
+        if control.role == "group" and not control.name and not control.holds_choices:
+            return False  # A layout wrapper is not a page-wide choice group.
+        # Only typed text: a choice can only ever take one of the list's own options, and "N/A" or "None" is
+        # often the right one -- even when the list shows its options only once it is opened.
+        if answer.action == "fill" and (answer.value or "").strip() and _WEB_ADDRESS_BOX.search(control.question or "") \
+                and not _WEB_ADDRESS.fullmatch((answer.value or "").strip()):
+            # Ciena on Workday, 30 September: the AI read "Facebook" under Social Network URLs as "have you worked at
+            # Facebook?" and its sentence was typed into the box. A box for a web address takes only a web address.
+            logger.info("NOT TYPED: %r for %r -- a box for a web address takes only a web address",
+                        answer.value[:60], control.question[:60])
+            return False
+        if answer.action == "fill" and is_non_answer(answer.value):
+            # Whoever proposed it -- the page plan or a single question -- "Not provided in the resume" is not the
+            # owner's answer and is never typed (Steelcase's Work Phone, 29 September).
+            logger.info("NOT TYPED: %r for %r is a way of saying 'unknown'", answer.value[:60], control.question[:60])
+            return False
         if answer.action == "choose":
             self._choice_methods.pop(control.ref, None)
             recipe = self._recalled_form_recipe(control, answer)
@@ -2761,18 +4248,54 @@ class PageAgent:
                 elif method == "native_select" and control.options:
                     index = self.assistant._best_option(control.options, [answer.value])
                     if index is not None:
+                        chosen_text = None
                         try:
-                            self.locate(page, control.ref).select_option(
-                                label=control.options[index], timeout=5_000
-                            )
+                            select_loc = self.locate(page, control.ref)
+                            select_loc.select_option(label=control.options[index], timeout=5_000)
+                            # Verify the cached recipe actually committed the selection
+                            # (Phase 0-B4 closure) -- the same positive-evidence check the
+                            # live native-select path uses, rather than trusting
+                            # select_option() not throwing. A verification read failure
+                            # here is routed through the same except branch as a throw from
+                            # select_option() itself, so either way the recipe is marked
+                            # failed under the existing bounded recipe policy, not silently
+                            # reported as success.
+                            chosen_text = select_loc.evaluate(
+                                "el => el.selectedOptions && el.selectedOptions[0] ? el.selectedOptions[0].text : ''",
+                                timeout=1_500)
+                        except Exception:
+                            chosen_text = None
+                        if chosen_text is not None and _fill_value_committed(chosen_text, control.options[index]):
                             self._choice_methods[control.ref] = method
                             if identity is not None:
                                 self._reused_recipes[control.ref] = identity
                             return True
-                        except Exception:
-                            if identity is not None:
-                                self._mark_recipe_failed(identity)
+                        if identity is not None:
+                            self._mark_recipe_failed(identity)
         loc = self.locate(page, control.ref)
+        if control.role in ("textbox", "searchbox") and answer.action in ("fill", "choose"):
+            from sites.workday import WorkdayAdapter
+            if WorkdayAdapter.is_searchable_input(loc):
+                identifier = loc.get_attribute("id") or ""
+                if not identifier:
+                    return False  # Identified as a picker: plain typing is never an answer.
+                from browser_automation import FramedPage
+                frame = loc.element_handle().owner_frame()
+                target = FramedPage(tab, frame) if frame != tab.main_frame else tab
+                if re.fullmatch(r"(?:type to add )?skills", control.question.strip(), re.IGNORECASE):
+                    chosen, missing = WorkdayAdapter().select_skills(
+                        self.assistant, target, loc, re.split(r"[,;\n]+", answer.value))
+                    if missing:
+                        note = "Skills unavailable in the site's list: " + ", ".join(missing)
+                        if note not in self.notes:
+                            self.notes.append(note)
+                        logger.info("SKILLS: %s", note)
+                    required = loc.get_attribute("aria-required") == "true" or loc.get_attribute("required") is not None
+                    if missing and not chosen and not required:
+                        self._entry_blank.add(control.ref)
+                    return bool(chosen) or not required
+                return WorkdayAdapter().select_from_searchable_input(
+                    self.assistant, target, identifier, [answer.value] + self._alternatives_for(answer.value), keyboard=False)
         if control.holds_choices and answer.action in ("choose", "check", "fill"):
             # The choices have no reference of their own: click the one that
             # says what the answer says, inside the group.
@@ -2787,11 +4310,9 @@ class PageAgent:
             # what was asked for.
             return self.put_in_a_spinbutton(page, loc, answer.value)
         if answer.action == "fill":
-            # Detect <input type="date"> before calling fill(): Playwright's
-            # fill() raises "Malformed value" when given a non-ISO string (e.g.
-            # the profile's "Immediately") on a date widget.  Convert to a
-            # YYYY-MM-DD string; if the profile value is already date-like use
-            # it, otherwise fall back to today so the field is not left blank.
+            # A date box is found before fill(): Playwright's fill() raises
+            # "Malformed value" for a non-ISO string on a date widget, and a
+            # text box that shows its format takes only that format.
             fill_value = answer.value
             try:
                 if loc.is_disabled(timeout=1_000) or not loc.is_visible(timeout=1_000):
@@ -2800,59 +4321,21 @@ class PageAgent:
             except Exception:
                 pass
             try:
-                is_date_input = loc.evaluate(
-                    "el => el.tagName === 'INPUT' && (el.type === 'date' || el.type === 'month')",
-                    timeout=2_000
-                )
+                input_type, placeholder = loc.evaluate(
+                    "el => [el.tagName === 'INPUT' ? (el.type || '') : '', el.getAttribute('placeholder') || '']",
+                    timeout=2_000)
             except Exception:
-                is_date_input = False
-
-            _MONTHS = {
-                "january": "01", "february": "02", "march": "03", "april": "04",
-                "may": "05", "june": "06", "july": "07", "august": "08",
-                "september": "09", "october": "10", "november": "11", "december": "12",
-                "jan": "01", "feb": "02", "mar": "03", "apr": "04",
-                "jun": "06", "jul": "07", "aug": "08", "sep": "09", "sept": "09",
-                "oct": "10", "nov": "11", "dec": "12",
-            }
-            import re as _re
-            _iso = _re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", fill_value.strip())
-            _mdy = _re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", fill_value.strip())
-            _my = _re.fullmatch(r"([A-Za-z]+)\s+(\d{4})", fill_value.strip())
-            _my_num = _re.fullmatch(r"(\d{1,2})/(\d{4})", fill_value.strip())
-            _bare_year = _re.fullmatch(r"(\d{4})", fill_value.strip())
-
-            if is_date_input:
-                if _iso:
-                    pass  # already correct ISO
-                elif _mdy:
-                    fill_value = f"{_mdy.group(3)}-{_mdy.group(1).zfill(2)}-{_mdy.group(2).zfill(2)}"
-                elif _my and _my.group(1).lower() in _MONTHS:
-                    m = _MONTHS[_my.group(1).lower()]
-                    fill_value = f"{_my.group(2)}-{m}-01"
-                elif _my_num:
-                    fill_value = f"{_my_num.group(2)}-{_my_num.group(1).zfill(2)}-01"
-                elif _bare_year:
-                    fill_value = f"{_bare_year.group(1)}-01-01"
-                else:
-                    from datetime import date as _date
-                    fill_value = _date.today().isoformat()
-                    logger.info(
-                        "DATE FIELD: profile says %r for %r, which is not a date -- "
-                        "substituting today (%s) so the field is not left blank",
-                        answer.value, control.question[:50], fill_value
-                    )
-            elif _my and _my.group(1).lower() in _MONTHS and re.search(r"date|month|graduat", control.question, re.IGNORECASE):
-                try:
-                    placeholder = (loc.get_attribute("placeholder", timeout=1_000) or "").lower()
-                except Exception:
-                    placeholder = ""
-                m = _MONTHS[_my.group(1).lower()]
-                if "yyyy" in placeholder or "mm" in placeholder or "/" in placeholder:
-                    if "dd" in placeholder:
-                        fill_value = f"{m}/01/{_my.group(2)}"
-                    else:
-                        fill_value = f"{m}/{_my.group(2)}"
+                input_type, placeholder = "", ""
+            # A date goes into a date box the one way every date is written (form_fields.date_text): in the box's own
+            # format, whatever the answer's ("December 2022", "2 weeks", "12/15/2022"). An answer that is not a date
+            # is not written into a date box: before, today's date went in its place.
+            if form_fields.is_date_box(input_type, placeholder):
+                written = form_fields.date_text(fill_value, input_type, placeholder)
+                if written is None:
+                    logger.info("DATE FIELD: %r is not a date, for %r -- left open", fill_value[:40],
+                                control.question[:50])
+                    return False
+                fill_value = written
             try:
                 fill_and_dispatch(loc, fill_value, timeout=2_500)
             except Exception:
@@ -2888,38 +4371,85 @@ class PageAgent:
                         el.dispatchEvent(new InputEvent('input', {bubbles: true, composed: true, inputType: 'insertText', data: value}));
                         el.dispatchEvent(new Event('change', {bubbles: true, composed: true}));
                     }""", fill_value, timeout=1_000)
-                    logger.info("Field %r filled via JS fallback after loc.fill failure", control.question[:50])
-                    return True
+                    logger.info("Field %r filled via JS fallback after loc.fill failure -- verifying", control.question[:50])
                 except Exception:
                     pass
+                else:
+                    # Verify the JS fallback actually committed the value (Phase 0-B4
+                    # closure) -- the same positive-evidence check as the ordinary path
+                    # below, not a second, independent method. A readback failure here is
+                    # NOT verified -- it used to be treated as success outright merely
+                    # because the JS evaluate() call itself did not throw.
+                    try:
+                        tab.wait_for_timeout(200)
+                        shown = (loc.input_value(timeout=1_500) or "").strip()
+                    except Exception:
+                        return False
+                    return _fill_value_committed(shown, fill_value)
                 raise
             try:
                 loc.press("Tab", timeout=2_000)
             except Exception:
                 pass
-            if re.fullmatch(r"city|zip code|postal code", control.question.strip(), re.IGNORECASE):
-                try:
-                    tab.wait_for_timeout(300)
-                    if (loc.input_value(timeout=2_000) or "").strip() != fill_value.strip():
-                        loc.evaluate("""(el, value) => {
-                            const setter = Object.getOwnPropertyDescriptor(
-                                HTMLInputElement.prototype, 'value').set;
-                            setter.call(el, value);
-                            el.dispatchEvent(new InputEvent('input', {bubbles: true, composed: true, inputType: 'insertText', data: value}));
-                            el.dispatchEvent(new Event('change', {bubbles: true, composed: true}));
-                            el.blur();
-                        }""", fill_value)
-                        tab.wait_for_timeout(300)
-                except Exception:
-                    pass
-            return True
-        if answer.action in ("check", "uncheck"):
-            want = answer.action == "check"
+            # Read the committed value back and verify it, rather than trusting that .fill()
+            # not throwing means the value stuck (Phase 0-B4; task sections 4, 6-7). A plain
+            # <input>/<textarea> is what this path fills.
             try:
-                loc.set_checked(want, timeout=5_000)
+                tab.wait_for_timeout(200)
+                shown = (loc.input_value(timeout=1_500) or "").strip()
             except Exception:
-                loc.click(timeout=5_000)
-            return True
+                # Verification unavailable is NOT verified (Phase 0-B4 closure correction):
+                # a readback failure used to be treated as success outright. Failing
+                # conservatively here is safe -- PageAgent.not_stuck()'s own, independent,
+                # later re-check already treats a control that genuinely vanished because
+                # the page moved on as fine ("the page rebuilt itself; the next read will
+                # show it"), so this does not fight that existing, deterministic handling;
+                # it only stops a transient/stale readback from being silently counted as
+                # success before that later check ever runs.
+                return False
+            if _fill_value_committed(shown, fill_value):
+                return True
+            # One deterministic retry via the same native-setter fallback already used when
+            # .fill() itself throws -- not a second, independent method, not an AI call, and
+            # not an unbounded loop (task sections 5, 7, 37).
+            try:
+                loc.evaluate("""(el, value) => {
+                    const setter = Object.getOwnPropertyDescriptor(
+                        HTMLInputElement.prototype, 'value').set;
+                    setter.call(el, value);
+                    el.dispatchEvent(new InputEvent('input', {bubbles: true, composed: true, inputType: 'insertText', data: value}));
+                    el.dispatchEvent(new Event('change', {bubbles: true, composed: true}));
+                    el.blur();
+                }""", fill_value)
+                tab.wait_for_timeout(300)
+                shown = (loc.input_value(timeout=1_500) or "").strip()
+            except Exception:
+                return False   # verification unavailable is NOT verified (Phase 0-B4 closure)
+            return _fill_value_committed(shown, fill_value)
+        if answer.action in ("check", "uncheck"):
+            # Unreferenced ARIA checkboxes can inherit the adjacent label's ref.
+            # Resolve the actual box before checking its state or clicking its label.
+            if control.role in ("checkbox", "switch", "radio") and not loc.evaluate(
+                    "e => ['checkbox', 'radio'].includes(e.type) || ['checkbox', 'switch', 'radio'].includes(e.getAttribute('role'))"):
+                box = tab.get_by_role(control.role, name=control.name, exact=True)
+                if box.count() != 1:
+                    return False
+                loc = box
+            # A tick box drawn as a hidden input behind a styled label (ADP's "Yes, I agree to sign electronically.",
+            # SK AX USA, 30 September) refuses set_checked and a click on the input: its label is clicked, then the
+            # input's own click() is dispatched. Done only when the box then shows the state asked for.
+            want = answer.action == "check"
+            for attempt in (lambda: loc.set_checked(want, timeout=5_000),
+                            lambda: loc.click(timeout=3_000),
+                            lambda: loc.evaluate(_CLICK_LABEL_JS),
+                            lambda: loc.evaluate("e => e.click()")):
+                try:
+                    attempt()
+                except Exception:
+                    continue
+                if _is_checked(loc) == want:
+                    return True
+            return _is_checked(loc) == want
         if answer.action in ("upload_resume", "upload_cover_letter"):
             if answer.action == "upload_resume":
                 path = self.resume_file
@@ -2929,8 +4459,8 @@ class PageAgent:
                 return False
             # Workday's "Select files" button is only a visual trigger; its
             # real file input is hidden inside the upload widget and does not
-            # reliably emit Playwright's filechooser event.
-            if answer.action == "upload_resume":
+            # reliably emit Playwright's filechooser event. The same for a cover letter's.
+            if answer.action in ("upload_resume", "upload_cover_letter"):
                 try:
                     for depth in range(1, 8):
                         nearby = loc.locator(
@@ -2938,42 +4468,57 @@ class PageAgent:
                         ).locator("input[type='file']")
                         if nearby.count():
                             nearby.last.set_input_files(str(path), timeout=15_000)
-                            self.resume_uploaded = True
-                            self._record_resume_attached()
-                            if hasattr(self.assistant, "attached_resume"):
-                                self.assistant.attached_resume = str(path)
                             self.settle(page, 1_500)
-                            return True
+                            if answer.action == "upload_resume":
+                                return self._confirm_resume_attached(page, path)
+                            return self._confirm_cover_letter_attached(page, path, control)
                 except Exception as exc:
-                    logger.info("Nearby resume file input was unavailable: %s", str(exc).splitlines()[0][:120])
+                    logger.info("Nearby file input was unavailable: %s", str(exc).splitlines()[0][:120])
             if answer.action == "upload_resume" and hasattr(self.assistant, "upload_via_chooser"):
                 try:
                     if self.assistant.upload_via_chooser(
                             page, r"select files?|upload a file|choose files?", Path(path)):
-                        self.resume_uploaded = True
-                        self._record_resume_attached()
-                        if hasattr(self.assistant, "attached_resume"):
-                            self.assistant.attached_resume = str(path)
                         self.settle(page, 1_500)
-                        return True
+                        return self._confirm_resume_attached(page, path)
                 except Exception as exc:
                     logger.info("Browser upload helper could not attach the resume: %s", str(exc).splitlines()[0][:120])
             try:
                 loc.set_input_files(str(path), timeout=8_000)
             except Exception:
-                with tab.expect_file_chooser(timeout=8_000) as chooser:
-                    loc.click(timeout=5_000)
-                chooser.value.set_files(str(path))
-            if answer.action == "upload_resume":
-                self.resume_uploaded = True
-                self._record_resume_attached()
-                if hasattr(self.assistant, "attached_resume"):
-                    self.assistant.attached_resume = str(path)
+                try:
+                    with tab.expect_file_chooser(timeout=4_000) as chooser:
+                        loc.click(timeout=5_000)
+                    chooser.value.set_files(str(path))
+                except Exception:
+                    # The button opened a menu of sources, not a file window (Jobvite: Dropbox / File / Type or Paste
+                    # Resume / Apply With LinkedIn -- Altamira, 30 September): its item for a file on this computer is
+                    # chosen, never a cloud drive or a sign-in, and the file goes to the window that item opens.
+                    item = next((el for el in (tab.get_by_text(_FILE_ON_THIS_COMPUTER).nth(i) for i in range(
+                        min(tab.get_by_text(_FILE_ON_THIS_COMPUTER).count(), 6))) if el.is_visible()), None)
+                    if item is None:
+                        raise
+                    with tab.expect_file_chooser(timeout=8_000) as chooser:
+                        item.click(timeout=5_000)
+                    chooser.value.set_files(str(path))
+                    logger.info('ATTACHED: application document')
             self.settle(page, 1_500)
-            return True
-        if answer.action == "choose" and control.role in ("textbox", "searchbox", "spinbutton"):
+            if answer.action == "upload_resume":
+                return self._confirm_resume_attached(page, path)
+            return self._confirm_cover_letter_attached(page, path, control)
+        if answer.action == "choose" and control.role == "spinbutton":
+            return self.put_in_a_spinbutton(page, loc, answer.value)
+        if answer.action == "choose" and control.role in ("textbox", "searchbox"):
             fill_and_dispatch(loc, answer.value, timeout=8_000)     # a plain box, whatever the plan called it
-            return True
+            # Verify the committed value (Phase 0-B4 closure) -- the same positive-evidence
+            # check the ordinary "fill" action uses; a readback failure is NOT verified, not
+            # a silent success (fill_and_dispatch() not throwing is not, by itself, evidence
+            # the value stuck).
+            try:
+                tab.wait_for_timeout(200)
+                shown = (loc.input_value(timeout=1_500) or "").strip()
+            except Exception:
+                return False
+            return _fill_value_committed(shown, answer.value)
         if answer.action in ("choose", "check") and control.role in ("radio", "checkbox", "switch", "group", "radiogroup"):
             snapshot_controls = parse_snapshot(self.snapshot(page))
             if control.role in ("group", "radiogroup"):
@@ -2986,6 +4531,12 @@ class PageAgent:
                          if c.role == control.role and c.group and c.group == control.group] or [control]
             if control.toggle and answer.action == "check" and answer.value.strip().lower() in ("checked", "true", ""):
                 return self._press_toggle(page, control)
+            # A question's own choices were found: the answer is one of them or none. Looking further -- every
+            # radio on the page, the first label that contains the words -- ticked another question's "Yes".
+            real_group = len(group) >= 2
+            if control.role == "checkbox" and real_group \
+                    and answer.value.strip().lower() not in ("checked", "true", "unchecked", "false", ""):
+                return self._tick_several(page, group, answer.value)
             index = self.assistant._best_option([c.name for c in group], [answer.value])
             if control.toggle or any(c.toggle for c in group):
                 if index is None:
@@ -2993,31 +4544,45 @@ class PageAgent:
                                 [c.name for c in group][:8])
                     return False
                 return self._press_toggle(page, group[index])
-            if index is None:
+            if index is None and not real_group:
                 role_filter = control.role if control.role in ("radio", "checkbox", "switch") else "radio"
                 all_radios = [c for c in snapshot_controls if c.role == role_filter]
                 fallback_idx = self.assistant._best_option([c.name for c in all_radios], [answer.value])
                 if fallback_idx is not None:
                     group = all_radios
                     index = fallback_idx
-            if index is None:
+            if index is None and not real_group:
                 try:
                     candidates = [answer.value]
                     if re.search(r"\bnot\b.*\bveteran\b", answer.value, re.I):
                         candidates.extend(["I am not a protected veteran", "Not a protected veteran", "No"])
                     for cand in candidates:
                         role_sel = control.role if control.role in ("radio", "checkbox") else "radio"
-                        radio_loc = tab.locator(f"input[type='{role_sel}']").filter(has_text=cand).first
+                        # The whole text, not a part of it: "Male" is inside "Female", and a label holding a whole
+                        # group was clicked in its middle -- Meta's gender went to Female (30 September).
+                        whole = re.compile(rf"^\s*{re.escape(cand)}\s*$", re.IGNORECASE)
+                        radio_loc = tab.locator(f"input[type='{role_sel}']").filter(has_text=whole).first
                         if not radio_loc.count():
-                            radio_loc = tab.locator("label").filter(has_text=cand).first
+                            radio_loc = tab.locator("label").filter(has_text=whole).first
                         if radio_loc.count():
                             try:
                                 radio_loc.click(timeout=3_000)
                             except Exception:
                                 radio_loc.click(force=True, timeout=2_000)
-                            return True
+                            # Verify the click actually checked it (Phase 0-B4) -- `radio_loc`
+                            # may itself be the <label>, not the input, so an unreadable
+                            # checked state is inconclusive rather than a reason to fail.
+                            checked = _is_checked(radio_loc)
+                            return True if checked is None else checked
                 except Exception:
                     pass
+                logger.info("No choice matching %r for %r among %s", answer.value, control.question[:50],
+                            [c.name for c in group][:8])
+                return False
+            if index is None:
+                # The question's own choices do not hold the answer: it is left for the owner, not looked for
+                # elsewhere on the page -- and never clicked as choice number None, which crashed UKG's OPT/STEM
+                # question three times (30 September).
                 logger.info("No choice matching %r for %r among %s", answer.value, control.question[:50],
                             [c.name for c in group][:8])
                 return False
@@ -3025,18 +4590,139 @@ class PageAgent:
             try:
                 target.set_checked(True, timeout=5_000)
             except Exception:
-                target.click(timeout=5_000)
-                try:
-                    target.click(timeout=3_000)
-                except Exception:
-                    try:
-                        target.click(force=True, timeout=2_000)
-                    except Exception:
-                        target.evaluate("e => e.click()")
-            return True
+                handle = target.evaluate_handle('e => e.labels && e.labels[0]')
+                label = handle.as_element()
+                if label is not None:
+                    label.click(timeout=5_000)
+                else:
+                    target.click(timeout=5_000)
+            # Verify the box actually ended up checked (Phase 0-B4) -- the explicit
+            # check/uncheck action four lines below already does this (`_is_checked(loc) ==
+            # want`); this "choose" dispatch, the normal way a multiple-choice question is
+            # answered, had reported success on the click alone. `None` (the control's
+            # checked state could not be read) is inconclusive, not a failure.
+            checked = _is_checked(target)
+            return True if checked is None else checked
         if answer.action == "choose":
             return self.choose(page, control, answer.value, self._page_controls(page))
         return False
+
+    def _question_for(self, control: Control) -> str:
+        """The question text given to the AI for one unanswered control. A box inside a job or degree entry
+        names that entry -- "Country of Institution" alone got one answer for both degrees (Steelcase)."""
+        entry = getattr(self, "_entries", {}).get(control.ref)
+        about = repeated_entries.describe(entry, getattr(self, "history", {}) or {}) if entry is not None else ""
+        return f"{control.question} (for: {about})" if about else control.question
+
+    def _optional_entry_box(self, control: Control, still_open) -> bool:
+        """A box inside a job or degree entry that the form does not mark required."""
+        if getattr(self, "_entries", {}).get(control.ref) is None:
+            return False
+        if _REQUIRED_STAR.search(control.question or "") or _REQUIRED_STAR.search(control.name or ""):
+            return False
+        return not any(q.endswith("*") and _same_question(q.rstrip("*"), control.question) for q in still_open or ())
+
+    def _profile_says_none(self, source: str) -> bool:
+        """Whether a blank answer is the profile's own word: its field exists and is empty on purpose (no middle
+        name), as against a question the profile knows nothing about."""
+        field = str(source or "").split(".", 1)[1] if str(source or "").startswith("profile.") else ""
+        return field in BLANK_MEANS_NONE and hasattr(self.profile, field) \
+            and not str(getattr(self.profile, field) or "").strip()
+
+    def _inventory_field(self, page, control: Control):
+        """The field inventory's entry for this list, found by its question -- or None when there is not exactly
+        one."""
+        try:
+            fields = form_fields.inventory(self.tab(page))
+        except Exception:
+            return None
+        found = [f for f in fields if f.kind in ("combobox", "select", "button_list") and f.visible and not f.trap
+                 and _same_question(f.question or f.label, control.question)]
+        return found[0] if len(found) == 1 else None
+
+    def answer_location_choices(self, page, controls: list[Control]) -> int:
+        """Answers a question asking which of its places the owner would like to work or apply in, by the owner's
+        rule (location_choice.py): tick boxes take the owner's own state's places and, open to relocation, the rest;
+        a pick-one list or radio row takes the owner's state's place first. Only a question nothing has answered yet
+        -- never one the owner or the site already answered. Returns how many questions were answered."""
+        answered = 0
+        groups: dict[tuple[str, str], list[Control]] = {}
+        for c in controls:
+            # The question over a row of boxes: their group, or the fieldset they sit in.
+            asked = c.group or c.container
+            if c.role in ("checkbox", "radio") and asked and not c.disabled:
+                groups.setdefault((c.role, asked), []).append(c)
+        for (role, question), boxes in groups.items():
+            if len(boxes) < 2 or any(b.checked for b in boxes):
+                continue
+            picks = location_choice.choices(question, [b.name for b in boxes], self.profile, several=role == "checkbox")
+            if not picks:
+                continue
+            done = []
+            for k in picks:
+                try:
+                    target = self.locate(page, boxes[k].ref)
+                    try:
+                        target.set_checked(True, timeout=5_000)
+                    except Exception:
+                        target.click(timeout=5_000)
+                    # Verify the box actually ended up checked (Phase 0-B4 closure) -- a
+                    # non-throwing set_checked()/click() is not, by itself, evidence it
+                    # took; a verification read failure (_is_checked returning None) is
+                    # NOT verified either.
+                    if _is_checked(target) is True:
+                        done.append(boxes[k].name)
+                except Exception as exc:
+                    logger.info("Could not tick %r: %s", boxes[k].name, str(exc).splitlines()[0][:100])
+            if done:
+                answered += 1
+                self.written[question] = "; ".join(done)
+                logger.info('FIELD_ACTION: application field handled')
+        for c in controls:
+            if c.role not in ("combobox", "listbox") or c.disabled or c.answer or len(c.options) < 2:
+                continue
+            picks = location_choice.choices(c.question, list(c.options), self.profile, several=False)
+            if not picks:
+                continue
+            answer = Answer(c.ref, c.question, "choose", c.options[picks[0]], "profile.locations")
+            try:
+                if self.do(page, answer, c):
+                    answered += 1
+                    self.written[c.question] = answer.value
+                    logger.info('FIELD_ACTION: application field handled')
+            except Exception as exc:
+                logger.info("Could not choose %r: %s", answer.value, str(exc).splitlines()[0][:100])
+        return answered
+
+    def _tick_several(self, page, boxes: list[Control], value: str) -> bool:
+        """Ticks the boxes a "select any that apply" answer names: the whole answer when it is one of them, else each
+        part of it ("CCNP; NSE7", "English, Telugu"). Every part must be one of the boxes, or nothing is ticked and
+        the question stays open -- never a box that is only like the answer."""
+        names = [box.name for box in boxes]
+        whole = self.assistant._best_option(names, [value])
+        picks = [whole] if whole is not None else []
+        if not picks:
+            parts = [part for part in re.split(r"\s*(?:;|\n|\|)\s*|\s*,\s+", value) if part.strip()]
+            picks = [self.assistant._best_option(names, [part]) for part in parts]
+            if len(parts) < 2 or any(pick is None for pick in picks):
+                logger.info("No choices matching %r for %r among %s", value, boxes[0].question[:50], names[:8])
+                return False
+        all_checked = True
+        for pick in dict.fromkeys(picks):
+            if boxes[pick].checked:
+                continue
+            target = self.locate(page, boxes[pick].ref)
+            try:
+                target.set_checked(True, timeout=5_000)
+            except Exception:
+                target.click(timeout=5_000)
+            # Verify the box actually ended up checked (Phase 0-B4 closure) -- same
+            # positive evidence the explicit check/uncheck action already uses, rather
+            # than trusting a non-throwing set_checked()/click() alone. A verification
+            # read failure (_is_checked returning None) is NOT verified either.
+            if _is_checked(target) is not True:
+                all_checked = False
+        return all_checked
 
     def _press_toggle(self, page, choice: Control) -> bool:
         """Press a choice drawn as a toggle button once, and read it back.
@@ -3076,6 +4762,13 @@ class PageAgent:
         says when one was used."""
         if self._choose_exact(page, control, value, controls):
             return True
+        # Immediate availability means no notice to serve, only for a notice
+        # duration question. Do not reinterpret N/A on unrelated questions.
+        if re.search(r'\bnotice\s+period\b', control.question, re.I) and re.fullmatch(
+                r'immediate(?:ly)?|no notice(?: period)?|zero(?: days)?|0(?: days)?', value.strip(), re.I):
+            if self._choose_exact(page, control, 'Not Applicable', controls):
+                self._chosen_instead[control.ref] = 'Not Applicable'
+                return True
         for alternative in self._alternatives_for(value):
             if self._choose_exact(page, control, alternative, controls):
                 self._chosen_instead[control.ref] = alternative
@@ -3126,9 +4819,31 @@ class PageAgent:
             try:
                 loc.select_option(label=control.options[index], timeout=5_000)
                 self._choice_methods[control.ref] = "native_select"
-                return True
+                # Verify the option actually committed (Phase 0-B4) rather than trusting that
+                # select_option() not throwing means it did -- form_fields.choose()'s own
+                # native-select branch already does this (`_kept()`/`shown_value()`); this is
+                # the live dispatch path and had no readback of its own. A readback failure
+                # (an exotic/script-drawn <select>) is inconclusive, not a reason to fail.
+                try:
+                    chosen_text = loc.evaluate(
+                        "el => el.selectedOptions && el.selectedOptions[0] ? el.selectedOptions[0].text : ''",
+                        timeout=1_500)
+                except Exception:
+                    return True
+                return _fill_value_committed(chosen_text or "", control.options[index])
             except Exception:
                 pass   # a listbox drawn by script: pick the option instead
+
+        # A list whose choices exist only once it is opened -- Greenhouse's type-to-search lists, a server's
+        # suggestions -- is filled by the field inventory's filler, which opens it the way its portal builds it,
+        # reads the rows, clicks the one that is the answer and confirms it (form_fields.choose). Lucid's gender
+        # and disability lists were left empty on three passes (29 September). When it does not take, the ways
+        # below that other portals rely on (Workday's prompt lists, Ant lists) are tried as before.
+        if not control.options and control.role == "combobox":
+            field = self._inventory_field(page, control)
+            if field is not None and form_fields.choose(tab, field, value):
+                self._choice_methods[control.ref] = "inventory_filler"
+                return True
 
         # An Ant Design list (Dayforce): read whole, chosen by label, and
         # confirmed by what the select then shows (interaction.resolve_ant_dropdown).
@@ -3203,9 +4918,7 @@ class PageAgent:
                             except Exception:
                                 labels.append("")
                         if any(labels):
-                            pick = self.assistant._best_option(labels, [val])
-                            if pick is None:
-                                pick = closest_choice(labels, val)
+                            pick = self._pick_label(labels, val)
                             if pick is not None:
                                 try:
                                     portal_opts.nth(pick).click(timeout=3_000)
@@ -3254,9 +4967,7 @@ class PageAgent:
                         labels.append(" ".join((prompts.nth(i).inner_text(timeout=500) or "").split()))
                     except Exception:
                         labels.append("")
-                pick = self.assistant._best_option(labels, [value]) if any(labels) else None
-                if pick is None and any(labels):
-                    pick = closest_choice(labels, value)
+                pick = self._pick_label(labels, value) if any(labels) else None
                 if pick is not None:
                     prompts.nth(pick).click(timeout=5_000)
                     tab.wait_for_timeout(500)
@@ -3358,8 +5069,8 @@ class PageAgent:
                         tab.wait_for_timeout(400)
                         if _check_portal(typed) or _check_portal(value):
                             return True
-                        tab.keyboard.press("ArrowDown")
-                        tab.keyboard.press("Enter")
+                        # The row that is the answer is clicked; never ArrowDown + Enter (form_fields.pick_open_row).
+                        form_fields.pick_open_row(tab, value)
                         tab.wait_for_timeout(500)
                         current = next((c for c in parse_snapshot(self.snapshot(page))
                                         if c.ref == control.ref or _same_question(c.question, control.question)), None)
@@ -3380,7 +5091,7 @@ class PageAgent:
                     current = next((c for c in parse_snapshot(self.snapshot(page))
                                     if _same_question(c.question, control.question)), None)
                     if current is not None and _same_answer(current.answer, value):
-                        logger.info("Accepted typed address %r without an exact autocomplete match", value[:60])
+                        logger.info('FIELD_ACTION: application field handled')
                         self._choice_methods[control.ref] = "typed_value"
                         return True
                 except Exception:
@@ -3430,8 +5141,8 @@ class PageAgent:
                 return out.slice(0, 150).join('\n');
             }""")
             folder = self.job_dir if self.job_dir else Path("output")
-            path = Path(folder) / f"dropdown_dump_{control.ref}.txt"
-            path.write_text(f"question={control.question!r}\nurl={tab.url}\n\n{info}\n", encoding="utf-8")
+            path = Path(folder) / "dropdown_dump_structure.txt"
+            diagnostics.write_safe_text(path, diagnostics.sanitize_snapshot(info))
             logger.info("DROPDOWN_DUMP written to %s", path)
         except Exception as exc:
             logger.info("DROPDOWN_DUMP failed: %s", str(exc).splitlines()[0][:120])
@@ -3439,6 +5150,11 @@ class PageAgent:
     def put_in_a_spinbutton(self, page, loc, value: str) -> bool:
         """Get a value into a box that keeps its own count, and check it took."""
         tab = self.tab(page)
+
+        from sites.workday import WorkdayAdapter
+        composite = WorkdayAdapter.fill_date_segment(tab, loc, value)
+        if composite is not None:
+            return composite
 
         def holds_it() -> bool:
             try:
@@ -3484,9 +5200,9 @@ class PageAgent:
                 box.fill("", timeout=3_000)
                 tab.keyboard.type(typed, delay=60)
                 tab.wait_for_timeout(1_500)          # the list is fetched as you type
-                tab.keyboard.press("ArrowDown")
-                tab.wait_for_timeout(400)
-                tab.keyboard.press("Enter")
+                # The row that is the answer is clicked; never ArrowDown + Enter, which took the first row and, with
+                # no list open, sent the whole form (form_fields.pick_open_row).
+                form_fields.pick_open_row(tab, value)
                 tab.wait_for_timeout(1_200)
                 # Leave the box before judging it: text that was typed but never
                 # chosen stays in the box until then, and was read as the answer.
@@ -3501,11 +5217,11 @@ class PageAgent:
                           if _same_question(c.question, control.question)), None)
             took = shown is not None and shown.answer and _same_answer(shown.answer, value)
             if took and not complaint.search(snapshot):
-                logger.info("CHOSE %r for %r by typing and pressing Enter", value[:30], control.question[:40])
+                logger.info('FIELD_ACTION: application field handled')
                 return True
             if shown is not None and shown.answer and not took:
                 # Enter took whichever row was showing, and it is not what was asked
-                # for ("Fairfax Station" for "Fairfax"): a wrong answer is worse than
+                # for ("Springfield Gardens" for "Springfield"): a wrong answer is worse than
                 # none, so it is taken out again.
                 try:
                     box = self.locate(page, control.ref)
@@ -3619,6 +5335,8 @@ class PageAgent:
         names = [text for _ref, text in offered]
         if not names:
             return None
+        if geo_reference.same_locality(value, value):
+            return next((i for i, name in enumerate(names) if geo_reference.same_locality(value, name)), None)
         # A dialling code ("+1") is offered by several countries: take the one
         # the profile names. With no country in the profile, nothing is assumed.
         if re.fullmatch(r"\+?\d{1,4}", value.strip()):
@@ -3626,13 +5344,13 @@ class PageAgent:
             country = geo_reference.country_code(str(getattr(self.profile, "country", "") or ""))
             for i, name in enumerate(names):
                 if country and (code in name or value.strip() in name) and geo_reference.country_code(name) == country:
-                    logger.info("Matched dial code %r to profile country choice: %r", value, name)
+                    logger.info('FIELD_ACTION: application field handled')
                     return i
         index = self.assistant._best_option(names, [value])
         if index is None:
             index = closest_choice(names, value)
             if index is not None:
-                logger.info("Closest choice to %r is %r", value[:40], names[index][:60])
+                logger.info('FIELD_ACTION: application field handled')
         return index
 
     def _pick_label(self, labels: list[str], value: str) -> Optional[int]:
@@ -3642,6 +5360,8 @@ class PageAgent:
         follows the page agent's usual rules (_pick)."""
         if not str(value or "").strip():
             return None
+        if geo_reference.same_locality(value, value):
+            return self._pick([(str(i), label) for i, label in enumerate(labels)], value)
         if geo_reference.country_code(value) or geo_reference.us_state_code(value):
             return next((i for i, label in enumerate(labels)
                          if label.strip() and (geo_reference.same_place(label, value)
@@ -3687,7 +5407,7 @@ class PageAgent:
                         choice.first.check(timeout=4_000)
                     except Exception:
                         choice.first.click(timeout=4_000)
-                    logger.info("Chose %r inside %r", wanted[:40], control.question[:40])
+                    logger.info('FIELD_ACTION: application field handled')
                     return True
             except Exception:
                 continue
@@ -3903,10 +5623,29 @@ class PageAgent:
                 note = f"{question[:80]}: the page says {said!r}, your profile says {str(mismatch.get('facts_say') or '')[:60]!r}"
                 if note not in self.notes:
                     self.notes.append(note)
+        try:
+            password_fields = account_password_fields(self.snapshot(page) or "")
+            password_refs = {field.ref for field in password_fields if field.ref}
+            optional_passwords = {field.ref for field in password_fields if field.optional_account and field.ref}
+        except Exception:
+            password_refs = set()
+            optional_passwords = set()
         for item in plan.for_owner:
             question = str(item.get("question") or "")
+            # Require a field identity, not merely a password word on a page
+            # containing an optional heading. Duplicate labels without a ref
+            # qualify only if every matching field is in the optional section.
+            matching = [c for c in controls if c.role in ANSWER_ROLES and _plain(c.question) == _plain(question)]
+            if item.get("ref"):
+                matching = [c for c in matching if c.ref == str(item["ref"])]
+            if matching and all(c.ref in optional_passwords for c in matching):
+                continue
             required = bool(item.get("required")) or "*" in question
+            # One answered copy cannot satisfy a different blank field bearing
+            # the same label. Unresolved/mismatched references remain blockers.
             still_blank = not any(c.question == question and c.answer for c in controls)
+            if item.get("ref") or any(c.ref in password_refs for c in matching):
+                still_blank = any(not c.answer for c in matching) if matching else True
             if required and still_blank:
                 note = f"needs your answer: {question[:90]} ({item.get('reason', '')})"
                 self.record_unanswered(question, str(item.get("reason", "")), controls)
@@ -3924,9 +5663,31 @@ class PageAgent:
         return reasons
 
     # -- moving on ----------------------------------------------------------------------
+    def _in_site_menu(self, page, control: Control) -> bool:
+        """Whether a button sits in the site's header, navigation or footer rather than in the page's content."""
+        try:
+            return bool(self.locate(page, control.ref).evaluate(
+                "e => !!e.closest('header, nav, footer, [role=banner], [role=navigation], [role=contentinfo]')",
+                timeout=2_000))
+        except Exception:
+            return False
+
     def press_next(self, page, plan: PagePlan, controls: list[Control]) -> tuple[str, object, str]:
         """("moved" | "submitted" | "retry" | "stop", page, what happened)."""
+        lock_factory = getattr(self.assistant, "_execution_lock", None)
+        if callable(lock_factory):
+            with lock_factory():
+                if getattr(self.assistant, "_submission_execution_state", "active") != "active":
+                    return "stop", page, "automation is parked for human handoff"
+                return self._press_next_locked(page, plan, controls)
+        return self._press_next_locked(page, plan, controls)
+
+    def _press_next_locked(self, page, plan: PagePlan, controls: list[Control]) -> tuple[str, object, str]:
+        if getattr(self.assistant, "_submission_execution_state", "active") != "active":
+            return "stop", page, "automation is parked for human handoff"
         tab = self.tab(page)
+        if hasattr(self.assistant, "protect_submission"):
+            self.assistant.protect_submission(tab)
 
         # Pre-navigation sweep: scan DOM for inline resume-parsed experience or
         # education cards stuck in active 'Edit' or 'Draft' modes. Autonomously
@@ -3949,6 +5710,37 @@ class PageAgent:
             self.settle(page, 3_000)
             return "retry", page, "no way forward was found on this page"
         label = " ".join((control.name or plan.next_label).split())
+        if plan.page_kind == "application_form":
+            self._seen_form = True
+        # The site's own menu (its header, navigation or footer) is never a step of an application already under
+        # way. UKG, 30 September: the page fell back to the job board's home mid-application, the plan pressed the
+        # header's "Find Opportunities", searched the board and opened another job's link. Once the form has been
+        # seen, a page that offers only the menu is left for the job's own page, where the application is resumed.
+        if getattr(self, "_seen_form", False) and plan.next_kind != "open_application" \
+                and not re.search(r"\bapply\b", label, re.IGNORECASE) and self._in_site_menu(page, control):
+            back = str(getattr(self.job, "url", "") or "")
+            if not back:
+                return "stop", page, f"{label!r} is the site's own menu -- the page has left the application"
+            logger.info("NOT PRESSING %r: the site's own menu, not a step of the application -- back to the job", label)
+            tab.goto(back, wait_until="domcontentloaded", timeout=45_000)
+            self.settle(page, 2_000)
+            return "moved", page, "back to the job's own page"
+        # "Add Education", "Add Experience" add an empty entry -- a way forward only while the owner has more
+        # degrees or jobs than the page shows. UKG, 30 September: the plan pressed "Add Education" as its next step
+        # on a page already showing both degrees, and the new entry was filled with the master's a second time.
+        adding = _ADD_ENTRY.match(label)
+        if adding:
+            section = "education" if re.search(r"educat|degree|school", adding.group(1), re.IGNORECASE) else "work"
+            shown = len({e.index for e in getattr(self, "_entries", {}).values() if e.section == section})
+            owned = len((getattr(self, "history", {}) or {}).get("education" if section == "education"
+                                                                  else "experience") or [])
+            if shown >= owned:
+                onward = self.profile_forward([c for c in controls if not _ADD_ENTRY.match(" ".join((c.name or "").split()))])
+                logger.info("NOT PRESSING %r: the page already shows %d of your %d -- %s", label, shown, owned,
+                            f"pressing {onward.name!r} instead" if onward else "looking for the way forward")
+                if onward is None:
+                    return "retry", page, f"{label!r} only adds an empty entry -- it is not the way forward"
+                control, label = onward, " ".join((onward.name or "").split())
         if control.disabled:
             return "retry", page, f"{label!r} is not enabled yet"
         if self.GOOGLE_SIGN_IN.search(label) and host_of(tab.url) in self._google_failed:
@@ -3979,24 +5771,43 @@ class PageAgent:
         self._pressed[label.lower()] = pressed + 1
         if re.search(r"linked ?in|indeed|facebook|apple|microsoft", label, re.IGNORECASE):
             return "stop", page, f"{label!r} is a sign-in the agent never uses"
-        if plan.next_kind == "consent" or re.search(r"(i )?(agree|accept|acknowledge|consent)", label, re.IGNORECASE):
+        if plan.next_kind == "consent" or re.search(r"\b(i )?(agree|accept|acknowledge|consent)\b", label, re.IGNORECASE):
             if safety.is_attestation(label) or re.search(r"certif|attest|sign", label, re.IGNORECASE):
                 return "stop", page, f"{label!r} is a declaration -- only you can give it"
             if not getattr(self.profile, "accept_application_privacy_prompts", False):
                 return "stop", page, f"{label!r} accepts a notice -- you haven't allowed the agent to accept those"
 
         submit_word = safety.is_submit_label(label) and plan.page_kind != "job_description"
-        # Schwab's questions page is step 2 of 5 and its button says "Submit":
-        # it saves that step. A "Submit" is the application's last only when no
-        # step counter shows more steps to come.
+        # Schwab's questions page is step 2 of 5 and its button says "Submit": it saves
+        # that step. A "Submit" is the application's last only when the page's own DOM
+        # structure positively proves it -- never plan.step (AI-reported text this code
+        # never reads from the page itself) and never the control's own label.
         counter = re.search(r"(\d+)\s*(?:of|/)\s*(\d+)", plan.step or "")
         steps_remain = bool(counter) and int(counter.group(1)) < int(counter.group(2))
         is_review = getattr(self.assistant, "is_review_step", lambda p: False)(tab)
-        # The review heuristic answers yes whenever a button reads "Submit",
-        # so it must not outvote a step counter that shows more steps to come
-        # (Schwab's step 2 of 5 is exactly that button).
+        # Core invariant (the P0-B1 general authority-boundary finding, 7 October 2026):
+        # Python must positively establish that a submit-labeled control is NON_FINAL
+        # before clicking it outside the authoritative final-submit gateway. Absence of
+        # evidence that it is final is not evidence that it is intermediate. A prior fix
+        # (commit 756b77b) cross-checked the step counter against a Workday-style wizard
+        # marker only when that marker was present and read literally as "Review" --
+        # the final independent review reproduced, through this exact production path
+        # with the browser-side guard entirely absent, a genuinely final submit control
+        # on a page with NO such marker and a wrong step count being clicked anyway: on
+        # any ATS shape without that marker, the browser guard was the only thing left
+        # standing between a wrong step count and a real, uncontained submit. The step
+        # counter is no longer authority over this decision at all -- it remains only as
+        # the (pre-existing, unrelated) dampener on is_review's own broader "a Submit
+        # button exists somewhere on the page" signal above. submission_step_finality()
+        # returns "UNKNOWN", never "NON_FINAL", for an unsupported ATS shape, a missing
+        # or ambiguous/duplicated marker, or a hidden/stale one; only "NON_FINAL" may
+        # authorize this click, so both "FINAL" and "UNKNOWN" fail closed here.
+        step_finality = (
+            getattr(self.assistant, "submission_step_finality", lambda p: "UNKNOWN")(tab)
+            if submit_word else "UNKNOWN"
+        )
         final = plan.next_kind == "final_submit" or (is_review and not steps_remain) \
-            or (submit_word and not (steps_remain and plan.next_kind == "next_step"))
+            or (submit_word and step_finality != "NON_FINAL")
         if plan.page_kind == "job_description" and plan.next_kind == "open_application":
             final = False
         if final:
@@ -4032,14 +5843,22 @@ class PageAgent:
             # A page that will not move on needs the owner, like every other
             # stop: the run hands the open browser over instead of ending
             # with the application abandoned. The evidence is kept either way.
+            # What is still blank is named from the page itself (the field inventory, which groups choices by the
+            # page's own names): Paylocity's stop said only "stuck" while eight required questions sat unanswered.
+            try:
+                blank = [f.question or f.label or f.name
+                         for f in form_fields.blank_required(form_fields.inventory(tab))]
+            except Exception:
+                blank = []
+            still = ("; still blank and required: " + " | ".join(q[:90] for q in blank[:10])) if blank else ""
             return "stop", page, (f"the page did not change after three tries -- stuck in a validation loop "
-                                  f"({state}); evidence in {dump_dir}")
+                                  f"({state}); evidence in {dump_dir}{still}")
 
         before = re.sub(r"\[ref=[\w-]+\]|\[active\]", "", self.snapshot(page))
         tabs_before = len(tab.context.pages)
-        if submit_word:
-            self.final_pressed = True   # a confirmation after any Submit counts
         pressed_at = time.time()
+        guard = getattr(self.assistant, "_submission_guard", None)
+        denials_before = guard.denial_count(tab) if guard is not None else None
         if OPENS_A_FILE_DIALOG.search(label) and self.resume_file and Path(self.resume_file).is_file():
             try:
                 with tab.expect_file_chooser(timeout=6_000) as chooser:
@@ -4050,6 +5869,11 @@ class PageAgent:
                 pass          # no dialog came; the click itself still happened
         else:
             self.locate(page, control.ref).click(timeout=10_000)
+        if guard is not None and denials_before is not None and guard.denial_count(tab) > denials_before:
+            logger.error("SUBMISSION_GUARD_V0_DENIED: PageAgent stopped after an intercepted submit attempt")
+            return "stop", page, "final submission is only available through the verified gateway or human handoff"
+        if submit_word:
+            self.final_pressed = True   # a confirmation after an allowed intermediate Submit counts
         self.settle(page, 2_500)
         page = self.newest_tab(page, tabs_before)
         try:
@@ -4066,16 +5890,40 @@ class PageAgent:
             alerts = [c for c in re.findall(r"- alert[^:\n]*: (.+)", self.snapshot(page))][:5]
             return "retry", page, ("the page did not move on" +
                                    (f"; it says: {'; '.join(alerts)}" if alerts else ""))
+        # The ref-stripped text changed, but a validation error may still be visibly present
+        # (Phase 0-B4): an error banner re-rendering with different incidental text, or new
+        # content appearing beside an unresolved error, must not be read as the press having
+        # succeeded merely because *something* changed. This previously ran only once
+        # "after == before" had already decided "retry" above, never on this path (discovery:
+        # docs/security/phase0-b4-discovery.md section 5/7).
+        post_press_errors = page_errors(self.snapshot(page))
+        if post_press_errors:
+            if self.tracker is not None and self.key and hasattr(self.tracker, "record_event"):
+                try:
+                    self.tracker.record_event(
+                        self.key, "action_validation_failed", "press_next: validation error shown after the press",
+                        payload={"action": "press_next", "evidence_kind": "validation_text",
+                                "error_count": len(post_press_errors)})
+                except Exception as exc:
+                    logger.debug("Could not record the validation-failed press: %s", exc)
+            return "retry", page, f"the form shows an error: {'; '.join(post_press_errors[:5])}"
         return "moved", page, ""
 
     def submit_gate(self, page, controls: list[Control], last_step: bool = True) -> str:
-        """Why the application must not be sent now, or "" when it may."""
-        auto_enabled = bool(getattr(self.config, "auto_submit_verified_only", False))
-        if not auto_enabled and not getattr(self.config, "auto_submit", False):
-            # The owner sends it, but not a form still without the resume it asks for.
-            if last_step and self._tailored_resume_missing(page) and self._form_asks_for_a_resume(page, controls):
+        """Why the application must not be sent now, or "" when it may.
+
+        The last Submit is never pressed from here. Only two paths may send an application: the owner, after
+        apply_flow.hand_over(), and the verified path (safety.evaluate_auto_submit) that the hand-over runs. This
+        gate used to press it itself whenever the old AUTO_SUBMIT setting was on -- a setting apply_flow no longer
+        honours -- and on 29 September it pressed Secunetics' 'Submit Application' four times, with State still
+        empty and past a CAPTCHA. Every last step now stops here with the words that send it to the hand-over."""
+        if last_step:
+            # Not a form still without the resume it asks for.
+            if self._tailored_resume_missing(page) and self._form_asks_for_a_resume(page, controls):
                 return "the tailored resume is not attached"
             return "automatic submission is off -- the application is ready for you to submit"
+        # A button that says Submit on a step with more to come: it saves the step, and gets every check but the
+        # finished-application ones. The old AUTO_SUBMIT setting plays no part.
         if safety.captcha_visible(page):
             return "a CAPTCHA is showing -- only you can complete it"
         conflicts = safety.legal_answer_conflicts(answered_fields(controls), self.profile)
@@ -4139,7 +5987,12 @@ class PageAgent:
             texts += [f.locator("body").inner_text(timeout=3_000) for f in frames]
             if not any(CONFIRMATION_TEXT.search(t or "") for t in texts):
                 return False
-            return not any(self._asks_for_input(part) for part in [tab, *frames])
+            if not any(self._asks_for_input(part) for part in [tab, *frames]):
+                return True
+            # A form on a confirmation page is an offer ("create a Candidate Home account to track your
+            # progress"), not a step still to do -- when the page says in the past tense that the application
+            # was received, and does not say there is something left to finish it.
+            return any(RECEIVED_TEXT.search(t or "") and not STILL_TO_DO_TEXT.search(t or "") for t in texts)
         except Exception:
             return False
 
@@ -4166,10 +6019,105 @@ class PageAgent:
         except Exception:
             return False
 
+    def _file_input_holds_name(self, page, name: str) -> bool:
+        """Whether any `<input type=file>` on the page or in a frame currently holds a file
+        matching `name` (Phase 0-B4) -- unlike a filename-in-text check, this does not depend
+        on the site choosing to display the filename anywhere as text; the input element's
+        own `.files` state is deterministic DOM truth regardless of site rendering, which "a
+        file shows up differently on every site" (discovery) made a text-only check alone too
+        strict for some real/test pages. Shared by the resume and cover-letter verifiers
+        below, so both get the same underlying evidence rather than two copies of it."""
+        if not name:
+            return False
+        try:
+            tab = self.tab(page)
+            frames = list(getattr(tab, "frames", None) or [tab])
+        except Exception:
+            return False
+        for frame in frames:
+            try:
+                if frame.evaluate(
+                    "(name) => [...document.querySelectorAll('input[type=file]')]"
+                    ".some(el => el.files && el.files.length && el.files[0].name === name)",
+                    name):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _resume_file_input_holds_it(self, page) -> bool:
+        return bool(self.resume_file) and self._file_input_holds_name(page, self.resume_file.name)
+
+    def _confirm_resume_attached(self, page, path) -> bool:
+        """Verifies the upload actually shows as attached before trusting it (Phase 0-B4) --
+        `set_input_files()`/a completed file-chooser not throwing is not, by itself, evidence
+        a file now shows attached (discovery: docs/security/phase0-b4-discovery.md section
+        6). Checks `_resume_on_page()`'s existing filename-in-text evidence (which previously
+        ran only as a pre-check, never right after the upload) OR the file input's own
+        `.files` state (`_resume_file_input_holds_it`) -- a site that never renders the
+        filename as text still holds it on the input element itself, which is deterministic
+        DOM truth regardless of site rendering. Unverified is reported honestly, not silently
+        treated as done: the caller gets `False`, exactly like any other answer that could
+        not be committed, rather than a second, independent upload method or a retry loop."""
+        if not (self._resume_on_page(page) or self._resume_file_input_holds_it(page)):
+            logger.info("UPLOAD: the resume does not yet show as attached after the upload attempt")
+            if self.tracker is not None and self.key and hasattr(self.tracker, "record_event"):
+                try:
+                    self.tracker.record_event(self.key, "action_outcome_unknown",
+                                              "upload_resume: not shown as attached after the attempt",
+                                              payload={"action": "upload_resume", "evidence_kind": "attachment_filename"})
+                except Exception as exc:
+                    logger.debug("Could not record the unverified upload: %s", exc)
+            return False
+        self._resume_went_on(path)
+        return True
+
+    def _confirm_cover_letter_attached(self, page, path, control: Optional["Control"] = None) -> bool:
+        """Verifies the cover-letter upload actually shows as attached before trusting it
+        (Phase 0-B4 closure) -- `set_input_files()`/a completed file-chooser/
+        `assistant.attach_cover_letter()` not throwing is not, by itself, evidence a file now
+        shows attached, the same gap the resume upload had. Checks `_section_holds_a_file()`
+        -- the existing, section-scoped evidence `attach_documents()` already uses as a
+        pre-check ("a section that already holds a file is left alone") -- scoped to this
+        control's own section so an attached resume elsewhere on the page is never mistaken
+        for an attached cover letter, OR the file input's own `.files` state
+        (`_file_input_holds_name`) for a section whose markup shows no filename-shaped text.
+        Unverified is reported honestly: `False`, no `_letter_attached`, exactly like any
+        other answer that could not be committed."""
+        section = (control.container or control.question) if control is not None else ""
+        verified = False
+        try:
+            if _section_holds_a_file(self.snapshot(page), section):
+                verified = True
+        except Exception:
+            pass
+        if not verified:
+            verified = self._file_input_holds_name(page, Path(path).name)
+        if not verified:
+            logger.info("UPLOAD: the cover letter does not yet show as attached after the upload attempt")
+            if self.tracker is not None and self.key and hasattr(self.tracker, "record_event"):
+                try:
+                    self.tracker.record_event(
+                        self.key, "action_outcome_unknown",
+                        "upload_cover_letter: not shown as attached after the attempt",
+                        payload={"action": "upload_cover_letter", "evidence_kind": "attachment_filename"})
+                except Exception as exc:
+                    logger.debug("Could not record the unverified cover-letter upload: %s", exc)
+            return False
+        self._letter_attached = True
+        return True
+
+    def _resume_went_on(self, path) -> None:
+        """The resume is on the form: remembered for this run, for later runs (an event), and by the browser."""
+        self.resume_uploaded = True
+        self._record_resume_attached()
+        if hasattr(self.assistant, "attached_resume"):
+            self.assistant.attached_resume = str(path)
+
     def _record_resume_attached(self) -> None:
         if self.tracker is not None and self.key and self.resume_file and hasattr(self.tracker, "record_event"):
             try:
-                self.tracker.record_event(self.key, "resume_attached", self.resume_file.name)
+                self.tracker.record_event(self.key, "resume_attached", "resume document")
             except Exception as exc:
                 logger.debug("Could not record the upload: %s", exc)
 
@@ -4198,6 +6146,11 @@ class PageAgent:
             and time.time() < deadline:
             self.tab(page).wait_for_timeout(1_000)
             snapshot = self.snapshot(page)
+        try:
+            self._entries = repeated_entries.entry_map(snapshot)
+        except Exception as exc:
+            logger.debug("Could not read the page's repeated entries: %s", exc)
+            self._entries = {}
         return snapshot
 
     def _save(self, snapshot: str) -> None:
@@ -4207,8 +6160,12 @@ class PageAgent:
         if not self.job_dir:
             return
         try:
-            folder = self.job_dir / "pages"
-            folder.mkdir(parents=True, exist_ok=True)
-            (folder / f"page_{self.pages_read:02d}.txt").write_text(snapshot, encoding="utf-8")
+            # One folder per run: every run numbered its pages from 1 in the same folder, so each run's pages
+            # were written over the last one's, and the pages a failure happened on were gone by the next try.
+            folder = Path(self.job_dir) / "pages" / self._run_stamp
+            if not folder.is_dir():
+                folder.mkdir(parents=True, exist_ok=True)
+                keep_latest_runs(folder.parent, RUNS_KEPT)
+            diagnostics.write_safe_text(folder / f"page_{self.pages_read:02d}.txt", diagnostics.sanitize_snapshot(snapshot))
         except Exception:
             pass

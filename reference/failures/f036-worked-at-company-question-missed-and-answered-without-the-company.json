@@ -1,0 +1,18 @@
+{
+  "id": "f036",
+  "date": "2026-09-29",
+  "class": "A label keyword list chose too few wordings, answered with one fixed value, and a rule written for one employer",
+  "symptom": "Blue Cross and Blue Shield of Louisiana asked 'Have you worked at Louisiana Blue as an employee or a contracted employee?' and it was left blank.",
+  "site": "Any employer's form",
+  "root_cause": "The 'worked here before' question was recognised only as 'previously employed by', 'worked here before' or 'former employee'; a recognised one got the profile's single previously_employed_here value whatever company it named, so applying to a past employer would have been answered No; and OCC's wording had a rule of its own in page_agent (a company literal in logic).",
+  "why_tests_missed": "The tests used the recognised wordings and a profile value; none used 'worked at <name> as an employee or contractor', and none applied to a company on the person's resume.",
+  "fix": "employment_history.py: asks_about() recognises the question in any wording and takes the organisation it names (or this employer for 'us'/'here'), leaving questions that name no one in particular; past_employers() reads the profile and the resume's 'Company, place | dates' lines; answer() is Yes when the organisation is one of them (same_organisation: shared telling words or an acronym), otherwise No. known_answer asks it right after the person's own saved answers. The OCC rule is removed.",
+  "tests": [
+    "tests/test_employment_history.py",
+    "tests/test_employment_history.py::test_a_company_the_person_never_worked_for_is_no",
+    "tests/test_employment_history.py::test_a_company_on_the_resume_is_yes",
+    "tests/test_employment_history.py::test_a_question_that_names_no_one_in_particular_is_not_answered_here",
+    "tests/test_employment_history.py::test_the_agent_answers_it_before_the_fixed_profile_default"
+  ],
+  "prevention": "A yes/no fact about the person that depends on the employer is computed from the person's history against the employer named, not stored as one answer; and the question is recognised by its structure, not by a list of phrasings."
+}

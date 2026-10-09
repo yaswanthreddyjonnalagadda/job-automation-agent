@@ -1,0 +1,17 @@
+{
+  "id": "f050",
+  "date": "2026-09-29",
+  "class": "A progress indicator's first entry read as the current step, so the last Submit was taken for a mid-form one",
+  "symptom": "Aristocrat (Workday), 29 September: on the Review page the agent logged \"pressing 'Submit' (step 1 of 5 -- more steps follow)\" and the site answered \"Congratulations! We've Received Your Application!\" -- the application was sent without the owner's review.",
+  "site": "Workday (Aristocrat); any site whose progress bar lists finished steps before the current one",
+  "root_cause": "PageAgent.profile_plan found the step with the first 'step N of M' anywhere on the page. Workday's progress bar reads 'completed step 1 of 5 ... current step 5 of 5', so the Review page was read as step 1 of 5, its Submit was classed next_step (the Schwab rule: a Submit with steps to come only saves that step), and the press went through the ordinary Next path instead of the submit gate. The AI plan reports the step itself and was right; only the profile-only shortcut, used once the page was fully answered, misread it.",
+  "why_tests_missed": "The step-counter tests had one counter per page. None had a progress bar listing completed steps, and none checked that a page which does not clearly say its step treats Submit as the last.",
+  "fix": "page_agent.current_step(): a counter marked 'current' wins, one marked 'completed' is never the current step, and several unmarked counters that disagree mean 'unknown' -- which makes a Submit the final one, so it goes to the submit gate and the agent stops for the owner.",
+  "tests": [
+    "tests/test_step_counter_on_the_last_page.py::test_the_step_the_page_is_on",
+    "tests/test_step_counter_on_the_last_page.py::test_the_submit_on_workdays_review_page_is_the_final_one",
+    "tests/test_step_counter_on_the_last_page.py::test_a_submit_on_a_step_with_more_to_come_still_only_saves_that_step",
+    "tests/test_step_counter_on_the_last_page.py::test_a_submit_whose_step_cannot_be_told_is_treated_as_the_last"
+  ],
+  "prevention": "Every exception that lets a Submit-labelled button be pressed outside the submit gate must fail safe: when the evidence for 'more steps follow' is ambiguous, treat the button as final. Test that exception against real progress bars, including the ones that list finished steps."
+}

@@ -1,0 +1,13 @@
+{
+  "portal": "Oracle Recruiting Cloud / Candidate Experience (<pod>.fa.<dc>.oraclecloud.com/hcmUI/CandidateExperience/.../job/<id>)",
+  "studied": "2026-09-29 (partly: the form itself is behind an emailed code)",
+  "sample": "https://erhk.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/47577",
+  "single_page": false,
+  "opens_with": "'Apply Now' -> .../apply/email: an email-only step (or 'communicate by phone instead'); NEXT emails a one-time code, and the form opens after it is entered",
+  "fields": {
+    "components": "Oracle JET (oj-* classes) throughout",
+    "email_step": "input type=email 'Email Address' required",
+    "bot_trap": "a text input labelled 'honeypot' beside the email box, and a hidden required textarea -- never fill either",
+    "not_yet_seen": "the multi-section form after the code (earlier R+L run: one page of ~43,000 characters holding every section) -- study it on the next Oracle application"
+  }
+}
