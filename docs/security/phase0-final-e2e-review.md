@@ -297,9 +297,105 @@ mid-run, then a resumed/duplicate attempt refused through that same real bridge
 (K). No production code was changed -- every finding was PASS; these tests lock in
 already-correct behavior per the fix policy's "no speculative production changes."
 
+## Main-divergence audit and reconciliation
+
+`origin/main` was at `52fc64b` throughout this task. `git merge-base
+integrate/phase0-final origin/main` is `3d5a87e` -- the exact commit the task's own
+historical note named as main's last-known divergence point, confirmed still
+current rather than assumed. `git diff 3d5a87e 52fc64b` is **empty**: main's only
+unique commit since the shared ancestor is the merge commit object itself: its
+resulting tree is byte-identical to `3d5a87e`. Concretely this means every file
+`main` touches on its way to its current tip, `integrate/phase0-final` already had
+at least as current content for, since the whole B1-B5 architecture (and this
+final review) descends from that same `3d5a87e`.
+
+MAIN-ONLY COMMITS: none with unique tree content (only the merge commit `52fc64b`
+itself, which is a no-op at the file level).
+ARCHITECTURE-ONLY COMMITS: effectively everything -- P0-B1 through P0-B5 and this
+final review, roughly 60 commits across 8 merged PRs.
+POTENTIAL CONFLICT FILES: none. Confirmed with a dry-run `git merge-tree 3d5a87e
+HEAD origin/main` (clean, no conflict markers) before running the real merge.
+
+The merge itself (`git merge --no-ff origin/main`) completed with the `ort`
+strategy and produced **zero file changes** (`git show --stat` on the merge
+commit lists none) -- a genuine no-op merge, exactly as predicted. No targeted
+re-validation or replay re-run was performed after it, per sections 29/31's own
+guidance not to duplicate an identical check when reconciliation touched no
+watched behavior; the one thing still required regardless -- one final full suite
+on the exact resulting candidate -- follows below.
+
+## Final source audit
+
+Searched the real production source tree (excluding `.venv/`, `venv/`, `output/`,
+`sandbox/`, `tests/` -- the first three hold stale snapshot/scratch copies from
+earlier work, not live code; `sandbox/` is a stale parallel copy with different
+line numbers than the real files) for every dangerous pattern section 32 lists:
+
+| Pattern | Result |
+| --- | --- |
+| `form.submit()` / `.requestSubmit()` executable calls | None outside `submission_guard.py`'s own instrumentation; the only matches in `browser_automation.py` are docstring prose describing *why* a generic click-guard is needed, not executable code |
+| `page.content()` persisted | Exactly two real call sites: `diagnostics.py:330` (the authorized `capture_safe_dom`, feeding `sanitize_dom`) and `safety.py:564` (live-perception fallback for the sponsorship shield, classified NON-DIAGNOSTIC in the P0-B5 source audit, unchanged) |
+| Raw screenshot persisted outside `diagnostics.py` | None found |
+| Raw OTP/password/link logging | None (matrix cell G) |
+| Raw event payload values | None (matrix cells G, J) |
+| Checkpoint overwrite / `pending_action` reset | Exactly one clearing site, `page_agent.py:1628` inside `_resolve_pending_account_creation`, gated by an exact-marker match at line 1626 and reachable only after a fresh positive live-state read; `checkpoint.py:186`'s `STICKY_FIELDS` protects it from every other write path |
+| Uncertain-action silent clearing | `new_uncertain_actions` is unioned onto the existing checkpoint value, never replacing it (`apply_flow.py:669-671`) |
+| Unverified upload/fill/navigation success | B4's own extensive, already-passing test suites (`test_action_verification.py`, `test_navigation_verification.py`, `test_adapter_write_verification.py`) |
+| Cleanup entering `pages/` | Fixed this session (`683e5cb`); matrix cell I |
+| Unbounded raw console persistence | Bounded at 512 KiB / latest 200 category-only entries, per the P0-B5 doc |
+| Active diagnostic HTML | Served as `text/plain` with `nosniff` + a locked-down CSP, per the P0-B5 doc |
+
+No unexplained authority bypass found anywhere in the production source tree.
+
 ## B1-B5 targeted regression (new tests included)
 
 `pytest -q -rs -n auto` across every B1-B5 test file plus the new cross-phase E2E
 test: **559 passed, 3 skipped** (the same three Windows file-symlink-privilege
 skips seen throughout this engagement, already covered on Linux), 298.84s. Zero
 failures.
+
+## Final full suite on the exact PR candidate (after the main merge)
+
+`pytest -q -rs -n auto`, run on `integrate/phase0-final` at `5c2d1a2` (the merge
+commit, containing everything above): **5 failed, 2366 passed, 11 skipped**,
+1486.15s. Four of the five failures are the unchanged baseline IDs. The fifth,
+`tests/test_emailed_code_rule.py::test_the_reader_stops_at_the_limit`, is a
+transient: `login_guard.record_code_read()`'s own storage write warned
+("Could not record the sign-in attempt") under this run's heavy parallel I/O, so
+the test's own setup loop recorded fewer than `MAX_CODE_READS` reads before
+asserting the limit kicks in. This is the same class of transient already
+recorded in the P0-B5 PR's own history ("an intermittent sign-in-state file write
+failure; no login-guard authority code changed") -- not a new defect, and nothing
+in this task touched `login_guard.py`, `emailed_codes.py`, or any account/auth
+code. Reproduced to confirm: the same test passed 3/3 run alone
+(`pytest tests/test_emailed_code_rule.py -k test_the_reader_stops_at_the_limit`,
+3.1-7.1s each), and the entire file passed cleanly end to end with no contention
+(82/82). No unexplained new failure or error ID remains; the full suite was not
+re-run a second time to chase a reproduced, explained environmental transient,
+per this task's own "do not run the huge full suite repeatedly" instruction.
+
+Corpus re-check after this run: still no decrease.
+
+## Final replay
+
+Not re-run separately: the main-reconciliation merge changed zero files (see
+above), so a replay against this exact candidate cannot differ from the replay
+already performed by the pre-commit hook on commit `334e555`
+(452 saved pages, 231 distinct, zero differences) -- re-running it against
+identical code would only duplicate that result, which section 31 explicitly
+says not to do.
+
+## Phase-0 final closure verdict
+
+Every closure criterion (task section 25) is met: no new, unexplained
+full-suite failure/error ID; all B1-B5 targeted suites clean; the new
+cross-phase E2E test passes (happy path through the real submission bridge,
+diagnostic privacy, duplicate-attempt refusal); interruption/recovery and
+owner-handoff properties hold via the already-extensive existing suites plus
+the six newly-closed matrix gaps; dispatch interruption fails closed at every
+stage (cell B, confirmed through the real `apply_flow.submit_verified` bridge);
+duplicate submission is prevented (cells B and K); privacy sentinels are absent
+from diagnostics (cells D, G, and the new E2E test); diagnostic failures cannot
+change runtime authority (cell D, by construction); retention cannot delete
+pages/reference/application materials (cell I, the P0-B5 closure fix); replay
+has no unexplained behavioral difference. **PHASE 0 FUNCTIONALLY CLOSED.**
