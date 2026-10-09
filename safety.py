@@ -403,6 +403,24 @@ _NO_ANSWER = re.compile(r"^\W*(no|n)\b|\b(do not|don't|does not|will not|won't) 
 _YES_ANSWER = re.compile(r"^\W*(yes|y)\b|\b(will|do|would) (need|require)\b", re.IGNORECASE)
 
 
+def sponsorship_free_work_answer(question: str, profile) -> Optional[tuple[str, str]]:
+    """Resolve an authorization question explicitly requiring NO sponsorship.
+
+    Needing sponsorship makes the compound proposition false even when work
+    is currently authorized. Inclusive "with or without" wording is unchanged.
+    None means this is not such a question; an empty answer means missing data.
+    """
+    question = " ".join((question or "").split())
+    if profile is None or _CONDITIONAL_Q.search(question) or not _AUTHORIZED_Q.search(question) \
+            or not re.search(_INCLUSIVE_WITHOUT + r"without\b.{0,80}\bsponsorship\b", question, re.I):
+        return None
+    if bool(getattr(profile, "requires_visa_sponsorship", False)):
+        return "No", "profile.requires_visa_sponsorship"
+    eligible = str(getattr(profile, "legally_eligible_to_work", "") or "").strip().lower()
+    answer = "Yes" if eligible == "yes" else "No" if eligible == "no" else ""
+    return answer, "profile.legally_eligible_to_work"
+
+
 def legal_answer_conflicts(form_fields: list[dict], profile) -> list[str]:
     """Sponsorship and work-authorization answers on the page that contradict
     the profile, or that are left blank.
@@ -427,7 +445,15 @@ def legal_answer_conflicts(form_fields: list[dict], profile) -> list[str]:
             continue
         if re.search(r"placeholder|make a selection|^select\b|please select|^-+$", value, re.IGNORECASE):
             value = ""
-        if _SPONSORSHIP_Q.search(question):
+        sponsorship_free = sponsorship_free_work_answer(question, profile)
+        if sponsorship_free is not None:
+            expected, _source = sponsorship_free
+            said_yes, said_no = bool(_YES_ANSWER.search(value)), bool(_NO_ANSWER.search(value))
+            matches = (expected == "Yes" and said_yes and not said_no) \
+                or (expected == "No" and said_no and not said_yes)
+            if not matches:
+                conflicts.append(f"{question[:90]} -- authorization without sponsorship does not match your profile")
+        elif _SPONSORSHIP_Q.search(question):
             said_yes, said_no = bool(_YES_ANSWER.search(value)), bool(_NO_ANSWER.search(value))
             if not value:
                 conflicts.append(f"{question[:90]} -- not answered; your profile says you "

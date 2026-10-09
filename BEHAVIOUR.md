@@ -1141,3 +1141,30 @@ Artifact limits: DOM 2 MiB; accessibility/text/JSON and runtime logs 1 MiB;
 console 512 KiB (the category-only projection is much smaller); screenshots
 16 MiB; manifests 64 KiB. Oversized sanitized text may be truncated with a
 manifest flag; oversized JSON becomes valid truncation metadata.
+
+## Opening Apply versus final Apply
+
+An Apply control on a posting can open the application while submission protection
+stays active. The browser guard and Python navigation use the same conservative
+DOM check: an Apply label, job-description text and a heading, with no application
+form, answer fields (including hidden fields and open shadow roots), or review/
+signature text. A submit-type button without an associated form can qualify.
+AI page classification alone never authorizes the exception. After application
+DOM state has been observed in a guarded document, the exception stays disabled
+for that document, even if the fields disappear. Ambiguous pages still hand off;
+review-page Apply remains subject to the existing submission gate.
+The posting check ignores only hidden OneTrust cookie switches and its explicitly
+labelled cookie-list search control. Hidden applicant fields still count, even
+inside that container. Conditional disability-accommodation guidance is not a
+form error; actual validation messages, including ones sharing its alert, remain
+blocking.
+
+## Work authorization without sponsorship
+
+A compound question asking whether the applicant is authorized to work without
+current or future sponsorship uses both profile facts. A need for sponsorship
+makes its answer No even when the applicant is currently authorized to work.
+With no sponsorship need, the answer follows stated legal work eligibility;
+missing eligibility remains unresolved. Inclusive "with or without sponsorship"
+questions retain their existing handling. Initial filling, correction, and final
+conflict checking share the same rule, preserving owner-entered answers.

@@ -496,3 +496,33 @@ def test_redaction_never_breaks_a_log_line():
     assert lines[0].startswith("Could not read ATS_PASSWORD=***")
     assert "someone@example.com" not in lines[1] and "010-0000" not in lines[1]
     assert sum(isinstance(f, safety.RedactingFilter) for f in log.filters) == 1
+
+
+@pytest.mark.parametrize('question', [
+    'Are you currently authorized to work without the need for current or future employer sponsorship?',
+    'Are you authorized to work without visa sponsorship?',
+])
+def test_authorized_without_sponsorship_question_preserves_negative_polarity(question):
+    profile = _needs_sponsorship()
+    assert safety.legal_answer_conflicts([{'label': question, 'value': 'No'}], profile) == []
+    assert safety.legal_answer_conflicts([{'label': question, 'value': 'Yes'}], profile)
+
+
+@pytest.mark.parametrize(('eligible', 'sponsorship', 'expected'), [
+    ('Yes', False, 'Yes'), ('Yes', True, 'No'), ('No', False, 'No'), ('', False, ''),
+])
+def test_sponsorship_free_authorization_requires_both_profile_facts(eligible, sponsorship, expected):
+    from types import SimpleNamespace
+    profile = SimpleNamespace(legally_eligible_to_work=eligible, requires_visa_sponsorship=sponsorship)
+    question = 'Are you authorized to work without employer sponsorship?'
+    assert safety.sponsorship_free_work_answer(question, profile)[0] == expected
+    if expected:
+        assert not safety.legal_answer_conflicts([{'label': question, 'value': expected}], profile)
+    else:
+        assert safety.legal_answer_conflicts([{'label': question, 'value': 'Yes'}], profile)
+
+
+@pytest.mark.parametrize('wording', ['with or without', 'with and/or without', 'with/or without'])
+def test_inclusive_authorization_is_not_inverted(wording):
+    assert safety.sponsorship_free_work_answer(
+        f'Are you authorized to work {wording} sponsorship?', _needs_sponsorship()) is None

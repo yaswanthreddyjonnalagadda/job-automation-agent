@@ -1,0 +1,16 @@
+{
+  "id": "f124",
+  "date": "2026-10-09",
+  "site": "ADP; shared form validator",
+  "class": "Informational accessibility guidance was classified as an error from the word unable",
+  "symptom": "Verified submission was refused because a conditional notice explaining how to request a disability accommodation appeared in an alert region.",
+  "root_cause": "The validator correctly inspected alert regions but treated unable as evidence of failure without distinguishing a conditional accommodation instruction from a reported validation error.",
+  "fix": "Exclude a narrowly recognized conditional disability-accommodation notice, while preserving actual errors in separate alerts or within the same text.",
+  "tests": [
+    "tests/test_dropdown_reading.py::test_accommodation_notice_is_not_a_form_error",
+    "tests/test_dropdown_reading.py::test_accommodation_notice_with_actual_failure_stays_an_error",
+    "tests/test_safety_rules.py::test_validation_reports_blanks_and_errors"
+  ],
+  "prevention": "Check the semantic purpose of an alert, not only error-like words, and always pair informational-alert regressions with real-error retention tests.",
+  "why_tests_missed": "Existing tests covered success and route-announcement alerts but not conditional accommodation guidance containing the word unable."
+}

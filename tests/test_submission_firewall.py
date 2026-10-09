@@ -44,6 +44,41 @@ def guarded(page):
     return guard
 
 
+@pytest.mark.parametrize('button_type', ['button', 'submit'])
+@pytest.mark.parametrize('label', ['Apply', 'Apply Now'])
+def test_posting_apply_opens_form_while_review_apply_stays_guarded(page, button_type, label):
+    page.set_content(f'''<h1>Security Engineer</h1><h2>Responsibilities</h2>
+        <p>Maintain systems.</p><h2>Qualifications</h2><p>Relevant experience.</p>
+        <button type="{button_type}">{label}</button>''')
+    page.locator('button').evaluate("""button => button.onclick = () => {
+        document.body.innerHTML = '<h1>Your application</h1><form><label>Email<input></label>'
+            + '<button type="submit">Apply</button></form>';
+        document.querySelector('form').onsubmit = () => { window.submitted = true; return false; };
+    }""")
+    guard = guarded(page)
+    page.get_by_role('button', name=label, exact=True).click()
+    assert page.get_by_role('heading', name='Your application').count() == 1
+    assert not guard.denials(page)
+    page.get_by_role('button', name='Apply', exact=True).click()
+    assert page.evaluate('window.submitted') is None
+    assert guard.denials(page)[0]['kind'] == 'click'
+
+
+@pytest.mark.parametrize('context', [
+    '<form id="application"></form>',
+    '<input type="hidden" value="private draft">',
+    '<label>Email<input></label>',
+    '<h2>Review your application</h2>',
+])
+def test_posting_words_do_not_exempt_apply_in_application_context(page, context):
+    page.set_content('<h1>Engineer</h1><h2>Responsibilities</h2>' + context +
+                     '<button type="button" onclick="window.submitted=true">Apply</button>')
+    guard = guarded(page)
+    page.get_by_role('button', name='Apply', exact=True).click()
+    assert page.evaluate('window.submitted') is None
+    assert guard.denials(page)[0]['kind'] == 'click'
+
+
 @pytest.mark.parametrize("label", [
     "Submit Application",
     "Save and Submit",
@@ -935,3 +970,45 @@ def test_resuming_automation_rearms_guard_before_navigation(page, tmp_path):
     assert assistant._submission_execution_state == "active"
     assert page.evaluate("window.submitted") is None
     assert assistant._submission_guard.denials(page)[0]["kind"] == "click"
+
+
+def test_apply_cannot_become_posting_again_after_application_state(page):
+    page.set_content('<h1>Application</h1><label>Email<input></label>')
+    guard = guarded(page)
+    page.evaluate('''() => document.body.innerHTML = '<h1>Engineer</h1><h2>Responsibilities</h2>'
+        + '<button onclick="window.submitted=true">Apply</button>' ''')
+    page.get_by_role('button', name='Apply', exact=True).click()
+    assert page.evaluate('window.submitted') is None
+    assert guard.denials(page)[0]['kind'] == 'click'
+
+
+def test_shadow_application_fields_do_not_exempt_apply(page):
+    page.set_content('<h1>Engineer</h1><h2>Responsibilities</h2><div id="widget"></div>'
+                     '<button onclick="window.submitted=true">Apply</button>')
+    page.locator('#widget').evaluate('host => host.attachShadow({mode:"open"}).innerHTML = "<input>"')
+    guard = guarded(page)
+    page.get_by_role('button', name='Apply', exact=True).click()
+    assert page.evaluate('window.submitted') is None
+    assert guard.denials(page)[0]['kind'] == 'click'
+
+
+def test_cookie_preferences_do_not_turn_posting_apply_into_submission(page):
+    page.set_content('''<h1>Engineer</h1><h2>Responsibilities</h2>
+        <div id="onetrust-pc-sdk" style="display:none">
+          <input type="checkbox"><input type="text" aria-label="Cookie list search">
+        </div><button onclick="window.opened=true">Apply</button>''')
+    guard = guarded(page)
+    page.get_by_role('button', name='Apply', exact=True).click()
+    assert page.evaluate('window.opened') is True
+    assert not guard.denials(page)
+
+
+@pytest.mark.parametrize('field', ['<input type="hidden">', '<input aria-label="Email">'])
+def test_cookie_container_does_not_hide_application_state(page, field):
+    page.set_content('<h1>Engineer</h1><h2>Responsibilities</h2>'
+                     '<div id="onetrust-pc-sdk" style="display:none">' + field + '</div>'
+                     '<button onclick="window.submitted=true">Apply</button>')
+    guard = guarded(page)
+    page.get_by_role('button', name='Apply', exact=True).click()
+    assert page.evaluate('window.submitted') is None
+    assert guard.denials(page)[0]['kind'] == 'click'

@@ -74,6 +74,7 @@ from perception import (
 )
 import provenance
 import safety
+from submission_guard import is_posting_apply
 
 import diagnostics
 diagnostics.install_log_privacy()
@@ -2481,6 +2482,9 @@ class PageAgent:
                     return "checked", "profile.accept_application_privacy_prompts"
         if not question or safety.is_attestation(question):
             return "", ""
+        sponsorship_free = safety.sponsorship_free_work_answer(question, self.profile)
+        if sponsorship_free is not None:
+            return sponsorship_free
 
         # A box inside a repeated Work or Education entry belongs to that job or that degree: it is answered from
         # that entry's own record, never from one value for the whole person (Steelcase, 29 September: a job's
@@ -3972,7 +3976,12 @@ class PageAgent:
             question = item["label"]
             if not question or not safety.legal_answer_conflicts([item], self.profile):
                 continue
-            if safety._SPONSORSHIP_Q.search(question):
+            sponsorship_free = safety.sponsorship_free_work_answer(question, self.profile)
+            if sponsorship_free is not None:
+                value, source = sponsorship_free
+                if value:
+                    fixes.append((question, value, source, False))
+            elif safety._SPONSORSHIP_Q.search(question):
                 needs = bool(getattr(self.profile, "requires_visa_sponsorship", False))
                 fixes.append((question, "Yes" if needs else "No", "profile.requires_visa_sponsorship", False))
             elif safety._AUTHORIZED_Q.search(question):
@@ -5798,7 +5807,12 @@ class PageAgent:
             if not getattr(self.profile, "accept_application_privacy_prompts", False):
                 return "stop", page, f"{label!r} accepts a notice -- you haven't allowed the agent to accept those"
 
-        submit_word = safety.is_submit_label(label) and plan.page_kind != "job_description"
+        posting_opening = (
+            plan.page_kind == "job_description" and plan.next_kind == "open_application"
+            and not getattr(self.assistant, "_form_filled_this_run", False)
+            and is_posting_apply(self.locate(page, control.ref))
+        )
+        submit_word = safety.is_submit_label(label) and not posting_opening
         # Schwab's questions page is step 2 of 5 and its button says "Submit": it saves
         # that step. A "Submit" is the application's last only when the page's own DOM
         # structure positively proves it -- never plan.step (AI-reported text this code
@@ -5829,7 +5843,7 @@ class PageAgent:
         )
         final = plan.next_kind == "final_submit" or (is_review and not steps_remain) \
             or (submit_word and step_finality != "NON_FINAL")
-        if plan.page_kind == "job_description" and plan.next_kind == "open_application":
+        if posting_opening:
             final = False
         if final:
             gate = self.submit_gate(page, controls)

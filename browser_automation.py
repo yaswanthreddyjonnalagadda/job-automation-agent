@@ -39,7 +39,7 @@ import account_state
 import form_fields
 import option_match
 import safety
-from submission_guard import SubmissionGuardV0
+from submission_guard import SubmissionGuardV0, is_posting_apply
 import visible_desktop
 from config import AppConfig, UserProfile, get_user_profile, resume_to_attach
 from interaction import (
@@ -1985,12 +1985,7 @@ class JobApplicationAssistant:
             return False
         control = self.find_apply_control(page)
         if control is not None:
-            try:
-                if (control.get_attribute("type") or "").lower() == "submit":
-                    return False
-            except Exception:
-                pass
-            return True
+            return is_posting_apply(control)
         return bool(self.apply_destination(page))
 
     def open_embedded_form(self, page: Page):
@@ -4372,6 +4367,12 @@ class JobApplicationAssistant:
                     // as a problem held up an application with nothing wrong.
                     const ok = /\\b(success|successfully|uploaded|saved|complete[d]?)\\b/i;
                     const bad = /\\b(error|invalid|required|must|cannot|failed|unable|select an option)\\b/i;
+                    // A conditional accommodation notice is guidance, not a
+                    // failure to complete a field. Real validation text in the
+                    // same alert must still block progression/submission.
+                    const accommodationNotice = t =>
+                        /^if you\\b.+\\bdisability\\b.+\\b(contact|request|ask)\\b.+(?:accommodation|alternative application process)\\.?$/i.test(t)
+                        && !/\\b(error|invalid|required|must|failed|select an option)\\b/i.test(t);
                     // Next.js announces each route change in a clipped,
                     // one-pixel role="alert" for screen readers. It holds the
                     // page title, and was reported as a form error.
@@ -4385,7 +4386,8 @@ class JobApplicationAssistant:
                     const errors = [...document.querySelectorAll('[role=alert], [aria-invalid=true], [class*=error i]')]
                         .filter(e => visible(e) && !announcement(e))
                         .map(e => (e.innerText || '').trim())
-                        .filter(t => t && t.length < 200 && (bad.test(t) || !ok.test(t)));
+                        .filter(t => t && t.length < 200 && !accommodationNotice(t)
+                            && (bad.test(t) || !ok.test(t)));
                     return {required_still_blank: [...new Set(blanks)], errors_shown: [...new Set(errors)]};
                 }"""
             )

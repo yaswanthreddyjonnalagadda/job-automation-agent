@@ -91,6 +91,12 @@ def test_a_posting_is_recognised(page, agent):
     assert agent.on_job_description(page)
 
 
+def test_an_unassociated_submit_type_apply_still_opens_the_posting(page, agent):
+    page.set_content(POSTING.replace('<a href="/jobs/126880/login">Apply for this job online</a>',
+                                    '<button type="submit">Apply</button>'))
+    assert agent.on_job_description(page)
+
+
 def test_a_form_is_not_a_posting(page, agent):
     page.set_content(FORM)
     assert not agent.on_job_description(page)

@@ -17,6 +17,53 @@ logger = logging.getLogger(__name__)
 _GUARD_NAME = "__jaaSubmissionGuardV0"
 
 
+# One conservative DOM predicate shared by posting detection and the click firewall.
+# Labels or a planner's page_kind alone cannot establish opening vs. submitting.
+_APPLICATION_CONTEXT_JS = r"""() => {
+    // Cookie managers retain hidden utility controls after their banner closes.
+    // Only these recognizable utilities are exempt; hidden applicant inputs,
+    // including inputs placed in the same container, still count as state.
+    const cookieUtility = input => !input.getClientRects().length && !input.form
+        && input.closest('#onetrust-consent-sdk, #onetrust-pc-sdk')
+        && (input.type === 'checkbox' || (input.type === 'text'
+            && /^cookie list search$/i.test(input.getAttribute('aria-label') || '')));
+    const roots = [document];
+    for (let i = 0; i < roots.length; i++) {
+        const root = roots[i];
+        if (root.querySelector('form, textarea, select, [role="textbox"], [role="combobox"], '
+            + '[role="checkbox"], [role="radio"], [contenteditable="true"]')) return true;
+        if (Array.from(root.querySelectorAll('input')).some(input =>
+            !['search', 'button', 'submit', 'image', 'reset'].includes(input.type)
+                && !cookieUtility(input))) return true;
+        for (const element of root.querySelectorAll('*')) {
+            if (element.shadowRoot) roots.push(element.shadowRoot);
+        }
+    }
+    return false;
+}"""
+_POSTING_APPLY_JS = r"""element => {
+    if (!element || element.form || element.closest('form') || element.hasAttribute('form')) return false;
+    const labels = [element.innerText, element.value, element.getAttribute('aria-label'),
+        element.getAttribute('title')].map(value => String(value || '').replace(/\s+/g, ' ').trim())
+        .filter(Boolean);
+    if (!labels.length || !labels.every(label => /^apply(?: now| for (?:this|the) job(?: online)?)?$/i.test(label)))
+        return false;
+    if ((APPLICATION_CONTEXT)()) return false;
+    const body = document.body ? document.body.innerText : '';
+    if (!/responsibilities|qualifications|requirements|job description|about the (role|job|position)|what you('ll| will) do|who you are|job (id|number|requisition)|posted/i.test(body)) return false;
+    if (/review (your|and submit)|submit (your|this) application|confirm (your|this) application|application (review|summary)|electronic signature|e-signature/i.test(body)) return false;
+    return Boolean(document.querySelector('h1, h2, [role="heading"]'));
+}""".replace('APPLICATION_CONTEXT', _APPLICATION_CONTEXT_JS)
+
+
+def is_posting_apply(control: Any) -> bool:
+    """Require positive posting evidence and absence of application DOM state."""
+    try:
+        return bool(control.evaluate(_POSTING_APPLY_JS))
+    except (PlaywrightError, AttributeError):
+        return False
+
+
 def _guard_script(capability: str) -> str:
     return r"""(() => {
       // A document.open()-class replacement (what Playwright's page.set_content() uses, and
@@ -36,7 +83,10 @@ def _guard_script(capability: str) -> str:
       const capability = CAPABILITY;
       const submitLabel = new RegExp(SUBMIT_PATTERN, "i");
       const safeUtilityLabel = new RegExp(SAFE_UTILITY_PATTERN, "i");
-      const state = {active: false, authorization: null, denials: [], sequence: 0};
+      const applicationContext = APPLICATION_CONTEXT;
+      const postingApply = POSTING_APPLY;
+      const state = {active: false, authorization: null, denials: [], sequence: 0,
+        applicationSeen: applicationContext()};
       const selector = 'button, input[type="submit"], input[type="image"], [role="button"], a';
       const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
       const labels = element => [
@@ -91,6 +141,8 @@ def _guard_script(capability: str) -> str:
         if (!(element instanceof Element)) return null;
         const candidate = element.closest(selector);
         if (!candidate) return null;
+        state.applicationSeen ||= applicationContext();
+        if (!state.applicationSeen && postingApply(candidate)) return null;
         if (labels(candidate).some(label => submitLabel.test(label))) return candidate;
         if (structuralSubmitter(candidate) && !ordinaryNavigation(candidate)) return candidate;
         return soleRemainingAction(candidate) ? candidate : null;
@@ -202,6 +254,7 @@ def _guard_script(capability: str) -> str:
         activate(token) {
           if (token === capability) {
             state.active = true;
+            state.applicationSeen ||= applicationContext();
             ensureListeners();
           }
         },
@@ -231,6 +284,8 @@ def _guard_script(capability: str) -> str:
         "SUBMIT_PATTERN", json.dumps(safety.SUBMIT_LABEL_RE.pattern)
     ).replace(
         "SAFE_UTILITY_PATTERN", json.dumps(safety.SAFE_UTILITY_LABEL_RE.pattern)
+    ).replace("POSTING_APPLY", _POSTING_APPLY_JS).replace(
+        "APPLICATION_CONTEXT", _APPLICATION_CONTEXT_JS
     )
 
 

@@ -297,3 +297,11 @@ def test_any_country_is_recognised_not_only_one():
         == "Korea, Republic of"
     assert geo_reference.option_domain(CHOBANI_COUNTRIES) == geo_reference.COUNTRY
     assert geo_reference.option_domain(US_STATES) == geo_reference.US_STATE
+
+
+def test_sponsorship_free_question_uses_shared_legal_answer():
+    profile = SimpleNamespace(requires_visa_sponsorship=True, legally_eligible_to_work='Yes')
+    question = 'Are you authorized to work without the need for current or future employer sponsorship?'
+    for concept in ('WORK_AUTHORIZATION', 'VISA_SPONSORSHIP'):
+        assert resolve_profile_value(concept, profile, ['Yes', 'No'], question) == (
+            'No', 'profile.requires_visa_sponsorship')

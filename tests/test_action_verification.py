@@ -535,3 +535,26 @@ def test_radio_group_without_aria_group_verified_by_question_matching(page, tmp_
     answer_first_ref = page_agent.Answer(yes_btn.ref, q, "choose", "No")
     assert a.not_stuck([(answer_first_ref, yes_btn)], after) == []
 
+
+
+@pytest.mark.parametrize('needs_sponsorship', [True, False])
+def test_sponsorship_free_radio_answer_and_correction_agree(page, tmp_path, needs_sponsorship):
+    import safety
+    question = 'Are you currently authorized to work without the need for current or future employer sponsorship?'
+    expected = 'No' if needs_sponsorship else 'Yes'
+    page.set_content(f'<div><p>{question}</p>'
+                     '<label><input type="radio" name="authorization" value="Yes">Yes</label>'
+                     '<label><input type="radio" name="authorization" value="No">No</label></div>')
+    a = agent(tmp_path=tmp_path)
+    a.profile = config.UserProfile(legally_eligible_to_work='Yes', requires_visa_sponsorship=needs_sponsorship)
+    a.assistant.values = safety.AgentValues()
+    controls = page_agent.parse_snapshot(a.snapshot(page))
+    target = next(c for c in controls if c.role == 'radio' and c.name == expected)
+    assert a.known_answer(target)[0] == expected
+    answer = page_agent.Answer(target.ref, question, 'choose', *a.known_answer(target))
+    assert a.do(page, answer, target)
+    for _ in range(2):
+        controls = page_agent.parse_snapshot(a.snapshot(page))
+        assert a.correct_from_profile(page, page_agent.PagePlan(), controls) == []
+        assert not safety.legal_answer_conflicts(page_agent.answered_fields(controls), a.profile)
+        assert page.locator(f'input[value="{expected}"]').is_checked()

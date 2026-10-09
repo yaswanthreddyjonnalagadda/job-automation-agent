@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import geo_reference
+import safety
 
 
 def clean_text(text: str) -> str:
@@ -677,6 +678,11 @@ def resolve_profile_value(
     """
     if not concept or profile is None:
         return "", ""
+
+    if concept in {"WORK_AUTHORIZATION", "VISA_SPONSORSHIP"}:
+        sponsorship_free = safety.sponsorship_free_work_answer(question, profile)
+        if sponsorship_free is not None:
+            return sponsorship_free
 
     val = ""
     src = f"profile.{concept.lower()}"
