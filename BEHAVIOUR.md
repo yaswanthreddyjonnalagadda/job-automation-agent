@@ -1039,7 +1039,8 @@ carry on using Chrome while an application is open. Point
 Chrome must then be closed while the agent runs, since one profile cannot be
 open in two browsers.
 
-The agent's window is brought in front of your other apps when a run starts and again
+The agent's window is brought in front of your other apps immediately after opening
+the page, before page-opening telemetry is delivered, and again
 at every hand-over, so you can watch it (Windows keeps a background program from
 taking focus, so it is restored, briefly put on top and asked for focus). It finds its
 own window by the Chrome process running on its profile, never by "any Chrome window",
