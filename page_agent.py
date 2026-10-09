@@ -1427,7 +1427,7 @@ class PageAgent:
         """Code reloaded into a run that is already going keeps its old object:
         anything added since starts empty rather than failing."""
         for name, default in (("notes", list), ("corrected", set), ("owner_answers", dict), ("failed", list),
-                              ("_entries", dict), ("_entry_blank", set), ("history", dict), ("_attached_here", set),
+                              ("_entries", dict), ("_entry_blank", set), ("_widget_answers", dict), ("history", dict), ("_attached_here", set),
                               ("_google_tried", set), ("_retried_after_error", bool), ("_google_failed", set),
                               ("_google_reloads", dict), ("_peeked", dict),
                               ("_emailed_in", set), ("_created_at", set), ("_account_known", set), ("_reset_asked", set), ("_verify_asked", set), ("_misfit", set), ("_letter_attached", bool), ("_uncertain_entry_sections", set), ("_code_tries", int), ("_last_code", str), ("_asked_for_new_code", bool), ("_pressed", dict), ("_opened_entries", set), ("_woken", set), ("_list_retries", int), ("_shapes", dict),
@@ -3824,6 +3824,11 @@ class PageAgent:
             now = by_ref.get(before.ref) or next(iter(by_question.get(before.question, [])), None)
             if now is None:
                 continue   # the page rebuilt itself; the next read will show it
+            widget_ok = self._widget_answer_verified(before, answer.value)
+            if widget_ok is not None:
+                if not widget_ok:
+                    missing.append(f"{before.question[:60]} = {answer.value[:40]!r}")
+                continue
             want = answer.value.strip().lower()
             if answer.action == "choose" and before.role in ("radio", "checkbox", "switch"):
                 # A choice among buttons: whichever button carries the answer must be the one on.
@@ -3851,6 +3856,25 @@ class PageAgent:
             if not ok:
                 missing.append(f"{before.question[:60]} = {answer.value[:40]!r}")
         return missing
+
+    def _widget_answer_verified(self, control: Control, value: str) -> Optional[bool]:
+        """Re-read committed tags, never the cleared search text or cached success."""
+        saved = getattr(self, "_widget_answers", {}).get(control.ref)
+        if saved is None or saved["attempted"] != value or saved["question"] != control.question \
+                or control.role not in ("textbox", "searchbox"):
+            return None
+        try:
+            from sites.workday import WorkdayAdapter
+            field = saved["field"]
+            metadata = form_fields.field_for_locator(field)
+            if metadata is None or field.input_value().strip():
+                return False
+            chosen = {option_match.plain(item) for item in WorkdayAdapter.selected_skills(field)}
+            if saved["selected"]:
+                return all(option_match.plain(item) in chosen for item in saved["selected"])
+            return not metadata.required
+        except Exception:
+            return False
 
     def refusal(self, page, answer: Answer, control: Control, controls: list[Control] = (),
                 correcting: bool = False) -> str:
@@ -4297,6 +4321,8 @@ class PageAgent:
 
     def do(self, page, answer: Answer, control: Control) -> bool:
         tab = self.tab(page)
+        if answer.action in ("fill", "choose") and self._widget_answer_verified(control, answer.value) is True:
+            return True
         if control.role == "group" and not control.name and not control.holds_choices:
             return False  # A layout wrapper is not a page-wide choice group.
         # Only typed text: a choice can only ever take one of the list's own options, and "N/A" or "None" is
@@ -4364,7 +4390,7 @@ class PageAgent:
                 from browser_automation import FramedPage
                 frame = loc.element_handle().owner_frame()
                 target = FramedPage(tab, frame) if frame != tab.main_frame else tab
-                if re.fullmatch(r"(?:type to add )?skills", control.question.strip(), re.IGNORECASE):
+                if re.fullmatch(r"(?:type to add )?skills", control.question.rstrip(" *✱"), re.IGNORECASE):
                     chosen, missing = WorkdayAdapter().select_skills(
                         self.assistant, target, loc, re.split(r"[,;\n]+", answer.value))
                     if missing:
@@ -4372,9 +4398,16 @@ class PageAgent:
                         if note not in self.notes:
                             self.notes.append(note)
                         logger.info("SKILLS: %s", note)
-                    required = loc.get_attribute("aria-required") == "true" or loc.get_attribute("required") is not None
+                    stable_field = target.locator(f"input[id={json.dumps(identifier)}]")
+                    metadata = form_fields.field_for_locator(stable_field)
+                    required = metadata is None or metadata.required
                     if missing and not chosen and not required:
                         self._entry_blank.add(control.ref)
+                    if chosen or not required:
+                        self._widget_answers[control.ref] = {
+                            "field": stable_field, "selected": tuple(chosen), "attempted": answer.value,
+                            "question": control.question,
+                        }
                     return bool(chosen) or not required
                 return WorkdayAdapter().select_from_searchable_input(
                     self.assistant, target, identifier, [answer.value] + self._alternatives_for(answer.value), keyboard=False)

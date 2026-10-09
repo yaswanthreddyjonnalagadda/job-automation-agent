@@ -87,3 +87,63 @@ def test_empty_skills_menu_is_dismissed_when_escape_is_ignored(page):
     assert a.do(page,page_agent.Answer(control.ref,control.question,'fill','Missing','profile'),control)
     assert not page.locator('#popup').is_visible()
     assert control.ref in a._entry_blank
+
+
+@pytest.mark.parametrize('value', ['AWS, BGP', 'AWS, Missing', 'Missing'])
+def test_page_cycle_verifies_skill_tags_or_intentional_optional_blank(page, value):
+    page.set_content(widget())
+    a = agent()
+    control = next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.name == 'Type to Add Skills')
+    answer = page_agent.Answer(control.ref, control.question, 'fill', value, 'profile')
+    given = a.apply_answers(page, page_agent.PagePlan(answers=[answer]), [control])
+    assert given
+    after = page_agent.parse_snapshot(a.snapshot(page))
+    assert a.not_stuck(given, after) == []
+
+
+def test_removed_skill_tags_are_not_accepted_from_stale_completion(page):
+    page.set_content(widget())
+    a = agent()
+    control = next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.name == 'Type to Add Skills')
+    answer = page_agent.Answer(control.ref, control.question, 'fill', 'AWS', 'profile')
+    given = a.apply_answers(page, page_agent.PagePlan(answers=[answer]), [control])
+    page.locator('#tags').evaluate('e => e.replaceChildren()')
+    assert a.not_stuck(given, page_agent.parse_snapshot(a.snapshot(page)))
+
+
+def test_optional_skill_blank_cannot_hide_a_new_required_field(page):
+    page.set_content(widget())
+    a = agent()
+    control = next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.name == 'Type to Add Skills')
+    answer = page_agent.Answer(control.ref, control.question, 'fill', 'Missing', 'profile')
+    given = a.apply_answers(page, page_agent.PagePlan(answers=[answer]), [control])
+    page.locator('#skills').evaluate('e => e.setAttribute("aria-required", "true")')
+    assert a.not_stuck(given, page_agent.parse_snapshot(a.snapshot(page)))
+
+
+def test_optional_skill_completion_does_not_repeat_unavailable_searches(page, monkeypatch):
+    from sites.workday import WorkdayAdapter
+    page.set_content(widget())
+    a = agent()
+    control = next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.name == 'Type to Add Skills')
+    answer = page_agent.Answer(control.ref, control.question, 'fill', 'Missing', 'profile')
+    assert a.do(page, answer, control)
+    monkeypatch.setattr(WorkdayAdapter, 'select_skills', lambda *args: pytest.fail('repeated a verified optional search'))
+    assert a.do(page, answer, control)
+
+
+def test_skill_requirement_on_label_cannot_be_skipped_as_optional(page):
+    page.set_content(widget().replace('>Type to Add Skills<', '>Type to Add Skills *<'))
+    a = agent()
+    control = next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.role == 'textbox')
+    assert not a.do(page, page_agent.Answer(control.ref, control.question, 'fill', 'Missing', 'profile'), control)
+
+
+def test_skill_requirement_metadata_stays_with_its_field_in_mixed_page(page):
+    page.set_content('<label>Other required field<input required></label>' + widget())
+    a = agent()
+    control = next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.name == 'Type to Add Skills')
+    answer = page_agent.Answer(control.ref, control.question, 'fill', 'Missing', 'profile')
+    given = a.apply_answers(page, page_agent.PagePlan(answers=[answer]), [control])
+    assert given
+    assert a.not_stuck(given, page_agent.parse_snapshot(a.snapshot(page))) == []

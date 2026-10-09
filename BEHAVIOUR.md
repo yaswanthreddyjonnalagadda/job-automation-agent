@@ -1236,3 +1236,10 @@ document or unavailable evidence remains uncertain. The login flow verifies a ch
 page and does not retry a denied or uncertain action through another button or Enter.
 A guard handoff names the blocked action and current-step uncertainty rather than
 claiming the application has reached final submission.
+
+Workday skill selections are checked again from their committed tags after the page
+is reread. The search box clearing after a selection is expected. An unavailable
+optional skill list can remain intentionally blank; its fresh, field-specific
+required status is checked before continuing. Removed tags, leftover search text,
+unreadable state, or a newly required blank still fail verification. A verified
+optional blank does not repeat the same unavailable searches on each read.

@@ -1,0 +1,19 @@
+{
+  "id": "f132",
+  "date": "2026-10-09",
+  "site": "Workday multi-select skills; shared page-cycle verification",
+  "class": "A cleared widget search box was mistaken for a missing committed answer",
+  "symptom": "After the account fix, the live application stopped at My Experience because optional Type to Add Skills could not retain the proposed skill list.",
+  "root_cause": "The picker already selected skills separately and allowed unavailable optional skills to remain blank. The later page-cycle verifier compared the whole proposed list with the cleared textbox, ignoring committed tags and intentional blank state, then retried until handoff.",
+  "why_tests_missed": "Skill tests checked the picker return, tag contents and cleared query, but did not run apply_answers followed by the production not_stuck verification cycle.",
+  "fix": "Bind successful widget handling to its exact field and requested answer, and re-read committed tags plus fresh field-specific requirement metadata during later verification. Accept supported selected tags or an optional intentional blank, refuse removed selections, leftover queries, unreadable state and newly required blanks, and avoid repeating already verified optional searches.",
+  "tests": [
+    "tests/test_workday_skills.py::test_page_cycle_verifies_skill_tags_or_intentional_optional_blank",
+    "tests/test_workday_skills.py::test_removed_skill_tags_are_not_accepted_from_stale_completion",
+    "tests/test_workday_skills.py::test_optional_skill_blank_cannot_hide_a_new_required_field",
+    "tests/test_workday_skills.py::test_optional_skill_completion_does_not_repeat_unavailable_searches",
+    "tests/test_workday_skills.py::test_skill_requirement_on_label_cannot_be_skipped_as_optional",
+    "tests/test_workday_skills.py::test_skill_requirement_metadata_stays_with_its_field_in_mixed_page"
+  ],
+  "prevention": "Exercise field interaction and the later whole-page verifier together. Treat a widget's search query, committed selections and requirement metadata as distinct evidence, and refresh that evidence before resuming."
+}
