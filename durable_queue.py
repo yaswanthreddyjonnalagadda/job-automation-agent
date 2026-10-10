@@ -205,12 +205,12 @@ class DurableJobQueue:
     def update_status(
         self,
         job_id: str,
-        worker_id: str,
-        new_status: JobState | str,
+        worker_id: Optional[str] = None,
+        new_status: JobState | str = JobState.RUNNING,
         notes: str = "",
         checkpoint_reference: Optional[str] = None,
     ) -> bool:
-        """Updates the state of a leased job."""
+        """Updates the state of a leased or managed job."""
         now = time.time()
         st_val = new_status.value if isinstance(new_status, JobState) else str(new_status)
 
@@ -225,11 +225,16 @@ class DurableJobQueue:
                 query += ", checkpoint_reference = ?"
                 params.append(checkpoint_reference)
 
-            if st_val in (JobState.COMPLETED.value, JobState.FAILED.value, JobState.CANCELLED.value):
+            if st_val in (JobState.COMPLETED.value, JobState.FAILED.value, JobState.CANCELLED.value, JobState.QUEUED.value):
                 query += ", lease_expires_at = NULL"
+                if st_val == JobState.QUEUED.value:
+                    query += ", assigned_worker = NULL, lease_started_at = NULL"
 
-            query += " WHERE job_id = ? AND assigned_worker = ?"
-            params.extend([job_id, worker_id])
+            query += " WHERE job_id = ?"
+            params.append(job_id)
+            if worker_id is not None:
+                query += " AND assigned_worker = ?"
+                params.append(worker_id)
 
             cur = conn.execute(query, params)
             return cur.rowcount > 0

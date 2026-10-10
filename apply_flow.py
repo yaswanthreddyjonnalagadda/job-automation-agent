@@ -1050,12 +1050,32 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             # 29 September -- "Your application was submitted successfully" showed while the run crashed, and the
             # application was recorded as needing the owner).
             if confirmed_after_all(agent, page, tracker, key):
+                if RuntimeEvent is not None:
+                    RuntimeEvent.emit(
+                        event_name=EventName.RUN_STOPPED,
+                        component="apply_flow",
+                        stage="review",
+                        reason_code=ReasonCode.SUCCESS,
+                        display_message="Confirmed by page after error",
+                        is_verified=True,
+                        evidence="page confirmed after error",
+                        application_key=key,
+                    )
                 return
             try:
                 dump_path = dump_forensic_failure(page, reason=f"Unhandled agent error/stall: {exc}", console_logs=getattr(page, "_console_logs", []))
                 tracker.update_status(key, STATUS_NEEDS_USER_REVIEW, notes="Runtime interrupted; sanitized diagnostic capture attempted")
             except Exception as dump_err:
                 logger.error("Failed to dump forensic diagnostics: %s", dump_err)
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.RUN_STOPPED,
+                    component="page_agent",
+                    stage="error",
+                    reason_code=ReasonCode.INTERNAL_ERROR,
+                    display_message=f"Unhandled agent error/stall: {exc}",
+                    application_key=key,
+                )
             raise
 
         page = agent.tab(outcome.page)
@@ -1092,6 +1112,17 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             message = "Submitted by the agent -- the site confirmed it" + (f". Worth checking: {notes}" if notes else "")
             tracker.update_status(key, STATUS_SUBMITTED, notes=message[:1000])
             logger.info("SUBMITTED: %s at %s -- the site confirmed it", job.title, job.company)
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.RUN_STOPPED,
+                    component="page_agent",
+                    stage="submit",
+                    reason_code=ReasonCode.SUCCESS,
+                    display_message=f"Submitted by the agent: {job.title} at {job.company}",
+                    is_verified=True,
+                    evidence="the site confirmed it",
+                    application_key=key,
+                )
             return
         if outcome.kind == "blocked_validation_loop":
             tracker.update_status(
@@ -1104,6 +1135,15 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 dump_forensic_failure(page, reason=f"Validation loop: {outcome.summary}", console_logs=getattr(page, "_console_logs", []))
             except Exception as dump_err:
                 logger.error("Failed to dump forensic diagnostics on validation loop: %s", dump_err)
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.RUN_STOPPED,
+                    component="page_agent",
+                    stage="application",
+                    reason_code=ReasonCode.STALL_DETECTED,
+                    display_message=f"Blocked by validation loop: {outcome.summary}",
+                    application_key=key,
+                )
             return
         if outcome.kind == "disqualified_policy_mismatch":
             tracker.update_status(
@@ -1112,10 +1152,28 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 notes=f"Disqualified: policy mismatch -- {outcome.summary}",
             )
             logger.warning("DISQUALIFIED_POLICY_MISMATCH: %s at %s -- %r", job.title, job.company, outcome.summary)
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.RUN_STOPPED,
+                    component="page_agent",
+                    stage="application",
+                    reason_code=ReasonCode.ACTION_VALIDATION_FAILED,
+                    display_message=f"Disqualified by policy mismatch: {outcome.summary}",
+                    application_key=key,
+                )
             return
         if outcome.kind == "no_sponsorship":
             tracker.update_status(key, STATUS_SKIPPED, notes=f"Skipped: no visa sponsorship -- {outcome.summary}")
             logger.warning("SKIPPED: %s at %s does not sponsor visas -- %r", job.title, job.company, outcome.summary)
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.RUN_STOPPED,
+                    component="page_agent",
+                    stage="application",
+                    reason_code=ReasonCode.ACTION_VALIDATION_FAILED,
+                    display_message=f"Skipped: no visa sponsorship -- {outcome.summary}",
+                    application_key=key,
+                )
             return
 
         # Task 3.3: Enforce the Human-in-the-Loop Review Border
@@ -1139,6 +1197,15 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 decision = assistant.wait_for_signal(signal_path, timeout_seconds=args.timeout, page=page)
             except TimeoutError:
                 logger.info("No instruction received; application left filled and unsubmitted.")
+                if RuntimeEvent is not None:
+                    RuntimeEvent.emit(
+                        event_name=EventName.RUN_STOPPED,
+                        component="apply_flow",
+                        stage="review",
+                        reason_code=ReasonCode.AUTH_REQUIRED,
+                        display_message="Review stop timed out waiting for instruction",
+                        application_key=key,
+                    )
                 return
             if not page.is_closed():
                 agent.note_owner_changes(page)
@@ -1149,12 +1216,41 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 status, note = safety.verification_status(evidence)
                 tracker.update_status(key, status, notes=note)
                 logger.info("SUBMITTED_BY_USER: %s", note)
+                if RuntimeEvent is not None:
+                    RuntimeEvent.emit(
+                        event_name=EventName.RUN_STOPPED,
+                        component="apply_flow",
+                        stage="review",
+                        reason_code=ReasonCode.SUCCESS,
+                        display_message=f"Submitted by user: {note}",
+                        is_verified=True,
+                        evidence=str(evidence)[:200],
+                        application_key=key,
+                    )
                 return
             if decision in RUN_ENDS:
                 remember_progress(tracker, key, page, f"run ended: {decision}", assistant=assistant)
+                if RuntimeEvent is not None:
+                    RuntimeEvent.emit(
+                        event_name=EventName.RUN_STOPPED,
+                        component="apply_flow",
+                        stage="review",
+                        reason_code=ReasonCode.AUTH_REQUIRED,
+                        display_message=f"Application run ended at review: {decision}",
+                        application_key=key,
+                    )
                 return
             if decision in ("skip", "decline", "abort", "quit"):
                 tracker.update_status(key, STATUS_SKIPPED, notes="Skipped by you")
+                if RuntimeEvent is not None:
+                    RuntimeEvent.emit(
+                        event_name=EventName.RUN_STOPPED,
+                        component="apply_flow",
+                        stage="review",
+                        reason_code=ReasonCode.AUTH_REQUIRED,
+                        display_message="Application skipped by user at review",
+                        application_key=key,
+                    )
                 return
             if decision == "reload_code":
                 # Resume at the review stop loads the latest code too; it was taken for Continue, and the page was
@@ -1193,6 +1289,15 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                                                  for_blanks=any("still blank" in r for r in outcome.reasons))
         except TimeoutError:
             logger.info("No instruction received; the application is left as it is, unsubmitted.")
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.RUN_STOPPED,
+                    component="apply_flow",
+                    stage="handoff",
+                    reason_code=ReasonCode.AUTH_REQUIRED,
+                    display_message=f"Handoff timed out waiting for action: {outcome.kind}",
+                    application_key=key,
+                )
             return
         terminal_decisions = (*RUN_ENDS, "submitted_by_user", "skip", "decline", "abort", "quit")
         if decision not in terminal_decisions and hasattr(assistant, "resume_automation"):
@@ -1209,12 +1314,41 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             status, note = safety.verification_status(evidence)
             tracker.update_status(key, status, notes=note)
             logger.info("SUBMITTED_BY_USER: %s", note)
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.RUN_STOPPED,
+                    component="apply_flow",
+                    stage="handoff",
+                    reason_code=ReasonCode.SUCCESS,
+                    display_message=f"Submitted by user during handoff: {note}",
+                    is_verified=True,
+                    evidence=str(evidence)[:200],
+                    application_key=key,
+                )
             return
         if decision in RUN_ENDS:
             remember_progress(tracker, key, page, f"run ended: {decision}", assistant=assistant)
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.RUN_STOPPED,
+                    component="apply_flow",
+                    stage="handoff",
+                    reason_code=ReasonCode.AUTH_REQUIRED,
+                    display_message=f"Run ended during handoff: {decision}",
+                    application_key=key,
+                )
             return
         if decision in ("skip", "decline", "abort", "quit"):
             tracker.update_status(key, STATUS_SKIPPED, notes="Skipped by you")
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.RUN_STOPPED,
+                    component="apply_flow",
+                    stage="handoff",
+                    reason_code=ReasonCode.AUTH_REQUIRED,
+                    display_message=f"Application skipped during handoff: {decision}",
+                    application_key=key,
+                )
             return
         if decision == "reload_code":
             assistant = load_latest_code(agent, assistant, job, experience_data)
@@ -1632,7 +1766,14 @@ def main() -> None:
         help="Optional path to a JSON file with {experience: [...], education: [...]} "
              "structured resume data, used by the 'fill_experience' signal.",
     )
+    parser.add_argument(
+        "--run-id",
+        help="Explicit unique run ID for structured diagnostics correlation",
+    )
     args = parser.parse_args()
+
+    import secrets
+    run_id = args.run_id or f"run_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_{secrets.token_hex(4)}"
 
     experience_data: dict = {}
     if args.experience_json:
@@ -1657,6 +1798,30 @@ def main() -> None:
     refresh_answer_bank(tracker)
     key = dedup_key_for_url(job.url)
     submission_key = submission_effect_key_for_url(job.url)
+
+    if RuntimeEvent is not None:
+        RuntimeEvent.set_current_run(run_id, key)
+
+    diag_consumer = None
+    try:
+        from structured_logging import SchemaBinding, StructuredLogConsumer
+        diag_consumer = StructuredLogConsumer(config.output_dir, SchemaBinding()).start()
+    except Exception as exc:
+        logger.debug("Structured log consumer not initialized: %s", exc)
+
+    import atexit
+    def _cleanup():
+        nonlocal diag_consumer
+        if diag_consumer is not None:
+            try:
+                diag_consumer.close()
+            except Exception:
+                pass
+            diag_consumer = None
+        if RuntimeEvent is not None:
+            RuntimeEvent.clear_current_run()
+    atexit.register(_cleanup)
+
     identity_aliases = set(tracker.submission_keys_for_url(job.url))
     identity_aliases.add(key)
     identity_aliases.discard(submission_key)
@@ -1676,6 +1841,7 @@ def main() -> None:
             stage="init",
             display_message=f"Starting application run for {job.title} at {job.company}",
             application_key=key,
+            run_id=run_id,
             safe_metadata={"title": job.title, "company": job.company, "url": job.url},
         )
 
@@ -1684,6 +1850,16 @@ def main() -> None:
     )
     if effect_state:
         logger.error("Submission for %s is parked for reconciliation", key[:12])
+        if RuntimeEvent is not None:
+            RuntimeEvent.emit(
+                event_name=EventName.RUN_STOPPED,
+                component="apply_flow",
+                stage="init",
+                reason_code=ReasonCode.SUBMISSION_UNCERTAIN,
+                display_message="Submission is parked for reconciliation",
+                application_key=key,
+                run_id=run_id,
+            )
         return
 
     if hasattr(tracker, "find_submitted"):
@@ -1693,9 +1869,29 @@ def main() -> None:
                 "DUPLICATE: %s at %s was already submitted on %s -- not applying again",
                 already.title, already.company, already.updated_at,
             )
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.RUN_STOPPED,
+                    component="apply_flow",
+                    stage="init",
+                    reason_code=ReasonCode.SUCCESS,
+                    display_message=f"Already submitted on {already.updated_at}",
+                    application_key=key,
+                    run_id=run_id,
+                )
             return
         if already:
             logger.error("DUPLICATE: this application was already submitted -- not applying again")
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.RUN_STOPPED,
+                    component="apply_flow",
+                    stage="init",
+                    reason_code=ReasonCode.SUCCESS,
+                    display_message="Already submitted previously",
+                    application_key=key,
+                    run_id=run_id,
+                )
             return
 
     resume = parse_resume(config.resume_path)
@@ -2010,6 +2206,15 @@ def main() -> None:
                     decision = assistant.wait_for_signal(signal_path, timeout_seconds=args.timeout, page=page)
                 except TimeoutError as exc:
                     logger.error("TIMEOUT: %s", exc)
+                    if RuntimeEvent is not None:
+                        RuntimeEvent.emit(
+                            event_name=EventName.RUN_STOPPED,
+                            component="apply_flow",
+                            stage="wizard",
+                            reason_code=ReasonCode.AUTH_REQUIRED,
+                            display_message=f"Timeout waiting for signal: {exc}",
+                            application_key=key,
+                        )
                     return
 
             if decision == "submitted_by_user":
@@ -2027,6 +2232,17 @@ def main() -> None:
                 tracker.update_status(key, status, notes=note)
                 remember_progress(tracker, key, page, "submitted by the user", assistant=assistant)
                 logger.info("SUBMITTED_BY_USER: confirmation seen on %s", page.url)
+                if RuntimeEvent is not None:
+                    RuntimeEvent.emit(
+                        event_name=EventName.RUN_STOPPED,
+                        component="apply_flow",
+                        stage="wizard",
+                        reason_code=ReasonCode.SUCCESS,
+                        display_message=f"Submitted by user in wizard: {note}",
+                        is_verified=True,
+                        evidence=str(evidence)[:200],
+                        application_key=key,
+                    )
                 return
 
             if decision in RUN_ENDS:
@@ -2041,6 +2257,15 @@ def main() -> None:
                 else:
                     logger.info("%s: the application form was never reached; status left as it was",
                                 decision.upper())
+                if RuntimeEvent is not None:
+                    RuntimeEvent.emit(
+                        event_name=EventName.RUN_STOPPED,
+                        component="apply_flow",
+                        stage="wizard",
+                        reason_code=ReasonCode.AUTH_REQUIRED,
+                        display_message=f"Run ended in wizard: {decision}",
+                        application_key=key,
+                    )
                 return
 
             if decision == "reload_code":
@@ -2063,6 +2288,15 @@ def main() -> None:
                     if getattr(assistant, "_stuck_on", "") == "BLOCKED_VALIDATION_LOOP":
                         tracker.update_status(key, STATUS_BLOCKED_VALIDATION_LOOP, notes="Circuit breaker tripped: validation loop detected")
                         logger.error("BLOCKED_VALIDATION_LOOP: circuit breaker tripped in wizard")
+                        if RuntimeEvent is not None:
+                            RuntimeEvent.emit(
+                                event_name=EventName.RUN_STOPPED,
+                                component="apply_flow",
+                                stage="wizard",
+                                reason_code=ReasonCode.STALL_DETECTED,
+                                display_message="Circuit breaker tripped: validation loop detected",
+                                application_key=key,
+                            )
                         return
                     logger.warning("NO_NEXT_BUTTON: nothing to advance to from step %d -- treat this as the final step", step)
                 continue
@@ -2091,6 +2325,15 @@ def main() -> None:
             if decision in ("skip", "decline", "abort", "quit"):
                 tracker.update_status(key, STATUS_SKIPPED, notes=f"User declined at chat review, step {step}")
                 logger.info("DECLINED")
+                if RuntimeEvent is not None:
+                    RuntimeEvent.emit(
+                        event_name=EventName.RUN_STOPPED,
+                        component="apply_flow",
+                        stage="wizard",
+                        reason_code=ReasonCode.AUTH_REQUIRED,
+                        display_message=f"User declined at step {step}: {decision}",
+                        application_key=key,
+                    )
                 return
 
             # Anything unrecognised re-detects instead of quitting. Abandoning

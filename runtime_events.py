@@ -11,6 +11,7 @@ from collections import deque
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from enum import Enum
+import secrets
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -22,6 +23,7 @@ class EventName(str, Enum):
     RUN_STOPPED = "RUN_STOPPED"
     RUN_PAUSED = "RUN_PAUSED"
     RUN_RESUMED = "RUN_RESUMED"
+    RUN_COMPLETED = "RUN_COMPLETED"
 
     # Page classification & navigation
     PAGE_OPENED = "PAGE_OPENED"
@@ -231,9 +233,16 @@ class RuntimeEvent:
 
         clean_meta = _sanitize_metadata(safe_metadata)
 
+        cur_run, cur_app = cls.get_current_run()
+        eff_run = run_id or cur_run
+        if not eff_run or eff_run == "default":
+            eff_run = f"run_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_{secrets.token_hex(4)}"
+
+        eff_app = application_key or cur_app or ""
+
         ev = cls(
-            run_id=run_id or "default",
-            application_key=application_key or "",
+            run_id=eff_run,
+            application_key=eff_app,
             event=ev_enum,
             timestamp=now_iso,
             component=component,
@@ -292,7 +301,37 @@ class RuntimeEvent:
         with _GLOBAL_BUFFER_LOCK:
             _GLOBAL_EVENT_BUFFER.clear()
 
+    @classmethod
+    def set_current_run(cls, run_id: str, application_key: Optional[str] = None) -> None:
+        """Bind active run_id and application_key to the current thread and execution context."""
+        _CURRENT_RUN_CONTEXT.run_id = run_id
+        if application_key:
+            _CURRENT_RUN_CONTEXT.application_key = application_key
+        global _GLOBAL_FALLBACK_RUN, _GLOBAL_FALLBACK_APP
+        _GLOBAL_FALLBACK_RUN = run_id
+        if application_key:
+            _GLOBAL_FALLBACK_APP = application_key
+
+    @classmethod
+    def get_current_run(cls) -> tuple[Optional[str], Optional[str]]:
+        """Return the active (run_id, application_key) for the current execution."""
+        r_id = getattr(_CURRENT_RUN_CONTEXT, "run_id", None) or _GLOBAL_FALLBACK_RUN
+        a_key = getattr(_CURRENT_RUN_CONTEXT, "application_key", None) or _GLOBAL_FALLBACK_APP
+        return r_id, a_key
+
+    @classmethod
+    def clear_current_run(cls) -> None:
+        """Clear the active run context."""
+        _CURRENT_RUN_CONTEXT.run_id = None
+        _CURRENT_RUN_CONTEXT.application_key = None
+        global _GLOBAL_FALLBACK_RUN, _GLOBAL_FALLBACK_APP
+        _GLOBAL_FALLBACK_RUN = None
+        _GLOBAL_FALLBACK_APP = None
+
 
 _GLOBAL_BUFFER_LOCK = threading.RLock()
 _GLOBAL_EVENT_BUFFER: deque[RuntimeEvent] = deque(maxlen=2000)
 _EVENT_LISTENERS: List[Any] = []
+_CURRENT_RUN_CONTEXT = threading.local()
+_GLOBAL_FALLBACK_RUN: Optional[str] = None
+_GLOBAL_FALLBACK_APP: Optional[str] = None

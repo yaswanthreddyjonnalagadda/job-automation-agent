@@ -164,7 +164,7 @@ class WorkerDaemon:
 
     def _execute_job(self, job: QueuedJob) -> None:
         """Executes apply.py in a dedicated subprocess for the claimed job."""
-        cmd = [sys.executable, "apply.py", job.job_url]
+        cmd = [sys.executable, "apply.py", job.job_url, "--run-id", job.job_id]
         logger.info("Launching execution: %s", " ".join(cmd))
 
         try:

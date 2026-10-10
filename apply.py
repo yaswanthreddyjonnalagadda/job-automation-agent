@@ -126,7 +126,7 @@ def read_job(url: str) -> dict | None:
     return job
 
 
-def run_one(url: str, auto: bool = True, open_url: str = "") -> int:
+def run_one(url: str, auto: bool = True, open_url: str = "", run_id: str = "") -> int:
     job = read_job(url)
     if not job:
         logger.error("Could not read a job description from %s", url)
@@ -152,6 +152,8 @@ def run_one(url: str, auto: bool = True, open_url: str = "") -> int:
         "--signal-file", str(signal_path),
         "--timeout", "3600",
     ]
+    if run_id:
+        cmd += ["--run-id", run_id]
     if open_url:
         cmd += ["--open-url", open_url]
     experience = DATA_DIR / "_experience.json"
@@ -191,6 +193,12 @@ def main() -> int:
         open_url = urls[at + 1] if at + 1 < len(urls) else ""
         urls = urls[:at] + urls[at + 2:]
 
+    run_id = ""
+    if "--run-id" in urls:
+        at = urls.index("--run-id")
+        run_id = urls[at + 1] if at + 1 < len(urls) else ""
+        urls = urls[:at] + urls[at + 2:]
+
     auto = False
     if "--auto" in urls:
         auto = True
@@ -198,7 +206,7 @@ def main() -> int:
 
     outcomes = []
     for url in urls:
-        outcomes.append(run_one(unquote(url) if "%" not in url else url, auto=auto or True, open_url=open_url))
+        outcomes.append(run_one(unquote(url) if "%" not in url else url, auto=auto or True, open_url=open_url, run_id=run_id))
     if len(outcomes) == 1:
         return outcomes[0]
     return 1 if any(code != 0 and code not in run_outcomes.EXPECTED_STOPS for code in outcomes) else 0
