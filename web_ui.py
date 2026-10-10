@@ -1195,6 +1195,48 @@ def health_check():
             "message": f"Database unavailable: {str(exc).splitlines()[0][:100]}",
         }
 
+    # 6. Remote Worker & Offload Architecture
+    all_workers = []
+    local_fallback = False
+    try:
+        from remote_client import RemoteControlClient
+        client = RemoteControlClient(BASE_DIR)
+        remote_w = client.get_active_remote_worker()
+        local_fallback = client.local_fallback_enabled
+        all_workers = client.get_system_workers()
+
+        if remote_w:
+            metrics = remote_w.metrics or {}
+            cpu = metrics.get("cpu_percent", "N/A")
+            mem = metrics.get("memory_percent", "N/A")
+            disk = metrics.get("disk_free_gb", "N/A")
+            checks["remote_worker"] = {
+                "title": "Oracle Runtime Worker",
+                "ok": True,
+                "message": f"Worker '{remote_w.worker_id}' is {remote_w.status.value} (CPU: {cpu}%, RAM: {mem}%, Free Disk: {disk} GB, SHA: {remote_w.git_sha[:8]})",
+            }
+        else:
+            checks["remote_worker"] = {
+                "title": "Oracle Runtime Worker",
+                "ok": local_fallback,
+                "message": (
+                    "Local fallback active (ENABLE_LOCAL_FALLBACK=1)"
+                    if local_fallback
+                    else "ORACLE WORKER OFFLINE: Remote execution is required. Local execution disabled to protect Windows resources."
+                ),
+                "hint": (
+                    "Deploy remote worker via `scripts/remote/bootstrap_worker.sh`."
+                    if not local_fallback
+                    else "Local laptop execution enabled. CPU/RAM usage will increase during applications."
+                ),
+            }
+    except Exception as exc:
+        checks["remote_worker"] = {
+            "title": "Oracle Runtime Worker",
+            "ok": False,
+            "message": f"Worker manager error: {exc}",
+        }
+
     all_ok = all(c["ok"] for c in checks.values())
     status_str = "ok" if all_ok else "warning"
 
@@ -1205,8 +1247,10 @@ def health_check():
             ui_shell.page("System Health &middot; Job Agent", body_html),
             checks=checks,
             status=status_str,
+            workers=all_workers,
+            local_fallback=local_fallback,
         )
-    return {"status": status_str, "checks": checks}
+    return {"status": status_str, "checks": checks, "workers": all_workers, "local_fallback": local_fallback}
 
 
 # ----------------------------------------------------------------------
