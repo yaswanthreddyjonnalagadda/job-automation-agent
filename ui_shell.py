@@ -243,8 +243,11 @@ HEAD = """<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
+<meta name="csrf-token" content="{{ csrf_token }}">
 <link rel="icon" href=\"""" + FAVICON + """\">
+<link rel="stylesheet" href="/static/cockpit.css">
 <style>""" + BASE_CSS + """</style>
+<script src="/static/cockpit.js" defer></script>
 """
 
 # The header every page shows. `request` is Flask's; the tab for the current page is marked.
@@ -257,6 +260,7 @@ HEADER = """
     <a href="/profile" class="{{ 'active' if request.path in ('/profile', '/setup') }}">Profile</a>
     <a href="/answers" class="{{ 'active' if request.path == '/answers' }}">Saved answers</a>
     <a href="/settings" class="{{ 'active' if request.path == '/settings' }}">Settings</a>
+    <a href="/health" class="{{ 'active' if request.path == '/health' }}">System Health</a>
   </nav>
 </div></header>
 """

@@ -1,0 +1,18 @@
+{
+  "id": "f137",
+  "date": "2026-10-09",
+  "site": "Chipotle / generic employer postings",
+  "class": "Application-entry navigation conflicts with final-submit containment",
+  "symptom": "Apply Now on a posting was intercepted as final submission before the application opened.",
+  "root_cause": "The shared submit vocabulary intentionally includes Apply Now, while navigation attempted a normal click on that label. Social destinations could also be concealed behind generic link labels.",
+  "why_tests_missed": "Guard tests exercised final controls and navigation tests used unguarded browsers; the intersection of a guarded posting and real application-entry link was missing.",
+  "fix": "Follow a verified posting anchor with HTTP GET without dispatching click handlers or relaxing the guard. Keep buttons, fragment links and final submission guarded; reject social/job-board destinations by centralized sourcing policy.",
+  "tests": [
+    "tests/test_run_recovery_regressions.py::test_application_entry_follows_the_link_without_dispatching_submit_handlers",
+    "tests/test_run_recovery_regressions.py::test_page_agent_application_entry_uses_the_verified_navigation_path",
+    "tests/test_run_recovery_regressions.py::test_apply_on_a_completed_form_remains_guarded",
+    "tests/test_run_recovery_regressions.py::test_social_destinations_are_rejected_even_when_labelled_apply",
+    "tests/test_run_recovery_regressions.py::test_social_host_matching_does_not_block_unrelated_employers"
+  ],
+  "prevention": "Test entry navigation with the production submission guard enabled and with hostile click handlers. Never add a generic click exemption for Apply labels."
+}

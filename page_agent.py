@@ -48,6 +48,17 @@ import account_state
 import job_sources
 import answer_bank
 from claude_integration import JOB_POSTING_CHARS, is_non_answer
+try:
+    from runtime_events import RuntimeEvent, EventName, ReasonCode, AnswerSource
+except ImportError:
+    try:
+        import sys
+        _pkg_root = str(Path(__file__).resolve().parent)
+        if _pkg_root not in sys.path:
+            sys.path.insert(0, _pkg_root)
+        from runtime_events import RuntimeEvent, EventName, ReasonCode, AnswerSource
+    except Exception:
+        RuntimeEvent = None
 import employment_history
 import form_fields
 from field_requirements import account_password_fields
@@ -1828,6 +1839,35 @@ class PageAgent:
             return
         self._account_seen[host] = seen
         logger.info("ACCOUNT_STATE: %s -> %s%s", state, step.action, f" ({step.why[:100]})" if step.why else "")
+        app_key = getattr(self, "key", "")
+        if RuntimeEvent is not None:
+            RuntimeEvent.emit(
+                event_name=EventName.ACCOUNT_STATE_DETECTED,
+                component="account_state",
+                stage="account",
+                display_message=f"Account state: {state.kind} -> {step.action}",
+                application_key=app_key,
+                safe_metadata={"kind": state.kind, "action": step.action, "host": host},
+            )
+            if state.kind == account_state.MFA_REQUIRED:
+                RuntimeEvent.emit(
+                    event_name=EventName.MFA_DETECTED,
+                    component="account_state",
+                    stage="account",
+                    reason_code=ReasonCode.MFA_REQUIRED,
+                    display_message=f"MFA challenge detected: {step.why[:80]}",
+                    application_key=app_key,
+                    safe_metadata={"host": host},
+                )
+            elif state.kind in (account_state.VERIFY_EMAIL, account_state.CODE_ENTRY):
+                RuntimeEvent.emit(
+                    event_name=EventName.EMAIL_VERIFICATION_REQUIRED,
+                    component="account_state",
+                    stage="account",
+                    display_message=f"Email verification required: {state.kind}",
+                    application_key=app_key,
+                    safe_metadata={"host": host},
+                )
         if self.job_dir is None:
             return
         try:
@@ -2783,11 +2823,39 @@ class PageAgent:
                 action = "check" if value.strip().lower() not in ("no", "false", "0", "unchecked") else "uncheck"
             try:
                 answer = Answer(control.ref, control.question, action, value, source)
+                app_key = getattr(self, "key", "")
+                if RuntimeEvent is not None:
+                    RuntimeEvent.emit(
+                        event_name=EventName.QUESTION_DETECTED,
+                        component="page_agent",
+                        stage="form_filling",
+                        display_message=f"Question detected: {control.question[:80]}",
+                        application_key=app_key,
+                        safe_metadata={"question": control.question[:100], "role": control.role},
+                    )
+                    RuntimeEvent.emit(
+                        event_name=EventName.ANSWER_SELECTED,
+                        component="page_agent",
+                        stage="form_filling",
+                        display_message=f"Selected answer for {control.question[:50]}: {str(value)[:40]}",
+                        application_key=app_key,
+                        safe_metadata={"question": control.question[:100], "answer": str(value)[:100], "source": str(source)},
+                    )
                 if self.do(page, answer, control):
                     filled += 1
                     self.written[control.question] = answer.value
                     self._remember(control, answer)
                     logger.info('FIELD_ACTION: application field handled')
+                    if RuntimeEvent is not None:
+                        RuntimeEvent.emit(
+                            event_name=EventName.ANSWER_WRITTEN,
+                            component="page_agent",
+                            stage="form_filling",
+                            display_message=f"Wrote answer to {control.question[:50]}",
+                            is_verified=True,
+                            application_key=app_key,
+                            safe_metadata={"question": control.question[:100], "answer": str(value)[:100], "source": str(source)},
+                        )
                     # Quiescence check: if Country was updated, let network settle before filling dependent fields
                     if re.search(r"^\s*country(/region)?( of residence)?\s*:?\s*\*?\s*$", control.question or "", re.I):
                         logger.info("LOCATION_SWEEP: Country answered; waiting for network quiescence...")
@@ -2963,6 +3031,16 @@ class PageAgent:
             except Exception:
                 pass
             if safety.captcha_visible(page):
+                if RuntimeEvent is not None:
+                    RuntimeEvent.emit(
+                        event_name=EventName.CAPTCHA_DETECTED,
+                        component="page_agent",
+                        stage="form_filling",
+                        reason_code=ReasonCode.CAPTCHA_REQUIRED,
+                        display_message="CAPTCHA challenge detected on page",
+                        application_key=getattr(self, "key", ""),
+                        safe_metadata={"url": page.url},
+                    )
                 return Outcome("captcha", page, ["a CAPTCHA is showing -- only you can complete it"])
             if getattr(self.profile, "requires_visa_sponsorship", False):
                 disqualified, clause, shot = safety.check_visa_sponsorship_shield(
@@ -4028,6 +4106,22 @@ class PageAgent:
                 note = f"corrected {control.question[:70]!r} from {was[:40]!r} to {value[:40]!r} (from your {source})"
                 self.notes.append(note)
                 logger.info("CORRECTED: %s", note)
+                if RuntimeEvent is not None:
+                    RuntimeEvent.emit(
+                        event_name=EventName.ANSWER_CORRECTED,
+                        component="page_agent",
+                        stage="form_filling",
+                        display_message=f"Corrected '{control.question[:50]}' to '{value[:40]}' (was '{was[:40]}')",
+                        is_verified=True,
+                        application_key=getattr(self, "key", ""),
+                        safe_metadata={
+                            "question": control.question[:100],
+                            "previous_value": was[:100],
+                            "new_value": value[:100],
+                            "source": str(source),
+                            "reason": f"from your {source}",
+                        },
+                    )
         return given + self._correct_entries(page, controls, policy) + self._clear_none_boxes(page, controls, policy)
 
     def _clear_none_boxes(self, page, controls: list[Control], policy: str) -> list[tuple[Answer, Control]]:
@@ -5825,12 +5919,25 @@ class PageAgent:
         else:
             logger.info("NEXT: pressing %r", label)
 
+        locator = self.locate(page, control.ref)
+        try:
+            href = locator.evaluate("e => (e.closest('a[href]') || {}).href || ''")
+        except Exception:
+            href = ""
+        if href and job_sources.job_board(href):
+            return "stop", page, "the proposed navigation leads to a social site or job board"
+        if plan.next_kind == "open_application" and hasattr(self.assistant, "follow_application_entry"):
+            if self.assistant.follow_application_entry(tab, locator):
+                self.settle(page, 2_500)
+                return "moved", page, "followed the posting's application link"
+
         # Task 4.1: Deploy the State Fingerprint Circuit Breaker
         if not hasattr(self, "_circuit_breaker") or self._circuit_breaker is None:
             from state_machine import StateFingerprintCircuitBreaker
             self._circuit_breaker = StateFingerprintCircuitBreaker(consecutive_threshold=3)
 
         tripped, state, meta = self._circuit_breaker.check(tab)
+        app_key = getattr(self, "key", "")
         if tripped:
             logger.warning("CIRCUIT BREAKER TRIPPED in press_next: %s across 3 consecutive cycles", state)
             dump_dir = self._circuit_breaker.trip_and_dump(
@@ -5840,6 +5947,25 @@ class PageAgent:
                 key=getattr(self, "key", ""),
                 console_logs=getattr(tab, "_console_logs", []),
             )
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.LOOP_DETECTED,
+                    component="circuit_breaker",
+                    stage="navigation",
+                    reason_code=ReasonCode.STALL_DETECTED,
+                    display_message=f"Loop detected across consecutive cycles: {state}",
+                    application_key=app_key,
+                    safe_metadata={"fingerprint": state, "dump_dir": str(dump_dir)},
+                )
+                RuntimeEvent.emit(
+                    event_name=EventName.CIRCUIT_BREAKER_TRIGGERED,
+                    component="circuit_breaker",
+                    stage="navigation",
+                    reason_code=ReasonCode.STALL_DETECTED,
+                    display_message="Circuit breaker tripped after repeated identical page states",
+                    application_key=app_key,
+                    safe_metadata={"fingerprint": state},
+                )
             # A page that will not move on needs the owner, like every other
             # stop: the run hands the open browser over instead of ending
             # with the application abandoned. The evidence is kept either way.
@@ -5853,12 +5979,32 @@ class PageAgent:
             still = ("; still blank and required: " + " | ".join(q[:90] for q in blank[:10])) if blank else ""
             return "stop", page, (f"the page did not change after three tries -- stuck in a validation loop "
                                   f"({state}); evidence in {dump_dir}{still}")
+        elif meta and meta.get("consecutive", 0) >= 2:
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.STALL_WARNING,
+                    component="circuit_breaker",
+                    stage="navigation",
+                    reason_code=ReasonCode.STALL_DETECTED,
+                    display_message=f"Potential stall: identical page state observed {meta.get('consecutive')} times",
+                    application_key=app_key,
+                    safe_metadata={"consecutive": meta.get("consecutive", 0)},
+                )
 
         before = re.sub(r"\[ref=[\w-]+\]|\[active\]", "", self.snapshot(page))
         tabs_before = len(tab.context.pages)
         pressed_at = time.time()
         guard = getattr(self.assistant, "_submission_guard", None)
         denials_before = guard.denial_count(tab) if guard is not None else None
+        if RuntimeEvent is not None:
+            RuntimeEvent.emit(
+                event_name=EventName.NAVIGATION_ATTEMPTED,
+                component="page_agent",
+                stage="navigation",
+                display_message=f"Attempting navigation click: {label[:50]}",
+                application_key=app_key,
+                safe_metadata={"label": label[:80]},
+            )
         if OPENS_A_FILE_DIALOG.search(label) and self.resume_file and Path(self.resume_file).is_file():
             try:
                 with tab.expect_file_chooser(timeout=6_000) as chooser:
@@ -5888,6 +6034,16 @@ class PageAgent:
         after = re.sub(r"\[ref=[\w-]+\]|\[active\]", "", self.snapshot(page))
         if after == before:
             alerts = [c for c in re.findall(r"- alert[^:\n]*: (.+)", self.snapshot(page))][:5]
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.NAVIGATION_NO_CHANGE,
+                    component="page_agent",
+                    stage="navigation",
+                    reason_code=ReasonCode.NAVIGATION_FAILED,
+                    display_message=f"Navigation produced no change after pressing {label[:40]}",
+                    is_verified=False,
+                    application_key=app_key,
+                )
             return "retry", page, ("the page did not move on" +
                                    (f"; it says: {'; '.join(alerts)}" if alerts else ""))
         # The ref-stripped text changed, but a validation error may still be visibly present
@@ -5906,7 +6062,27 @@ class PageAgent:
                                 "error_count": len(post_press_errors)})
                 except Exception as exc:
                     logger.debug("Could not record the validation-failed press: %s", exc)
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.NAVIGATION_NO_CHANGE,
+                    component="page_agent",
+                    stage="navigation",
+                    reason_code=ReasonCode.ACTION_VALIDATION_FAILED,
+                    display_message=f"Form showed error after navigation: {'; '.join(post_press_errors[:3])}",
+                    is_verified=False,
+                    application_key=app_key,
+                )
             return "retry", page, f"the form shows an error: {'; '.join(post_press_errors[:5])}"
+        if RuntimeEvent is not None:
+            RuntimeEvent.emit(
+                event_name=EventName.NAVIGATION_VERIFIED,
+                component="page_agent",
+                stage="navigation",
+                display_message=f"Navigation verified after pressing {label[:40]}",
+                is_verified=True,
+                evidence="page_content_changed",
+                application_key=app_key,
+            )
         return "moved", page, ""
 
     def submit_gate(self, page, controls: list[Control], last_step: bool = True) -> str:
@@ -5925,6 +6101,16 @@ class PageAgent:
         # A button that says Submit on a step with more to come: it saves the step, and gets every check but the
         # finished-application ones. The old AUTO_SUBMIT setting plays no part.
         if safety.captcha_visible(page):
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.CAPTCHA_DETECTED,
+                    component="page_agent",
+                    stage="form_filling",
+                    reason_code=ReasonCode.CAPTCHA_REQUIRED,
+                    display_message="CAPTCHA challenge detected on page",
+                    application_key=getattr(self, "key", ""),
+                    safe_metadata={"url": page.url},
+                )
             return "a CAPTCHA is showing -- only you can complete it"
         conflicts = safety.legal_answer_conflicts(answered_fields(controls), self.profile)
         if conflicts:

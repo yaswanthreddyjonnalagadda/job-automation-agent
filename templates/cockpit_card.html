@@ -1,0 +1,128 @@
+<!-- Live Agent Cockpit Card Partial -->
+<section id="live-cockpit-card" class="cockpit-card {% if is_running %}is-active{% endif %}" aria-label="Live Agent Cockpit">
+  <!-- Header -->
+  <div class="cockpit-header">
+    <div class="cockpit-title-wrap">
+      <div id="cockpit-dot" class="cockpit-status-dot {% if is_running %}pulsing{% endif %}"></div>
+      <div>
+        <h2 id="cockpit-job-title" class="cockpit-heading">{{ job_title or 'Live Application Cockpit' }}</h2>
+        <div id="cockpit-employer" class="cockpit-subheading">{{ employer or 'No active application running' }}</div>
+      </div>
+    </div>
+    <div class="cockpit-badges">
+      <span id="cockpit-status-text" class="badge badge-stage">{{ stage or 'Idle' }}</span>
+      <span id="cockpit-stall-badge" class="badge badge-stall-normal">Normal</span>
+      <span id="cockpit-timer" class="badge badge-timer">00:00</span>
+    </div>
+  </div>
+
+  <!-- Stepper -->
+  <div id="cockpit-stepper" class="cockpit-stepper" role="progressbar" aria-label="Application Progress Steps">
+    <div class="step-item is-active">
+      <div class="step-circle">1</div>
+      <div class="step-label">Start</div>
+    </div>
+    <div class="step-connector"></div>
+    <div class="step-item">
+      <div class="step-circle">2</div>
+      <div class="step-label">Auth</div>
+    </div>
+    <div class="step-connector"></div>
+    <div class="step-item">
+      <div class="step-circle">3</div>
+      <div class="step-label">Form Fill</div>
+    </div>
+    <div class="step-connector"></div>
+    <div class="step-item">
+      <div class="step-circle">4</div>
+      <div class="step-label">Review</div>
+    </div>
+    <div class="step-connector"></div>
+    <div class="step-item">
+      <div class="step-circle">5</div>
+      <div class="step-label">Submit</div>
+    </div>
+  </div>
+
+  <!-- Challenge / Handoff Banner (dynamic) -->
+  <div id="cockpit-challenge-banner" class="challenge-banner" style="display:none;"></div>
+
+  <!-- Live State Grid -->
+  <div class="cockpit-grid">
+    <div class="state-card">
+      <div class="state-label">Current Agent Action</div>
+      <div id="cockpit-current-action" class="state-value">Ready to launch application</div>
+    </div>
+    <div class="state-card">
+      <div class="state-label">Last Verified Action</div>
+      <div id="cockpit-last-verified" class="state-value">None recorded</div>
+    </div>
+  </div>
+
+  <!-- Action Controls Bar -->
+  <div class="cockpit-controls">
+    <div class="controls-group">
+      <button type="button" class="btn-control primary" onclick="window.Cockpit.resumeRun()" title="Resume current run">
+        ▶ Resume
+      </button>
+      <button type="button" class="btn-control" disabled title="Pause is unavailable for this run">
+        ⏸ Pause
+      </button>
+      <button type="button" class="btn-control" onclick="window.Cockpit.raiseBrowser()" title="Bring browser window to foreground">
+        🪟 Raise Browser
+      </button>
+    </div>
+    <div class="controls-group">
+      <button type="button" class="btn-control danger" onclick="window.Cockpit.stopRun()" title="Stop and cancel current application">
+        ⏹ Cancel Run
+      </button>
+    </div>
+  </div>
+
+  <!-- Tabs Navigation -->
+  <div class="cockpit-tabs">
+    <button type="button" id="tab-btn-timeline" class="cockpit-tab-btn active" onclick="window.Cockpit.setTab('timeline')">
+      Live Timeline Feed
+    </button>
+    <button type="button" id="tab-btn-ledger" class="cockpit-tab-btn" onclick="window.Cockpit.setTab('ledger')">
+      Answer Transparency Ledger
+    </button>
+  </div>
+
+  <!-- Tab Content: Timeline Feed -->
+  <div id="tab-content-timeline" class="cockpit-tab-content">
+    <div class="event-filter-bar">
+      <button type="button" id="filter-all" class="filter-chip active" onclick="window.Cockpit.setFilter('all')">All Events</button>
+      <button type="button" id="filter-verified" class="filter-chip" onclick="window.Cockpit.setFilter('verified')">Verified Only</button>
+      <button type="button" id="filter-challenges" class="filter-chip" onclick="window.Cockpit.setFilter('challenges')">Challenges &amp; Handoffs</button>
+      <button type="button" id="filter-errors" class="filter-chip" onclick="window.Cockpit.setFilter('errors')">Warnings &amp; Loops</button>
+    </div>
+    <ul id="cockpit-timeline-list" class="timeline-list">
+      <li class="timeline-item"><span class="muted">Awaiting runtime events...</span></li>
+    </ul>
+  </div>
+
+  <!-- Tab Content: Answer Transparency Ledger -->
+  <div id="tab-content-ledger" class="cockpit-tab-content" style="display:none;">
+    <div style="margin-bottom:12px;font-size:12px;color:var(--muted)">
+      Every answer filled on this form, its origin provenance, and any corrections made to ensure accuracy.
+    </div>
+    <div style="overflow-x:auto;">
+      <table class="ledger-table">
+        <thead>
+          <tr>
+            <th>Question</th>
+            <th>Answer</th>
+            <th>Provenance Source</th>
+            <th>Status</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="cockpit-ledger-body">
+          <tr><td colspan="5" class="muted" style="text-align:center;padding:16px;">No answers recorded yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+

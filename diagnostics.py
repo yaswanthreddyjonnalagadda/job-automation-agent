@@ -434,6 +434,11 @@ def retention_days(value=None) -> int:
 
 
 DIAGNOSTIC_FILES = {'page.png','page.html','screenshot.png','page_state.html','axtree_dump.json','console_logs.json','failure_meta.json','manifest.json','review_screenshot.png','review_page.html','review_summary.json','comparison.json','validation.json','submitted_confirmation.png'}
+STRUCTURED_FILES = frozenset({'run_events.jsonl', 'summary.json', 'timeline.jsonl',
+    'state_transitions.json', 'action_history.json', 'stop_context.json',
+    'safe_errors.json', 'checkpoint_summary.json', 'handoff_summary.json',
+    'stop_summary.txt', 'copy_for_agent.txt'})
+DIAGNOSTIC_FILES.update(STRUCTURED_FILES)
 DIAGNOSTIC_PATTERNS = re.compile(r'^(?:stopped_.*\.(?:png|txt)|dropdown_dump_.*\.txt|forensic_disqualified_policy_mismatch_.*\.png|page_\d+\.txt|(?:ui_run|run)_.*\.(?:log|jsonl))$')
 
 
@@ -473,10 +478,22 @@ def cleanup_expired_diagnostics(base_dir: Path, days=None, active_dir=None, now=
                     # recovery). `account/` is unaffected: it holds only this run's own
                     # account-state diagnostic screenshots, never permanent recordings.
                     root = folder.relative_to(base_dir).parts[0]
-                    allowed = (root=='output' and depth==0) or (root=='output' and depth==1 and (path.name.startswith(('evidence_','step_')) or path.name=='account')) or (root=='runs' and depth==0) or (root=='logs' and path.name=='account_failures' and depth==0)
+                    structured = (root == 'output' and (
+                        (depth == 1 and path.name == 'diagnostics') or
+                        (depth == 2 and folder.name == 'diagnostics' and re.fullmatch(r'[0-9a-f]{64}', path.name)) or
+                        (depth == 3 and folder.parent.name == 'diagnostics' and path.name == 'stop_cause')))
+                    allowed = structured or (root=='output' and depth==0) or (root=='output' and depth==1 and (path.name.startswith(('evidence_','step_')) or path.name=='account')) or (root=='runs' and depth==0) or (root=='logs' and path.name=='account_failures' and depth==0)
                     if allowed:
                         stack.append((path,depth+1))
                 elif path.is_file() and _safe_artifact_name(path.name) and path.stat().st_mtime <= cutoff:
+                    # Generic names such as summary.json may also be job materials.
+                    # New names are retention-eligible only inside our exact subtree.
+                    if path.name in STRUCTURED_FILES:
+                        parts = path.relative_to(base_dir).parts
+                        if not (len(parts) in {5, 6} and parts[0] == 'output'
+                                and parts[2] == 'diagnostics' and re.fullmatch(r'[0-9a-f]{64}', parts[3])
+                                and (len(parts) == 5 or parts[4] == 'stop_cause')):
+                            continue
                     path.unlink()
                     removed += 1
             if folder.name.startswith(('evidence_','step_')) or folder.parent.name=='runs':

@@ -165,8 +165,134 @@ def build(
     caller already knows a more precise one (e.g. P0-B3's recovery.reconcile() outcome)."""
     resolved_category = category if category in _CATEGORIES else classify(
         outcome_kind=outcome_kind, reason_text=reason_text)
-    return Handoff(
+    h = Handoff(
         application_key=application_key, employer=employer, portal=portal, stage=stage,
         category=resolved_category, reason=reason_text, required_action=required_action,
         work_completed=work_completed, resume_condition=resume_condition_for(resolved_category),
     )
+    set_active_handoff(h)
+    return h
+
+
+# ----------------------------------------------------------------------
+# Active handoff management & telemetry integration
+# ----------------------------------------------------------------------
+import threading
+import time
+
+_ACTIVE_HANDOFF_LOCK = threading.RLock()
+_ACTIVE_HANDOFF: Optional[dict] = None
+
+
+def set_active_handoff(h: Handoff, handoff_id: Optional[str] = None) -> dict:
+    """Registers an active handoff and emits a structured telemetry event."""
+    global _ACTIVE_HANDOFF
+    import secrets
+    from runtime_events import RuntimeEvent, EventName, ReasonCode
+
+    hid = handoff_id or secrets.token_urlsafe(16)
+    data = {
+        "handoff_id": hid,
+        "application_key": h.application_key,
+        "employer": h.employer,
+        "portal": h.portal,
+        "stage": h.stage,
+        "category": h.category,
+        "reason": h.reason,
+        "required_action": h.required_action,
+        "work_completed": h.work_completed,
+        "resume_condition": h.resume_condition,
+        "created_at": time.time(),
+        "status": "PENDING",
+    }
+    with _ACTIVE_HANDOFF_LOCK:
+        _ACTIVE_HANDOFF = data
+
+    # Map category to telemetry reason code
+    rc = ReasonCode.AUTH_REQUIRED
+    if h.category == CAPTCHA:
+        rc = ReasonCode.CAPTCHA_REQUIRED
+        ev_name = EventName.CAPTCHA_DETECTED
+    elif h.category in (SMS_MFA, AUTHENTICATOR_MFA, SECURITY_KEY, PUSH_APPROVAL):
+        rc = ReasonCode.MFA_REQUIRED
+        ev_name = EventName.MFA_DETECTED
+    else:
+        ev_name = EventName.HANDOFF_CREATED
+
+    RuntimeEvent.emit(
+        event_name=ev_name,
+        component="handoff",
+        stage=h.stage or "handoff",
+        display_message=h.compose_message(),
+        reason_code=rc,
+        application_key=h.application_key,
+        safe_metadata={
+            "handoff_id": hid,
+            "category": h.category,
+            "employer": h.employer,
+            "portal": h.portal,
+            "resume_condition": h.resume_condition,
+            "required_action": h.required_action,
+            "work_completed": h.work_completed,
+        },
+    )
+    return data
+
+
+def get_active_handoff(application_key: Optional[str] = None) -> Optional[dict]:
+    """Returns the current active handoff session, optionally matching application_key."""
+    with _ACTIVE_HANDOFF_LOCK:
+        if _ACTIVE_HANDOFF is None:
+            return None
+        if application_key and _ACTIVE_HANDOFF.get("application_key") != application_key:
+            return None
+        return dict(_ACTIVE_HANDOFF)
+
+
+def clear_active_handoff(handoff_id: Optional[str] = None) -> None:
+    """Clears the active handoff session."""
+    global _ACTIVE_HANDOFF
+    with _ACTIVE_HANDOFF_LOCK:
+        if handoff_id and _ACTIVE_HANDOFF and _ACTIVE_HANDOFF.get("handoff_id") != handoff_id:
+            return
+        _ACTIVE_HANDOFF = None
+
+
+def resolve_active_handoff(
+    application_key: Optional[str] = None,
+    live_verification_fn: Optional[callable] = None,
+) -> tuple[bool, str]:
+    """Attempts to resolve the active handoff.
+
+    Requires positive verification evidence when live_verification_fn is provided
+    (B3 / B4 invariant: clicking does NOT equal verification).
+    """
+    global _ACTIVE_HANDOFF
+    from runtime_events import RuntimeEvent, EventName
+
+    with _ACTIVE_HANDOFF_LOCK:
+        if _ACTIVE_HANDOFF is None:
+            return True, "No active handoff to resolve"
+        if application_key and _ACTIVE_HANDOFF.get("application_key") != application_key:
+            return False, "Active handoff does not match application"
+
+        if live_verification_fn is not None:
+            ok, msg = live_verification_fn()
+            if not ok:
+                return False, f"Condition not verified on live page: {msg}"
+
+        hid = _ACTIVE_HANDOFF.get("handoff_id")
+        app_key = _ACTIVE_HANDOFF.get("application_key")
+        _ACTIVE_HANDOFF = None
+
+    RuntimeEvent.emit(
+        event_name=EventName.HANDOFF_RESOLVED,
+        component="handoff",
+        stage="resolution",
+        display_message="Human handoff resolved and verified",
+        is_verified=True,
+        application_key=app_key,
+        safe_metadata={"handoff_id": hid},
+    )
+    return True, "Handoff resolved successfully"
+

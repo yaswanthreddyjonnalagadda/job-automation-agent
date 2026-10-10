@@ -26,6 +26,7 @@ logger = logging.getLogger("job_sources")
 BLOCKED_SOURCES = ("linkedin.com", "indeed.com", "dice.com", "adzuna.", "ziprecruiter.com", "glassdoor.",
                    "monster.com", "careerbuilder.com", "simplyhired.com", "talent.com", "jooble.org", "jobrapido.com",
                    "lensa.com", "jobgether.com", "snagajob.com", "joblist.com", "ladders.com")
+SOCIAL_HOSTS = ("facebook.com", "instagram.com", "twitter.com", "t.co", "x.com")
 
 # Aggregator "apply with AI" sites and staffing/recruiting agencies are both
 # excluded by the user's own sourcing rule -- apply on the EMPLOYER's own
@@ -704,6 +705,9 @@ def job_board(url: str) -> str:
     The owner's rule: apply on the employer's own page. Adzuna, 30 September: its "Apply for this job" is Adzuna's own
     easy-apply behind an Adzuna login, and the run tried to sign in there."""
     host = urlparse(url or "").netloc.lower()
+    hostname = (urlparse(url or "").hostname or "").lower()
+    if any(hostname == social or hostname.endswith("." + social) for social in SOCIAL_HOSTS):
+        return f"{hostname} is a social site: use the employer's own careers page instead"
     if any(b in host for b in BLOCKED_SOURCES):
         return (f"{host} is a job board, not the employer's site: open the posting there, follow its link to the "
                 f"company's own careers page, and use that link")

@@ -73,3 +73,24 @@ def test_an_application_page_links_its_runs_log(client, monkeypatch, tmp_path):
 def test_the_filter_counts_match_the_groups(client):
     page = client.get("/").get_data(as_text=True)
     assert re.search(r'data-filter="needs"[^>]*>Needs you<span class="n">3</span>', page)
+
+
+@pytest.mark.parametrize("mode", ["empty", "idle", "running", "handoff"])
+def test_applications_page_renders_cockpit_in_each_runtime_state(client, monkeypatch, mode):
+    """Render the real root page, not just cockpit JSON endpoints or a partial."""
+    if mode == "empty":
+        monkeypatch.setattr(web_ui, "get_tracker", lambda: SimpleNamespace(list_all=lambda: []))
+    monkeypatch.setattr(web_ui, "_running_url",
+                        lambda: "https://jobs.example.com/0" if mode == "running" else "")
+    monkeypatch.setattr(web_ui, "clear_waiting_files", lambda _path: None)
+    monkeypatch.setattr(web_ui.handoff, "get_active_handoff", lambda: (
+        {"category": "CAPTCHA", "employer": "Synthetic Employer"} if mode == "handoff" else None))
+    response = client.get("/")
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert 'id="live-cockpit-card"' in html
+    assert 'href="/static/cockpit.css"' in html
+    assert 'src="/static/cockpit.js"' in html
+    expected_stage = {"running": "Working", "handoff": "Handoff"}.get(mode, "Idle")
+    assert f'class="badge badge-stage">{expected_stage}</span>' in html
+    assert "Internal Server Error" not in html

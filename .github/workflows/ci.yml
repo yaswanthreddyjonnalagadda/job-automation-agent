@@ -24,7 +24,8 @@ jobs:
       # tests/test_dashboard.py talks to the tracker's Postgres database. This
       # one exists only for the length of the job; its password is not a secret.
       postgres:
-        image: postgres:16
+        # Docker's public ECR mirror avoids Docker Hub's shared-runner pull limit.
+        image: public.ecr.aws/docker/library/postgres:16
         env:
           POSTGRES_USER: job_agent
           POSTGRES_PASSWORD: ci-only

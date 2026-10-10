@@ -1,0 +1,14 @@
+{
+  "id": "f142",
+  "date": "2026-10-09",
+  "site": "Application startup",
+  "class": "Synchronous telemetry is inserted ahead of a required user-visible startup action",
+  "symptom": "The full suite's existing foreground-order regression failed after page-opening telemetry was added between navigation and window activation.",
+  "root_cause": "Window activation followed synchronous telemetry dispatch, allowing event listeners to delay showing the newly opened application.",
+  "why_tests_missed": "The telemetry integration was not validated against the existing foreground-order regression; the full-suite run exposed the conflict.",
+  "fix": "Bring the agent's window forward immediately after opening its page, before delivering page-opening telemetry. Preserve the original regression assertion.",
+  "tests": [
+    "tests/test_agent_window_is_shown.py::test_a_run_raises_the_window_as_soon_as_it_has_opened_the_page"
+  ],
+  "prevention": "Keep observability after required user-visible startup actions and run existing ordering regressions when adding synchronous listeners."
+}

@@ -58,6 +58,18 @@ from sites import adapter_for
 
 import diagnostics
 diagnostics.install_log_privacy()
+
+try:
+    from runtime_events import RuntimeEvent, EventName, ReasonCode
+except ImportError:
+    try:
+        import sys
+        _pkg_root = str(Path(__file__).resolve().parent)
+        if _pkg_root not in sys.path:
+            sys.path.insert(0, _pkg_root)
+        from runtime_events import RuntimeEvent, EventName, ReasonCode
+    except Exception:
+        RuntimeEvent = None
 logger = logging.getLogger(__name__)
 
 # A Chrome-family window is titled "<page> - Google Chrome" (real Chrome, what the agent uses),
@@ -4606,11 +4618,48 @@ class JobApplicationAssistant:
             return ""
         return href or ""
 
+    def follow_application_entry(self, page: Page, control) -> bool:
+        """Follow a posting's real HTTP link with GET, without executing its
+        click handlers or relaxing the submission guard. Button-only and
+        fragment/JavaScript actions keep their normal guarded click path.
+        """
+        import job_sources
+        if not self.on_job_description(page) or not control.is_visible():
+            return False
+        destination = control.evaluate("""e => {
+            const a = e.closest('a[href]');
+            if (!a || a.closest('form') || a.hasAttribute('download')) return '';
+            const raw = (a.getAttribute('href') || '').trim();
+            return raw && !raw.startsWith('#') ? a.href : '';
+        }""")
+        parsed = urlparse(destination or "")
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            return False
+        if job_sources.job_board(destination) or destination == page.url:
+            return False
+        if safety.captcha_visible(page):
+            return False
+        target = page.frame() if getattr(page, "top", None) is not None else page
+        target.goto(destination, wait_until="domcontentloaded", timeout=60_000)
+        logger.info("APPLY_ENTRY_NAVIGATED: followed the posting's application link with GET")
+        return True
+
     def click_apply_button(self, page: Page) -> Page:
         """Many ATS postings (Workday, Greenhouse...) show a JD page with an
         'Apply' link/button that leads to the actual form -- sometimes in a
         new tab. This just navigates there; it submits nothing. Returns the
         page to keep working with (same page, or the new tab if one opened)."""
+        app_key = getattr(self, "application_key", "")
+        if RuntimeEvent is not None:
+            RuntimeEvent.emit(
+                event_name=EventName.APPLY_SEARCHING,
+                component="browser_automation",
+                stage="apply_button",
+                display_message="Searching for Apply button on page",
+                application_key=app_key,
+                safe_metadata={"url": page.url},
+            )
+
         btn = self.find_apply_control(page)
         if btn is None:
             destination = self.apply_destination(page)
@@ -4619,13 +4668,65 @@ class JobApplicationAssistant:
                 # page settles), but its link is in the page. Following it is
                 # what clicking it would do.
                 logger.info("Apply link found by address: %s", destination[:90])
+                if RuntimeEvent is not None:
+                    RuntimeEvent.emit(
+                        event_name=EventName.APPLY_FOUND,
+                        component="browser_automation",
+                        stage="apply_button",
+                        display_message=f"Apply destination link found: {destination[:60]}",
+                        application_key=app_key,
+                    )
                 page.goto(destination, wait_until="domcontentloaded", timeout=60_000)
                 page.wait_for_timeout(2_000)
+                if RuntimeEvent is not None:
+                    RuntimeEvent.emit(
+                        event_name=EventName.APPLY_CLICK_VERIFIED,
+                        component="browser_automation",
+                        stage="apply_button",
+                        display_message="Navigated to apply destination link",
+                        is_verified=True,
+                        evidence="url_changed",
+                        application_key=app_key,
+                        safe_metadata={"target_url": page.url},
+                    )
                 return page
             logger.info("No 'Apply' button found -- assuming already on the application form")
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.APPLY_CLICK_BLOCKED,
+                    component="browser_automation",
+                    stage="apply_button",
+                    display_message="No Apply button found; assuming already on form",
+                    application_key=app_key,
+                )
             return page
 
+        if RuntimeEvent is not None:
+            RuntimeEvent.emit(
+                event_name=EventName.APPLY_FOUND,
+                component="browser_automation",
+                stage="apply_button",
+                display_message="Apply button found on page",
+                application_key=app_key,
+            )
+            RuntimeEvent.emit(
+                event_name=EventName.APPLY_CLICK_ATTEMPTED,
+                component="browser_automation",
+                stage="apply_button",
+                display_message="Clicking Apply button",
+                application_key=app_key,
+            )
+
         context = page.context
+        initial_url = page.url
+        if self.follow_application_entry(page, btn):
+            return page
+        # A misleading label must not send a posting to a social/job-board tab.
+        import job_sources
+        href = btn.evaluate("e => (e.closest('a[href]') || {}).href || ''")
+        if href and job_sources.job_board(href):
+            logger.warning("APPLY_ENTRY_BLOCKED: destination is not an employer application")
+            return page
         try:
             with context.expect_page(timeout=5_000) as new_page_info:
                 btn.click()
@@ -4643,6 +4744,30 @@ class JobApplicationAssistant:
             target.wait_for_load_state("networkidle", timeout=10_000)
         except Exception:
             target.wait_for_timeout(3_000)
+
+        if RuntimeEvent is not None:
+            if target != page or (target.url and target.url != initial_url):
+                RuntimeEvent.emit(
+                    event_name=EventName.APPLY_CLICK_VERIFIED,
+                    component="browser_automation",
+                    stage="apply_button",
+                    display_message="Apply button click verified navigation",
+                    is_verified=True,
+                    evidence="tab_opened" if target != page else "url_changed",
+                    application_key=app_key,
+                    safe_metadata={"target_url": target.url},
+                )
+            else:
+                RuntimeEvent.emit(
+                    event_name=EventName.APPLY_NAV_NOT_OBSERVED,
+                    component="browser_automation",
+                    stage="apply_button",
+                    reason_code=ReasonCode.NAVIGATION_FAILED,
+                    display_message="Apply button clicked but URL did not change",
+                    is_verified=False,
+                    application_key=app_key,
+                )
+
         return target
 
     def dismiss_apply_chooser(self, page: Page) -> Page:
@@ -6256,8 +6381,9 @@ class JobApplicationAssistant:
         r"thank you(?:,\s*[^.!?]{0,60})?\s+for\s+(?:applying|your\s+application|your\s+interest)"
         r"(?:\s+(?:to|for|at)\s+[^.!?]{0,60})?",
         r"thanks\s+for\s+applying",
-        r"we(?:'ve| have)\s+received\s+your\s+application",
-        r"your\s+application\s+(?:has\s+been|was)\s+(?:submitted|sent|received)",
+        r"we(?:['’]ve| have)\s+received\s+your\s+application",
+        r"your\s+application\s+(?:has\s+been|was)\s+(?:successfully\s+)?(?:submitted|sent|received)(?:\s+successfully)?",
+        r"thank\s+you\s+for\s+submitting\s+your\s+application",
         r"application\s+(?:submitted|received|has\s+been\s+sent|was\s+sent)",
         r"submission\s+received",
         r"(?:your\s+)?application\s+was\s+successfully\s+submitted",
@@ -6292,13 +6418,18 @@ class JobApplicationAssistant:
             # fixed banner, a horizontally scrollable container) is not attempted here -- a
             # documented limitation, not a silent gap.
             headings = page.evaluate(
-                """() => [...document.querySelectorAll('h1, h2, h3, [role=alert], [role=status]')]
+                """() => [...document.querySelectorAll('h1, h2, h3, p, [role=alert], [role=status]')]
                        .filter(e => {
                            if (e.closest('[hidden]')) return false;
                            if (!e.getClientRects().length) return false;
                            const style = getComputedStyle(e);
                            if (style.visibility === 'hidden' || style.visibility === 'collapse') return false;
                            if (parseFloat(style.opacity) === 0) return false;
+                           let ancestor = e.parentElement;
+                           while (ancestor) {
+                               if (parseFloat(getComputedStyle(ancestor).opacity) === 0) return false;
+                               ancestor = ancestor.parentElement;
+                           }
                            return true;
                        })
                        .map(e => (e.innerText || '').replace(/\\s+/g, ' ').trim())
@@ -6306,7 +6437,12 @@ class JobApplicationAssistant:
             )
         except Exception:
             headings = []
-        if any(self._CONFIRMATION_HEADING_RE.match(text) for text in headings):
+        if any(self._CONFIRMATION_HEADING_RE.match(text) for text in headings) and not page.evaluate(
+            """() => [...document.querySelectorAll('input,textarea,select,[contenteditable=true]')]
+                .filter(e => !e.disabled && e.getClientRects().length
+                    && getComputedStyle(e).visibility !== 'hidden'
+                    && !['hidden','search','button','submit','reset'].includes(e.type || '')).length >= 3"""
+        ):
             return True
         if not job_title:
             return False
@@ -6478,10 +6614,20 @@ class JobApplicationAssistant:
             logger.info("PASSCODE: %s -- leaving it to the user", why)
             return ""
         employer = (getattr(self, "employer", "") or "").strip()
+        app_key = getattr(self, "application_key", "")
         tab = page.context.new_page()
         try:
             deadline = time.time() + wait_seconds
             while time.time() < deadline:
+                if RuntimeEvent is not None:
+                    RuntimeEvent.emit(
+                        event_name=EventName.EMAIL_POLLING,
+                        component="gmail",
+                        stage="email_verification",
+                        display_message=f"Polling Gmail for verification passcode ({employer or 'employer'})",
+                        application_key=app_key,
+                        safe_metadata={"employer": employer},
+                    )
                 query = quote("newer_than:1h (passcode OR \"one-time\" OR verification OR code)")
                 tab.goto(f"https://mail.google.com/mail/u/0/#search/{query}", wait_until="domcontentloaded", timeout=45_000)
                 try:
@@ -6507,6 +6653,16 @@ class JobApplicationAssistant:
                         code = self._extract_code(length=length, text=body)
                     if code and code != previous:
                         logger.info("PASSCODE: found a one-time passcode in Gmail")  # never the mail's text: it holds the code
+                        if RuntimeEvent is not None:
+                            RuntimeEvent.emit(
+                                event_name=EventName.EMAIL_MATCHED,
+                                component="gmail",
+                                stage="email_verification",
+                                display_message="Found verification passcode in Gmail",
+                                is_verified=True,
+                                application_key=app_key,
+                                safe_metadata={"employer": employer},
+                            )
                         login_guard.record_code_read(
                             urlparse(page.url).netloc.lower(),
                             (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
@@ -6516,6 +6672,15 @@ class JobApplicationAssistant:
                 logger.info("PASSCODE: no new passcode email yet -- checking again in 15s")
                 tab.wait_for_timeout(15_000)
             logger.warning("PASSCODE: no passcode email arrived within %ds", wait_seconds)
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.EMAIL_TIMEOUT,
+                    component="gmail",
+                    stage="email_verification",
+                    reason_code=ReasonCode.EMAIL_VERIFICATION_TIMEOUT,
+                    display_message=f"Passcode email did not arrive within {wait_seconds}s",
+                    application_key=app_key,
+                )
             return ""
         except Exception as exc:
             logger.warning("PASSCODE: Gmail read failed: %s", str(exc).splitlines()[0][:160])
@@ -6539,10 +6704,20 @@ class JobApplicationAssistant:
             logger.info("VERIFY_LINK: %s -- leaving it to the user", why)
             return ""
         site_url = page.url
+        app_key = getattr(self, "application_key", "")
         tab = page.context.new_page()
         try:
             deadline = time.time() + wait_seconds
             while time.time() < deadline:
+                if RuntimeEvent is not None:
+                    RuntimeEvent.emit(
+                        event_name=EventName.EMAIL_POLLING,
+                        component="gmail",
+                        stage="email_verification",
+                        display_message="Polling Gmail for account verification link",
+                        application_key=app_key,
+                        safe_metadata={"site_url": site_url},
+                    )
                 query = quote("newer_than:1h (verify OR verification OR activate OR confirm)")
                 tab.goto(f"https://mail.google.com/mail/u/0/#search/{query}", wait_until="domcontentloaded",
                          timeout=45_000)
@@ -6566,6 +6741,16 @@ class JobApplicationAssistant:
                         if emailed_codes.verification_link_ok(href, text, site_url):
                             logger.info("VERIFY_LINK: found the account-verification link from %s in Gmail",
                                         urlparse(emailed_codes.unwrap(href)).netloc)
+                            if RuntimeEvent is not None:
+                                RuntimeEvent.emit(
+                                    event_name=EventName.EMAIL_MATCHED,
+                                    component="gmail",
+                                    stage="email_verification",
+                                    display_message="Found account verification link in Gmail",
+                                    is_verified=True,
+                                    application_key=app_key,
+                                    safe_metadata={"domain": urlparse(site_url).netloc},
+                                )
                             login_guard.record_code_read(
                                 urlparse(site_url).netloc.lower(),
                                 (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
@@ -6577,6 +6762,15 @@ class JobApplicationAssistant:
                 logger.info("VERIFY_LINK: no verification email from this site yet -- checking again in 15s")
                 tab.wait_for_timeout(15_000)
             logger.warning("VERIFY_LINK: no verification email arrived within %ds", wait_seconds)
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.EMAIL_TIMEOUT,
+                    component="gmail",
+                    stage="email_verification",
+                    reason_code=ReasonCode.EMAIL_VERIFICATION_TIMEOUT,
+                    display_message=f"Verification link email did not arrive within {wait_seconds}s",
+                    application_key=app_key,
+                )
             return ""
         except Exception as exc:
             logger.warning("VERIFY_LINK: Gmail read failed: %s", str(exc).splitlines()[0][:160])
@@ -7062,23 +7256,32 @@ class JobApplicationAssistant:
         needs_user_review rather than assuming the application arrived.
         """
         company = getattr(self, "employer", "") or ""
-        waited, mail_checked = 0.0, False
+        waited, mail_attempts, last_mail_check = 0.0, 0, None
+        check_mail = bool(getattr(getattr(self, "_profile", None), "check_gmail_for_confirmation", True))
         while waited < timeout_seconds:
+            on_form = True
             try:
                 if page.is_closed():
                     break
                 if self.submission_confirmed(page, job_title):
                     return f"the page confirmed it ({page.url[:80]})"
+                on_form = self.find_submit_button(page) is not None
             except Exception:
                 pass
-            if not mail_checked and waited >= 60 and company:
-                mail_checked = True
+            if not on_form and check_mail and company and self._confirmation_email_due(waited, last_mail_check, mail_attempts):
+                mail_attempts += 1
+                last_mail_check = waited
                 found = self.gmail_shows_confirmation(page, company, job_title)
                 if found:
                     return f"confirmation email: {found[:120]}"
             time.sleep(5.0)
             waited += 5.0
         return None
+
+    @staticmethod
+    def _confirmation_email_due(elapsed, last_check, attempts):
+        """Give the page/email time to settle, with at most three mail reads."""
+        return elapsed >= 45 and attempts < 3 and (last_check is None or elapsed - last_check >= 120)
 
     def refuse_to_submit(self, reason: str = "") -> None:
         """There is no code path in this class that clicks an application's
@@ -7505,6 +7708,8 @@ class JobApplicationAssistant:
         away_since: Optional[float] = None
         last_list_reload = 0.0
         last_mail_check: Optional[float] = None
+        mail_attempts = 0
+        self._confirmation_evidence = ""
         # Stopped for a CAPTCHA: once the user has completed it, carry on by
         # itself. On Schwab's sign-in the user solved the puzzle, the site moved
         # to its next step, and the run went on waiting for an instruction.
@@ -7608,6 +7813,7 @@ class JobApplicationAssistant:
                     # A confirmation page counts even if the form was never
                     # recognised (it needs its message AND no Submit button).
                     if not on_form and self.submission_confirmed(page, job_title):
+                        self._confirmation_evidence = "the page confirmed it"
                         return "submitted_by_user"
                     if not getattr(self, "_seen_application_form", False):
                         # Still before the form (a sign-in page, say): nothing
@@ -7615,6 +7821,7 @@ class JobApplicationAssistant:
                         # "left the form" timer -- just wait for the user.
                         continue
                     if self.submission_confirmed(page, job_title):
+                        self._confirmation_evidence = "the page confirmed it"
                         return "submitted_by_user"
                     if on_form:
                         away_since = None
@@ -7622,13 +7829,16 @@ class JobApplicationAssistant:
                         away_since = waited if away_since is None else away_since
                         # An applications list may not show a brand-new
                         # submission until reloaded.
-                        if re.search(r"/applications|my-applications|dashboard", page.url) and waited - last_list_reload >= 60:
+                        if re.search(r"/(?:applications|my-applications|dashboard)/?$", urlparse(page.url).path) and waited - last_list_reload >= 60:
                             last_list_reload = waited
                             page.reload(wait_until="domcontentloaded", timeout=30_000)
                         # The site shows nothing conclusive: look for the
                         # employer's confirmation email, every 2 minutes.
-                        if check_mail and (last_mail_check is None or waited - last_mail_check >= 120):
+                        if check_mail and self._confirmation_email_due(
+                                waited - away_since, None if last_mail_check is None else last_mail_check - away_since,
+                                mail_attempts):
                             last_mail_check = waited
+                            mail_attempts += 1
                             found = self.gmail_shows_confirmation(page, company, job_title)
                             if found:
                                 self._confirmation_evidence = f"confirmation email: {found}"

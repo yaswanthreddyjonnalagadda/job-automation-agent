@@ -29,6 +29,7 @@ diagnostics.install_log_privacy()
 
 from config import DATA_DIR, get_app_config, get_user_profile
 from job_sources import resolve_job
+import run_outcomes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("apply")
@@ -125,7 +126,7 @@ def read_job(url: str) -> dict | None:
     return job
 
 
-def run_one(url: str, auto: bool = True, open_url: str = "") -> int:
+def run_one(url: str, auto: bool = True, open_url: str = "", run_id: str = "") -> int:
     job = read_job(url)
     if not job:
         logger.error("Could not read a job description from %s", url)
@@ -134,10 +135,10 @@ def run_one(url: str, auto: bool = True, open_url: str = "") -> int:
     logger.info("Job: %s @ %s (%s)", job["title"], job["company"], job["location"] or "location n/a")
 
     if already_submitted(job):
-        return 3
+        return run_outcomes.ALREADY_SUBMITTED
 
     if skipped_for_sponsorship(job):
-        return 4
+        return run_outcomes.SKIPPED_SPONSORSHIP
 
     key = slug(f"{job['company']}_{job['title']}")
     job_path = DATA_DIR / f"_job_{key}.json"
@@ -151,6 +152,8 @@ def run_one(url: str, auto: bool = True, open_url: str = "") -> int:
         "--signal-file", str(signal_path),
         "--timeout", "3600",
     ]
+    if run_id:
+        cmd += ["--run-id", run_id]
     if open_url:
         cmd += ["--open-url", open_url]
     experience = DATA_DIR / "_experience.json"
@@ -190,16 +193,23 @@ def main() -> int:
         open_url = urls[at + 1] if at + 1 < len(urls) else ""
         urls = urls[:at] + urls[at + 2:]
 
+    run_id = ""
+    if "--run-id" in urls:
+        at = urls.index("--run-id")
+        run_id = urls[at + 1] if at + 1 < len(urls) else ""
+        urls = urls[:at] + urls[at + 2:]
+
     auto = False
     if "--auto" in urls:
         auto = True
         urls = [u for u in urls if u != "--auto"]
 
-    failures = 0
+    outcomes = []
     for url in urls:
-        if run_one(unquote(url) if "%" not in url else url, auto=auto or True, open_url=open_url) != 0:
-            failures += 1
-    return 1 if failures else 0
+        outcomes.append(run_one(unquote(url) if "%" not in url else url, auto=auto or True, open_url=open_url, run_id=run_id))
+    if len(outcomes) == 1:
+        return outcomes[0]
+    return 1 if any(code != 0 and code not in run_outcomes.EXPECTED_STOPS for code in outcomes) else 0
 
 
 if __name__ == "__main__":

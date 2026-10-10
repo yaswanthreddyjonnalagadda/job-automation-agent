@@ -34,8 +34,23 @@ diagnostics.install_log_privacy()
 import application_status
 import ui_shell
 import visible_desktop
+import run_outcomes
 from config import get_app_config
-from tracking import open_tracker as get_tracker
+from tracking import chosen, open_tracker as get_tracker
+import sqlite3
+import queue
+import handoff
+try:
+    from runtime_events import RuntimeEvent, EventName, ReasonCode, AnswerSource
+except ImportError:
+    try:
+        import sys
+        _pkg_root = str(Path(__file__).resolve().parent)
+        if _pkg_root not in sys.path:
+            sys.path.insert(0, _pkg_root)
+        from runtime_events import RuntimeEvent, EventName, ReasonCode, AnswerSource
+    except Exception:
+        RuntimeEvent = None
 
 BASE_DIR = Path(__file__).resolve().parent
 app = Flask(__name__)
@@ -174,7 +189,7 @@ def _run_apply(url: str, open_url: str = "") -> None:
                     break
                 private_log.append(chunk)
         proc.wait()
-        state = "finished" if proc.returncode == 0 else f"failed (exit {proc.returncode})"
+        state = run_outcomes.display_state(proc.returncode)
     except Exception as exc:
         state = "failed (runtime error; private details omitted)"
 
@@ -573,10 +588,7 @@ def reload_agent():
     """Loads edited agent code into the run that is already going, without
     closing its browser or losing the part-filled form (the flow's
     'reload_code' signal)."""
-    written = 0
-    for signal_file in (BASE_DIR / "data").glob("_signal_*.txt"):
-        signal_file.write_text("reload_code", encoding="utf-8")
-        written += 1
+    written = _signal_waiting_run("reload_code")
     if not written:
         # No flow is waiting on a signal right now; leave one for when it is.
         return redirect(url_for("index", error="No run is waiting -- nothing to reload."))
@@ -611,6 +623,637 @@ def local_time(value: datetime | None, fmt: str = "%d %b %I:%M %p") -> str:
 
 
 # ----------------------------------------------------------------------
+# Answer Transparency Ledger & Live Agent Cockpit Backend
+# ----------------------------------------------------------------------
+_LEDGER_DB_PATH = BASE_DIR / "data" / "applications.db"
+_LEDGER_LOCK = threading.RLock()
+
+
+def init_answer_ledger() -> None:
+    """Initializes the answer transparency ledger SQLite schema."""
+    _LEDGER_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with _LEDGER_LOCK, sqlite3.connect(_LEDGER_DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS application_answers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                application_key TEXT NOT NULL,
+                question_text TEXT NOT NULL,
+                final_answer TEXT NOT NULL,
+                source TEXT NOT NULL,
+                fact_reference TEXT DEFAULT '',
+                timestamp TEXT NOT NULL,
+                verification_result TEXT DEFAULT '',
+                previous_value TEXT DEFAULT '',
+                correction_reason TEXT DEFAULT '',
+                status TEXT DEFAULT 'COMMITTED'
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_answers_app ON application_answers(application_key)")
+        conn.commit()
+
+
+def record_answer_ledger(
+    application_key: str,
+    question_text: str,
+    final_answer: str,
+    source: str = "PROFILE",
+    fact_reference: str = "",
+    verification_result: str = "ACCEPTED",
+    previous_value: str = "",
+    correction_reason: str = "",
+    status: str = "COMMITTED",
+) -> int:
+    """Records or updates an answer entry in the transparency ledger."""
+    init_answer_ledger()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _LEDGER_LOCK, sqlite3.connect(_LEDGER_DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, final_answer FROM application_answers WHERE application_key = ? AND question_text = ? ORDER BY id DESC LIMIT 1",
+            (application_key, question_text)
+        )
+        row = cursor.fetchone()
+        if row:
+            row_id, old_val = row
+            if previous_value or (old_val != final_answer):
+                prev = previous_value or old_val
+                cursor.execute("""
+                    UPDATE application_answers
+                    SET final_answer = ?, source = ?, fact_reference = ?, timestamp = ?,
+                        verification_result = ?, previous_value = ?, correction_reason = ?, status = ?
+                    WHERE id = ?
+                """, (final_answer, source, fact_reference, now_iso, verification_result, prev, correction_reason, status, row_id))
+                conn.commit()
+                return row_id
+            return row_id
+
+        cursor.execute("""
+            INSERT INTO application_answers
+            (application_key, question_text, final_answer, source, fact_reference, timestamp, verification_result, previous_value, correction_reason, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (application_key, question_text, final_answer, source, fact_reference, now_iso, verification_result, previous_value, correction_reason, status))
+        conn.commit()
+        return cursor.lastrowid or 0
+
+
+def get_answers_for_application(application_key: str) -> list[dict]:
+    """Retrieves all transparency ledger answers for a given application key."""
+    init_answer_ledger()
+    with _LEDGER_LOCK, sqlite3.connect(_LEDGER_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM application_answers WHERE application_key = ? ORDER BY id ASC",
+            (application_key,)
+        )
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def update_answer_in_ledger(answer_id: int, new_value: str) -> bool:
+    """Updates an existing answer entry (user override) and updates the answer bank."""
+    init_answer_ledger()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _LEDGER_LOCK, sqlite3.connect(_LEDGER_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM application_answers WHERE id = ?", (answer_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False
+        old_val = row["final_answer"]
+        q_text = row["question_text"]
+        app_key = row["application_key"]
+        cursor.execute("""
+            UPDATE application_answers
+            SET final_answer = ?, source = 'USER_OVERRIDE', previous_value = ?,
+                correction_reason = 'User manual override from Cockpit', timestamp = ?, status = 'OVERRIDDEN'
+            WHERE id = ?
+        """, (new_value, old_val, now_iso, answer_id))
+        conn.commit()
+
+    try:
+        tracker = get_tracker()
+        if hasattr(tracker, "record_answer"):
+            tracker.record_answer(app_key, q_text, new_value, answered_by="user")
+    except Exception:
+        pass
+    return True
+
+
+def _runtime_event_listener(ev):
+    if not ev or not getattr(ev, "event", None):
+        return
+    ev_name = ev.event.value if hasattr(ev.event, "value") else str(ev.event)
+    meta = ev.safe_metadata or {}
+    app_key = ev.application_key or ""
+    if not app_key:
+        return
+
+    if ev_name == "ANSWER_WRITTEN":
+        q = meta.get("question")
+        ans = meta.get("answer")
+        src = meta.get("source", "PROFILE")
+        if q and ans:
+            record_answer_ledger(
+                application_key=app_key,
+                question_text=str(q),
+                final_answer=str(ans),
+                source=str(src),
+                verification_result="ACCEPTED",
+                status="COMMITTED",
+            )
+    elif ev_name == "ANSWER_CORRECTED":
+        q = meta.get("question")
+        prev = meta.get("previous_value", "")
+        new = meta.get("new_value", "")
+        src = meta.get("source", "PROFILE")
+        reason = meta.get("reason", "")
+        if q and new:
+            record_answer_ledger(
+                application_key=app_key,
+                question_text=str(q),
+                final_answer=str(new),
+                source=str(src),
+                verification_result="CORRECTED",
+                previous_value=str(prev),
+                correction_reason=str(reason),
+                status="COMMITTED",
+            )
+
+
+if RuntimeEvent is not None:
+    RuntimeEvent.register_listener(_runtime_event_listener)
+
+
+# ----------------------------------------------------------------------
+# Live Agent Cockpit API Routes
+# ----------------------------------------------------------------------
+@app.get("/api/cockpit-state")
+def api_cockpit_state():
+    live_url = _running_url()
+    tracker = get_tracker()
+    active_handoff = handoff.get_active_handoff()
+    is_waiting = bool(live_url and waiting_runs(_RUNS_FILE.parent))
+    
+    app_record = None
+    app_key = ""
+    if live_url:
+        if hasattr(tracker, "find_by_url"):
+            app_record = tracker.find_by_url(live_url)
+        if not app_record and hasattr(tracker, "list_all"):
+            for r in tracker.list_all():
+                if r.url == live_url:
+                    app_record = r
+                    break
+    if not app_record and hasattr(tracker, "list_all"):
+        all_apps = tracker.list_all()
+        if all_apps:
+            app_record = all_apps[0]
+
+    if app_record:
+        app_key = getattr(app_record, "dedup_key", "") or getattr(app_record, "url", "")
+
+    recent_events = []
+    if RuntimeEvent is not None:
+        recent_events = [e.as_dict() for e in reversed(RuntimeEvent.get_recent(limit=40))]
+
+    stage = "Discovery"
+    stage_step = 1
+    loop_status = "normal"
+    last_verified = "None recorded"
+    current_action = "Agent idle"
+
+    for e in recent_events:
+        if e.get("is_verified"):
+            last_verified = e.get("display_message") or e.get("event")
+            break
+
+    for e in recent_events[:6]:
+        ev_name = e.get("event", "")
+        if "LOOP" in ev_name or "CIRCUIT_BREAKER" in ev_name:
+            loop_status = "stalled"
+            break
+        elif "STALL" in ev_name or "WARNING" in ev_name:
+            loop_status = "warning"
+
+    if live_url:
+        current_action = "Agent processing form"
+        if recent_events:
+            current_action = recent_events[0].get("display_message") or recent_events[0].get("event")
+
+        rec_status = getattr(app_record, "status", "") if app_record else ""
+        if rec_status == "submitted":
+            stage = "Submitted"
+            stage_step = 5
+        elif rec_status == "ready_to_submit":
+            stage = "Review"
+            stage_step = 4
+        elif active_handoff:
+            stage = f"Challenge ({active_handoff.get('category')})"
+            stage_step = 3
+        elif rec_status == "form_filled":
+            stage = "Form Fill"
+            stage_step = 3
+        else:
+            ev_stage = recent_events[0].get("stage") if recent_events else ""
+            if ev_stage == "account":
+                stage = "Auth"
+                stage_step = 2
+            elif ev_stage == "form_filling":
+                stage = "Form Fill"
+                stage_step = 3
+            elif ev_stage == "submit":
+                stage = "Review"
+                stage_step = 4
+            else:
+                stage = "Discovery"
+                stage_step = 1
+    elif active_handoff:
+        current_action = f"Waiting for human intervention: {active_handoff.get('reason')}"
+        stage = f"Challenge ({active_handoff.get('category')})"
+        stage_step = 3
+
+    if is_waiting:
+        stage = "Waiting for you"
+        stage_step = 4 if getattr(app_record, "status", "") == "ready_to_submit" else 3
+        current_action = (getattr(app_record, "notes", "") or
+                          "Waiting for your action in the browser or Continue on the dashboard")
+
+    elapsed_seconds = 0
+    if live_url:
+        with _RUNS_LOCK:
+            run_data = _RUNS.get(live_url, {})
+            started = run_data.get("started")
+            if started:
+                if isinstance(started, datetime):
+                    tz = started.tzinfo or timezone.utc
+                    started_utc = started if started.tzinfo else started.replace(tzinfo=timezone.utc)
+                    elapsed_seconds = int((datetime.now(timezone.utc) - started_utc).total_seconds())
+                elif isinstance(started, (int, float)):
+                    elapsed_seconds = int(time.time() - started)
+
+    recent_answers = get_answers_for_application(app_key) if app_key else []
+
+    portal_name = "Direct Portal"
+    if app_record and getattr(app_record, "url", ""):
+        from urllib.parse import urlparse
+        netloc = urlparse(app_record.url).netloc
+        portal_name = netloc.replace("www.", "").split(".")[0].capitalize()
+
+    return {
+        "is_running": bool(live_url),
+        "is_waiting": is_waiting,
+        "running_url": live_url,
+        "job_title": getattr(app_record, "title", "") if app_record else "No active job",
+        "employer": getattr(app_record, "company", "") if app_record else "No active employer",
+        "portal": portal_name,
+        "stage": stage,
+        "stage_step": stage_step,
+        "current_action": current_action,
+        "last_verified_action": last_verified,
+        "loop_status": loop_status,
+        "elapsed_seconds": max(0, elapsed_seconds),
+        "active_handoff": active_handoff,
+        "recent_events": recent_events,
+        "recent_answers": recent_answers,
+    }
+
+
+@app.get("/api/events/stream")
+def api_events_stream():
+    """SSE stream emitting RuntimeEvent objects as they occur."""
+    def event_stream():
+        q = queue.Queue(maxsize=100)
+        def listener(ev):
+            try:
+                q.put_nowait(ev)
+            except Exception:
+                pass
+        if RuntimeEvent is not None:
+            RuntimeEvent.register_listener(listener)
+        try:
+            while True:
+                try:
+                    ev = q.get(timeout=15.0)
+                    yield f"data: {json.dumps(ev.as_dict())}\n\n"
+                except queue.Empty:
+                    yield ": keep-alive\n\n"
+        finally:
+            if RuntimeEvent is not None:
+                RuntimeEvent.remove_listener(listener)
+    return Response(event_stream(), mimetype="text/event-stream")
+
+
+@app.post("/api/cockpit/pause")
+def api_cockpit_pause():
+    return {"ok": False, "error": "Pause is unavailable for this run. No action was sent."}, 409
+
+
+@app.post("/api/cockpit/resume")
+def api_cockpit_resume():
+    _continue_waiting_run()
+    return {"ok": True, "status": "resumed"}
+
+
+def _continue_waiting_run():
+    return _signal_waiting_run("continue")
+
+
+def _signal_waiting_run(decision):
+    """Waiting notes exist before an answer file; resume creates that file."""
+    if not _running_url():
+        return 0
+    written = 0
+    for waiting in waiting_runs(_RUNS_FILE.parent):
+        (_RUNS_FILE.parent / waiting["signal"]).write_text(decision, encoding="utf-8")
+        written += 1
+    return written
+
+
+@app.post("/api/cockpit/stop")
+def api_cockpit_stop():
+    return stop()
+
+
+def raise_browser_window() -> bool:
+    """Brings any visible agent Chrome / browser window to the foreground on Windows."""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        target_hwnds = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def visit(hwnd, _):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length and (user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd)):
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                title = buf.value.lower()
+                if any(w in title for w in ("chrome", "chromium", "job", "apply", "greenhouse", "workday", "lever")):
+                    target_hwnds.append(hwnd)
+            return True
+
+        user32.EnumWindows(visit, 0)
+        for hwnd in target_hwnds:
+            user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
+            user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0043)
+            user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, 0x0043)
+            user32.SetForegroundWindow(hwnd)
+        return bool(target_hwnds)
+    except Exception as exc:
+        logger.debug("Failed to raise browser window: %s", exc)
+        return False
+
+
+@app.post("/api/cockpit/raise-browser")
+def api_cockpit_raise_browser():
+    try:
+        raised = raise_browser_window()
+        return {"ok": True, "raised": raised}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/api/cockpit/takeover")
+def api_cockpit_takeover():
+    try:
+        raise_browser_window()
+        active_h = handoff.Handoff(
+            category=handoff.OWNER_REVIEW,
+            reason="User initiated manual browser takeover",
+            required_action="Review application in open browser and continue when ready",
+            resume_condition="User presses Continue",
+        )
+        handoff.set_active_handoff(active_h)
+        return {"ok": True}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/api/handoff/resolve")
+def api_handoff_resolve():
+    data = request.form if request.form else (request.get_json(silent=True) or {})
+    handoff_id = data.get("handoff_id")
+    action = data.get("action") or "check_and_resume"
+
+    active = handoff.get_active_handoff()
+    if not active:
+        return {"ok": True, "message": "No active handoff"}
+
+    if action == "more_time":
+        return {"ok": True, "message": "Timeout extended"}
+
+    if action == "cancel":
+        handoff.clear_active_handoff()
+        return stop()
+
+    ok, msg = handoff.resolve_active_handoff()
+    if ok:
+        _continue_waiting_run()
+        return {"ok": True, "message": msg}
+    return {"ok": False, "error": msg}
+
+
+@app.post("/api/answers/update")
+def api_answers_update():
+    data = request.form if request.form else (request.get_json(silent=True) or {})
+    answer_id = data.get("answer_id")
+    new_value = data.get("new_value")
+    if not answer_id or new_value is None:
+        return {"ok": False, "error": "Missing answer_id or new_value"}, 400
+    try:
+        aid = int(answer_id)
+        success = update_answer_in_ledger(aid, str(new_value))
+        return {"ok": success}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}, 500
+
+
+@app.get("/api/application/<int:app_id>/answers")
+def api_application_answers(app_id: int):
+    tracker = get_tracker()
+    record = tracker.get(app_id) if hasattr(tracker, "get") else None
+    if not record:
+        return {"ok": False, "error": "Application not found"}, 404
+    app_key = getattr(record, "dedup_key", "") or getattr(record, "url", "")
+    answers = get_answers_for_application(app_key)
+    return {"ok": True, "answers": answers}
+
+
+@app.get("/health")
+def health_check():
+    import config as cfg_mod
+
+    checks = {}
+
+    # 1. Playwright Chromium
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            exec_path = p.chromium.executable_path
+            checks["playwright"] = {
+                "title": "Playwright Chromium",
+                "ok": True,
+                "message": f"Browser located: {Path(exec_path).name}",
+            }
+    except Exception as exc:
+        checks["playwright"] = {
+            "title": "Playwright Chromium",
+            "ok": False,
+            "message": f"Chromium not runnable: {str(exc).splitlines()[0][:100]}",
+            "hint": "Run `python -m playwright install chromium`",
+        }
+
+    # 2. User profile
+    try:
+        prof = cfg_mod.get_user_profile()
+        missing = [f for f in ("full_name", "email", "phone") if not getattr(prof, f, None)]
+        if missing:
+            checks["profile"] = {
+                "title": "User Profile",
+                "ok": False,
+                "message": f"Missing required fields: {', '.join(missing)}",
+                "hint": "Update your profile on the Profile tab.",
+            }
+        else:
+            checks["profile"] = {
+                "title": "User Profile",
+                "ok": True,
+                "message": f"Configured for {prof.full_name} ({prof.email})",
+            }
+    except Exception as exc:
+        checks["profile"] = {
+            "title": "User Profile",
+            "ok": False,
+            "message": f"Profile failed to load: {exc}",
+        }
+
+    # 3. Resume document
+    try:
+        cfg = cfg_mod.get_app_config()
+        resume_p = getattr(cfg, "resume_path", None)
+        if resume_p and Path(resume_p).is_file():
+            checks["resume"] = {
+                "title": "Resume Document",
+                "ok": True,
+                "message": f"Found resume: {Path(resume_p).name} ({Path(resume_p).stat().st_size // 1024} KB)",
+            }
+        else:
+            checks["resume"] = {
+                "title": "Resume Document",
+                "ok": False,
+                "message": "Resume file not found",
+                "hint": "Provide a valid resume PDF in profile or settings.",
+            }
+    except Exception as exc:
+        checks["resume"] = {
+            "title": "Resume Document",
+            "ok": False,
+            "message": f"Resume check failed: {exc}",
+        }
+
+    # 4. AI Provider
+    try:
+        anthropic_k = os.getenv("ANTHROPIC_API_KEY")
+        gemini_k = os.getenv("GEMINI_API_KEY")
+        if anthropic_k or gemini_k:
+            provider = "Gemini" if gemini_k else "Anthropic Claude"
+            checks["ai_provider"] = {
+                "title": "AI Model Engine",
+                "ok": True,
+                "message": f"API key configured ({provider})",
+            }
+        else:
+            checks["ai_provider"] = {
+                "title": "AI Model Engine",
+                "ok": False,
+                "message": "No AI API key found (GEMINI_API_KEY or ANTHROPIC_API_KEY)",
+                "hint": "Configure your API key in .env or Settings.",
+            }
+    except Exception as exc:
+        checks["ai_provider"] = {
+            "title": "AI Model Engine",
+            "ok": False,
+            "message": f"AI provider check failed: {exc}",
+        }
+
+    # 5. Database
+    try:
+        tracker = get_tracker()
+        checks["database"] = {
+            "title": "Application Database",
+            "ok": True,
+            "message": f"Database connected ({chosen()})",
+        }
+    except Exception as exc:
+        checks["database"] = {
+            "title": "Application Database",
+            "ok": False,
+            "message": f"Database unavailable: {str(exc).splitlines()[0][:100]}",
+        }
+
+    # 6. Remote Worker & Offload Architecture
+    all_workers = []
+    local_fallback = False
+    try:
+        from remote_client import RemoteControlClient
+        client = RemoteControlClient(BASE_DIR)
+        remote_w = client.get_active_remote_worker()
+        local_fallback = client.local_fallback_enabled
+        all_workers = client.get_system_workers()
+
+        if remote_w:
+            metrics = remote_w.metrics or {}
+            cpu = metrics.get("cpu_percent", "N/A")
+            mem = metrics.get("memory_percent", "N/A")
+            disk = metrics.get("disk_free_gb", "N/A")
+            checks["remote_worker"] = {
+                "title": "Oracle Runtime Worker",
+                "ok": True,
+                "message": f"Worker '{remote_w.worker_id}' is {remote_w.status.value} (CPU: {cpu}%, RAM: {mem}%, Free Disk: {disk} GB, SHA: {remote_w.git_sha[:8]})",
+            }
+        else:
+            checks["remote_worker"] = {
+                "title": "Oracle Runtime Worker",
+                "ok": local_fallback,
+                "message": (
+                    "Local fallback active (ENABLE_LOCAL_FALLBACK=1)"
+                    if local_fallback
+                    else "ORACLE WORKER OFFLINE: Remote execution is required. Local execution disabled to protect Windows resources."
+                ),
+                "hint": (
+                    "Deploy remote worker via `scripts/remote/bootstrap_worker.sh`."
+                    if not local_fallback
+                    else "Local laptop execution enabled. CPU/RAM usage will increase during applications."
+                ),
+            }
+    except Exception as exc:
+        checks["remote_worker"] = {
+            "title": "Oracle Runtime Worker",
+            "ok": False,
+            "message": f"Worker manager error: {exc}",
+        }
+
+    all_ok = all(c["ok"] for c in checks.values())
+    status_str = "ok" if all_ok else "warning"
+
+    if request.accept_mimetypes.accept_html and not request.is_json:
+        tmpl_path = BASE_DIR / "templates" / "health.html"
+        body_html = tmpl_path.read_text(encoding="utf-8") if tmpl_path.is_file() else ""
+        return render_template_string(
+            ui_shell.page("System Health &middot; Job Agent", body_html),
+            checks=checks,
+            status=status_str,
+            workers=all_workers,
+            local_fallback=local_fallback,
+        )
+    return {"status": status_str, "checks": checks, "workers": all_workers, "local_fallback": local_fallback}
+
+
+# ----------------------------------------------------------------------
 # Views
 # ----------------------------------------------------------------------
 PAGE_SIZE = 10        # applications shown at first, and added by "Show 10 more"
@@ -641,14 +1284,27 @@ def index():
     except ValueError:
         show = PAGE_SIZE
     show = max(PAGE_SIZE, min(show, MAX_SHOWN))
-    counts = {}
-    for record in apps:
-        counts[record.status] = counts.get(record.status, 0) + 1
+    active_h = handoff.get_active_handoff()
+    job_title = ""
+    employer = ""
+    stage = "Idle"
+    if live:
+        for a in apps:
+            if a.url == live:
+                job_title = a.title
+                employer = a.company
+                stage = "Waiting for you" if signals else "Working"
+                break
+    elif active_h:
+        job_title = active_h.get("category", "")
+        employer = active_h.get("employer", "")
+        stage = "Handoff"
+
     return render_template_string(
         INDEX_HTML, apps=apps[:show], total=len(apps), shown=min(show, len(apps)),
         more=min(show + PAGE_SIZE, MAX_SHOWN), can_show_more=show < min(len(apps), MAX_SHOWN),
-        counts=counts, groups=ui_shell.group_counts(apps), runs=latest_run(runs), signals=signals, error=request.args.get("error"),
-        working_url=working_url,
+        groups=ui_shell.group_counts(apps), runs=latest_run(runs), signals=signals, error=request.args.get("error"),
+        working_url=working_url, is_running=bool(live), job_title=job_title, employer=employer, stage=stage,
     )
 
 
@@ -725,6 +1381,8 @@ def _current_runs() -> dict:
                     if ev.get("screenshot_path") and Path(ev["screenshot_path"]).is_file():
                         run["screenshot"] = ev["screenshot_path"]
                         break
+                if run["state"].startswith(("failed", "finished", "ended")) and rec.status in {"submitted", "skipped"}:
+                    run["state"] = f"finished -- {rec.status}"
             if run["state"] != "running" or _process_alive(run.get("pid")):
                 continue
             status = rec.status if rec else ""
@@ -1142,18 +1800,8 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
     <p class="hint">Only employers' own sites. Job boards and staffing agencies are refused.</p>
   </div>
 
-  {% if runs.values()|selectattr('state', 'equalto', 'running')|list %}
-    <script>
-      // A run is active: reload every 5s so its state and the application's
-      // status stay current -- but never while a URL is being typed or a menu is open.
-      setInterval(() => {
-        const box = document.querySelector("input[name=url]");
-        if (box && (box.value || document.activeElement === box)) return;
-        if (document.querySelector("details.menu[open]")) return;
-        location.reload();   // the address keeps ?show=, so the list stays where it was
-      }, 5000);
-    </script>
-  {% endif %}
+  <!-- Live Agent Cockpit Component -->
+  {% include 'cockpit_card.html' %}
 
   {% set waiting = apps | selectattr('status', 'in', ['ready_to_submit', 'needs_user_review', 'BLOCKED_VALIDATION_LOOP']) | rejectattr('url', 'equalto', working_url or '-') | list %}
   {% if working_url %}
@@ -1212,7 +1860,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
     <div class="card run">
       <div class="where">
         <div>
-          {% if r.state == 'running' %}<span class="live">Running</span>{% else %}<span class="pill">{{ r.state }}</span>{% endif %}
+          {% if r.state == 'running' %}<span class="live">{{ 'Waiting for you' if signals else 'Running' }}</span>{% else %}<span class="pill">{{ r.state }}</span>{% endif %}
           {% if r.title %}<strong style="margin-left:8px">{{ r.title }}</strong>{% endif %}
           {% if r.company %}<span class="muted"> at {{ r.company }}</span>{% endif %}
         </div>
