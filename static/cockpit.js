@@ -236,16 +236,22 @@
     const isStalled = data.loop_status === 'stalled';
     const isWarning = data.loop_status === 'warning';
     const hasHandoff = !!data.active_handoff;
+    const isWaiting = !!data.is_waiting;
+    const statusText = document.getElementById('cockpit-status-text');
+    if (statusText) statusText.textContent = isWaiting ? 'Waiting for you' : (data.stage || 'Working');
 
     if (dot) {
       if (isStalled) dot.className = 'cockpit-status-dot danger';
-      else if (isWarning || hasHandoff) dot.className = 'cockpit-status-dot warning';
+      else if (isWarning || hasHandoff || isWaiting) dot.className = 'cockpit-status-dot warning';
       else dot.className = 'cockpit-status-dot pulsing';
     }
 
     const stallBadge = document.getElementById('cockpit-stall-badge');
     if (stallBadge) {
-      if (isStalled) {
+      if (isWaiting) {
+        stallBadge.className = 'badge badge-stall-warning';
+        stallBadge.textContent = 'Waiting for you';
+      } else if (isStalled) {
         stallBadge.className = 'badge badge-stall-danger';
         stallBadge.textContent = 'Stalled (Loop Guard)';
       } else if (isWarning) {
@@ -272,7 +278,7 @@
     }
 
     // Stepper
-    updateStepper(data.stage_step || 1, isStalled, hasHandoff);
+    updateStepper(data.stage_step || 1, isStalled, hasHandoff || isWaiting);
 
     // Handoff Banner
     renderChallengeBanner(data.active_handoff);
@@ -317,7 +323,8 @@
     },
 
     pauseRun: async function() {
-      await postJson('/api/cockpit/pause');
+      const result = await postJson('/api/cockpit/pause');
+      if (!result.ok) alert(result.error || 'Pause is unavailable for this run.');
       fetchState();
     },
 

@@ -1746,6 +1746,9 @@ def main() -> None:
             # works out what to do there.
             logger.info("Working the application with the reading agent")
             page = assistant.open_job_page(resume_at or job.url)
+            # Show the application immediately; telemetry listeners must not
+            # delay bringing the owner's browser window to the front.
+            assistant.raise_window(page)
             if RuntimeEvent is not None:
                 RuntimeEvent.emit(
                     event_name=EventName.PAGE_OPENED,
@@ -1756,9 +1759,6 @@ def main() -> None:
                     application_key=key,
                     safe_metadata={"url": page.url},
                 )
-            # The browser opens behind whatever the owner is using: bring it up now, so they can watch
-            # the run, not only at a hand-over.
-            assistant.raise_window(page)
             page = assistant.open_embedded_form(page)
             if resume_at and not shows_the_application(assistant, page):
                 # KBI's last page was recorded as the careers home (/en-US/KBI_Biopharma/): no form, no

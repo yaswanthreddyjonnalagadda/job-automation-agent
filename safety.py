@@ -218,7 +218,7 @@ def is_captcha_frame(url: str) -> bool:
 
 CAPTCHA_TEXT_RE = re.compile(
     r"verify (that )?you are (a )?human|i'm not a robot|complete the (captcha|security check)|"
-    r"security check|prove you('| a)re human|click the object that does not fit",
+    r"prove you('| a)re human|click the object that does not fit",
     re.IGNORECASE,
 )
 
@@ -237,7 +237,12 @@ def captcha_visible(page) -> bool:
             if frame.is_visible() and box and box["height"] > 60 and box["width"] > 60:
                 return True
         body = page.locator("body").inner_text(timeout=5_000) or ""
-        return bool(CAPTCHA_TEXT_RE.search(body))
+        if CAPTCHA_TEXT_RE.search(body):
+            return True
+        # A standalone prompt can be a challenge. The same words inside a
+        # responsibility such as "automating security checks" are not evidence.
+        prompts = page.get_by_text(re.compile(r"^\s*(?:additional\s+)?security check\s*[.!:]*\s*$", re.I))
+        return any(prompts.nth(i).is_visible() for i in range(min(prompts.count(), 8)))
     except Exception:
         return False
 

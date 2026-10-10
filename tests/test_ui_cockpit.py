@@ -140,10 +140,11 @@ def test_api_cockpit_state(client, monkeypatch):
 
 
 def test_api_cockpit_controls(client, monkeypatch):
-    # Test pause
+    # The runtime has no cooperative pause command. Never acknowledge a pause
+    # or send refresh (which resumes automation) in response to this request.
     res_pause = client.post("/api/cockpit/pause")
-    assert res_pause.status_code == 200
-    assert res_pause.get_json()["ok"] is True
+    assert res_pause.status_code == 409
+    assert res_pause.get_json()["ok"] is False
 
     # Test resume
     res_resume = client.post("/api/cockpit/resume")
@@ -236,3 +237,40 @@ def test_health_check_json_and_html(client):
     assert res_html.status_code == 200
     assert "System Health" in res_html.get_data(as_text=True)
     assert "Playwright Chromium" in res_html.get_data(as_text=True)
+
+
+@pytest.mark.parametrize("accept", ["application/json", "text/html"])
+def test_database_health_reports_a_working_tracker(client, monkeypatch, tmp_path, accept):
+    from job_tracker import JobTracker
+
+    tracker = JobTracker(tmp_path / "health_applications.db")
+    monkeypatch.setenv("TRACKER", "sqlite")
+    monkeypatch.setattr(web_ui, "get_tracker", lambda: tracker)
+
+    response = client.get("/health", headers={"Accept": accept})
+    assert response.status_code == 200
+    if accept == "application/json":
+        check = response.get_json()["checks"]["database"]
+        assert check["ok"] is True
+        assert check["message"] == "Database connected (sqlite)"
+    else:
+        body = response.get_data(as_text=True)
+        assert "Database connected (sqlite)" in body
+        assert "Database unavailable" not in body
+
+
+@pytest.mark.parametrize("accept", ["application/json", "text/html"])
+def test_database_health_reports_a_tracker_failure(client, monkeypatch, accept):
+    def unavailable():
+        raise RuntimeError("synthetic tracker unavailable")
+
+    monkeypatch.setattr(web_ui, "get_tracker", unavailable)
+    response = client.get("/health", headers={"Accept": accept})
+    assert response.status_code == 200
+    message = "Database unavailable: synthetic tracker unavailable"
+    if accept == "application/json":
+        check = response.get_json()["checks"]["database"]
+        assert check["ok"] is False
+        assert check["message"] == message
+    else:
+        assert message in response.get_data(as_text=True)

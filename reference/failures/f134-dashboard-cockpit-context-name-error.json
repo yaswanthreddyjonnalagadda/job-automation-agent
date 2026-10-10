@@ -1,0 +1,16 @@
+{
+  "id": "f134",
+  "date": "2026-10-09",
+  "site": "Local Applications dashboard",
+  "class": "A stale template-context argument breaks the complete page before rendering",
+  "symptom": "The local dashboard returned HTTP 500 at / after the cockpit was added, while /runtime and /health still returned 200.",
+  "root_cause": "The Applications route passed counts=counts to render_template_string even though no counts variable existed. The template uses the existing ui_shell.group_counts(apps) result through groups instead, so the unused argument raised NameError before any page could render.",
+  "why_tests_missed": "Cockpit-specific tests exercised API controls, state, ledger and health routes but never rendered the Applications page containing the cockpit. Existing dashboard rendering tests would have caught the failure but were omitted from that targeted validation.",
+  "fix": "Remove the unused undefined context argument and exercise the complete Applications route with empty, idle, active-run and handoff states. Keep the centralized group-count calculation and existing application controls unchanged.",
+  "tests": [
+    "tests/test_dashboard_layout.py::test_applications_page_renders_cockpit_in_each_runtime_state",
+    "tests/test_dashboard_layout.py::test_the_filter_counts_match_the_groups",
+    "tests/test_dashboard_layout.py::test_pages_share_the_header_and_mark_where_you_are"
+  ],
+  "prevention": "When adding a template partial, validate the complete parent route with synthetic application and runtime state, alongside API endpoint tests. Run existing dashboard rendering regressions before restarting the local service."
+}

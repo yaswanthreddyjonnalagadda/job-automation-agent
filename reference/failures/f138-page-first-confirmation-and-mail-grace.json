@@ -1,0 +1,21 @@
+{
+  "id": "f138",
+  "date": "2026-10-09",
+  "site": "Blue Mantis / generic confirmation pages",
+  "class": "Narrow receipt recognition causes unnecessary mail checks and delayed completion",
+  "symptom": "The owner saw page confirmation, but the agent checked Gmail and closed only after email confirmation arrived.",
+  "root_cause": "The manual watcher recognized exact phrases only in heading/alert/status elements, missing paragraph receipts and common wording variants. Its mail fallback began immediately after the form disappeared and had no read-attempt limit.",
+  "why_tests_missed": "Tests covered common heading receipts and false positives, but not paragraph receipts, Unicode punctuation, post-submit grace periods or bounded mail retries.",
+  "fix": "Recognize complete receipt phrases in visible paragraphs as well as headings/status regions while rejecting hidden content, unfinished forms and incidental mentions. Prioritize page evidence, defer mail for 45 seconds, respect the owner mail preference, and allow at most three checks spaced at least 120 seconds apart.",
+  "tests": [
+    "tests/test_run_recovery_regressions.py::test_visible_receipt_wording_does_not_require_email",
+    "tests/test_run_recovery_regressions.py::test_templates_advice_and_unfinished_forms_are_not_receipts",
+    "tests/test_run_recovery_regressions.py::test_page_receipt_finishes_wait_without_opening_gmail",
+    "tests/test_run_recovery_regressions.py::test_email_fallback_has_a_grace_period_and_bounded_retries",
+    "tests/test_run_recovery_regressions.py::test_email_fallback_stops_when_the_form_reappears",
+    "tests/test_run_recovery_regressions.py::test_a_page_receipt_ends_the_browser_context",
+    "tests/test_run_recovery_regressions.py::test_automatic_evidence_wait_respects_the_mail_preference",
+    "tests/test_run_recovery_regressions.py::test_an_automatic_submit_that_left_the_form_visible_does_not_read_mail"
+  ],
+  "prevention": "Observe page receipts before mail, test positive and adversarial receipt shapes, and test timing with a synthetic clock. A click or elapsed time is never submission evidence."
+}
