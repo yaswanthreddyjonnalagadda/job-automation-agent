@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import diagnostics
 from durable_queue import DurableJobQueue, JobState, QueuedJob
 from resource_manager import HealthCategory, ResourceManager, WorkloadPriority
 from worker_manager import WorkerCapability, WorkerInfo, WorkerRegistry, WorkerStatus, WorkerType
@@ -162,6 +163,27 @@ class WorkerDaemon:
 
             time.sleep(1.0)
 
+    @staticmethod
+    def _drain_output(proc: subprocess.Popen, sanitized_lines: list) -> None:
+        """Reads the subprocess's combined stdout/stderr to completion, line by line.
+
+        Must run concurrently with waiting on the process, never after: the pipe
+        this is reading from has a fixed OS buffer (commonly 64 KiB), and `apply.py`
+        can log well past that in one run. Left unread, the child blocks on its own
+        write() once the buffer fills, `proc.poll()` then never returns (the process
+        isn't exiting, it's stuck waiting on a reader that will never come), and the
+        job hangs for its full lease duration instead of finishing or failing. Only
+        sanitized lines are kept (`diagnostics.sanitize_log_line`, the same
+        allowlist-by-category projection the local dashboard's own subprocess
+        capture already uses) -- this crosses a process/trust boundary onto a
+        remote host, so raw application content never leaves memory.
+        """
+        try:
+            for line in proc.stdout:
+                sanitized_lines.append(diagnostics.sanitize_log_line(line))
+        except Exception:
+            pass
+
     def _execute_job(self, job: QueuedJob) -> None:
         """Executes apply.py in a dedicated subprocess for the claimed job."""
         cmd = [sys.executable, "apply.py", job.job_url, "--run-id", job.job_id]
@@ -180,11 +202,17 @@ class WorkerDaemon:
             with self._lock:
                 self._active_process = proc
 
-            # Monitor execution output
+            sanitized_lines: list = []
+            reader = threading.Thread(target=self._drain_output, args=(proc, sanitized_lines), daemon=True)
+            reader.start()
+
+            # Monitor execution; the reader thread above keeps the output pipe drained
+            # throughout, not just at the end, so this loop can safely just wait.
             while proc.poll() is None:
                 # Renew lease periodically
                 self.queue.renew_lease(job.job_id, self.worker_id, self.lease_duration)
                 time.sleep(2.0)
+            reader.join(timeout=5.0)
 
             ret = proc.returncode
             if ret == 0:
@@ -192,7 +220,9 @@ class WorkerDaemon:
                 self.queue.update_status(job.job_id, self.worker_id, JobState.COMPLETED, notes="Application completed")
             else:
                 logger.warning("Job %s finished with return code %d", job.job_id, ret)
-                self.queue.update_status(job.job_id, self.worker_id, JobState.FAILED, notes=f"Process exited {ret}")
+                tail = "; ".join(line.strip() for line in sanitized_lines[-5:])
+                notes = f"Process exited {ret}" + (f" -- last output: {tail}" if tail else "")
+                self.queue.update_status(job.job_id, self.worker_id, JobState.FAILED, notes=notes)
 
         except Exception as exc:
             logger.error("Job %s failed with exception: %s", job.job_id, exc)
