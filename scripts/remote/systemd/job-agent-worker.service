@@ -1,0 +1,27 @@
+[Unit]
+Description=Job Automation Agent Persistent Remote Worker
+After=network.target
+
+[Service]
+Type=simple
+User=jobagent
+Group=jobagent
+WorkingDirectory=/opt/job-automation-agent
+ExecStart=/opt/job-automation-agent/.venv/bin/python worker_daemon.py
+Restart=on-failure
+RestartSec=10
+KillMode=mixed
+TimeoutStopSec=60
+
+# Environmental protections
+Environment=PYTHONUNBUFFERED=1
+Environment=JOB_WORKER_ID=oracle-worker-1
+Environment=JOB_WORKER_TYPE=REMOTE_LINUX
+
+# Resource guardrails (Always Free 24GB protection)
+MemoryHigh=18G
+MemoryMax=22G
+
+[Install]
+WantedBy=multi-user.target
+
