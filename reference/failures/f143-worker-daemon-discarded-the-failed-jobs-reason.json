@@ -1,0 +1,16 @@
+{
+  "id": "f143",
+  "date": "2026-10-10",
+  "site": "Remote worker execution (worker_daemon.py, the Oracle Cloud job-execution daemon)",
+  "class": "A subprocess's output was piped but never read, discarding the one thing that explains a failure and risking a silent hang",
+  "symptom": "A remote-worker job that failed left only 'Process exited N' in the durable queue's notes -- no way to tell why from the dashboard or the queue, confirmed live against a real Oracle Cloud worker with two different dummy job URLs. Separately, any job whose apply.py subprocess logs more than the OS pipe buffer (commonly 64 KiB) in one run would never be read at all, letting the child block on its own write() indefinitely.",
+  "root_cause": "WorkerDaemon._execute_job() opened the apply.py subprocess with stdout=PIPE, stderr=STDOUT, then only called proc.poll() in a sleep loop -- nothing ever read from the pipe. On success or failure, update_status() was given either a fixed string or the bare exit code, never the subprocess's own output.",
+  "why_tests_missed": "No test exercised _execute_job() against a subprocess that logged anything at all, let alone enough to fill a pipe buffer -- the only coverage was at the registry/queue-schema level (test_worker_manager.py, test_durable_queue.py), never the daemon's own execution path.",
+  "fix": "A dedicated reader thread (_drain_output) is started before the wait loop and drains the pipe for the subprocess's entire lifetime, not just after it exits. Each line is passed through diagnostics.sanitize_log_line() (the same category-only allowlist the local dashboard's own subprocess capture already uses) before being kept, since this output now crosses a process boundary onto a remote host. A failed job's notes include the sanitized tail of the last few lines alongside the exit code.",
+  "tests": [
+    "tests/test_worker_daemon.py::test_a_failed_jobs_notes_carry_a_sanitized_reason_not_just_the_exit_code",
+    "tests/test_worker_daemon.py::test_drain_output_keeps_up_with_a_job_that_logs_past_the_pipe_buffer",
+    "tests/test_worker_daemon.py::test_a_successful_job_still_reports_plainly"
+  ],
+  "prevention": "A subprocess opened with stdout=PIPE/stderr=PIPE must have something reading it for its entire lifetime, started before any wait loop -- a wait loop that only polls for exit, with no concurrent reader, is a latent deadlock for any child that can log past one OS pipe buffer, not just a missing-detail bug. When that output crosses a trust or network boundary (here: worker machine to dashboard), sanitize it the same way every other diagnostic surface in this project already does, rather than inventing a new policy."
+}
