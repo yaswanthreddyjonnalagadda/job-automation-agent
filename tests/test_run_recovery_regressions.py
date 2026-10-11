@@ -71,6 +71,36 @@ def test_visible_receipt_wording_does_not_require_email(page, assistant, body):
     assert assistant.submission_confirmed(page) is True
 
 
+@pytest.mark.parametrize("receipt", [
+    "<span>Application Submitted</span>",
+    "<div>Your application was submitted successfully.</div>",
+    "<div><span>Application</span> Submitted</div>",
+])
+def test_generic_receipt_elements_finish_wait_and_close_browser(page, assistant, tmp_path, monkeypatch, receipt):
+    signal, _ = setup_wait(tmp_path, assistant, monkeypatch)
+    page.set_content("<main>" + receipt + "<p>We will be in touch.</p></main>")
+    assistant.gmail_shows_confirmation = lambda *args: pytest.fail("Page receipt must precede mail")
+    assistant._context = page.context
+    assistant._playwright = None
+    assert assistant._wait_for_signal(signal, page=page, timeout_seconds=10) == "submitted_by_user"
+    assistant.__exit__(None, None, None)
+    assert page.is_closed()
+
+
+@pytest.mark.parametrize("receipt", [
+    "<span hidden>Application Submitted</span>",
+    "<div style='opacity:0'><span>Application Submitted</span></div>",
+    "<div>If <span>your application was submitted successfully</span>, check your email.</div>",
+    "<p>If <span>Application Submitted</span> appears, check your email.</p>",
+    "<div>Application received after the deadline will not be reviewed.</div>",
+    "<div>Application Submitted</div><button>Submit Application</button>",
+    "<div>Application Submitted</div><input><input><input>",
+])
+def test_generic_receipt_elements_reject_templates_and_incidental_fragments(page, assistant, receipt):
+    page.set_content(receipt)
+    assert assistant.submission_confirmed(page) is False
+
+
 @pytest.mark.parametrize("body", [
     "<p hidden>Your application was submitted successfully.</p>",
     "<p>If your application was submitted successfully, you will receive an email.</p>",

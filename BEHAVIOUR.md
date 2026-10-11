@@ -844,9 +844,12 @@ report and every reason), and an audit row in `application_events`. The click
 itself is re-checked for a CAPTCHA or attestation that appeared in between.
 Afterwards the application is recorded **submitted** only once a confirmation
 page, portal entry or confirmation email is found — clicking is not evidence.
-A confirmation page is recognized by a visible heading, paragraph or alert/status region whose own text
-essentially is a known confirmation phrase, not by that wording merely
-appearing anywhere on the page: an unrelated FAQ or error page that happens
+A confirmation page is recognized by a visible heading, paragraph, standalone
+div/span or alert/status region whose own text essentially is a known confirmation
+phrase. Inline receipt fragments surrounded by other sentence text do not count.
+Recognition ends the evidence wait and lets normal browser teardown close the
+application tab. It is not enough for that wording merely to
+appear anywhere on the page: an unrelated FAQ or error page that happens
 to mention "application received" or "previously submitted application" in
 an ordinary sentence is not read as confirming this run. A real confirmation
 this does not recognize is left **needs_user_review**, not guessed at --
