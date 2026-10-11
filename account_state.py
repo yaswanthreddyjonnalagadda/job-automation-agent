@@ -349,7 +349,8 @@ def next_step(state: AccountState, memory: Memory) -> Step:
         if memory.account_exists:
             return Step(OPEN_SIGN_IN, "an account already exists for this email here")
         if memory.created:
-            return Step(FOR_OWNER, "the new-account form is still showing after the account was created: "
+            return Step(FOR_OWNER, "the new-account form is still showing after an account-creation attempt; "
+                                   "account creation is not confirmed: "
                                    "look at the page, then press Continue")
         return Step(CREATE, "no account here yet")
     if kind == SIGN_IN_FORM:

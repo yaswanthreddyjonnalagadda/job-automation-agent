@@ -1,0 +1,18 @@
+{
+  "id": "f146",
+  "date": "2026-10-10",
+  "site": "Chipotle / Workday and dedicated ATS registration forms",
+  "class": "Final-submission containment blocks authorized account creation",
+  "symptom": "The agent filled email and both passwords and acknowledged the notice, then paused without creating the account. Live browser console showed SUBMISSION_GUARD_V0_DENIED for Create Account.",
+  "root_cause": "The final-submission guard correctly denied structural form submitters but had no dedicated account-helper authorization path. The filler ignored its click helper's false result and recorded an account attempt anyway. The state message called an attempted creation a created account.",
+  "why_tests_missed": "Account-filling success tests ran without containment, while firewall tests deliberately verified that ordinary clicks on account submitters were denied. No test required the real account filler to complete with containment armed.",
+  "fix": "Add a token-protected, single-click account-creation gateway restricted to a dedicated credential form. Preserve ordinary-click and final-submission containment, reject mixed application forms, check the click result before counting an attempt, and describe an unresolved creation honestly.",
+  "tests": [
+    "tests/test_account_creation_gateway.py::test_real_account_filler_reaches_application_with_guard_armed",
+    "tests/test_account_creation_gateway.py::test_account_gateway_rejects_mixed_application_forms",
+    "tests/test_account_creation_gateway.py::test_account_gateway_never_authorizes_other_submit_actions",
+    "tests/test_account_creation_gateway.py::test_account_gateway_requires_explicit_call_and_does_not_leave_authorization",
+    "tests/test_account_creation_gateway.py::test_denied_creation_does_not_spend_a_creation_attempt"
+  ],
+  "prevention": "Test authorized authentication operations with production containment enabled, and verify both advancement and continued blocking of final application submission. Distinguish not dispatched, attempted and confirmed outcomes."
+}
