@@ -99,6 +99,32 @@ def _guard_script(capability: str) -> str:
       const finalForm = (form, submitter) => submitter
         ? Boolean(finalControl(submitter))
         : Array.from(form.elements).some(element => Boolean(finalControl(element)));
+      // Account helpers may authorize one dedicated registration form. A label
+      // alone never exempts a button from final-submission containment.
+      const accountCreationControl = element => {
+        if (!(element instanceof HTMLButtonElement) || !element.form || element.disabled) return false;
+        if (!labels(element).length || !labels(element).every(
+            label => /^(create (?:my |your |an )?account|register|sign up)$/i.test(label))) return false;
+        const form = element.form;
+        const controls = Array.from(form.elements);
+        if (controls.some(e => e.matches?.('input[type=file],textarea,select'))
+            || form.querySelector('[contenteditable=true]')) return false;
+        const inputs = controls.filter(e => e instanceof HTMLInputElement
+          && !e.disabled && e.type !== 'hidden' && e.getClientRects().length);
+        const passwords = inputs.filter(e => e.type === 'password');
+        const emails = inputs.filter(e => e.type !== 'password' && e.type !== 'checkbox'
+          && (e.type === 'email' || /e-?mail|user ?name/i.test([
+            e.getAttribute('aria-label'), e.name, e.id, e.getAttribute('data-automation-id'),
+            e.placeholder, ...Array.from(e.labels || []).map(l => l.innerText),
+            ...(e.getAttribute('aria-labelledby') || '').split(/\s+/)
+              .map(id => document.getElementById(id)?.innerText || '')
+          ].join(' '))));
+        if (passwords.length !== 2 || emails.length !== 1 || !emails[0].value.trim()
+            || !passwords[0].value || passwords[0].value !== passwords[1].value) return false;
+        if (inputs.some(e => !passwords.includes(e) && !emails.includes(e) && e.type !== 'checkbox')) return false;
+        return !controls.some(e => e !== element && e.matches?.(selector)
+          && !labels(e).some(label => safeUtilityLabel.test(label)));
+      };
       const recordDenial = (kind, element) => {
         const item = {
           sequence: ++state.sequence,
@@ -118,16 +144,20 @@ def _guard_script(capability: str) -> str:
         if (!authorization || authorization.capability !== capability || authorization.element !== element) {
           return false;
         }
+        if (authorization.accountCreation
+            && (authorization.clickAllowed || !accountCreationControl(element))) return false;
         authorization.clickAllowed = true;
         setTimeout(() => {
           if (state.authorization === authorization) state.authorization = null;
         }, 0);
         return true;
       };
-      const authorizedForm = form => {
+      const authorizedForm = (form, submitter = null) => {
         const authorization = state.authorization;
         return Boolean(authorization && authorization.capability === capability
-          && authorization.form === form && authorization.clickAllowed);
+          && authorization.form === form && authorization.clickAllowed
+          && (!authorization.accountCreation || ((!submitter || submitter === authorization.element)
+            && accountCreationControl(authorization.element))));
       };
 
       // Named, stable function references -- not inline closures passed directly to
@@ -161,7 +191,7 @@ def _guard_script(capability: str) -> str:
         if (!state.active) return;
         const form = event.target;
         if (!(form instanceof HTMLFormElement) || !finalForm(form, event.submitter)) return;
-        if (authorizedForm(form)) {
+        if (authorizedForm(form, event.submitter)) {
           state.authorization = null;
           return;
         }
@@ -190,7 +220,7 @@ def _guard_script(capability: str) -> str:
       const nativeRequestSubmit = HTMLFormElement.prototype.requestSubmit;
       if (nativeRequestSubmit) {
         HTMLFormElement.prototype.requestSubmit = function(submitter) {
-          if (state.active && finalForm(this, submitter) && !authorizedForm(this)) {
+          if (state.active && finalForm(this, submitter) && !authorizedForm(this, submitter)) {
             recordDenial("javascript_request_submit", submitter || firstSubmitter(this));
             return;
           }
@@ -212,6 +242,11 @@ def _guard_script(capability: str) -> str:
         authorize(element, token) {
           if (token !== capability || !state.active || !finalControl(element)) return false;
           state.authorization = {element, form: element.form || element.closest("form"), capability};
+          return true;
+        },
+        authorizeAccountCreation(element, token) {
+          if (token !== capability || !state.active || !accountCreationControl(element)) return false;
+          state.authorization = {element, form: element.form, capability, accountCreation: true};
           return true;
         },
         clearAuthorization(token) {
@@ -370,6 +405,30 @@ class SubmissionGuardV0:
             logger.warning("SUBMISSION_GUARD_V0: could not verify click outcome; stopping fallback: %s",
                            str(exc).splitlines()[0][:120])
             return True
+
+    def click_account_creation(self, page: Any, locator: Any) -> bool:
+        """One account-helper click, limited to a dedicated credential form."""
+        if not safety.password_allowed(page.url):
+            return False
+        self.activate(page)
+        before = self.denial_count(page)
+        try:
+            if not locator.evaluate(
+                f"(element, token) => window.{_GUARD_NAME}.authorizeAccountCreation(element, token)",
+                self._capability,
+            ):
+                return False
+            locator.click(timeout=8_000)
+            return self.denial_count(page) <= before
+        except PlaywrightError:
+            logger.warning("ACCOUNT_CREATE_BLOCKED: dedicated account click could not complete")
+            return False
+        finally:
+            for frame in page.frames:
+                try:
+                    frame.evaluate(f"token => window.{_GUARD_NAME}?.clearAuthorization(token)", self._capability)
+                except PlaywrightError:
+                    pass
 
     @staticmethod
     def _valid_authorization(decision: Any) -> bool:

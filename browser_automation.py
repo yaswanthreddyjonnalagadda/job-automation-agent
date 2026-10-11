@@ -5231,7 +5231,15 @@ class JobApplicationAssistant:
                 if not button.count():
                     logger.warning("ACCOUNT_CREATE_FAILED: no Create Account button found")
                     return False
-            self._click_resiliently(button, timeout_ms=8_000)
+            guard = getattr(self, "_submission_guard", None)
+            if guard is not None and button.evaluate("e => Boolean(e.form)"):
+                clicked = guard.click_account_creation(page, button)
+            else:
+                clicked = self._click_resiliently(button, timeout_ms=8_000)
+            if not clicked:
+                self._login_paused = "the account-creation click could not be confirmed; check the page before trying again"
+                logger.warning("ACCOUNT_CREATE_BLOCKED: account-control click was not confirmed")
+                return False
             login_guard.record_account_attempt(site, email)
             page.wait_for_timeout(5_000)
             try:

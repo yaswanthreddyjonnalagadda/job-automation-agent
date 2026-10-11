@@ -427,6 +427,17 @@ the site; they now all do.
 
 ## The account step, one state at a time
 
+Account creation runs through a dedicated one-click gateway when its button
+belongs to a form. The gateway requires an explicit registration label, one
+filled email/username field and two matching passwords. Forms containing
+application fields, file uploads or another sending action remain blocked.
+Ordinary clicks on account submitters remain guarded; only the account helper
+can authorize this narrowly scoped click after the existing credential and
+consent checks. Authorization is cleared afterwards, and final application
+submission still requires its own verified gateway. A blocked click is not
+counted as an account-creation attempt, and a form that remains open is reported
+as an unconfirmed creation attempt rather than a created account.
+
 An account section the application page itself calls optional ("Create a Career Profile
 account (optional)" at the foot of Meta's form) is part of the application, not an account
 step: the agent does not make that account, leaves its password boxes empty, and goes on
