@@ -6418,13 +6418,24 @@ class JobApplicationAssistant:
             # fixed banner, a horizontally scrollable container) is not attempted here -- a
             # documented limitation, not a silent gap.
             headings = page.evaluate(
-                """() => [...document.querySelectorAll('h1, h2, h3, p, [role=alert], [role=status]')]
+                """() => [...document.querySelectorAll('h1, h2, h3, p, div, span, [role=alert], [role=status]')]
                        .filter(e => {
                            if (e.closest('[hidden]')) return false;
                            if (!e.getClientRects().length) return false;
                            const style = getComputedStyle(e);
                            if (style.visibility === 'hidden' || style.visibility === 'collapse') return false;
                            if (parseFloat(style.opacity) === 0) return false;
+                           // Inline receipt words inside a larger sentence are not a receipt.
+                           // Block receipts remain eligible even beside unrelated page text.
+                           if (e.matches('div,span') && style.display.startsWith('inline')) {
+                               const siblings = [...e.parentNode.childNodes].filter(n => n !== e);
+                               if (siblings.some(n => {
+                                   if (n.nodeType === Node.TEXT_NODE) return n.textContent.trim();
+                                   return n.nodeType === Node.ELEMENT_NODE
+                                       && getComputedStyle(n).display.startsWith('inline')
+                                       && (n.innerText || '').trim();
+                               })) return false;
+                           }
                            let ancestor = e.parentElement;
                            while (ancestor) {
                                if (parseFloat(getComputedStyle(ancestor).opacity) === 0) return false;

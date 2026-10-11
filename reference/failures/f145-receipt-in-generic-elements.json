@@ -1,0 +1,15 @@
+{
+  "id": "f145",
+  "date": "2026-10-10",
+  "site": "ADP / generic confirmation pages",
+  "class": "Submission evidence omitted because receipt markup is not semantic",
+  "symptom": "The page displays Application Submitted in a visible span, but the manual watcher cannot verify it and the application tab remains open.",
+  "root_cause": "The watcher only inspected headings, paragraphs and alert/status elements, excluding standalone div and span receipts recorded in the saved confirmation structure diagnostic.",
+  "why_tests_missed": "Existing receipt tests used semantic headings, paragraphs or explicit status roles; none exercised generic elements through the wait and browser teardown.",
+  "fix": "Inspect visible div and span text with the existing complete-phrase matcher and unfinished-form checks. Reject inline fragments surrounded by other sentence text. Let confirmed receipts finish the wait and normal teardown close the browser.",
+  "tests": [
+    "tests/test_run_recovery_regressions.py::test_generic_receipt_elements_finish_wait_and_close_browser",
+    "tests/test_run_recovery_regressions.py::test_generic_receipt_elements_reject_templates_and_incidental_fragments"
+  ],
+  "prevention": "Exercise observed DOM shapes in browser regressions, covering both completion and contextual false positives rather than assuming semantic markup."
+}
