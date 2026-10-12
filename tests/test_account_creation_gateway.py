@@ -210,3 +210,64 @@ def test_dispatched_login_rejection_still_counts_with_guard_armed(page, monkeypa
     assert page.evaluate("window.signedIn") == 1
     assert outcomes == [False]
     assert assistant._last_login_rejected
+
+
+OVERLAY_SIGN_IN_FORM = '''<h2>Sign In</h2><form data-automation-id="signInForm" style="position:relative;width:300px"
+onsubmit="window.signedIn=(window.signedIn||0)+1; document.body.innerHTML='<h2>My Information</h2>';return false">
+<label>Email Address<input type="email"></label><label>Password<input type="password"></label>
+<div style="position:relative"><button aria-hidden="true" data-automation-id="signInSubmitButton">Sign In</button>
+<div role="button" aria-label="Sign In" style="position:absolute;inset:0"
+onclick="this.closest('form').requestSubmit(this.previousElementSibling)"></div></div></form>'''
+
+
+def test_login_helper_uses_accessible_overlay_with_guard_armed(page, monkeypatch):
+    serve(page, OVERLAY_SIGN_IN_FORM)
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant._submission_guard = SubmissionGuardV0(page.context)
+    monkeypatch.setattr(login_guard, "may_sign_in", lambda *args: None)
+    outcomes = []
+    monkeypatch.setattr(login_guard, "record_sign_in", lambda *args, **kwargs: outcomes.append(kwargs['ok']))
+    assistant.remember_account = lambda *args: None
+    assert assistant.attempt_auto_login(page, "owner@example.com", "Synthetic-Password1!", create_if_missing=False)
+    assert page.evaluate("window.signedIn") == 1
+    assert outcomes == [True]
+
+
+@pytest.mark.parametrize('extra', ['<div role="button" aria-label="Submit Application"></div>',
+    '<input type="file">', '<textarea></textarea>'])
+def test_overlay_gateway_rejects_mixed_application_controls(page, extra):
+    serve(page, OVERLAY_SIGN_IN_FORM.replace('</form>',extra+'</form>'))
+    page.locator('input[type=email]').fill('owner@example.com')
+    page.locator('input[type=password]').fill('Synthetic-Password1!')
+    guard = SubmissionGuardV0(page.context)
+    assert not guard.click_account_sign_in(page,page.get_by_role('button',name='Sign In',exact=True))
+    assert page.evaluate('window.signedIn') is None
+
+
+def test_overlay_gateway_revalidates_form_before_native_submit(page):
+    serve(page, OVERLAY_SIGN_IN_FORM.replace("this.closest('form').requestSubmit",
+          "this.closest('form').appendChild(Object.assign(document.createElement('input'),{type:'file'}));this.closest('form').requestSubmit"))
+    page.locator('input[type=email]').fill('owner@example.com')
+    page.locator('input[type=password]').fill('Synthetic-Password1!')
+    guard = SubmissionGuardV0(page.context)
+    assert not guard.click_account_sign_in(page,page.get_by_role('button',name='Sign In',exact=True))
+    assert page.evaluate('window.signedIn') is None
+    assert guard.denials(page)[-1]['kind'] == 'javascript_request_submit'
+
+
+def test_real_account_filler_supports_accessible_overlay(page, monkeypatch):
+    serve(page, FORM.replace('return false',
+          "document.body.innerHTML='<h2 data-automation-id=progressBarActiveStep>My Information</h2>';return false")
+          .replace('<button type="submit">Create Account</button>',
+          '<div style="position:relative"><button type="submit" aria-hidden="true">Create Account</button>'
+          '<div role="button" aria-label="Create Account" style="position:absolute;inset:0" '
+          'onclick="this.closest(\'form\').requestSubmit(this.previousElementSibling)"></div></div>'))
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant.values = safety.AgentValues()
+    assistant._profile = None
+    assistant.adapter = lambda _: WorkdayAdapter()
+    assistant.detect_form_fields = lambda _: []
+    assistant._submission_guard = SubmissionGuardV0(page.context)
+    monkeypatch.setattr(assistant, '_read_ats_password', lambda: 'Synthetic-Password1!')
+    assert assistant.fill_create_account_form(page,'owner@example.com')
+    assert page.evaluate('window.created') == 1

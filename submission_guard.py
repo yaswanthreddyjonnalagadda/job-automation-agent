@@ -101,14 +101,17 @@ def _guard_script(capability: str) -> str:
         : Array.from(form.elements).some(element => Boolean(finalControl(element)));
       // Account helpers may authorize one dedicated credential form. A label
       // alone never exempts a button from final-submission containment.
+      const credentialForm = element => element.form || element.closest('form');
       const credentialControl = (element, action) => {
-        if (!(element instanceof HTMLButtonElement) || !element.form || element.disabled) return false;
+        if (!(element instanceof Element) || !element.matches('button,[role=button]')
+            || !credentialForm(element) || element.disabled
+            || element.getAttribute('aria-disabled') === 'true') return false;
         const actionLabel = action === 'creation'
           ? /^(create (?:my |your |an )?account|register|sign up)$/i
           : /^(sign in|log in|login)$/i;
         if (!labels(element).length || !labels(element).every(label => actionLabel.test(label))) return false;
-        const form = element.form;
-        const controls = Array.from(form.elements);
+        const form = credentialForm(element);
+        const controls = [...new Set([...form.elements, ...form.querySelectorAll('[role=button]')])];
         if (controls.some(e => e.matches?.('input[type=file],textarea,select'))
             || form.querySelector('[contenteditable=true]')) return false;
         const inputs = controls.filter(e => e instanceof HTMLInputElement
@@ -126,7 +129,8 @@ def _guard_script(capability: str) -> str:
             || (action === 'creation' && passwords[0].value !== passwords[1].value)) return false;
         if (inputs.some(e => !passwords.includes(e) && !emails.includes(e) && e.type !== 'checkbox')) return false;
         return !controls.some(e => e !== element && e.matches?.(selector)
-          && !labels(e).some(label => safeUtilityLabel.test(label)));
+          && !labels(e).some(label => safeUtilityLabel.test(label))
+          && !(labels(e).length && labels(e).every(label => actionLabel.test(label))));
       };
       const recordDenial = (kind, element) => {
         const item = {
@@ -148,7 +152,8 @@ def _guard_script(capability: str) -> str:
           return false;
         }
         if (authorization.credentialAction
-            && (authorization.clickAllowed || !credentialControl(element, authorization.credentialAction))) return false;
+            && (authorization.clickAllowed || credentialForm(element) !== authorization.form
+              || !credentialControl(element, authorization.credentialAction))) return false;
         authorization.clickAllowed = true;
         setTimeout(() => {
           if (state.authorization === authorization) state.authorization = null;
@@ -159,8 +164,13 @@ def _guard_script(capability: str) -> str:
         const authorization = state.authorization;
         return Boolean(authorization && authorization.capability === capability
           && authorization.form === form && authorization.clickAllowed
-          && (!authorization.credentialAction || ((!submitter || submitter === authorization.element)
-            && credentialControl(authorization.element, authorization.credentialAction))));
+          && (!authorization.credentialAction || (
+            credentialForm(authorization.element) === form
+            && credentialControl(authorization.element, authorization.credentialAction)
+            && (!submitter || submitter === authorization.element
+            || (authorization.element.getAttribute('role') === 'button'
+              && submitter && credentialForm(submitter) === form
+              && credentialControl(submitter, authorization.credentialAction))))));
       };
 
       // Named, stable function references -- not inline closures passed directly to
@@ -170,6 +180,12 @@ def _guard_script(capability: str) -> str:
       const onClick = event => {
         if (!state.active) return;
         const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
+        const credential = state.authorization;
+        if (credential?.credentialAction && path.includes(credential.element)) {
+          if (authorizedClick(credential.element)) return;
+          denyEvent(event, 'credential_shape_changed', credential.element);
+          return;
+        }
         let candidate = null;
         for (const target of path) {
           candidate = finalControl(target);
@@ -249,12 +265,12 @@ def _guard_script(capability: str) -> str:
         },
         authorizeAccountCreation(element, token) {
           if (token !== capability || !state.active || !credentialControl(element, 'creation')) return false;
-          state.authorization = {element, form: element.form, capability, credentialAction: 'creation'};
+          state.authorization = {element, form: credentialForm(element), capability, credentialAction: 'creation'};
           return true;
         },
         authorizeAccountSignIn(element, token) {
           if (token !== capability || !state.active || !credentialControl(element, 'sign_in')) return false;
-          state.authorization = {element, form: element.form, capability, credentialAction: 'sign_in'};
+          state.authorization = {element, form: credentialForm(element), capability, credentialAction: 'sign_in'};
           return true;
         },
         clearAuthorization(token) {

@@ -5250,7 +5250,7 @@ class JobApplicationAssistant:
                     logger.warning("ACCOUNT_CREATE_FAILED: no Create Account button found")
                     return False
             guard = getattr(self, "_submission_guard", None)
-            if guard is not None and button.evaluate("e => Boolean(e.form)"):
+            if guard is not None and button.evaluate("e => Boolean(e.form || e.closest('form'))"):
                 clicked = guard.click_account_creation(page, button)
             else:
                 clicked = self._click_resiliently(button, timeout_ms=8_000)
@@ -5445,15 +5445,16 @@ class JobApplicationAssistant:
         # Ignore hidden duplicates. With containment armed, only the dedicated
         # credential gateway may dispatch the sign-in; a failed dispatch must
         # not be retried through other selectors or Enter.
-        for selector in (
+        candidates = [root.get_by_role('button', name=re.compile(r'^\s*(sign in|log in|login)\s*$', re.I))]
+        candidates.extend(root.locator(selector) for selector in (
             "button[data-automation-id='signInSubmitButton']",
             "button:has-text('Sign In')",
             "button:has-text('Sign in')",
             "button:has-text('Log In')",
             "button:has-text('Log in')",
             "button[type='submit']",
-        ):
-            buttons = root.locator(selector)
+        ))
+        for buttons in candidates:
             button = next((buttons.nth(i) for i in range(buttons.count())
                            if buttons.nth(i).is_visible()), None)
             if button is None:
