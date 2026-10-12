@@ -1,0 +1,16 @@
+{
+  "id": "f147",
+  "date": "2026-10-11",
+  "site": "Cloud worker / Ubuntu 24.04",
+  "class": "Browser startup sandbox mismatch",
+  "symptom": "Chipotle cloud application exited before opening a browser page; direct startup probe reported No usable sandbox.",
+  "root_cause": "Ubuntu AppArmor restricted user namespaces for the downloaded Playwright Chromium executable. Production enables chromium_sandbox=True; the installation probe used Playwright defaults with sandbox disabled.",
+  "why_tests_missed": "The smoke test launched headless nonpersistent Chromium with different sandbox settings from real applications.",
+  "fix": "Install an exact-executable AppArmor namespace exception and verify headed persistent Chromium startup with chromium_sandbox=True under Xvfb. Keep host restrictions and Chromium sandbox enabled.",
+  "tests": [
+    "tests/test_worker_browser_startup.py::test_worker_probe_requires_sandboxed_headed_persistent_context",
+    "tests/test_worker_browser_startup.py::test_worker_probe_propagates_launch_failure",
+    "tests/test_worker_browser_startup.py::test_worker_probe_closes_context_on_navigation_failure"
+  ],
+  "prevention": "Run the production browser startup mode on the deployment host after every browser install or upgrade, before assigning applications to the worker."
+}

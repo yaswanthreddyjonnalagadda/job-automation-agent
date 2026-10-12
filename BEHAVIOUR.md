@@ -1184,3 +1184,7 @@ Artifact limits: DOM 2 MiB; accessibility/text/JSON and runtime logs 1 MiB;
 console 512 KiB (the category-only projection is much smaller); screenshots
 16 MiB; manifests 64 KiB. Oversized sanitized text may be truncated with a
 manifest flag; oversized JSON becomes valid truncation metadata.
+
+### Cloud browser startup
+
+Cloud installation verifies a headed persistent Chromium context with the sandbox enabled under Xvfb, matching the worker's browser mode. On Ubuntu hosts that restrict unprivileged user namespaces, an administrator runs `scripts/remote/configure_browser_sandbox.sh` after installing or upgrading Playwright. It installs an AppArmor user-namespace exception for the exact installed Chromium executable; it does not change the system-wide restriction. A failed sandbox startup fails the verification instead of passing with different browser settings.

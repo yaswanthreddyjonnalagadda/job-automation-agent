@@ -21,14 +21,11 @@ echo "=== [3/4] Installing Playwright Chromium & Native Dependencies ==="
 python -m playwright install --with-deps chromium
 
 echo "=== [4/4] Performing Synthetic Browser Launch Test ==="
-python -c "
-from playwright.sync_api import sync_playwright
-with sync_playwright() as p:
-    browser = p.chromium.launch(headless=True)
-    page = browser.new_page()
-    page.goto('about:blank')
-    print('SUCCESS: Synthetic headless Chromium launch passed on ' + str(page.title() or 'blank page'))
-    browser.close()
-"
+# Install/update the exact Chromium AppArmor exception before checking startup.
+# An administrator runs this separately when jobagent has no sudo permission.
+if sudo -n true 2>/dev/null; then
+    sudo bash scripts/remote/configure_browser_sandbox.sh
+fi
+xvfb-run -a python scripts/remote/verify_browser_startup.py
 echo "All dependencies and browser engine verified successfully!"
 
