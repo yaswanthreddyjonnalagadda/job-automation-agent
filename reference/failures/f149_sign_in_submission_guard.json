@@ -1,0 +1,18 @@
+{
+  "id": "f149",
+  "date": "2026-10-11",
+  "site": "Chipotle / Workday Sign In",
+  "class": "Authentication dispatch blocked by final-submission containment",
+  "symptom": "The cloud browser remained on a filled Sign In form with no visible rejection, while the login attempt ledger recorded a rejection and paused the run.",
+  "root_cause": "A structural submit button is blocked by default, including Sign In. The login helper tried multiple guarded clicks and then Enter, and treated the unchanged password form as a failed sign-in even though containment prevented dispatch.",
+  "why_tests_missed": "Existing authentication fixtures used non-form buttons without the production submission guard. Account-creation gateway tests did not cover sign-in.",
+  "fix": "Add a single-use dedicated sign-in credential capability, revalidate its form at click and submit time, and stop failed dispatch without retrying Enter or recording rejection. Preserve genuine rejected-login accounting and final submission containment.",
+  "tests": [
+    "tests/test_account_creation_gateway.py::test_sign_in_gateway_dispatches_once_and_keeps_final_submission_blocked",
+    "tests/test_account_creation_gateway.py::test_sign_in_gateway_rejects_mixed_application_forms",
+    "tests/test_account_creation_gateway.py::test_real_login_helper_with_guard_armed_does_not_invent_rejection",
+    "tests/test_account_creation_gateway.py::test_denied_login_click_never_records_rejection_or_retries_enter",
+    "tests/test_account_creation_gateway.py::test_dispatched_login_rejection_still_counts_with_guard_armed"
+  ],
+  "prevention": "Exercise authentication helpers with real structural forms and the production guard armed, checking both network-equivalent form dispatch and durable attempt accounting."
+}

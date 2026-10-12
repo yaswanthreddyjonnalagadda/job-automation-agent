@@ -139,3 +139,74 @@ def test_denied_creation_does_not_spend_a_creation_attempt(page, monkeypatch):
     monkeypatch.setattr(login_guard, "record_account_attempt", lambda *args: attempts.append(args))
     assert not assistant.fill_create_account_form(page, "owner@example.com")
     assert attempts == []
+
+
+SIGN_IN_FORM = '''<h2>Sign In</h2><form onsubmit="window.signedIn=(window.signedIn||0)+1; return false">
+<label>Email Address<input type="email" value="owner@example.com"></label>
+<label>Password<input type="password" value="Synthetic-Password1!"></label>
+<button type="submit">Sign In</button></form>'''
+
+
+def test_sign_in_gateway_dispatches_once_and_keeps_final_submission_blocked(page):
+    serve(page, SIGN_IN_FORM)
+    guard = SubmissionGuardV0(page.context)
+    button = page.get_by_role("button", name="Sign In", exact=True)
+    button.click()
+    assert page.evaluate("window.signedIn") is None
+    assert guard.click_account_sign_in(page, button)
+    assert page.evaluate("window.signedIn") == 1
+    button.click()
+    assert page.evaluate("window.signedIn") == 1
+    page.evaluate("document.body.innerHTML='<form onsubmit=\"window.sent=true;return false\"><button>Submit Application</button></form>'")
+    page.get_by_role("button", name="Submit Application").click()
+    assert page.evaluate("window.sent") is None
+
+
+@pytest.mark.parametrize("extra", ['<input type="file">', '<textarea></textarea>',
+    '<input aria-label="First Name" value="Candidate">', '<button>Submit Application</button>'])
+def test_sign_in_gateway_rejects_mixed_application_forms(page, extra):
+    serve(page, SIGN_IN_FORM.replace('</form>', extra + '</form>'))
+    guard = SubmissionGuardV0(page.context)
+    assert not guard.click_account_sign_in(page, page.get_by_role("button", name="Sign In", exact=True))
+    assert page.evaluate("window.signedIn") is None
+
+
+def test_real_login_helper_with_guard_armed_does_not_invent_rejection(page, monkeypatch):
+    serve(page, SIGN_IN_FORM.replace('return false',
+          "document.body.innerHTML='<h2>My Information</h2>';return false"))
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant._submission_guard = SubmissionGuardV0(page.context)
+    monkeypatch.setattr(login_guard, "may_sign_in", lambda *args: None)
+    outcomes = []
+    monkeypatch.setattr(login_guard, "record_sign_in", lambda *args, **kwargs: outcomes.append(kwargs['ok']))
+    assistant.remember_account = lambda *args: None
+    assert assistant.attempt_auto_login(page, "owner@example.com", "Synthetic-Password1!", create_if_missing=False)
+    assert page.evaluate("window.signedIn") == 1
+    assert outcomes == [True]
+
+
+def test_denied_login_click_never_records_rejection_or_retries_enter(page, monkeypatch):
+    serve(page, SIGN_IN_FORM.replace('</form>', '<input type="file"></form>'))
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant._submission_guard = SubmissionGuardV0(page.context)
+    monkeypatch.setattr(login_guard, "may_sign_in", lambda *args: None)
+    outcomes = []
+    monkeypatch.setattr(login_guard, "record_sign_in", lambda *args, **kwargs: outcomes.append(kwargs['ok']))
+    assert not assistant.attempt_auto_login(page, "owner@example.com", "Synthetic-Password1!", create_if_missing=False)
+    assert page.evaluate("window.signedIn") is None
+    assert outcomes == []
+
+
+def test_dispatched_login_rejection_still_counts_with_guard_armed(page, monkeypatch):
+    serve(page, SIGN_IN_FORM.replace('return false',
+          "document.getElementById('error').textContent='Invalid email or password';return false")
+          + '<div id="error" role="alert"></div>')
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant._submission_guard = SubmissionGuardV0(page.context)
+    monkeypatch.setattr(login_guard, "may_sign_in", lambda *args: None)
+    outcomes = []
+    monkeypatch.setattr(login_guard, "record_sign_in", lambda *args, **kwargs: outcomes.append(kwargs['ok']))
+    assert not assistant.attempt_auto_login(page, "owner@example.com", "Synthetic-Password1!", create_if_missing=False)
+    assert page.evaluate("window.signedIn") == 1
+    assert outcomes == [False]
+    assert assistant._last_login_rejected

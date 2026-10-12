@@ -5442,9 +5442,9 @@ class JobApplicationAssistant:
                 return False
         pw_locator.fill(password)
 
-        # Sign-in buttons are often duplicated (one hidden) or covered by a
-        # cookie banner, so go through the same resilient click path that the
-        # rest of the Workday flow uses instead of a bare .click().
+        # Ignore hidden duplicates. With containment armed, only the dedicated
+        # credential gateway may dispatch the sign-in; a failed dispatch must
+        # not be retried through other selectors or Enter.
         for selector in (
             "button[data-automation-id='signInSubmitButton']",
             "button:has-text('Sign In')",
@@ -5453,12 +5453,27 @@ class JobApplicationAssistant:
             "button:has-text('Log in')",
             "button[type='submit']",
         ):
-            if root.locator(selector).count() and self._click_resiliently(root.locator(selector).first):
-                page.wait_for_load_state("domcontentloaded", timeout=15000)
-                page.wait_for_timeout(3000)
-                logger.info("Attempted auto-login on %s", domain)
-                return self._after_login_attempt(page, email, create_if_missing)
+            buttons = root.locator(selector)
+            button = next((buttons.nth(i) for i in range(buttons.count())
+                           if buttons.nth(i).is_visible()), None)
+            if button is None:
+                continue
+            guard = getattr(self, "_submission_guard", None)
+            clicked = (guard.click_account_sign_in(page, button) if guard is not None
+                       else self._click_resiliently(button))
+            if not clicked:
+                logger.warning("LOGIN_NOT_DISPATCHED: sign-in click did not complete; not recording a rejection")
+                return False
+            page.wait_for_load_state("domcontentloaded", timeout=15000)
+            page.wait_for_timeout(3000)
+            logger.info("Attempted auto-login on %s", domain)
+            return self._after_login_attempt(page, email, create_if_missing)
 
+        # An armed guard requires an explicit credential-form capability; Enter
+        # cannot establish one and must not manufacture a rejected-login hold.
+        if getattr(self, "_submission_guard", None) is not None:
+            logger.warning("LOGIN_NOT_DISPATCHED: no supported dedicated sign-in button")
+            return False
         # Some ATS login forms submit on Enter even when no button matches.
         pw_locator.press("Enter")
         page.wait_for_load_state("domcontentloaded", timeout=15000)

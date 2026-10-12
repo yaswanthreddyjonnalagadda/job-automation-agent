@@ -1192,3 +1192,5 @@ Cloud installation verifies a headed persistent Chromium context with the sandbo
 Authentication classification uses the same active dialog for its accessibility snapshot and password count. Registration fields and frames behind a Sign In modal do not turn it into an account-creation step. Password frames inside the active dialog remain supported, and account checkpoints and attempt limits still apply.
 
 A recognized single-password Sign In form takes priority over registration content behind it. That sign-in action uses the configured credentials within existing attempt limits and cannot fall back to creating another account. An explicit account verification requirement still takes priority.
+
+With final-submission containment armed, the account helper may authorize one Sign In click only on a dedicated form containing one filled email/username and one filled password. Mixed application forms remain blocked, and the capability expires after that click. A blocked or undispatched login stops without an Enter retry or a fabricated rejected-login record; an actually dispatched unsuccessful login still counts against the existing durable limits.
