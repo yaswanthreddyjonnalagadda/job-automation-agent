@@ -1188,3 +1188,7 @@ manifest flag; oversized JSON becomes valid truncation metadata.
 ### Cloud browser startup
 
 Cloud installation verifies a headed persistent Chromium context with the sandbox enabled under Xvfb, matching the worker's browser mode. On Ubuntu hosts that restrict unprivileged user namespaces, an administrator runs `scripts/remote/configure_browser_sandbox.sh` after installing or upgrading Playwright. It installs an AppArmor user-namespace exception for the exact installed Chromium executable; it does not change the system-wide restriction. A failed sandbox startup fails the verification instead of passing with different browser settings.
+
+Authentication classification uses the same active dialog for its accessibility snapshot and password count. Registration fields and frames behind a Sign In modal do not turn it into an account-creation step. Password frames inside the active dialog remain supported, and account checkpoints and attempt limits still apply.
+
+A recognized single-password Sign In form takes priority over registration content behind it. That sign-in action uses the configured credentials within existing attempt limits and cannot fall back to creating another account. An explicit account verification requirement still takes priority.

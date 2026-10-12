@@ -3410,7 +3410,24 @@ class JobApplicationAssistant:
         ):
             loc = page.locator(selector).first
             try:
-                if loc.count() and loc.is_visible():
+                if not (loc.count() and loc.is_visible()
+                        and loc.locator("input[type=password]:visible").count() == 1):
+                    continue
+                # One password can also be registration. Require the form's
+                # own sign-in identity, never a background heading or link.
+                if loc.evaluate(r"""form => {
+                    const root = form.closest('[role=dialog], [aria-modal=true], '
+                        + '[data-behavior-click-outside-close=topmost]') || form;
+                    const headings = Array.from(root.querySelectorAll('h1,h2,h3,[role=heading]'))
+                        .map(e => (e.textContent || '').trim());
+                    if (headings.some(t => /\b(create (?:an |your |my )?account|register|sign ?up)\b/i.test(t)))
+                        return false;
+                    return /signInForm/i.test(form.getAttribute('data-automation-id') || '')
+                        || headings.some(t => /^(sign[ -]?in|log[ -]?in|login)\b/i.test(t))
+                        || Array.from(form.querySelectorAll('button,input[type=submit]')).some(e =>
+                            /^(sign[ -]?in|log[ -]?in|login)$/i.test(
+                                (e.getAttribute('aria-label') || e.value || e.innerText || '').trim()));
+                }"""):
                     return loc
             except Exception:
                 continue
@@ -3744,6 +3761,19 @@ class JobApplicationAssistant:
             if candidate_state == "verification":
                 logger.warning("ACCOUNT_HELD: Workday is asking for account verification")
                 return False
+            # A single-password Sign In form owns the interaction, even when
+            # registration controls remain visible behind its modal.
+            scope = self._sign_in_scope(page)
+            if scope is not None and self._read_ats_password():
+                # Sign In opens as a modal ON TOP of Create Account, and that
+                # stacked state is unreliable to drive (fields clear, clicks
+                # land on the form underneath). The dedicated login page has
+                # exactly one form and signs in cleanly, so go there instead.
+                if page.locator("button:has-text('Create Account')").count() and self._goto_login_page(page):
+                    scope = self._sign_in_scope(page)
+                logger.info("Sign In form present; signing in rather than creating an account")
+                return self.attempt_auto_login(page, email, "", scope=scope, create_if_missing=False)
+
             if self._read_ats_password() and self._account_exists_message(page):
                 return self.sign_in_to_existing_account(page, email)
             if candidate_state in ("registration", "registration_error"):
@@ -3771,18 +3801,6 @@ class JobApplicationAssistant:
                 if self.fill_create_account_form(page, email):
                     return True
                 return False if self._create_form_attempted else self.create_ats_account(page, email)
-            # A sign-in form wins outright: the account exists by then, and
-            # re-registering just bounces back to this same gate.
-            scope = self._sign_in_scope(page)
-            if scope is not None and self._read_ats_password():
-                # Sign In opens as a modal ON TOP of Create Account, and that
-                # stacked state is unreliable to drive (fields clear, clicks
-                # land on the form underneath). The dedicated login page has
-                # exactly one form and signs in cleanly, so go there instead.
-                if page.locator("button:has-text('Create Account')").count() and self._goto_login_page(page):
-                    scope = self._sign_in_scope(page)
-                logger.info("Sign In form present; signing in rather than creating an account")
-                return self.attempt_auto_login(page, email, "", scope=scope)
 
             if pw_count == 0:
                 return False

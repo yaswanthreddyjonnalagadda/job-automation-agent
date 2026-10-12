@@ -6141,12 +6141,24 @@ class PageAgent:
     # -- small helpers --------------------------------------------------------------------
     @staticmethod
     def _password_boxes(tab) -> int:
-        """How many password boxes the page shows, frames included."""
+        """Count passwords in the active snapshot scope, including its frames."""
         try:
-            count = tab.locator("input[type=password]:visible").count()
+            dialogs = tab.locator('[role="dialog"]:visible, dialog[open]:visible')
+            in_dialog = bool(dialogs.count())
+            scope = dialogs.last if in_dialog else tab
+            count = scope.locator("input[type=password]:visible").count()
             for frame in tab.frames[1:]:
-                if not safety.is_captcha_frame(frame.url):
-                    count += frame.locator("input[type=password]:visible").count()
+                if safety.is_captcha_frame(frame.url):
+                    continue
+                if in_dialog:
+                    # Nested frame passwords belong to the dialog only when
+                    # their outermost embedding element is inside that dialog.
+                    owner = frame
+                    while owner.parent_frame and owner.parent_frame != tab.main_frame:
+                        owner = owner.parent_frame
+                    if not scope.evaluate("(dialog, element) => dialog.contains(element)", owner.frame_element()):
+                        continue
+                count += frame.locator("input[type=password]:visible").count()
             return count
         except Exception:
             return 0
