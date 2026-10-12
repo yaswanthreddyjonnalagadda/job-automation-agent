@@ -44,6 +44,59 @@ def test_dom_projects_structure_without_untrusted_text():
         assert_private(d.sanitize_dom(rich))
 
 
+def test_alert_and_status_role_text_survives_dom_sanitization_but_secrets_still_dont():
+    """A Workday account-creation error (role=alert) must not be as opaque as
+    everything else this redacts -- that was the whole reason nobody could tell
+    why Chipotle's account creation kept failing (f147)."""
+    raw = '<div role="alert">This email address is already registered</div>'
+    raw += '<div role="status">Saving your changes</div>'
+    raw += f'<div role="alert">Contact {SENTINELS[1]} for help</div>'
+    raw += '<span>Some unrelated label</span>'
+    safe = d.sanitize_dom(raw)
+    assert 'This email address is already registered' in safe
+    assert 'Saving your changes' in safe
+    assert_private(safe)  # the email sentinel inside the alert is still redacted
+    assert 'Some unrelated label' not in safe  # non-status text still held to the allow-list
+
+
+def test_alert_and_status_role_text_survives_snapshot_sanitization():
+    raw = ('- alert "This email address is already registered"\n'
+           '- status "Saving"\n'
+           '- heading "Some Random Heading"\n')
+    safe = d.sanitize_snapshot(raw)
+    assert 'This email address is already registered' in safe
+    assert 'Saving' in safe
+    assert 'Some Random Heading' not in safe
+
+
+def test_content_preserving_log_categories_keep_their_sanitized_message():
+    out = d.sanitize_log_line("ACCOUNT_CREATE_FAILED: the site kept the form open -- "
+                              "This email is already registered\n")
+    assert out.startswith('ACCOUNT_CREATE_FAILED:')
+    assert 'This email is already registered' in out
+
+
+def test_content_preserving_log_categories_still_strip_secrets_and_pii():
+    out = d.sanitize_log_line(f"LOGIN_REJECTED: the site didn't accept {SENTINELS[1]} -- not retrying\n")
+    assert_private(out)
+    assert out.startswith('LOGIN_REJECTED:')
+
+
+def test_non_content_preserving_log_categories_stay_fully_opaque():
+    assert d.sanitize_log_line("FIELD_COMMITTED: first_name = John Smith\n") == \
+        "FIELD_COMMITTED: private details omitted\n"
+
+
+def test_an_unrecognized_log_category_still_falls_back_to_runtime():
+    assert d.sanitize_log_line("SOME_FUTURE_CATEGORY: whatever\n") == "RUNTIME: private details omitted\n"
+
+
+def test_previously_missing_categories_are_now_recognized_not_genericized():
+    for category in ("ACCOUNT_HELD", "LOGIN_FAILED", "FORM_ERROR", "SUBMIT_HELD", "NEEDS_USER_REVIEW"):
+        out = d.sanitize_log_line(f"{category}: some detail\n")
+        assert out.startswith(category + ":"), f"{category} fell through to {out!r}"
+
+
 def test_console_is_untrusted_and_bounded():
     entries = [{"type": "error", "text": " ".join(SENTINELS) * 1000,
                 "location": {"url": "https://example.invalid/?token=secret"}}] * 300

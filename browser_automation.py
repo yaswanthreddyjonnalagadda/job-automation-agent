@@ -1986,7 +1986,46 @@ class JobApplicationAssistant:
         # anything on the application, no page counts as the posting again.
         if getattr(self, "_form_filled_this_run", False):
             return False
-        if self.visible_input_count(page) > 3 or self.is_review_step(page):
+        field_count = self.visible_input_count(page)
+        # Posting chrome can contain a complete search or talent-community form.
+        # Only use the main landmark when its own Apply is a navigation link
+        # outside a form; application controls in main still count normally.
+        try:
+            mains = page.locator("main:visible, [role=main]:visible")
+            if mains.count() == 1:
+                main = mains.first
+                links = main.get_by_role("link", name=re.compile(r"^\s*apply\b", re.I))
+                if any(links.nth(i).is_visible() and links.nth(i).evaluate(
+                        """e => {
+                            const a = e.closest('a[href]');
+                            if (!a || a.closest('form') || a.hasAttribute('download')
+                                || (a.getAttribute('href') || '').trim().startsWith('#')) return false;
+                            const u = new URL(a.href, location.href);
+                            return ['http:', 'https:'].includes(u.protocol) && !u.username && !u.password
+                                && u.href !== location.href;
+                        }""")
+                       for i in range(min(links.count(), 5))):
+                    field_count = main.locator(
+                        "input:not([type=hidden]):not([type=search]):visible, select:visible, textarea:visible"
+                    ).evaluate_all(r"""fields => fields.filter(field => {
+                        const form = field.closest('form');
+                        if (!form || form.querySelector('input[type=password], input[type=file]')) return true;
+                        const actions = [...form.querySelectorAll('button, input[type=submit], [role=button]')]
+                            .filter(e => e.getClientRects().length)
+                            .map(e => (e.getAttribute('aria-label') || e.innerText || e.value || '')
+                                .replace(/\s+/g, ' ').trim());
+                        const join = /^(?:join|sign up for) (?:our |the )?talent (?:community|network)$/i;
+                        // An explicit subscription action identifies this auxiliary
+                        // form, including when it is nested in the main landmark.
+                        // Mixed application actions or credential/upload fields keep
+                        // every field in the application count.
+                        const auxiliary = actions.some(label => join.test(label)) && actions.every(
+                            label => join.test(label) || /^(?:add|remove) job alert$/i.test(label));
+                        return !auxiliary;
+                    }).length""")
+        except Exception:
+            pass  # An unreadable scope retains the conservative whole-page count.
+        if field_count > 3 or self.is_review_step(page):
             return False
         try:
             body = page.inner_text("body", timeout=5_000)
@@ -3091,7 +3130,7 @@ class JobApplicationAssistant:
         """True on the final review/summary step -- where auto mode stops and
         hands back to the human, because Submit is theirs to press."""
         try:
-            if page.locator("button:text-is('Submit'), [role='button']:text-is('Submit'), button:has-text('Submit Application')").count():
+            if page.locator("button:text-is('Submit'):visible, [role='button']:text-is('Submit'):visible, button:has-text('Submit Application'):visible").count():
                 return True
             return self.is_review_step_by_wizard_marker(page)
         except Exception:
@@ -3120,9 +3159,18 @@ class JobApplicationAssistant:
         real, uncontained submit). Left unchanged and still callable on its own: nothing below
         depends on it, but removing it would be an unrelated regression for any other caller."""
         try:
-            return page.locator(
-                "[aria-current='step']:has-text('Review'), [data-automation-id='progressBarActiveStep']:has-text('Review'), [class*='active']:has-text('Review')"
-            ).count() > 0
+            markers = page.locator(
+                "[aria-current='step']:visible, [data-automation-id='progressBarActiveStep']:visible, "
+                "[class*='active']:visible"
+            )
+            review = re.compile(r"^\s*review(?:\s+(?:your\s+)?application)?\s*$", re.I)
+            for i in range(markers.count()):
+                # Read visible text on the marker itself. A search form's class
+                # containing 'active' and hidden option containing 'Review' is
+                # neither a wizard step nor evidence of a final application.
+                if review.fullmatch(markers.nth(i).inner_text(timeout=2_000)):
+                    return True
+            return False
         except Exception:
             return False
 

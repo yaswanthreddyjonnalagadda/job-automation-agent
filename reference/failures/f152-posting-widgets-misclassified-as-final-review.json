@@ -1,0 +1,20 @@
+{
+  "id": "f152",
+  "date": "2026-10-12",
+  "site": "Cargill careers posting, application link to Paradox",
+  "class": "Unscoped posting fields and descendant-text matches confused auxiliary widgets with application progress",
+  "symptom": "Senior Network Security Engineer - SASE paused on its posting with a generic stopped-before-last-page message; Apply Now produced a submission-guard denial.",
+  "root_cause": "on_job_description counted search and talent-community fields across the entire page. is_review_step_by_wizard_marker matched Review anywhere below any element with active in its class, including a search form with a hidden option. This prevented the guarded GET application-entry path, and the resulting Apply click was correctly blocked by containment.",
+  "why_tests_missed": "Posting fixtures had few fields and review fixtures contained real short wizard labels; no tests combined a main posting, auxiliary forms, hidden Review options, and an armed submission guard.",
+  "fix": "Scope posting field counts to a unique visible main landmark only when it offers an Apply anchor outside a form; retain application-field and already-filled checks. Require visible review controls and exact visible review-marker text. Verify entry GET followed by blocked final submission. Exclude explicitly identified talent-community subscription forms inside main only when they have no mixed application actions, password fields, or upload fields.",
+  "tests": [
+    "tests/test_posting_entry_scope.py::test_posting_ignores_search_and_talent_community_fields",
+    "tests/test_posting_entry_scope.py::test_active_search_container_with_hidden_review_text_is_not_review",
+    "tests/test_posting_entry_scope.py::test_hidden_review_markers_and_submit_templates_are_not_review",
+    "tests/test_posting_entry_scope.py::test_application_fields_in_main_prevent_posting_classification",
+    "tests/test_posting_entry_scope.py::test_posting_entry_uses_get_without_relaxing_final_submission_guard",
+    "tests/test_posting_entry_scope.py::test_talent_community_form_inside_main_is_not_the_job_application",
+    "tests/test_posting_entry_scope.py::test_talent_wording_does_not_hide_a_mixed_application_form"
+  ],
+  "prevention": "Test auxiliary widgets and hidden templates alongside the real application region; observe navigation and guard outcomes rather than treating a planner label or generic handoff as evidence of the current step."
+}

@@ -36,6 +36,8 @@ Resolve application information in this order: structured profile → explicit p
 
 ## Testing and communication
 
+Before concluding a root cause or claiming a fix, investigate all identifiable failures associated with the reported incident across the relevant path: browser actions, site responses, authentication and submission guards, persisted state, recovery, diagnostics, and outcome reporting. Check whether missing or over-redacted evidence hides the actual error; restore useful evidence without exposing private data when necessary. Distinguish confirmed causes, contributing failures, and unresolved hypotheses. Validate the observed outcome end to end when authorized and practical; otherwise state what remains unverified. Fixing one reproduced defect does not establish that the original incident is resolved.
+
 For a bug: reproduce when practical → add regression coverage → implement the smallest correct fix → run targeted tests → related tests → full suite when justified. Do not rerun the full suite after every small edit. Retain repository hooks and inspect replay differences; replay consistency alone does not prove correctness. Prefer synthetic profiles and verify observed outcomes.
 
 During meaningful work, report failures, root causes, significant findings/assumptions, unexpected test results, and scope changes without narrating every command. At completion report the problem, cause, changes/files, tests and pass/fail results, unverified behavior, and commit status/hash. Never claim verification that did not happen.

@@ -1198,3 +1198,24 @@ With final-submission containment armed, the account helper may authorize one Si
 Dedicated credential actions can target an accessible button wrapper over a native submit button. The helper chooses the accessible Sign In control first. The gateway validates the wrapper's enclosing native form, checks both native and ARIA button controls for mixed application actions, and revalidates before accepting a companion native submit event. Account creation uses the same guarded path for these wrappers; no forced click or unguarded form submission is used.
 
 An authorized credential wrapper may delegate one click to a matching native button in the same validated form. A second delegated click is blocked, and mixed-form validation still applies at every dispatch boundary.
+
+### Site-authored error and status text now survives (f147)
+
+Dashboard stdout/stderr exports and saved accessibility text previously omitted
+a site's own error or status message exactly as they omit a value you typed --
+making it impossible to tell why an account-creation or sign-in attempt failed
+from the evidence alone (Chipotle's Workday Create Account form, 9-12 October).
+
+They now keep that text, after the same secret/PII scrubbing everything else
+gets: an accessibility role of alert or status keeps its own message instead of
+being held to the field-label allow-list, and a reviewed set of failure
+categories (account creation/login/submission being held, blocked, rejected,
+or needing you) keep their sanitized message instead of the bare category name.
+Every value you typed, and every other category (filled fields, codes,
+passwords, answers), stays exactly as opaque as before.
+
+### Posting navigation and Review detection
+
+A posting's search fields outside its main content and explicitly identified talent-community subscription forms do not turn it into an application when the main content offers an Apply link outside a form. Application fields inside that main content still count, and an application already filled in this run is never reclassified as a posting. The agent follows the posting's application link with GET while retaining submission containment for the destination form.
+
+Review detection requires a visible Submit control or a visible active-step marker whose own visible text identifies Review. A search container with an active class, hidden location options, and hidden review/submit templates cannot establish that the application reached its final step.
