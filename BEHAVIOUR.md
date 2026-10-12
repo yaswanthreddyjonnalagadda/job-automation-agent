@@ -1336,3 +1336,6 @@ stays on your machine so a run that stopped can be understood afterwards.
 Screenshots, DOM dumps, the account-page snapshots and the run log keep their
 privacy treatment.
 
+### Cloud browser startup
+
+Cloud installation verifies a headed persistent Chromium context with the sandbox enabled under Xvfb, matching the worker's browser mode. On Ubuntu hosts that restrict unprivileged user namespaces, an administrator runs `scripts/remote/configure_browser_sandbox.sh` after installing or upgrading Playwright. It installs an AppArmor user-namespace exception for the exact installed Chromium executable; it does not change the system-wide restriction. A failed sandbox startup fails the verification instead of passing with different browser settings.

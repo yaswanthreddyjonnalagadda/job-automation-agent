@@ -25,7 +25,7 @@ fi
 echo "=== [3/5] Installing System Dependencies ==="
 sudo apt-get update -y
 sudo apt-get install -y --no-install-recommends \
-    python3 python3-pip python3-venv git curl \
+    python3 python3-pip python3-venv git curl xvfb xauth apparmor \
     libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
     libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
     libgbm1 libasound2t64 libpango-1.0-0 libcairo2
@@ -38,5 +38,6 @@ if [ ! -d "${INSTALL_DIR}" ]; then
 fi
 
 echo "=== [5/5] Bootstrap complete ==="
-echo "Next step: Run install_dependencies.sh as 'jobagent'."
+echo "Next: install Playwright as jobagent, then run sudo bash scripts/remote/configure_browser_sandbox.sh."
+echo "Verify: sudo -u jobagent xvfb-run -a /opt/job-automation-agent/.venv/bin/python /opt/job-automation-agent/scripts/remote/verify_browser_startup.py"
 
