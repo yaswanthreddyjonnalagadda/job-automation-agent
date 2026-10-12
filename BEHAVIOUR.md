@@ -1184,3 +1184,18 @@ Artifact limits: DOM 2 MiB; accessibility/text/JSON and runtime logs 1 MiB;
 console 512 KiB (the category-only projection is much smaller); screenshots
 16 MiB; manifests 64 KiB. Oversized sanitized text may be truncated with a
 manifest flag; oversized JSON becomes valid truncation metadata.
+
+### Site-authored error and status text now survives (f147)
+
+Dashboard stdout/stderr exports and saved accessibility text previously omitted
+a site's own error or status message exactly as they omit a value you typed --
+making it impossible to tell why an account-creation or sign-in attempt failed
+from the evidence alone (Chipotle's Workday Create Account form, 9-12 October).
+
+They now keep that text, after the same secret/PII scrubbing everything else
+gets: an accessibility role of alert or status keeps its own message instead of
+being held to the field-label allow-list, and a reviewed set of failure
+categories (account creation/login/submission being held, blocked, rejected,
+or needing you) keep their sanitized message instead of the bare category name.
+Every value you typed, and every other category (filled fields, codes,
+passwords, answers), stays exactly as opaque as before.
