@@ -1,0 +1,15 @@
+{
+  "id": "f153",
+  "date": "2026-10-12",
+  "site": "Cargill local application recovery; all reading-agent Review handoffs",
+  "class": "Different handoff branches did not share automation resume lifecycle",
+  "symptom": "After reloading the posting-navigation fix, the run immediately paused again with automation is parked for human handoff.",
+  "root_cause": "human_handoff parked automation at Review, but run_page_agent re-armed containment only after ordinary handoffs. Continue, refresh, and reload at Review re-entered PageAgent with execution still parked.",
+  "why_tests_missed": "Existing tests checked resume_automation directly and module reload order, but never drove both real run_page_agent handoff branches through a resumed second agent.run call.",
+  "fix": "Both handoff branches call one resume_handoff_action helper that re-arms containment only for nonterminal actions, preserving authentication hold policy.",
+  "tests": [
+    "tests/test_review_handoff_resume.py::test_handoff_resumes_only_nonterminal_actions",
+    "tests/test_submission_firewall.py::test_resuming_automation_rearms_guard_before_navigation"
+  ],
+  "prevention": "Exercise the complete handoff/resume lifecycle for every stop branch, including reload, refresh, Continue, and terminal decisions; verify the next agent execution is active with containment re-armed."
+}

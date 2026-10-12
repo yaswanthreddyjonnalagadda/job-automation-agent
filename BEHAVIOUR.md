@@ -1219,3 +1219,5 @@ passwords, answers), stays exactly as opaque as before.
 A posting's search fields outside its main content and explicitly identified talent-community subscription forms do not turn it into an application when the main content offers an Apply link outside a form. Application fields inside that main content still count, and an application already filled in this run is never reclassified as a posting. The agent follows the posting's application link with GET while retaining submission containment for the destination form.
 
 Review detection requires a visible Submit control or a visible active-step marker whose own visible text identifies Review. A search container with an active class, hidden location options, and hidden review/submit templates cannot establish that the application reached its final step.
+
+After both Review and ordinary handoffs, Continue, Resume/reload, and refresh re-arm submission containment before automation runs again. Ending or skipping the run does not re-arm it. Authentication holds still follow the existing owner-Continue policy.
