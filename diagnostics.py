@@ -34,6 +34,8 @@ PLACEHOLDER = '<redacted-value>'
 SAFE_LABELS = frozenset('application|personal information|contact information|first name|middle name|last name|full name|email|phone|address|city|state|postal code|country|password|verification code|resume|cover letter|education|work experience|experience|review|continue|next|back|save|submit|submit application|sign in|create account|required|optional'.split('|'))
 SAFE_ROLES = frozenset('button textbox checkbox radio combobox listbox option heading link group form dialog alert navigation main document generic text paragraph list listitem spinbutton iframe separator status progressbar banner'.split())
 SAFE_TAGS = frozenset('html head body main section article div span p h1 h2 h3 h4 h5 h6 label legend fieldset form input textarea select option button a ul ol li table thead tbody tr th td nav header footer dialog br hr'.split())
+# A role whose own text is the site speaking to the user, not a form field's label.
+STATUS_ROLES = frozenset({'alert', 'status'})
 
 
 @dataclass(frozen=True)
@@ -113,19 +115,31 @@ def sanitize_dom(raw: str, context: PrivacyContext | None = None) -> str:
         if isinstance(text, Comment):
             text.extract()
         elif text.strip():
-            text.replace_with(NavigableString(safe_label(sanitize_text(str(text), context))))
+            cleaned = sanitize_text(str(text), context)
+            parent_role = text.parent.get('role') if text.parent else None
+            kept = cleaned[:300] if parent_role in STATUS_ROLES else safe_label(cleaned)
+            text.replace_with(NavigableString(kept))
     return str(soup)
 
 
 def sanitize_snapshot(text: str, context: PrivacyContext | None = None) -> str:
-    """Preserve roles/known labels and boolean state; omit free text and values."""
+    """Preserve roles/known labels and boolean state; omit free text and values,
+    except an alert/status role's own text -- the site's message, never a typed
+    value -- which keeps its sanitize_text'd content instead of the field-label
+    allow-list (f147: a Workday account-creation error was indistinguishable from
+    every redacted field label, so no run could learn why it failed)."""
     out = []
     for line in (text or '').splitlines()[:20000]:
         match = re.match(r'^(\s*)-\s+([a-zA-Z]+)(?:\s+"([^"]*)")?', line)
         if not match or match[2].lower() not in SAFE_ROLES:
             out.append(PLACEHOLDER)
             continue
-        label = ' "' + safe_label(sanitize_text(match[3], context)) + '"' if match[3] is not None else ''
+        role = match[2].lower()
+        if match[3] is not None:
+            cleaned = sanitize_text(match[3], context)
+            label = ' "' + (cleaned[:300] if role in STATUS_ROLES else safe_label(cleaned)) + '"'
+        else:
+            label = ''
         states = ' '.join(re.findall(r'\[(?:required|disabled|checked|expanded)(?:=(?:true|false|mixed))?\]', line))
         out.append(f'{match[1]}- {match[2]}{label}' + (f' {states}' if states else ''))
     return '\n'.join(out)
@@ -562,13 +576,51 @@ def install_log_privacy():
     logging.setLogRecordFactory(factory)
 
 
-LOG_OPERATIONS = frozenset("FIELD_ACTION FIELD_PRESERVED ANSWER_LIBRARY FIELD_COMMITTED ATTACHED UPLOAD ACCOUNT_STATE LOGIN CODE PASSCODE PASSCODE_OK VERIFY_LINK RECOVERY RECOVERY_OK ACCOUNT_CREATE_FAILED ACCOUNT_CREATE_ATTEMPT ACCOUNT_CREATED REVIEW_READY READY_TO_SUBMIT SUBMITTED_BY_USER SUBMITTED SKIPPED READ PAGE_FULLY_KNOWN UNHANDLED_ERROR VALIDATION_FAILED HANDOFF STARTED FINISHED".split())
+# Every category label a logger.* call actually uses in this codebase (f147: dozens of
+# real categories -- ACCOUNT_HELD, LOGIN_FAILED, FORM_ERROR, SUBMIT_HELD, and more -- were
+# missing from this list and silently collapsed to the generic 'RUNTIME', hiding even
+# which kind of thing happened, not just its detail). Recognising a category name here
+# costs nothing privacy-wise: by default its message is still fully omitted below.
+LOG_OPERATIONS = frozenset("""
+    ACCOUNT ACCOUNT_CREATED ACCOUNT_CREATE_ATTEMPT ACCOUNT_CREATE_BLOCKED ACCOUNT_CREATE_FAILED
+    ACCOUNT_HELD ACCOUNT_STATE ACCOUNT_UNVERIFIED ACCOUNT_VERIFIED AI_ANSWERED_QUESTION ANSWERED
+    ANSWER_BANK ANSWER_LIBRARY APPLY_ENTRY_BLOCKED APPLY_ENTRY_NAVIGATED ATTACHED AUTOFILL AUTO_SUBMIT
+    AUTO_SUBMIT_FAILED BLOCKED_VALIDATION_LOOP BRAIN CHOICE CHOICES CODE CONSENT CONSENT_SCAN CORRECTED
+    COVER_LETTER_REJECTED COVER_LETTER_RETRY DISQUALIFIED_POLICY_MISMATCH DROPPED DUPLICATE ENTRIES
+    ENTRY EVIDENCE FIELD_ACTION FIELD_COMMITTED FIELD_PRESERVED FINISHED FORENSIC_CAPTURE FORM_ERROR
+    GEMINI GMAIL GOTO HANDOFF KEPT KNEW LEARNED LEFT_FOR_YOU LEGAL_ANSWER_CONFLICT LOCATION_SWEEP LOGIN
+    LOGIN_BLOCKED LOGIN_FAILED LOGIN_HELD LOGIN_NO_ACCOUNT LOGIN_OK LOGIN_PAUSED LOGIN_REJECTED LOOKED
+    NEEDS_USER_REVIEW NEXT NEXT_STUCK NO_NEXT_BUTTON OPEN_ANSWER PAGE_FULLY_KNOWN PASSCODE PASSCODE_OK
+    PLATFORM_ANSWER POSTING_PAGE PROFILE_ANSWER PROFILE_CREATED PROFILE_DIALOG READ READY_TO_SUBMIT
+    READ_FROM_EARLIER_RUN RECALLED RECOVERY RECOVERY_OK RECOVERY_REJECTED RELOAD_FAILED RELOAD_REJECTED
+    REMOVED REQUIRED_BLANK RESUME RETAILORING REUSED_COVER_LETTER REUSED_RESUME REUSE_SKIPPED
+    REVIEW_READY SCREENING_QA_FAILED SIGNED SKILLS SKIPPED STARTED SUBMISSION_BLOCKED
+    SUBMISSION_REPLAY_BLOCKED SUBMISSION_STORAGE_FAILURE SUBMITTED SUBMITTED_BY_USER SUBMITTING
+    SUBMIT_HELD TEXTQ TIMEOUT TOGGLE UNANSWERED_SELECT UNHANDLED_ERROR UPLOAD UPLOAD_DIALOG
+    VALIDATION_FAILED VERIFY_LINK VERIFY_LINK_OK YOURS
+""".split())
+
+# Categories whose message body is the site's own displayed text (an error or status
+# banner) or the agent's own account of why it stopped -- never a value anyone typed --
+# so the sanitized remainder may be kept instead of collapsed to the bare category.
+# Verified call site by call site (f147): each interpolates only a static reason string,
+# a hostname/domain, an exception's own message, or a value sanitize_text already strips
+# (email, token, code). Every other LOG_OPERATIONS category keeps the fully-opaque default.
+CONTENT_PRESERVING_OPERATIONS = frozenset("""
+    ACCOUNT_CREATE_FAILED ACCOUNT_CREATE_BLOCKED ACCOUNT_CREATED ACCOUNT_HELD ACCOUNT_UNVERIFIED
+    FORM_ERROR VALIDATION_FAILED LOGIN_BLOCKED LOGIN_FAILED LOGIN_HELD LOGIN_NO_ACCOUNT LOGIN_PAUSED
+    LOGIN_REJECTED SUBMISSION_BLOCKED SUBMIT_HELD NEEDS_USER_REVIEW HANDOFF
+    DISQUALIFIED_POLICY_MISMATCH SCREENING_QA_FAILED BLOCKED_VALIDATION_LOOP LEGAL_ANSWER_CONFLICT
+""".split())
 
 
 def sanitize_log_line(line: str) -> str:
     # stdout/stderr can bypass logging entirely; retain only enumerated operations.
     match = re.search(r'\b([A-Z][A-Z_]+):', line[:4096])
     operation = match[1] if match and match[1] in LOG_OPERATIONS else 'RUNTIME'
+    if operation in CONTENT_PRESERVING_OPERATIONS:
+        rest = sanitize_text(line[match.end():].strip())[:300] if match else ''
+        return f'{operation}: {rest}\n' if rest else f'{operation}: (no detail)\n'
     return operation + ': private details omitted\n'
 
 
