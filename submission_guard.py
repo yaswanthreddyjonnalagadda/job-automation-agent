@@ -148,9 +148,21 @@ def _guard_script(capability: str) -> str:
       };
       const authorizedClick = element => {
         const authorization = state.authorization;
-        if (!authorization || authorization.capability !== capability || authorization.element !== element) {
+        if (!authorization || authorization.capability !== capability) {
           return false;
         }
+        if (authorization.credentialAction && authorization.element !== element
+            && authorization.element.getAttribute('role') === 'button'
+            && authorization.clickAllowed && !authorization.companionClickAllowed
+            && element instanceof HTMLButtonElement
+            && credentialForm(authorization.element) === authorization.form
+            && credentialForm(element) === authorization.form
+            && credentialControl(authorization.element, authorization.credentialAction)
+            && credentialControl(element, authorization.credentialAction)) {
+          authorization.companionClickAllowed = true;
+          return true;
+        }
+        if (authorization.element !== element) return false;
         if (authorization.credentialAction
             && (authorization.clickAllowed || credentialForm(element) !== authorization.form
               || !credentialControl(element, authorization.credentialAction))) return false;
@@ -181,9 +193,12 @@ def _guard_script(capability: str) -> str:
         if (!state.active) return;
         const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
         const credential = state.authorization;
-        if (credential?.credentialAction && path.includes(credential.element)) {
-          if (authorizedClick(credential.element)) return;
-          denyEvent(event, 'credential_shape_changed', credential.element);
+        const clicked = path.find(target => target instanceof Element && target.matches(selector));
+        if (credential?.credentialAction && (clicked === credential.element
+            || (credential.element.getAttribute('role') === 'button'
+              && clicked instanceof HTMLButtonElement && credentialForm(clicked) === credential.form))) {
+          if (authorizedClick(clicked)) return;
+          denyEvent(event, 'credential_shape_changed', clicked);
           return;
         }
         let candidate = null;

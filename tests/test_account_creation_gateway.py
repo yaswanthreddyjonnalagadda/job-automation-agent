@@ -220,8 +220,13 @@ onsubmit="window.signedIn=(window.signedIn||0)+1; document.body.innerHTML='<h2>M
 onclick="this.closest('form').requestSubmit(this.previousElementSibling)"></div></div></form>'''
 
 
-def test_login_helper_uses_accessible_overlay_with_guard_armed(page, monkeypatch):
-    serve(page, OVERLAY_SIGN_IN_FORM)
+@pytest.mark.parametrize('dispatch', ['requestSubmit', 'click'])
+def test_login_helper_uses_accessible_overlay_with_guard_armed(page, monkeypatch, dispatch):
+    body = OVERLAY_SIGN_IN_FORM
+    if dispatch == 'click':
+        body = body.replace("this.closest('form').requestSubmit(this.previousElementSibling)",
+                            "this.previousElementSibling.click()")
+    serve(page, body)
     assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
     assistant._submission_guard = SubmissionGuardV0(page.context)
     monkeypatch.setattr(login_guard, "may_sign_in", lambda *args: None)
@@ -271,3 +276,16 @@ def test_real_account_filler_supports_accessible_overlay(page, monkeypatch):
     monkeypatch.setattr(assistant, '_read_ats_password', lambda: 'Synthetic-Password1!')
     assert assistant.fill_create_account_form(page,'owner@example.com')
     assert page.evaluate('window.created') == 1
+
+
+def test_overlay_allows_only_one_delegated_native_click(page):
+    body = OVERLAY_SIGN_IN_FORM.replace("document.body.innerHTML='<h2>My Information</h2>';",'')
+    body = body.replace("this.closest('form').requestSubmit(this.previousElementSibling)",
+                        "this.previousElementSibling.click();this.previousElementSibling.click()")
+    serve(page,body)
+    page.locator('input[type=email]').fill('owner@example.com')
+    page.locator('input[type=password]').fill('Synthetic-Password1!')
+    guard = SubmissionGuardV0(page.context)
+    assert not guard.click_account_sign_in(page,page.get_by_role('button',name='Sign In',exact=True))
+    assert page.evaluate('window.signedIn') == 1
+    assert len(guard.denials(page)) == 1
