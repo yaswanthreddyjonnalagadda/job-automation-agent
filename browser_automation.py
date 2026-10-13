@@ -6883,15 +6883,42 @@ class JobApplicationAssistant:
             except Exception:
                 pass
 
-    _VERIFIED = re.compile(r"verified|activated|confirmed|success|thank you|you can now (sign|log) ?in|welcome",
-                           re.IGNORECASE)
+    _VERIFIED = re.compile(
+        r"(?:account|email|e-mail)(?: address)? (?:has been |is |was |successfully )*"
+        r"(?:verified|activated|confirmed)|you can now (sign|log) ?in", re.IGNORECASE)
     _LINK_FAILED = re.compile(r"expired|invalid|no longer valid|already been used|could not (be )?verif|error",
                               re.IGNORECASE)
 
     def verify_account_by_email_link(self, page: Page) -> bool:
-        """The site has sent the owner a link to verify the account it just made: open that link from Gmail in a tab
-        of this browser, and say whether the site then shows the account verified (the owner's decision of 30
-        September 2026). On success the sign-in refused for the unverified account no longer holds it back."""
+        """Recover a live account-verification requirement using authorized mail.
+
+        A link that lands on Sign In permits authentication to continue; only
+        an explicit confirmation establishes that verification itself succeeded.
+        """
+        self._email_verification_outcome = "unconfirmed"
+        if self.why_not_read_a_code(page):
+            return False
+        state = account_state.read_state(page.locator("body").aria_snapshot(),
+                                         password_boxes=page.locator("input[type=password]:visible").count())
+        if state.kind != account_state.VERIFY_EMAIL:
+            return False
+        said = page.locator("body").inner_text()
+        if not re.search(r"an email has been sent|we(?:'ve| have)? sent", said, re.I):
+            resend = page.get_by_role("button", name=re.compile(
+                r"^(?:resend (?:account verification|verification email)|send verification email)$", re.I))
+            if resend.count() and resend.first.is_visible():
+                email = (getattr(self._config, "ats_email", "") or self._owner_profile().email).strip()
+                boxes = self._email_boxes(page)
+                if any(box.input_value().strip() and box.input_value().strip().lower() != email.lower()
+                       for box in boxes):
+                    self._login_paused = "The verification email address differs from the saved account."
+                    return False
+                for box in boxes:
+                    if not box.input_value().strip():
+                        self._type_email(page, box, email)
+                if not self._click_resiliently(resend.first, timeout_ms=8000):
+                    return False
+                page.wait_for_timeout(1000)
         link = self.verification_link_from_gmail(page)
         if not link:
             return False
@@ -6904,13 +6931,23 @@ class JobApplicationAssistant:
             except Exception:
                 tab.wait_for_timeout(3_000)
             said = " ".join((tab.locator("body").inner_text(timeout=10_000) or "").split())[:2000]
-            if self._LINK_FAILED.search(said) and not self._VERIFIED.search(said):
+            if self._LINK_FAILED.search(said):
+                self._email_verification_outcome = "failed"
                 self._login_paused = (f"the verification link {host} emailed you did not work (it may have expired): "
                                       f"use 'Resend Account Verification' on the site, open the new email's link, then "
                                       f"press Continue")
                 logger.warning("VERIFY_LINK: the site did not take the link")
                 return False
-            logger.info("VERIFY_LINK_OK: opened the verification link -- the account on %s is verified", host)
+            if not self._VERIFIED.search(said):
+                state = account_state.read_state(tab.locator("body").aria_snapshot(),
+                                                 password_boxes=tab.locator("input[type=password]:visible").count())
+                if state.kind == account_state.SIGN_IN_FORM:
+                    self._email_verification_outcome = "sign_in_required"
+                    logger.info("VERIFY_LINK: link opened a sign-in form; authentication is still unconfirmed")
+                    return True
+                return False
+            self._email_verification_outcome = "verified"
+            logger.info("VERIFY_LINK_OK: the site confirmed account verification on %s", host)
             email = (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip() \
                 or getattr(self._owner_profile(), "email", "")
             login_guard.clear_hold(host, email)        # the refusal was for an unverified account

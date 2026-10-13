@@ -476,6 +476,12 @@ counts before what the form looks like. Then one table decides:
   browser -- only a https link back to that same site, and on a shared host such as
   Workday only that employer's own. Never a password-reset link, and never a link through
   a tracking address (those are left to you). Once per site per run; then it signs in.
+  If the current verification page offers Resend Account Verification, request a
+  fresh email before searching Gmail, unless the page already confirms an email
+  was sent. Preserve a different owner-entered email rather than replacing it.
+  Plain Sign In pages do not trigger mailbox access. Expired or invalid links
+  fail even alongside generic Welcome or Thank You text. A link landing on Sign
+  In permits a fresh sign-in attempt; it does not itself prove verification.
   Code or link is read from the page: a box for the emailed code means the code is read
   and typed (the one-time-code rule, unchanged); no such box, and the site says the
   account must be verified, means the link.

@@ -1728,7 +1728,7 @@ class PageAgent:
                 try:
                     after = account_state.read_state(self.snapshot(page), password_boxes=self._password_boxes(tab))
                     logger.info("VERIFY_LINK: %s -- %s", "also signed the account in" if after.kind ==
-                                account_state.SIGNED_IN else "verified only; sign-in is still its own step",
+                                account_state.SIGNED_IN else "verification link opened; checking sign-in next",
                                 after)
                 except Exception:
                     pass
