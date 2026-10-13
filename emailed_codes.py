@@ -14,7 +14,7 @@ The rule, in one place (the owner's decisions of 15 and 24 September 2026, and o
     applicant controls the mailbox, which the owner has let the agent read. The rule goes by what is on the
     page, not by how the site words its code step (the wording once stopped a Praxis application one step
     short of done);
-  * no more than MAX_CODE_READS reads for one account in 24 hours (login_guard);
+  * authentication history does not impose an agent-created daily mail-read quota;
   * never a code in a log line (passcode_from_gmail logs only that one was found).
 The same rule covers the one link the agent may open from the owner's mail (the owner's decision of 30 September
 2026): the link a site emails to verify an account it has just made for the owner's email -- and only a link that

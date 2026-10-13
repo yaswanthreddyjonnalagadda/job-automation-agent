@@ -1,13 +1,4 @@
-"""The owner's Workday accounts were being locked: every run, restart and Continue tried the sign-in again.
-
-Researched 25 September 2026: a Workday external candidate account is locked by a few wrong passwords
-(NVIDIA's support: 5 in a row, 30 minutes; other tenants 3); the sign-in page says the same thing for
-a wrong password, no account, an unverified account and a locked one; "Forgot your password" mails a
-link (not a code) valid 2 hours, 5 requests in 24 hours. The agent forgot every attempt when its run
-ended, so nothing stopped the next run from spending another one.
-
-The class: a limited resource (sign-in attempts) spent without a memory of what was spent.
-"""
+"""Authentication history is diagnostic only; portal and credential gates still apply."""
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -30,21 +21,26 @@ def test_a_first_sign_in_is_allowed():
     assert login_guard.may_sign_in(HOST, EMAIL) is None
 
 
-def test_a_rejected_sign_in_holds_the_next_until_the_owner_resumes():
+def test_a_rejected_sign_in_records_history_without_holding_the_next():
     login_guard.record_sign_in(HOST, EMAIL, ok=False)
-    why = login_guard.may_sign_in(HOST, EMAIL)
-    assert why and "Continue" in why and HOST in why
-    login_guard.owner_resumed(HOST)
     assert login_guard.may_sign_in(HOST, EMAIL) is None
+    assert not login_guard.refused_before(HOST, EMAIL)
+    entry = login_guard._load()[login_guard._key(HOST, EMAIL)]
+    assert entry['failed_sign_ins']
+    assert 'hold' not in entry
 
 
-def test_two_rejections_in_a_day_stop_it_whatever_the_owner_presses():
-    login_guard.record_sign_in(HOST, EMAIL, ok=False)
-    login_guard.owner_resumed(HOST)
-    login_guard.record_sign_in(HOST, EMAIL, ok=False)
-    login_guard.owner_resumed(HOST)
-    why = login_guard.may_sign_in(HOST, EMAIL)
-    assert why and "24 hours" in why and "lock" in why
+
+@pytest.mark.parametrize("gate", ["may_sign_in", "may_create_account", "may_request_reset", "may_read_code"])
+def test_legacy_counts_and_holds_never_gate_authentication(gate):
+    stamp = login_guard._stamp()
+    login_guard._save({login_guard._key(HOST, EMAIL): {
+        'failed_sign_ins': [stamp] * 20, 'creations': [stamp] * 20,
+        'reset_requests': [stamp] * 20, 'code_reads': [stamp] * 20,
+        'hold': 'rejected', 'hold_reason': 'Wait 24 hours then press Continue'}})
+    assert getattr(login_guard, gate)(HOST, EMAIL) is None
+    assert not login_guard.refused_before(HOST, EMAIL)
+
 
 
 def test_the_rejections_are_forgotten_after_a_day(monkeypatch):
@@ -63,21 +59,22 @@ def test_a_sign_in_that_worked_clears_the_count_and_the_hold():
     assert login_guard.may_sign_in(HOST, EMAIL) is None
 
 
-def test_each_site_and_each_email_is_counted_on_its_own():
-    login_guard.record_sign_in(HOST, EMAIL, ok=False)
-    assert login_guard.may_sign_in("other.wd1.myworkdayjobs.com", EMAIL) is None       # another tenant
-    assert login_guard.may_sign_in(HOST, "someone.else@example.com") is None           # another account
-    assert login_guard.may_sign_in(HOST.upper(), EMAIL.upper())                        # spelling is not a difference
+def test_diagnostic_history_is_scoped_to_account():
+    login_guard.record_sign_in(HOST.upper(), EMAIL.upper(), ok=False)
+    data = login_guard._load()
+    assert list(data) == [login_guard._key(HOST, EMAIL)]
+    assert data[login_guard._key(HOST, EMAIL)]['failed_sign_ins']
 
 
-def test_account_creation_and_password_resets_are_limited_too():
-    assert login_guard.may_create_account(HOST, EMAIL) is None
-    for _ in range(login_guard.MAX_ACCOUNT_CREATIONS):
+
+def test_repeated_creation_reset_and_mail_reads_are_diagnostic_only():
+    for _ in range(10):
         login_guard.record_account_attempt(HOST, EMAIL)
-    assert login_guard.may_create_account(HOST, EMAIL)
-    assert login_guard.may_request_reset(HOST, EMAIL) is None
-    login_guard.record_reset_request(HOST, EMAIL)
-    assert login_guard.may_request_reset(HOST, EMAIL)
+        login_guard.record_reset_request(HOST, EMAIL)
+        login_guard.record_code_read(HOST, EMAIL)
+    for gate in (login_guard.may_create_account, login_guard.may_request_reset, login_guard.may_read_code):
+        assert gate(HOST, EMAIL) is None
+
 
 
 @pytest.mark.parametrize("content", ["", "not json", "[1, 2]", '{"a": '])
@@ -85,7 +82,7 @@ def test_a_damaged_record_never_stops_a_run(content):
     login_guard.LOGIN_ATTEMPTS_FILE.write_text(content, encoding="utf-8")
     assert login_guard.may_sign_in(HOST, EMAIL) is None
     login_guard.record_sign_in(HOST, EMAIL, ok=False)               # and is replaced
-    assert login_guard.may_sign_in(HOST, EMAIL)
+    assert login_guard.may_sign_in(HOST, EMAIL) is None
 
 
 def test_a_record_that_cannot_be_written_never_stops_a_run(tmp_path, monkeypatch):
@@ -145,30 +142,26 @@ def tries(page):
     return page.evaluate("window.tries")
 
 
-def test_a_rejected_sign_in_is_not_tried_again_by_the_next_call_or_the_next_run(page, monkeypatch):
+def test_rejections_do_not_block_a_later_sign_in_or_new_assistant(page, monkeypatch):
     serve(page)
     a = assistant_for(monkeypatch=monkeypatch)
-    assert a.attempt_auto_login(page, EMAIL, "s3cret-ATS", create_if_missing=False) is False
-    assert tries(page) == 1
-    assert a.attempt_auto_login(page, EMAIL, "s3cret-ATS", create_if_missing=False) is False
-    assert tries(page) == 1                                                   # nothing was submitted
-    assert "Continue" in a._login_paused
-    b = assistant_for(monkeypatch=monkeypatch)                                # a new run: a new object
-    assert b.attempt_auto_login(page, EMAIL, "s3cret-ATS", create_if_missing=False) is False
-    assert tries(page) == 1
+    for expected in (1, 2, 3):
+        assert not a.attempt_auto_login(page, EMAIL, 's3cret-ATS', create_if_missing=False)
+        assert tries(page) == expected
+    b = assistant_for(monkeypatch=monkeypatch)
+    assert not b.attempt_auto_login(page, EMAIL, 's3cret-ATS', create_if_missing=False)
+    assert tries(page) == 4
 
 
-def test_after_the_owner_resumes_one_more_try_is_allowed_and_then_the_day_limit_holds(page, monkeypatch):
+
+def test_legacy_hold_does_not_prevent_real_sign_in(page, monkeypatch):
+    login_guard._save({login_guard._key(HOST, EMAIL): {'hold': 'rejected',
+        'failed_sign_ins': [login_guard._stamp()] * 10}})
     serve(page)
     a = assistant_for(monkeypatch=monkeypatch)
-    a.attempt_auto_login(page, EMAIL, "s3cret-ATS", create_if_missing=False)
-    login_guard.owner_resumed(HOST)
-    a.attempt_auto_login(page, EMAIL, "s3cret-ATS", create_if_missing=False)
-    assert tries(page) == 2
-    login_guard.owner_resumed(HOST)                                           # pressing Continue again ...
-    a.attempt_auto_login(page, EMAIL, "s3cret-ATS", create_if_missing=False)
-    assert tries(page) == 2                                                   # ... cannot spend a third
-    assert "24 hours" in a._login_paused
+    assert not a.attempt_auto_login(page, EMAIL, 's3cret-ATS', create_if_missing=False)
+    assert tries(page) == 1
+
 
 
 def test_a_sign_in_that_works_is_recorded_as_such(page, monkeypatch):
@@ -190,23 +183,23 @@ CREATE = """<html><body><h1>Create Account</h1>
     '<input type="password"><button>Sign In</button></form>'; });</script></body></html>"""
 
 
-def test_landing_on_sign_in_after_creating_an_account_signs_in_once_then_holds(page, monkeypatch):
-    """The owner's decision (28 September): sign in after creating. This sign-in form never lets
-    anyone in, so the one attempt is counted and the next waits for the owner."""
+def test_creation_followed_by_rejection_does_not_add_persistent_hold(page, monkeypatch):
     a = assistant_for(adapter=WorkdayAdapter(), monkeypatch=monkeypatch)
     serve(page, body=CREATE)
     assert a.fill_create_account_form(page, EMAIL) is False
-    why = login_guard.may_sign_in(HOST, EMAIL)
-    assert why and "verif" in why and "Continue" in why
+    assert login_guard.may_sign_in(HOST, EMAIL) is None
 
 
-def test_an_account_is_not_created_again_and_again(page, monkeypatch):
-    a = assistant_for(adapter=WorkdayAdapter(), monkeypatch=monkeypatch)
-    for _ in range(login_guard.MAX_ACCOUNT_CREATIONS):
+
+def test_creation_history_does_not_block_form_dispatch(page, monkeypatch):
+    for _ in range(10):
         login_guard.record_account_attempt(HOST, EMAIL)
-    serve(page, body=CREATE)
-    assert a.fill_create_account_form(page, EMAIL) is False
-    assert page.evaluate("window.creates") == 0
+    a = assistant_for(adapter=WorkdayAdapter(), monkeypatch=monkeypatch)
+    serve(page, body=CREATE.replace('<form data-automation-id=', '<form onsubmit="event.preventDefault()" data-automation-id='))
+    a.fill_create_account_form(page, EMAIL)
+    assert page.evaluate('window.creates') == 1
+    assert page.get_by_role('heading', name='Sign In').is_visible()
+
 
 
 def test_the_agent_never_asks_workday_for_a_password_reset(page, monkeypatch):
@@ -218,7 +211,7 @@ def test_the_agent_never_asks_workday_for_a_password_reset(page, monkeypatch):
     assert "link" in a._login_paused
 
 
-def test_a_reset_is_asked_for_once_a_day_elsewhere(page, monkeypatch):
+def test_reset_still_requires_authorized_mailbox_access(page, monkeypatch):
     serve(page)
     a = assistant_for(monkeypatch=monkeypatch)
     login_guard.record_reset_request(HOST, EMAIL)
@@ -245,14 +238,12 @@ def test_pressing_continue_in_the_agent_lets_it_try_again():
     assert login_guard.may_sign_in(HOST, EMAIL) is None
 
 
-@pytest.mark.parametrize("decision", ["reload_code", "refresh", "reupload_resume", "fill_education"])
-def test_only_the_owners_continue_lifts_a_hold_not_a_reload_or_a_refresh(decision):
-    """A code reload or a refresh says nothing about whether the owner looked at the account."""
+@pytest.mark.parametrize('decision', ['reload_code', 'refresh', 'reupload_resume', 'fill_education'])
+def test_reload_and_refresh_need_no_owner_action_to_remove_a_quota(decision):
     agent = a_paused_agent()
-    agent.forget_sign_in_attempts(owner_acted=(decision == "continue"))
-    assert login_guard.may_sign_in(HOST, EMAIL)                 # still held
-    agent.forget_sign_in_attempts(owner_acted=True)             # the owner's Continue
+    agent.forget_sign_in_attempts(owner_acted=False)
     assert login_guard.may_sign_in(HOST, EMAIL) is None
+
 
 
 def test_apply_flow_hands_the_owners_decision_to_the_agent():

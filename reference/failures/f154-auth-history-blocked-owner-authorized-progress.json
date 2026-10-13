@@ -1,0 +1,17 @@
+{
+  "id": "f154",
+  "date": "2026-10-12",
+  "site": "Chipotle Workday; employer authentication and email verification",
+  "class": "Historical attempt counters imposed application policy independent of live portal state",
+  "symptom": "The owner requested sign-in, but the agent refused until a local 24-hour window expired even though the browser showed a Sign In form rather than a website lockout.",
+  "root_cause": "login_guard persisted rejection holds and hard-coded daily quotas for sign-in, account creation, reset requests and email reads. A recorded rejection also forced the account state machine into an owner handoff on later runs. Local and cloud histories differed, making the restriction harder to explain.",
+  "why_tests_missed": "Tests explicitly required these quotas and holds; they did not represent the owner's current requested authentication policy.",
+  "fix": "At the owner's explicit request, remove all cross-run authentication quotas and rejection holds. Keep diagnostic history and compatibility helpers, but historical entries never deny an action. Preserve live portal classification, authorized credentials and mailbox access, CAPTCHA handling, duplicate-dispatch reconciliation and per-run loop handling.",
+  "tests": [
+    "tests/test_login_guard.py::test_legacy_counts_and_holds_never_gate_authentication",
+    "tests/test_login_guard.py::test_rejections_do_not_block_a_later_sign_in_or_new_assistant",
+    "tests/test_login_guard.py::test_legacy_hold_does_not_prevent_real_sign_in",
+    "tests/test_emailed_code_rule.py::test_the_reader_reads_an_authorized_code_despite_historical_reads"
+  ],
+  "prevention": "Separate diagnostic history from owner-approved action policy. Report website lockouts only from observed website evidence. Cover legacy stored state when changing authentication policy."
+}

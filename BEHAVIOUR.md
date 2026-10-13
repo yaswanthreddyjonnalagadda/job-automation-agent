@@ -472,7 +472,7 @@ counts before what the form looks like. Then one table decides:
   (also when it says so on its sign-in form, as Workday does: "Verify your account before
   you sign in"). Your decision of 30 September 2026: the agent reads the email the site
   sent from your Gmail, under the same rule as a one-time code (you allowed mail reads, an
-  employer site, no CAPTCHA, the day's limit), and opens its link in a tab of its own
+  employer site, no CAPTCHA), and opens its link in a tab of its own
   browser -- only a https link back to that same site, and on a shared host such as
   Workday only that employer's own. Never a password-reset link, and never a link through
   a tracking address (those are left to you). Once per site per run; then it signs in.
@@ -481,8 +481,7 @@ counts before what the form looks like. Then one table decides:
   account must be verified, means the link.
 - **Stop and tell you** when only you can act: a verification link it could not find or
   that did not work (the dashboard says which), a refused password the reset did not cure (or on an account the site has
-  not shown it knows), a locked account, or sign-in held back to protect the
-  account. The run says exactly what to do; press Continue when it is done. It no
+  not shown it knows), a website-reported locked account, or an unsupported authentication step. The run says exactly what to do; press Continue when it is done. It no
   longer treats a sign-in page it could not get past as a form to fill in.
 
 Every change of state is written to the run's log (`ACCOUNT_STATE`) with a
@@ -519,33 +518,22 @@ After creating the account it signs in once with your email and `ATS_PASSWORD` (
 decision of 28 September 2026). If the site then emails a one-time code, the agent
 reads it from your Gmail under the rules in "When a one-time code may be read from
 your mail". If the site rejects the sign-in -- which on Workday can simply mean the
-new account's email is not verified yet -- that counts as a rejected sign-in (next
-section): it stops and tells you to verify the account, then press Continue.
+new account's email is not verified yet -- the agent records the outcome and follows
+the supported verification flow; the recorded rejection creates no persistent hold.
 
-## Signing in without locking your accounts
+## Authentication attempt history
 
-How Workday works, as researched on 25 September 2026: each employer's site
-(`*.myworkdayjobs.com/<tenant>`) has its own candidate accounts, so the same email is
-a separate account everywhere. Every wrong password counts towards a lock (NVIDIA's
-support: 5 in a row, 30 minutes; some tenants 3). The Sign In page says the same
-thing -- "You may have entered the wrong email address or password or your account
-might be locked" -- for a wrong password, no account, an account not yet verified and
-a locked one, so a rejection never tells the agent which. "Forgot your password" mails
-a link (not a code) that lasts about two hours, with five requests allowed in 24 hours.
-Whether a new account must have its email verified first is the employer's setting.
+At the owner's request (12 October 2026), the agent imposes no daily sign-in,
+account-creation, password-reset, or emailed-code/link-read quotas, no 24-hour
+cooldown, and no persistent rejection hold requiring Continue. Historical entries
+in `data/_login_attempts.json`, including old holds, are diagnostic only and cannot
+block a later run. Authentication outcomes are still recorded.
 
-So the agent keeps count across runs (`data/_login_attempts.json`, on your machine):
-* after a rejected sign-in it does not try again until you press Continue, and after
-  two rejections on one account in 24 hours it stops for the day whatever you press;
-* after it creates an account it signs in once; that sign-in counts like any other,
-  so if the site rejects it the agent tells you to verify the account from the email
-  it was sent, then press Continue;
-* it never asks Workday for a password reset (it cannot follow the emailed link, and
-  each request spends one of the five); elsewhere it asks at most once a day;
-* it makes at most two attempts a day to create an account on one site.
-Each time it holds back, the hand-over says why and what to do. Only the dashboard's
-**Continue** lifts a hold: reloading the agent's code, refreshing or re-uploading a
-resume say nothing about whether you looked at the account, so they leave it in place.
+The agent still reads actual portal errors and verification requirements, uses only
+authorized credentials and mailbox access, preserves CAPTCHA handoff, and reconciles
+uncertain account creation before another dispatch. Existing per-run action tracking
+and the unchanged-page loop detector remain. A website's own lockout or rate limit is
+reported from observed evidence. Workday password-reset links remain owner-operated.
 
 ## Signing in with Google
 

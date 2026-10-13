@@ -183,7 +183,7 @@ def test_after_creating_the_account_it_signs_in_with_the_email_and_password(page
     assert page.evaluate("window.at_signin") == {"email": EMAIL, "password": PASSWORD}
 
 
-def test_a_new_account_the_site_will_not_sign_in_yet_is_tried_once_and_left_to_the_owner(page, monkeypatch):
+def test_a_new_account_rejection_is_recorded_without_a_persistent_hold(page, monkeypatch):
     reject = ("document.getElementById('alert').textContent = 'You may have entered the wrong email address or "
               "password or your account might be locked.';")
     body = create_page(EMAIL_BOXES["workday"], after_create=SIGN_IN_AFTER_CREATE,
@@ -193,4 +193,4 @@ def test_a_new_account_the_site_will_not_sign_in_yet_is_tried_once_and_left_to_t
     assert a.fill_create_account_form(page, EMAIL) is False
     assert page.evaluate("window.signins") == 1
     why = login_guard.may_sign_in(HOST, EMAIL)
-    assert why and "verify" in why and "Continue" in why
+    assert why is None

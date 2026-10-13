@@ -76,8 +76,9 @@
   and nowhere else: the owner has allowed mail reads
   (`check_gmail_for_confirmation`), the site is an employer's, no CAPTCHA is on
   the page (a code the site words as "to confirm you're a human" is still just
-  an emailed code: the owner's decision of 25 September 2026), and the
-  per-account limit in `login_guard` is not spent. `passcode_from_gmail` asks it before it
+  an emailed code: the owner's decision of 25 September 2026). Authentication
+  history is diagnostic only: the owner removed daily quotas and persistent
+  rejection holds on 12 October 2026. `passcode_from_gmail` asks it before it
   opens the mail; a new step that reads a code goes through it, it does not
   re-decide.
 
