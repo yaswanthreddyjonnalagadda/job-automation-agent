@@ -8,5 +8,7 @@
   "fix": "Ground generic degree subtypes in the matching original resume row before runtime history use; explicit owner degree overrides still win.",
   "tests": [
     "tests/test_education_source_grounding.py"
-  ]
+  ],
+  "why_tests_missed": "Education fixtures trusted the extracted subtype and did not compare it with the matching original resume row.",
+  "prevention": "Test generic and explicit owner degree levels against original source rows, and preserve unrelated schools."
 }

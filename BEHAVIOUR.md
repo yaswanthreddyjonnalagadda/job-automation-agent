@@ -1230,3 +1230,5 @@ Workday standalone login preserves tenant prefixes with and without a locale. Re
 Generic education levels in the profile do not validate extracted degree subtypes: matching original resume rows ground those subtypes, while explicit owner degrees retain priority. An explicit standalone closed-job notice stops form filling before job-search controls are treated as application fields; the official employer posting may still be available and must be checked separately.
 
 A generic “any certifications?” Yes/No question resolves to Yes from a nonempty explicit profile certification list; an empty default does not prove No, and a generic credential list does not prove a named qualification. Phone fields with an explicit ten-digit X placeholder use the same number as digits, removing a leading US country code only for a United States profile.
+
+An explicit No current security clearance answers direct current clearance-possession questions, including possession of a named required clearance, as No. It does not answer historical clearance, willingness, ability, or objections.

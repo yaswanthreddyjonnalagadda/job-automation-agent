@@ -2583,6 +2583,15 @@ class PageAgent:
                     return val, src
             return explicit, "profile.answer_library"
 
+        # A current clearance denial also answers possession of a named
+        # required clearance. It says nothing about past clearance or ability
+        # and willingness to obtain one.
+        if re.search(r"\bdo you (?:currently )?(?:have|possess)\s+(?:a |an |any |the )?"
+                     r"(?:(?:current/active|current|active|required|security|TS/SCI|TS|SCI|top secret|secret)\s+)*clearance\b",
+                     question, re.I) \
+                and str(getattr(self.profile, "security_clearance", "")).strip().casefold() in {"no", "false"}:
+            return "No", "profile.security_clearance"
+
         # 2. Universal Concept & Synonym Engine (zero-cost, zero-heavy-RAM, cross-ATS)
         concept = concept_matcher.match_concept(
             question=question,

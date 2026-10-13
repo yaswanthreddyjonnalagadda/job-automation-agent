@@ -8,5 +8,7 @@
   "fix": "Stop before autofill on an explicit standalone closed-job notice and identify the need to check the official employer posting, without claiming the employer job is closed.",
   "tests": [
     "tests/test_closed_posting.py"
-  ]
+  ],
+  "why_tests_missed": "No fixture paired a closed-posting notice with still-visible job-search controls.",
+  "prevention": "Keep explicit closed notices separate from FAQs and ordinary job-search or application text."
 }
