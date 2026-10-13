@@ -1,0 +1,15 @@
+{
+  "id": "f161",
+  "date": "2026-10-13",
+  "site": "MANTECH Avature",
+  "class": "Alternative resume entry misclassified as required login",
+  "symptom": "Already registered? Login diverted the agent away from From Device and other available application entry choices.",
+  "root_cause": "Any password field and already registered text became an authentication/account-exists requirement.",
+  "why_tests_missed": "The live portal variant was not represented in regression fixtures.",
+  "fix": "Treat existing login as optional only beside explicit choose-any-option-to-apply wording and multiple known resume entry alternatives; live login errors retain priority.",
+  "tests": [
+    "tests/test_account_state.py::test_existing_login_on_explicit_resume_entry_page",
+    "tests/test_account_state.py::test_resume_alternatives_do_not_hide_live_login_rejection"
+  ],
+  "prevention": "Retain synthetic coverage for the observed portal contract and preserve neighboring working behavior."
+}

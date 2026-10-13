@@ -1,0 +1,12 @@
+{
+  "id": "f163",
+  "date": "2026-10-13",
+  "site": "Sundayy referral to MANTECH",
+  "class": "Closed posting treated as an application",
+  "symptom": "The source said the job position was no longer available but the agent filled a header job-search field. The matching official employer posting remained open.",
+  "root_cause": "No explicit closed-posting notice check preceded autofill and form navigation.",
+  "fix": "Stop before autofill on an explicit standalone closed-job notice and identify the need to check the official employer posting, without claiming the employer job is closed.",
+  "tests": [
+    "tests/test_closed_posting.py"
+  ]
+}

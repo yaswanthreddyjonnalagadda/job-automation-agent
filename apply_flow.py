@@ -1901,6 +1901,8 @@ def main() -> None:
             return
 
     resume = parse_resume(config.resume_path)
+    import repeated_entries
+    experience_data = repeated_entries.with_profile(experience_data, profile, resume.raw_text)
     claude = brain_for(config, job)
 
     # Windows forbids <>:"/\|?* in folder names; a title with '|' crashed a run.

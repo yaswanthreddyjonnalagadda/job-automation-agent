@@ -1,0 +1,19 @@
+{
+  "id": "f156",
+  "date": "2026-10-12",
+  "site": "Chipotle Workday external EY tax-credit questionnaire",
+  "class": "Manual handoff and resume applied to one tab instead of the browser context",
+  "symptom": "The application agent was durably parked, but the newly opened questionnaire tab blocked the authorized manual opt-out click. The browser guard recorded a click denial and the survey remained unchanged.",
+  "root_cause": "human_handoff deactivated only its current page while the guard's context-wide new-page hook continued to activate popups. Resuming similarly activated only the original page, leaving previously deactivated secondary tabs unprotected.",
+  "why_tests_missed": "Tests covered ordinary popup containment and single-page handoff separately; none covered existing or newly opened secondary tabs across handoff and resume.",
+  "fix": "After the durable handoff record, park guard activation context-wide and deactivate existing tabs. Resume re-arms every open tab before the actor becomes active, restoring normal popup containment. Reloads upgrade the same live guard instance, retaining its capability and registered callbacks. Frame lifecycle callbacks honor parking; an activation already in flight ends by deactivating its frame if handoff began during the browser call.",
+  "tests": [
+    "tests/test_submission_firewall.py::test_handoff_popup_is_manual_until_all_tabs_are_rearmed",
+    "tests/test_submission_firewall.py::test_handoff_reload_preserves_live_guard_capability_and_callbacks",
+    "tests/test_submission_firewall.py::test_handoff_storage_failure_keeps_guard_armed",
+    "tests/test_submission_firewall.py::test_popup_opened_after_the_guard_is_constructed_is_still_guarded",
+    "tests/test_submission_firewall.py::test_frame_callbacks_cannot_rearm_during_context_parking",
+    "tests/test_submission_firewall.py::test_inflight_frame_activation_finishes_deactivated_after_parking"
+  ],
+  "prevention": "Exercise browser-context lifecycle transitions with both pre-existing and future popups, durable-storage failures, pending actor work and code reloads. Keep automatic submission gated throughout active execution."
+}

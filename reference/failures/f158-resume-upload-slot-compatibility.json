@@ -1,0 +1,15 @@
+{
+  "id": "f158",
+  "date": "2026-10-13",
+  "site": "Cargill Paradox",
+  "class": "Resume dispatched to video-only file input",
+  "symptom": "A PDF was assigned to Upload Video accepting video/*; the page said Invalid media type but the agent logged ATTACHED.",
+  "root_cause": "The first file input was selected without checking accepted types or document purpose, and explicit rejection was ignored.",
+  "why_tests_missed": "The live portal variant was not represented in regression fixtures.",
+  "fix": "Choose a compatible resume or generic document slot, exclude other document purposes, and refuse success on explicit upload errors. Both the browser helper and inventory uploader use centralized file-type and rejection checks.",
+  "tests": [
+    "tests/test_resume_upload_slots.py",
+    "tests/test_resume_upload_slots.py::test_inventory_resume_path_also_rejects_video_slots"
+  ],
+  "prevention": "Retain synthetic coverage for the observed portal contract and preserve neighboring working behavior."
+}

@@ -318,6 +318,7 @@ class SubmissionGuardV0:
         self._active_pages: weakref.WeakSet = weakref.WeakSet()
         self._tracker: Any = None
         self._dedup_key = ""
+        self._handoff_parked = False
         context.add_init_script(script=self._script)
         for page in context.pages:
             for frame in page.frames:
@@ -381,8 +382,19 @@ class SubmissionGuardV0:
                 f"token => window.{_GUARD_NAME}.activate(token)",
                 self._capability,
             )
+        finally:
+            # Playwright navigation callbacks may be in flight when parking
+            # starts. Their final browser command must respect the new state.
+            if getattr(self, "_handoff_parked", False):
+                try:
+                    frame.evaluate(
+                        f"token => window.{_GUARD_NAME}.deactivate(token)", self._capability)
+                except PlaywrightError:
+                    logger.debug("Submission guard could not deactivate a closing frame")
 
     def activate(self, page: Any) -> None:
+        if getattr(self, "_handoff_parked", False):
+            return
         self._active_pages.add(page)
         if not getattr(page, "_jaa_submission_guard_console_listener", False):
             page.on("console", self._on_console)
@@ -395,14 +407,14 @@ class SubmissionGuardV0:
             self._activate_frame(frame)
 
     def _activate_attached(self, page: Any, frame: Any) -> None:
-        if page in self._active_pages:
+        if not getattr(self, "_handoff_parked", False) and page in self._active_pages:
             try:
                 self._activate_frame(frame)
             except PlaywrightError:
                 logger.debug("Submission guard could not activate a closing frame")
 
     def _activate_navigated(self, page: Any, frame: Any) -> None:
-        if page in self._active_pages:
+        if not getattr(self, "_handoff_parked", False) and page in self._active_pages:
             try:
                 self._activate_frame(frame)
             except PlaywrightError:
@@ -415,6 +427,20 @@ class SubmissionGuardV0:
                 f"token => window.{_GUARD_NAME}.deactivate(token)",
                 self._capability,
             )
+
+    def park_for_handoff(self) -> None:
+        """Called only after automation is durably parked for owner control."""
+        self._handoff_parked = True
+        for page in self.context.pages:
+            if not page.is_closed():
+                self.deactivate(page)
+
+    def resume_from_handoff(self, page: Any) -> None:
+        """Restore containment in every tab before the actor becomes active."""
+        self._handoff_parked = False
+        for candidate in dict.fromkeys([*self.context.pages, page]):
+            if not candidate.is_closed():
+                self.activate(candidate)
 
     @staticmethod
     def _frame_denials(frame: Any) -> list[dict]:

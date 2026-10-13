@@ -1,0 +1,14 @@
+{
+  "id": "f160",
+  "date": "2026-10-13",
+  "site": "Chipotle Workday",
+  "class": "Generic Next selected before mandatory external assessment",
+  "symptom": "Take Assessment remained incomplete while Save and Continue was clicked repeatedly.",
+  "root_cause": "The deterministic forward-action selector ignored the explicit mandatory prerequisite.",
+  "why_tests_missed": "The live portal variant was not represented in regression fixtures.",
+  "fix": "Prefer a Take/Start Assessment control only with a live explicit must-complete-to-continue requirement; completed assessment and progress labels retain normal navigation.",
+  "tests": [
+    "tests/test_assessment_entry.py"
+  ],
+  "prevention": "Retain synthetic coverage for the observed portal contract and preserve neighboring working behavior."
+}

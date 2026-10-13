@@ -883,6 +883,10 @@ def resolve_profile_value(
         spec = DATA_CONCEPTS[concept]
         field_name = str(spec.get("profile_field") or "")
         raw = getattr(profile, field_name, "") if field_name else ""
+        if concept == "CERTIFICATIONS" and isinstance(raw, (list, tuple)) and raw \
+                and re.fullmatch(r"(?:do you have|have you obtained|do you hold) (?:any )?(?:professional )?certifications?[?*\s]*", question.strip(), re.I) \
+                and {clean_text(option) for option in options or []} >= {"yes", "no"}:
+            return "Yes", "profile.certifications"
         if spec.get("resolver") == "skill_level":
             val = _skill_level(raw, question)
         elif spec.get("resolver") == "yes_if_matches":

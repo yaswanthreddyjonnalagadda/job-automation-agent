@@ -345,6 +345,11 @@ class JobApplicationAssistant:
         if guard is None:
             guard = SubmissionGuardV0(page.context)
             self._submission_guard = guard
+        elif (type(guard).__module__, type(guard).__name__) == (
+                SubmissionGuardV0.__module__, SubmissionGuardV0.__name__):
+            # Keep the live context, capability and listeners when code reloads.
+            # Existing callbacks resolve activate() on this upgraded instance.
+            guard.__class__ = SubmissionGuardV0
         return guard
 
     def protect_submission(self, page: Page) -> None:
@@ -370,6 +375,7 @@ class JobApplicationAssistant:
                     raise RuntimeError("Cannot hand off without a persisted application identity")
                 guard = getattr(self, "_submission_guard", None)
                 if guard is not None:
+                    guard = self._ensure_submission_guard(page)
                     guard.bind_application(tracker, key)
                 tracker.record_submission_safety_event(
                     key, "MANUAL_HANDOFF_STARTED", {"execution_state": "parked"}
@@ -381,7 +387,7 @@ class JobApplicationAssistant:
             self._submission_execution_state = "parked"
             guard = getattr(self, "_submission_guard", None)
             if guard is not None:
-                guard.deactivate(page)
+                guard.park_for_handoff()
 
     def _execution_lock(self):
         lock = getattr(self, "_submission_execution_lock", None)
@@ -405,7 +411,8 @@ class JobApplicationAssistant:
         with self._execution_lock():
             guard = getattr(self, "_submission_guard", None)
             if guard is not None:
-                guard.activate(page)
+                guard = self._ensure_submission_guard(page)
+                guard.resume_from_handoff(page)
             self._submission_execution_state = "active"
 
     def _choose_channel(self) -> str:
@@ -3503,15 +3510,19 @@ class JobApplicationAssistant:
         """Navigates to the tenant's standalone login page, carrying the
         current page as the post-login redirect.
 
-        Workday's URLs are /<locale>/<site>/..., so the login page is
-        /<locale>/<site>/login. Returns False if the URL doesn't look like
-        that, leaving the caller on whatever page it was already on."""
+        Workday supports both /<locale>/<site>/... and /<site>/... .
+        Keep the tenant prefix intact without treating "job" as the site."""
         parsed = urlparse(page.url)
         parts = [p for p in parsed.path.split("/") if p]
-        if len(parts) < 2 or parts[2:3] == ["login"]:
+        if not parts:
             return False
+        localized = bool(re.fullmatch(r"[a-zA-Z]{2,3}-[a-zA-Z]{2}", parts[0]))
+        prefix_length = 2 if localized else 1
+        if len(parts) < prefix_length or parts[prefix_length:prefix_length + 1] == ["login"]:
+            return False
+        prefix = "/".join(parts[:prefix_length])
         target = (
-            f"{parsed.scheme}://{parsed.netloc}/{parts[0]}/{parts[1]}"
+            f"{parsed.scheme}://{parsed.netloc}/{prefix}"
             f"/login?redirect={quote(parsed.path, safe='')}"
         )
         try:
@@ -4615,7 +4626,20 @@ class JobApplicationAssistant:
         if self.adapter(page).attachment_is_empty(page, "resume") is False:
             return True  # this platform already holds a resume
 
-        file_input = page.query_selector(file_input_selector)
+        # A generic file input may be a video recorder, cover letter, or
+        # another document slot. Respect its declared file types and purpose.
+        candidates = []
+        for candidate in page.query_selector_all(file_input_selector):
+            accept = (candidate.get_attribute("accept") or "").lower()
+            if not form_fields.file_accepts(accept, target):
+                continue
+            purpose = candidate.evaluate("""el => [el.name, el.id,
+                el.getAttribute('aria-label'), ...(Array.from(el.labels || []).map(x => x.textContent))]
+                .filter(Boolean).join(' ')""")
+            if re.search(r"cover[ _-]*letter|upload[ _-]*video|upload[ _-]*photo|transcript", purpose, re.I)                     and not re.search(r"resume|\bcv\b", purpose, re.I):
+                continue
+            candidates.append((bool(re.search(r"resume|\bcv\b", purpose, re.I)), candidate))
+        file_input = max(candidates, key=lambda item: item[0])[1] if candidates else None
         if not file_input:
             if self.upload_via_chooser(page, r"^\s*(upload|attach|add) (a |your )?(resume|cv)\s*$", target):
                 return True
@@ -4623,6 +4647,9 @@ class JobApplicationAssistant:
             return False
         file_input.set_input_files(str(target))
         page.wait_for_timeout(1_500)
+        if form_fields.file_upload_rejected(page):
+            logger.warning("Resume upload rejected by the page")
+            return False
         logger.info('ATTACHED: application document')
         tracker, key = getattr(self, "tracker", None), getattr(self, "application_key", "")
         if tracker is not None and key and hasattr(tracker, "record_event"):

@@ -170,6 +170,18 @@ def read_state(snapshot: str, password_boxes: Optional[int] = None) -> AccountSt
     # Enter the verification code we sent" is verified with the code, not with a link.
     code_box = re.search(r'- textbox "[^"]*(code|passcode|otp)[^"]*"', snapshot or "", re.IGNORECASE)
     wants_code = bool(code_box and _first(_CODE, texts))
+    # Resume-choice pages may offer an existing-account login alongside
+    # independent ways to begin an application. That login is optional only
+    # when the page explicitly says so through its alternatives.
+    entry_controls = re.findall(r'- (?:button|link) "((?:[^"\\]|\\.)*)"', snapshot or "")
+    resume_choices = {"from device", "copy & paste", "without resume"}
+    offered_entries = {" ".join(_unescape(name).split()).casefold() for name in entry_controls}
+    if passwords == 1 and not form_error and not wants_code \
+            and not any(_first(pattern, texts) for pattern in (_WRONG_PASSWORD, _LOCKED, _UNVERIFIED, _MFA, _VERIFY)) \
+            and re.search(r"already registered", " ".join(texts), re.I) \
+            and re.search(r"choose any option to apply", " ".join(texts), re.I) \
+            and len(resume_choices & offered_entries) >= 2:
+        return state(NONE, "existing-account login beside explicit alternative application entries")
     for kind, pattern in ((LOCKED, _LOCKED), (VERIFY_EMAIL, _UNVERIFIED), (WRONG_PASSWORD, _WRONG_PASSWORD),
                           (ACCOUNT_EXISTS, _EXISTS)):
         if kind == VERIFY_EMAIL and wants_code:

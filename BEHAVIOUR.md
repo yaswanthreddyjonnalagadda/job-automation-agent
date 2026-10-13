@@ -789,6 +789,13 @@ stops it. Your decision of 25 September 2026, decided in `safety.py`.
 6. **Prints a clear message** asking the user to review and click Submit; the
    web UI shows the same as a banner.
 
+A durable manual handoff parks automation for the entire browser context. Existing
+application and questionnaire tabs, and tabs opened during that handoff, remain
+under manual control. Before automation resumes, the submission guard is re-armed
+in every open tab; newly opened tabs are then guarded as usual. A failed handoff
+record leaves containment armed. Reloading code preserves the live guard capability
+and context callbacks rather than installing a second guard.
+
 ## After the user submits
 
 The run keeps watching and records **submitted** only on evidence:
@@ -1215,3 +1222,11 @@ A posting's search fields outside its main content and explicitly identified tal
 Review detection requires a visible Submit control or a visible active-step marker whose own visible text identifies Review. A search container with an active class, hidden location options, and hidden review/submit templates cannot establish that the application reached its final step.
 
 After both Review and ordinary handoffs, Continue, Resume/reload, and refresh re-arm submission containment before automation runs again. Ending or skipping the run does not re-arm it. Authentication holds still follow the existing owner-Continue policy.
+
+### Observed application-entry and attachment recovery (13 October 2026)
+
+Workday standalone login preserves tenant prefixes with and without a locale. Resume upload selects a slot compatible with the file and its purpose; a video-only or cover-letter slot is not a resume destination, and an explicit unsupported-type error is not attachment success. Custom Element UI country/state menus are read in full and their committed selection is checked. An explicit mandatory assessment entry takes priority over ordinary Next navigation until completion. An existing-account login beside multiple explicitly offered resume-entry alternatives is optional; actual authentication errors and required login pages retain their existing handling.
+
+Generic education levels in the profile do not validate extracted degree subtypes: matching original resume rows ground those subtypes, while explicit owner degrees retain priority. An explicit standalone closed-job notice stops form filling before job-search controls are treated as application fields; the official employer posting may still be available and must be checked separately.
+
+A generic “any certifications?” Yes/No question resolves to Yes from a nonempty explicit profile certification list; an empty default does not prove No, and a generic credential list does not prove a named qualification. Phone fields with an explicit ten-digit X placeholder use the same number as digits, removing a leading US country code only for a United States profile.

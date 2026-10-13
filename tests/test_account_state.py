@@ -331,3 +331,19 @@ def test_a_box_for_the_code_makes_it_a_code_step_whatever_the_page_says():
         '- button "Sign In" [ref=e5]',
     ])
     assert A.read_state(snapshot).kind == A.CODE_ENTRY
+
+
+@pytest.mark.parametrize("alternatives,expected", [(True, A.NONE), (False, A.ACCOUNT_EXISTS)])
+def test_existing_login_on_explicit_resume_entry_page(alternatives, expected):
+    snapshot = form(heading="Already registered? Login")
+    if alternatives:
+        snapshot += '\n- paragraph: Choose any option to apply\n- button "From Device"\n- button "Copy & Paste"\n- button "Without Resume"'
+    else:
+        snapshot += '\n- button "Upload Resume"'
+    assert A.read_state(snapshot).kind == expected
+
+
+def test_resume_alternatives_do_not_hide_live_login_rejection():
+    snapshot = form(message="Invalid password", heading="Already registered? Login")
+    snapshot += '\n- paragraph: Choose any option to apply\n- button "From Device"\n- button "Without Resume"'
+    assert A.read_state(snapshot).kind == A.WRONG_PASSWORD

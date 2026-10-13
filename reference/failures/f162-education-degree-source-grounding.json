@@ -1,0 +1,12 @@
+{
+  "id": "f162",
+  "date": "2026-10-13",
+  "site": "MANTECH Avature and Chipotle Workday",
+  "class": "Cached extraction substituted a degree subtype",
+  "symptom": "The original resume lists B.Tech but cached history supplied B.S. Chipotle was already submitted when discovered; MANTECH was corrected before advancing.",
+  "root_cause": "A generic Bachelor profile level only overrode field of study, leaving an unsupported extracted subtype ungrounded.",
+  "fix": "Ground generic degree subtypes in the matching original resume row before runtime history use; explicit owner degree overrides still win.",
+  "tests": [
+    "tests/test_education_source_grounding.py"
+  ]
+}

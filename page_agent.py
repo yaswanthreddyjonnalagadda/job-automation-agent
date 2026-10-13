@@ -1299,6 +1299,15 @@ class Outcome:
         return " | ".join(self.reasons) or self.kind
 
 
+def closed_posting_message(text: str) -> str:
+    """Only explicit standalone closed-posting notices; not search/FAQ prose."""
+    lines = [" ".join(line.split()) for line in (text or "").splitlines()]
+    if any(re.fullmatch(r"(?:FAQs?|Frequently asked questions)", line, re.I) for line in lines):
+        return ""
+    pattern = r"(?:the |this )?job(?: position)? is no longer available[.!]?"
+    return next((line for line in lines if re.fullmatch(pattern, line, re.I)), "")
+
+
 # ---------------------------------------------------------------------------
 # The agent
 # ---------------------------------------------------------------------------
@@ -2415,7 +2424,7 @@ class PageAgent:
         if unresolved:
             return PagePlan(page_kind="application_form", answers=answers, for_owner=unresolved)
 
-        forward = self.profile_forward(controls)
+        forward = self.profile_forward(controls, snapshot)
         if forward is None:
             return PagePlan(page_kind="application_form", answers=answers)
         label = " ".join((forward.name or "").split())
@@ -2457,8 +2466,14 @@ class PageAgent:
                         "no AI call", plan.next_label)
         return plan
 
-    def profile_forward(self, controls: list[Control]) -> Optional[Control]:
+    def profile_forward(self, controls: list[Control], snapshot: str = "") -> Optional[Control]:
         """The safest clearly-labelled application action on a local-plan page."""
+        if re.search(r"must complete (?:an? |the )?assessment(?: test)? to continue", snapshot, re.I) \
+                and not re.search(r"you have completed the assessment", snapshot, re.I):
+            assessment = next((c for c in controls if c.role in PRESS_ROLES and not c.disabled
+                and re.fullmatch(r"\s*(?:take|start) assessment\s*", c.name or "", re.I)), None)
+            if assessment is not None:
+                return assessment
         options = [c for c in controls if c.role in PRESS_ROLES and c.name and not c.disabled
                    and FORWARD_LABEL.match(" ".join(c.name.split())) and not NEVER_PRESS.search(c.name)]
         if not options:
@@ -3008,6 +3023,12 @@ class PageAgent:
             if hasattr(self.assistant, "protect_submission"):
                 self.assistant.protect_submission(tab)
             self._current_host = urlparse(getattr(tab, "url", "")).netloc.lower()
+            try:
+                unavailable = closed_posting_message(tab.locator("body").inner_text(timeout=3_000))
+            except Exception:
+                unavailable = ""
+            if unavailable:
+                return Outcome("owner_needed", page, [unavailable + "; check the employer's official posting before continuing"])
             if not self._resume_autofill_attempted and self.resume_file \
                     and hasattr(self.assistant, "autofill_from_resume"):
                 try:
@@ -3656,7 +3677,7 @@ class PageAgent:
         except Exception as exc:
             logger.debug("Field inventory failed: %s", exc)
             return False
-        target = form_fields.resume_input(fields)
+        target = form_fields.resume_input(fields, Path(self.resume_file))
         if target is not None:
             from browser_automation import JobApplicationAssistant
             if JobApplicationAssistant._file_already_attached(target.frame, Path(self.resume_file).name):
@@ -4420,6 +4441,8 @@ class PageAgent:
                     timeout=2_000)
             except Exception:
                 input_type, placeholder = "", ""
+            if input_type == "tel" or re.search(r"phone|mobile|telephone", control.question, re.I):
+                fill_value = form_fields.phone_text(fill_value, placeholder, getattr(self.profile, "country", ""))
             # A date goes into a date box the one way every date is written (form_fields.date_text): in the box's own
             # format, whatever the answer's ("December 2022", "2 weeks", "12/15/2022"). An answer that is not a date
             # is not written into a date box: before, today's date went in its place.
@@ -4992,6 +5015,7 @@ class PageAgent:
 
         def _check_portal(val: str) -> bool:
             for selector in (
+                ".el-select-dropdown:visible .el-select-dropdown__item:not(.is-disabled)",
                 ".ant-select-dropdown:not(.ant-select-dropdown-hidden) [class*=ant-select-item-option]:visible",
                 ".ant-select-dropdown:not(.ant-select-dropdown-hidden) [role=option]:visible",
                 "[class*=ant-select-item-option]:visible",
@@ -5005,12 +5029,10 @@ class PageAgent:
                     portal_opts = tab.locator(selector)
                     count = portal_opts.count()
                     if count > 0:
-                        labels = []
-                        for i in range(min(count, 80)):
-                            try:
-                                labels.append(" ".join((portal_opts.nth(i).inner_text(timeout=300) or "").split()))
-                            except Exception:
-                                labels.append("")
+                        # Country/state menus can contain hundreds of rows.
+                        # Read the offered labels in one local DOM call instead
+                        # of truncating them or making one browser call per row.
+                        labels = [" ".join(text.split()) for text in portal_opts.all_text_contents()]
                         if any(labels):
                             pick = self._pick_label(labels, val)
                             if pick is not None:
@@ -5022,6 +5044,10 @@ class PageAgent:
                                     except Exception:
                                         portal_opts.nth(pick).evaluate("e => e.click()")
                                 tab.wait_for_timeout(500)
+                                if selector.startswith(".el-select-dropdown"):
+                                    committed = loc.input_value(timeout=1_500)
+                                    if not _fill_value_committed(committed, labels[pick]):
+                                        return False
                                 self._choice_methods[control.ref] = "portal_option"
                                 return True
                 except Exception:
