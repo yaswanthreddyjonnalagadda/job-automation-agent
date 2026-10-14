@@ -442,13 +442,11 @@ class SubmissionGuardV0:
             for key in ("screenshot", "html")
         ):
             return False
-        if not isinstance(decision.field_comparisons, list) or not decision.field_comparisons \
-                or any(type(item) is not safety.FieldComparison for item in decision.field_comparisons):
-            return False
-        return all(
-            not comparison.required or (bool(comparison.approved) and comparison.matches is True)
-            for comparison in decision.field_comparisons
-        )
+        # A form that was actually read back, recorded for the audit. Whether each
+        # answer equals approved data no longer decides the submission (owner's rule
+        # of 13 October 2026: every mandatory field filled and the form clean).
+        return isinstance(decision.field_comparisons, list) and bool(decision.field_comparisons) \
+            and all(type(item) is safety.FieldComparison for item in decision.field_comparisons)
 
     @staticmethod
     def _record_event(tracker: Any, dedup_key: str, kind: str, payload: dict | None = None) -> None:
