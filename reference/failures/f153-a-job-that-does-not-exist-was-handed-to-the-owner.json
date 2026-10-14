@@ -1,0 +1,19 @@
+{
+  "id": "f153",
+  "date": "2026-10-14",
+  "site": "Workday (Copart) -- a posting the employer's page says does not exist; any portal's closed-posting page",
+  "class": "A run that reached a page with nothing to apply to was handed to the owner as if a person could finish it, and could not tell a removed job from a site that was only down for a moment",
+  "symptom": "The agent opened Copart's posting and landed on 'The page you are looking for doesn't exist.' It tried for about forty seconds and stopped with 'no way forward was found on this page' and a needs-your-review status. The owner's instruction: if the job does not exist, stop the run and record that it does not.",
+  "root_cause": "The agent recognised only one closed-posting wording ('This job is no longer available') and handed even that to the owner as 'owner_needed'. Workday's removed-posting notice was not recognised, so the page fell through to the generic no-way-forward stop. And Copart's tenant was returning HTTP 502 for its job data at the time, so the same page also appears during an outage: a stop on the first read would have called a live job gone.",
+  "why_tests_missed": "test_closed_posting covered the wording of one notice and not what the run does with it; no test ran a page that looks the same during an outage and when a job is really gone.",
+  "fix": "posting_gone_message() recognises both notices (a standalone line only, never FAQ or prose). PageAgent._posting_gone() reloads the page twice, five seconds apart, and only if the notice is still there does the run end with a new outcome, job_not_found; one good read after a reload means it was an outage and the run carries on. apply_flow records the new status job_not_found ('Job doesn't exist', shown with the skipped jobs, not counted as a failure) and stops.",
+  "tests": [
+    "tests/test_job_that_does_not_exist.py::test_a_page_that_says_the_job_is_gone_is_recognised_only_as_its_own_notice",
+    "tests/test_job_that_does_not_exist.py::test_the_status_exists_and_reads_as_a_job_that_does_not_exist",
+    "tests/test_job_that_does_not_exist.py::test_a_posting_that_is_gone_after_every_reload_is_reported_gone",
+    "tests/test_job_that_does_not_exist.py::test_a_site_that_was_only_down_for_a_moment_is_not_a_job_that_does_not_exist",
+    "tests/test_job_that_does_not_exist.py::test_a_normal_page_is_never_reloaded_to_check",
+    "tests/test_job_that_does_not_exist.py::test_the_outcome_is_its_own_kind"
+  ],
+  "prevention": "Give every dead end its own named outcome and status instead of letting it fall through to a generic 'needs a person'; and before declaring something permanently gone, look again -- an error page that can come from an outage must be confirmed by a second read, never concluded from one."
+}

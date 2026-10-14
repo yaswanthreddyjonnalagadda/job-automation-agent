@@ -59,34 +59,35 @@ def click_resiliently(locator: Any, timeout_ms: int = 4_000) -> bool:
         denial_count = SubmissionGuardV0.click_denial_count(locator)
     except Exception:
         denial_count = None
+    frame = SubmissionGuardV0.click_frame(locator)   # read after the click even if the element is gone
     try:
         locator.click(timeout=timeout_ms)
-        if SubmissionGuardV0.click_was_denied(locator, denial_count):
+        if SubmissionGuardV0.click_was_denied(locator, denial_count, frame):
             logger.warning("SUBMISSION_GUARD_V0_DENIED: refusing click fallback")
             return False
         return True
     except Exception:
-        if SubmissionGuardV0.click_was_denied(locator, denial_count):
+        if SubmissionGuardV0.click_was_denied(locator, denial_count, frame):
             logger.warning("SUBMISSION_GUARD_V0_DENIED: refusing click fallback")
             return False
         try:
             locator.click(force=True, timeout=min(timeout_ms, 2_000))
-            if SubmissionGuardV0.click_was_denied(locator, denial_count):
+            if SubmissionGuardV0.click_was_denied(locator, denial_count, frame):
                 logger.warning("SUBMISSION_GUARD_V0_DENIED: refusing JavaScript click fallback")
                 return False
             return True
         except Exception:
-            if SubmissionGuardV0.click_was_denied(locator, denial_count):
+            if SubmissionGuardV0.click_was_denied(locator, denial_count, frame):
                 logger.warning("SUBMISSION_GUARD_V0_DENIED: refusing JavaScript click fallback")
                 return False
             try:
                 locator.evaluate("el => el.click()")
-                if SubmissionGuardV0.click_was_denied(locator, denial_count):
+                if SubmissionGuardV0.click_was_denied(locator, denial_count, frame):
                     logger.warning("SUBMISSION_GUARD_V0_DENIED: JavaScript click was intercepted")
                     return False
                 return True
             except Exception as exc:
-                if SubmissionGuardV0.click_was_denied(locator, denial_count):
+                if SubmissionGuardV0.click_was_denied(locator, denial_count, frame):
                     logger.warning("SUBMISSION_GUARD_V0_DENIED: JavaScript click was intercepted")
                     return False
                 logger.debug("click_resiliently failed: %s", exc)

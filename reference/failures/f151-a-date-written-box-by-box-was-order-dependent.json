@@ -1,0 +1,18 @@
+{
+  "id": "f151",
+  "date": "2026-10-14",
+  "site": "Workday (Copart) 'What is your desired start date?' -- any date made of separate Month, Day and Year boxes",
+  "class": "A composite value was written one part at a time in whatever order the answers arrived, though the parts depend on each other and only one order is correct",
+  "symptom": "The start-date question ended as Month 0, Day 6, Year 2026 and the form said 'Invalid Date: 00/06/2026'; the run logged 'could not set: Month = 10' and 'could not set: Day = 14'. The page could not go on.",
+  "root_cause": "Workday's date is three spinbuttons that type into one another: typing 10 in Month moves on to Day, then Year. The agent's filler writes one box per answer and reads the others to keep them. Run against the real widget with every order of the three answers, only Month, Day, Year gave 10/14/2026; every other order left rubbish ('12', '1214', '1012'), because a later box is typed into while an earlier one is still empty or being spun. The planner returns the three answers in whatever order it likes, and nothing put them in order.",
+  "why_tests_missed": "Nothing in the suite touches the date-segment filler at all (no test names fill_date_segment or the dateSection boxes), and the planner's answer order was never varied: every fixture listed Month, Day, Year.",
+  "fix": "PageAgent._date_segments_in_order() puts the Month, Day and Year answers of each date in that order, in the places the date's answers held, before the answers are applied; every other answer keeps its place, and two dates on one page stay separate (a date starts at its Month box in the page's own order). Confirmed against the real widget before and after.",
+  "tests": [
+    "tests/test_date_segments_in_order.py::test_every_arrival_order_is_written_month_day_year",
+    "tests/test_date_segments_in_order.py::test_other_answers_keep_their_places",
+    "tests/test_date_segments_in_order.py::test_two_dates_on_one_page_stay_separate",
+    "tests/test_date_segments_in_order.py::test_a_year_only_box_and_a_spinbutton_that_is_not_a_date_are_left_alone",
+    "tests/test_date_segments_in_order.py::test_a_plan_with_no_dates_comes_back_unchanged"
+  ],
+  "prevention": "When a value is made of parts that affect each other (a date, a phone number split in boxes, a card number), write it as a whole, in the order the widget needs, from the one place that knows all the parts -- never one part at a time in the order an upstream planner happened to list them. And vary the input order in the test, not only the order the happy path uses."
+}

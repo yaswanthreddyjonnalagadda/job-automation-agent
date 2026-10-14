@@ -1299,6 +1299,28 @@ class Outcome:
         return " | ".join(self.reasons) or self.kind
 
 
+def closed_posting_message(text: str) -> str:
+    """Only explicit standalone closed-posting notices; not search/FAQ prose."""
+    lines = [" ".join(line.split()) for line in (text or "").splitlines()]
+    if any(re.fullmatch(r"(?:FAQs?|Frequently asked questions)", line, re.I) for line in lines):
+        return ""
+    pattern = r"(?:the |this )?job(?: position)? is no longer available[.!]?"
+    return next((line for line in lines if re.fullmatch(pattern, line, re.I)), "")
+
+
+def posting_gone_message(text: str) -> str:
+    """The employer's own notice that the posting is gone: a closed job, or Workday's "The page you are looking
+    for doesn't exist." for a removed one. Only a line that is the notice and nothing else (f153)."""
+    closed = closed_posting_message(text)
+    if closed:
+        return closed
+    lines = [" ".join(line.split()) for line in (text or "").splitlines()]
+    if any(re.fullmatch(r"(?:FAQs?|Frequently asked questions)", line, re.I) for line in lines):
+        return ""
+    pattern = r"the page you are looking for (?:doesn'?t|does not|doesn’t) exist[.!]?"
+    return next((line for line in lines if re.fullmatch(pattern, line, re.I)), "")
+
+
 # ---------------------------------------------------------------------------
 # The agent
 # ---------------------------------------------------------------------------
@@ -2993,6 +3015,31 @@ class PageAgent:
                 return self._run_locked(page)
         return self._run_locked(page)
 
+    @staticmethod
+    def _posting_gone(tab) -> str:
+        """The employer's notice that the job does not exist, or "" (f153).
+
+        A site that is only down for a moment shows the same page (Copart's tenant answered 502 and "The page
+        you are looking for doesn't exist." for a posting that was still there), so the page is loaded again
+        twice before the job is called gone: one good read means it was only the outage."""
+        def notice() -> str:
+            try:
+                return posting_gone_message(tab.locator("body").inner_text(timeout=3_000))
+            except Exception:
+                return ""
+        message = notice()
+        for _ in range(2 if message else 0):
+            tab.wait_for_timeout(5_000)
+            try:
+                tab.reload(wait_until="domcontentloaded")
+                tab.wait_for_timeout(3_000)
+            except Exception:
+                return message
+            message = notice()
+            if not message:
+                return ""
+        return message
+
     def _run_locked(self, page) -> Outcome:
         self._ensure_state()
         tries = 0
@@ -3008,6 +3055,9 @@ class PageAgent:
             if hasattr(self.assistant, "protect_submission"):
                 self.assistant.protect_submission(tab)
             self._current_host = urlparse(getattr(tab, "url", "")).netloc.lower()
+            gone = self._posting_gone(tab)
+            if gone:
+                return Outcome("job_not_found", page, [gone])
             if not self._resume_autofill_attempted and self.resume_file \
                     and hasattr(self.assistant, "autofill_from_resume"):
                 try:
@@ -3435,6 +3485,33 @@ class PageAgent:
         return Outcome("gave_up", page, ["too many pages in one run"])
 
     # -- answering ------------------------------------------------------------------
+    _DATE_PARTS = ("month", "day", "year")
+
+    @staticmethod
+    def _date_segments_in_order(answers: list, controls: list) -> list:
+        """The answers with each date's Month, Day and Year boxes put in that order (f151).
+
+        The boxes of one date type into one another, so the order the three are written is the date: run
+        against Copart's real widget, only Month, Day, Year left 10/14/2026; every other order left rubbish
+        ('00/06/2026'), and a planner returns them in whatever order it likes. The segments of one date take
+        the places the date's answers held; every other answer stays where it was. A date starts at its
+        Month box, in the page's own order, so two dates on one page stay two dates."""
+        parts = PageAgent._DATE_PARTS
+        rank, date = {}, 0
+        for control in controls:
+            part = (control.name or "").strip().lower() if control.role == "spinbutton" else ""
+            if part not in parts:
+                continue
+            if part == "month":
+                date += 1
+            rank[control.ref] = (date, parts.index(part))
+        places = [i for i, given in enumerate(answers) if given.ref in rank]
+        ordered = sorted((answers[i] for i in places), key=lambda given: rank[given.ref])
+        result = list(answers)
+        for place, given in zip(places, ordered):
+            result[place] = given
+        return result
+
     def apply_answers(self, page, plan: PagePlan, controls: list[Control]) -> list[tuple[Answer, Control]]:
         """Gives the plan's answers the rules allow; returns the ones given.
         The ones that could not be given are kept in self.failed.
@@ -3444,7 +3521,8 @@ class PageAgent:
         current_controls = list(controls)
         by_ref = {c.ref: c for c in current_controls}
         signing = [a for a in plan.answers if self._is_signature(a, by_ref.get(a.ref))]
-        queue: list[Answer] = [a for a in plan.answers if a not in signing]
+        queue: list[Answer] = self._date_segments_in_order(
+            [a for a in plan.answers if a not in signing], current_controls)
         processed_refs: set[str] = set()
 
         while queue:

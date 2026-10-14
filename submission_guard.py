@@ -396,32 +396,58 @@ class SubmissionGuardV0:
         )
 
     @staticmethod
-    def click_was_denied(locator: Any, before: int | None) -> bool:
+    def click_frame(locator: Any) -> Any:
+        """The frame the clicked element lives in, found before the click: the frame still
+        answers after the element has gone, the element's own locator does not."""
+        try:
+            return locator.element_handle(timeout=1_500).owner_frame()
+        except Exception:
+            return None
+
+    @staticmethod
+    def click_was_denied(locator: Any, before: int | None, frame: Any = None) -> bool:
         if before is None or before < 0:
             return False
         try:
+            if frame is not None:
+                # A click that works often removes its own element (a list closes, a category opens its
+                # sub-menu). Asking that element's locator would wait 30 s for it, fail, and report a
+                # click that worked as refused (f149); the frame is read at once.
+                return frame.evaluate(
+                    f"() => window.{_GUARD_NAME} ? window.{_GUARD_NAME}.denialCount() : -1"
+                ) > before
             return SubmissionGuardV0.click_denial_count(locator) > before
         except Exception as exc:
-            logger.warning("SUBMISSION_GUARD_V0: could not verify click outcome; stopping fallback: %s",
-                           str(exc).splitlines()[0][:120])
+            reason = str(exc).splitlines()[0][:120] if str(exc) else type(exc).__name__
+            if frame is not None and any(text in reason for text in (
+                    "Execution context was destroyed", "Frame was detached", "frame was detached")):
+                return False    # the document itself changed; a refused click leaves it exactly as it was
+            logger.warning("SUBMISSION_GUARD_V0: could not verify click outcome; stopping fallback: %s", reason)
             return True
 
     def click_account_creation(self, page: Any, locator: Any) -> bool:
         """One account-helper click, limited to a dedicated credential form."""
+        return self._click_credentials(page, locator, "authorizeAccountCreation")
+
+    def click_account_sign_in(self, page: Any, locator: Any) -> bool:
+        """One sign-in click, without authorizing application submission."""
+        return self._click_credentials(page, locator, "authorizeAccountSignIn")
+
+    def _click_credentials(self, page: Any, locator: Any, authorization_method: str) -> bool:
         if not safety.password_allowed(page.url):
             return False
         self.activate(page)
         before = self.denial_count(page)
         try:
             if not locator.evaluate(
-                f"(element, token) => window.{_GUARD_NAME}.authorizeAccountCreation(element, token)",
+                f"(element, token) => window.{_GUARD_NAME}.{authorization_method}(element, token)",
                 self._capability,
             ):
                 return False
             locator.click(timeout=8_000)
             return self.denial_count(page) <= before
         except PlaywrightError:
-            logger.warning("ACCOUNT_CREATE_BLOCKED: dedicated account click could not complete")
+            logger.warning("ACCOUNT_ACTION_BLOCKED: dedicated credential click could not complete")
             return False
         finally:
             for frame in page.frames:

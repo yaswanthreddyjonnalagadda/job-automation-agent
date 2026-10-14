@@ -1,0 +1,19 @@
+{
+  "id": "f152",
+  "date": "2026-10-14",
+  "site": "Workday (Copart) 'Please select the appropriate option describing your employment eligibility' -- any list that asks for a category of work eligibility",
+  "class": "A required legal-status question was left for the owner on every run because no rule connected the question to the profile fact that answers it",
+  "symptom": "Copart's step 3 stopped with 'Please select the appropriate option describing your employment eligibility' still on 'Select One': a required dropdown with three statements (authorized permanently / an active temporary work permit / I require sponsorship before I am able to work). The profile already said requires_visa_sponsorship = true.",
+  "root_cause": "The concept layer recognised 'authorized to work' (a Yes/No) and 'require sponsorship' (a Yes/No) but not a question that asks for a category of eligibility, so no profile value was offered and, because a legal statement is only ever written when the profile states it outright (safety.is_legal_status_question), the question was left for the owner.",
+  "why_tests_missed": "Concept tests covered Yes/No legal questions only; no test used a portal's category-style eligibility question, and the question had never appeared in a saved page the replay guard reads.",
+  "fix": "A data concept EMPLOYMENT_ELIGIBILITY (reference/concepts.json) with a new resolver text_if_true: while the profile says it needs sponsorship it gives the statement the owner confirmed ('I require sponsorship before I am able to work'), which the option matcher resolves to the list's own wording. For a profile that does not need sponsorship it gives nothing, so the question stays the owner's -- the agent does not choose 'permanent' or 'temporary' on its own reading.",
+  "tests": [
+    "tests/test_employment_eligibility_option.py::test_the_question_is_recognised",
+    "tests/test_employment_eligibility_option.py::test_a_profile_that_needs_sponsorship_chooses_the_sponsorship_statement",
+    "tests/test_employment_eligibility_option.py::test_the_statement_is_given_even_before_the_list_has_been_read",
+    "tests/test_employment_eligibility_option.py::test_a_profile_that_does_not_need_sponsorship_is_left_for_the_owner",
+    "tests/test_employment_eligibility_option.py::test_the_neighbouring_legal_questions_keep_their_own_concepts",
+    "tests/test_employment_eligibility_option.py::test_the_chosen_statement_is_not_flagged_as_contradicting_the_profile"
+  ],
+  "prevention": "A legal-status answer is the owner's to state, once, and the agent's job is to carry that statement to every wording of the question. When a question is left for the owner, record which profile fact would have answered it and ask for the statement then, so the next form that asks it differently needs no new human step; and give each new answer a branch only for what the owner actually stated, leaving the other branches blank rather than inferred."
+}
