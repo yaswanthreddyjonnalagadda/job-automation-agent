@@ -6340,7 +6340,14 @@ class PageAgent:
         return snapshot
 
     def _save(self, snapshot: str) -> None:
-        """Every page read is kept: it is what a failure is replayed from."""
+        """Every page read is kept: it is what a failure is replayed from.
+
+        Written as read, never through diagnostics.py's structural sanitizer (f148): `snapshot`
+        is the return value of `self.snapshot()`, which has already applied `perception.hide_secrets()`
+        (f015 -- redact at the one place a page is read, not in each place it is written). A second,
+        coarser pass here hides nothing a typed password was not already hiding; it only turns every
+        question and answer into a placeholder, which blinds the owner, this session and
+        replay_guard.py to what a stuck run was actually looking at."""
         if self.resume_file and self.resume_file.name.lower() in (snapshot or "").lower():
             self.resume_seen = True   # the tailored resume shows as attached on a page of this run
         if not self.job_dir:
@@ -6352,6 +6359,6 @@ class PageAgent:
             if not folder.is_dir():
                 folder.mkdir(parents=True, exist_ok=True)
                 keep_latest_runs(folder.parent, RUNS_KEPT)
-            diagnostics.write_safe_text(folder / f"page_{self.pages_read:02d}.txt", diagnostics.sanitize_snapshot(snapshot))
+            (folder / f"page_{self.pages_read:02d}.txt").write_text(snapshot or "", encoding="utf-8")
         except Exception:
             pass
