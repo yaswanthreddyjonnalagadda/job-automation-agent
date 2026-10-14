@@ -1,0 +1,15 @@
+{
+  "id": "f148",
+  "date": "2026-10-14",
+  "site": "Page recordings (page_agent.PageAgent._save), seen following a live Copart (Workday) application",
+  "class": "A privacy layer was applied a second time to text that had already been made safe at its single source, so it protected nothing new and destroyed the one record needed to understand a stuck run",
+  "symptom": "While following a live application, every saved page (output/<job>/pages/<run>/page_NN.txt) read as '- textbox \"<redacted-value>\"': names, addresses, questions and answers were all placeholders, so neither the owner nor the assistant helping could tell which question the agent could not answer. The same had been found and fixed on 9 October (f134, on an unmerged branch), so main kept redacting.",
+  "root_cause": "PageAgent._save() wrote every page through diagnostics.sanitize_snapshot(), whose allow-list keeps only about 25 exact field labels. The text it receives is always the return value of PageAgent.snapshot(), which has already applied perception.hide_secrets() (f015: redact at the one place a page is read, not in each place it is written). The second pass therefore added no safety a typed secret did not already have, and its coarse allow-list erased every question and answer. The fix existed only on an unmerged branch (f134), so the regression stayed live on main.",
+  "why_tests_missed": "test_page_recordings asserted that the sanitized output equalled the sanitized expectation, which passes whether or not the sanitizer destroys useful text; no test said a recorded page must stay readable, and nothing flagged that a fix sitting on an open branch had not reached main.",
+  "fix": "_save() writes the snapshot it is given as it was read, as it did before the privacy layer was added. Forensic captures that are not the replay corpus (account/ snapshots, DOM dumps, logs) keep their structural sanitization.",
+  "tests": [
+    "tests/test_page_recordings.py::test_two_runs_keep_their_own_pages",
+    "tests/test_page_recordings.py::test_a_saved_page_never_carries_the_diagnostic_redaction_placeholder"
+  ],
+  "prevention": "Apply a privacy transform once, at the single place the sensitive data enters, and test that every later writer receives text that is already safe -- a second pass at each writer is redundancy that costs readability, not safety. Give each artifact an explicit purpose (replay corpus vs. forensic copy) and name which sanitizer covers which. And when a fix is found on a branch, merge or port it the same day: an unmerged fix is not a fix."
+}
