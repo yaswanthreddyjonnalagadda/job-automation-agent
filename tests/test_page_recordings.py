@@ -23,8 +23,21 @@ def test_two_runs_keep_their_own_pages(tmp_path):
         a = agent(tmp_path, stamp)
         a.pages_read = 1
         a._save(text)
-    assert (tmp_path / "pages" / "20260929_100000" / "page_01.txt").read_text() == '- textbox "Email"'
+    assert (tmp_path / "pages" / "20260929_100000" / "page_01.txt").read_text() == '- textbox "Email": privacy-test@example.invalid'
     assert (tmp_path / "pages" / "20260929_110000" / "page_01.txt").read_text() == '- button "Continue"'
+
+
+def test_a_saved_page_never_carries_the_diagnostic_redaction_placeholder(tmp_path):
+    """f148: every question and answer on a recorded page became `<redacted-value>`, so a stuck run's
+    page could not be read afterwards. Recordings are written as `snapshot()` returned them (secrets
+    already hidden upstream, f015); a label the structural sanitizer's allow-list does not know must survive."""
+    text = '- textbox "Street Address": 221B Baker Street\n- radio "Are you legally authorized to work in the US?"'
+    a = agent(tmp_path, "20260929_120000")
+    a.pages_read = 1
+    a._save(text)
+    saved = (tmp_path / "pages" / "20260929_120000" / "page_01.txt").read_text(encoding="utf-8")
+    assert saved == text
+    assert "<redacted-value>" not in saved
 
 
 def test_only_the_latest_runs_are_kept(tmp_path):

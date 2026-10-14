@@ -1199,3 +1199,14 @@ categories (account creation/login/submission being held, blocked, rejected,
 or needing you) keep their sanitized message instead of the bare category name.
 Every value you typed, and every other category (filled fields, codes,
 passwords, answers), stays exactly as opaque as before.
+
+### Page recordings stay readable (f148)
+
+The pages the agent reads during a run, saved under
+`output/<Company>_<Title>/pages/<run>/`, are kept as the agent read them, not
+through the structural sanitizer above. Passwords, codes and other secrets are
+already hidden at the moment a page is read, so a recording never holds one;
+what it does hold -- the questions, the options and the answers on the form --
+stays on your machine so a run that stopped can be understood afterwards.
+Screenshots, DOM dumps, the account-page snapshots and the run log keep their
+privacy treatment.
