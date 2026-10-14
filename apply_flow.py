@@ -1283,6 +1283,9 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             assistant.human_handoff(page)
         assistant.raise_window(page)
         agent.remember_page_state(page)
+        # What the owner's phone is told, and what its console shows (phone_alert / phone_console; both optional).
+        assistant._owner_needs = {"company": job.company, "title": job.title, "kind": outcome.kind,
+                                  "reasons": list(outcome.reasons)[:5] or list(agent.notes)[:3]}
         try:
             decision = assistant.wait_for_signal(signal_path, timeout_seconds=args.timeout, page=page,
                                                  for_captcha=outcome.kind == "captcha",

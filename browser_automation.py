@@ -33,6 +33,7 @@ from playwright.sync_api import BrowserContext, Page, sync_playwright
 
 import geo_reference
 import emailed_codes
+import phone_console
 import login_guard
 import provenance
 import account_state
@@ -7681,10 +7682,25 @@ class JobApplicationAssistant:
             waiting.write_text(datetime.now().isoformat(timespec="seconds"), encoding="utf-8")
         except OSError:
             pass
+        # A stop that needs the owner: tell their phone, and serve the console while waiting (both optional).
+        needs = getattr(self, "_owner_needs", None)
+        self._phone = None
+        if needs:
+            try:
+                self._phone = phone_console.begin(signal_path, needs)
+            except Exception as exc:
+                logger.info("PHONE_CONSOLE: not started (%s)", type(exc).__name__)
         try:
             return self._wait_for_signal(signal_path, poll_seconds, timeout_seconds, page, left_form_seconds,
                                          for_captcha=for_captcha, for_blanks=for_blanks)
         finally:
+            self._owner_needs = None            # one stop, one alert: a later wait is not this one
+            if self._phone is not None:
+                try:
+                    self._phone.close()
+                except Exception:
+                    pass
+                self._phone = None
             try:
                 waiting.unlink(missing_ok=True)
             except OSError:
@@ -7694,6 +7710,26 @@ class JobApplicationAssistant:
                     provenance.set_agent_busy(page, True)
                 except Exception:
                     pass
+
+    def _sleep_for_phone(self, seconds: float, page) -> None:
+        """The wait's pause between looks. With the phone console open it is cut into short beats, each serving
+        the phone (a fresh picture of the browser, the taps and typing it asked for); without one, a plain sleep."""
+        console = getattr(self, "_phone", None)
+        if console is None:
+            time.sleep(seconds)
+            return
+        tab = getattr(page, "top", None) or page
+        end = time.time() + seconds
+        while True:
+            if tab is not None:
+                try:
+                    console.service(tab)
+                except Exception:
+                    pass
+            remaining = end - time.time()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.3, remaining))
 
     def _wait_for_signal(
         self, signal_path: Path, poll_seconds: float = 2.0, timeout_seconds: float = 1800.0,
@@ -7772,7 +7808,7 @@ class JobApplicationAssistant:
                 raw = ""
             if raw:
                 break
-            time.sleep(poll_seconds)
+            self._sleep_for_phone(poll_seconds, page)
             waited += poll_seconds
             # Checked first: the page checks below can `continue`, and a skipped
             # timeout left a run on a sign-in page waiting forever.
