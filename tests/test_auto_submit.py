@@ -161,35 +161,44 @@ def test_values_match_is_exact(on_form, approved, expected):
     assert safety.values_match(on_form, approved) is expected
 
 
-def test_a_field_with_no_approved_value_blocks_submission():
+def test_an_answer_with_no_approved_value_no_longer_blocks_submission():
+    """Owner's rule, 13 October 2026: every mandatory field filled and the form clean
+    is enough -- an answer need not equal approved data."""
     result = decision(
         form_fields=[{"label": "How many people did you manage?", "value": "5", "required": True}],
         approved={},
     )
-    assert not result.eligible
-    assert any("no approved value" in r for r in result.reasons)
+    assert result.eligible and result.reasons == []
+    assert [c.matches for c in result.field_comparisons] == [False]   # still recorded for the audit
 
 
-def test_a_mismatched_field_blocks_submission():
+def test_a_field_differing_from_approved_data_no_longer_blocks_submission():
     result = decision(form_fields=[{"label": "City", "value": "Richmond", "required": True}])
-    assert not result.eligible
-    assert any("Richmond" in r and "Fairfax" in r for r in result.reasons)
+    assert result.eligible
+    assert result.field_comparisons[0].approved == "Fairfax"
 
 
-# ---------------------------------------------------------------- refusal on uncertainty
+# ---------------------------------------------------------------- refusal on an unfinished or flagged form
 @pytest.mark.parametrize("report_key,value", [
     ("required_still_blank", ["State"]),
     ("errors_shown", ["State is required"]),
+    ("legal_answer_conflicts", ["Sponsorship: the form says No, your profile says Yes"]),
+    ("attestations_pending", ["Typed Signature"]),
+    ("identity_checks", ["a one-time code step"]),
+])
+def test_an_unfinished_or_flagged_form_refuses(report_key, value):
+    result = decision(report={report_key: value})
+    assert not result.eligible and result.reasons
+
+
+@pytest.mark.parametrize("report_key,value", [
     ("warnings_shown", ["Some sections are incomplete"]),
     ("ambiguous_choices", ["'Race': wanted 'Asian', offered ['Other']"]),
     ("unsupported_questions", ["Describe your ideal team"]),
-    ("attestations_pending", ["Typed Signature"]),
-    ("identity_checks", ["a one-time code step"]),
     ("unanswered_questions", ["Preferred start date"]),
 ])
-def test_any_uncertainty_refuses(report_key, value):
-    result = decision(report={report_key: value})
-    assert not result.eligible and result.reasons
+def test_what_the_owner_removed_from_the_rule_no_longer_refuses(report_key, value):
+    assert decision(report={report_key: value}).eligible
 
 
 def test_a_captcha_refuses():
@@ -203,10 +212,11 @@ def test_a_different_job_or_url_refuses():
     assert decision(job={**BASE, "url": BASE["url"] + "?utm_source=LinkedIn"}).eligible
 
 
-def test_wrong_or_unverified_documents_refuse():
-    assert not decision(uploaded_documents=["Someone_Else.pdf"]).eligible
-    assert not decision(documents_verified=False).eligible
-    assert not decision(uploaded_documents=[]).eligible
+def test_the_documents_no_longer_decide_the_submission():
+    """Whether the attached files are the generated ones is recorded, not enforced."""
+    assert decision(uploaded_documents=["Someone_Else.pdf"]).eligible
+    assert decision(documents_verified=False).eligible
+    assert decision(uploaded_documents=[]).eligible
 
 
 # ---------------------------------------------------------------- the flow
@@ -349,13 +359,16 @@ def test_verified_auto_submit_end_to_end(page, tmp_path, agent):
     assert audit and audit[0][2]["eligible"] is True
 
 
-def test_verified_auto_submit_stops_when_one_field_is_unapproved(page, tmp_path, agent):
-    """Same page, but a field holds something no approved source supports."""
+def test_verified_auto_submit_goes_ahead_when_one_field_is_unapproved(page, tmp_path, agent):
+    """Same page, but a field holds something no approved source supports. Owner's rule
+    (13 October 2026): every mandatory field filled and the form clean is enough, so it
+    submits -- and the unapproved answer is still counted in the audit, never named."""
     serve(page,
           "<label for=c>City *</label><input id=c required>"
           "<label for=q>Notice period *</label><input id=q value='2 weeks' required>"
           "<p>Attached: Resume_Example.pdf</p>"
-          "<button onclick='window.submitted=1'>Submit application</button>")
+          "<button onclick=\"document.body.innerHTML='<h1>Application Received!</h1>'\">"
+          "Submit application</button>")
     agent.employer = "Example Corp"
     agent.set_value(page, "[id='c']", "Fairfax", "City *", source="profile:city")
 
@@ -371,10 +384,8 @@ def test_verified_auto_submit_stops_when_one_field_is_unapproved(page, tmp_path,
     status = apply_flow.hand_over(agent, page, tracker, "key", Job(), tmp_path, resume.name, summary,
                                   config=Config(), profile=Profile(), documents={"resume": resume})
 
-    # The form itself is complete and clean, so it is handed over for the user
-    # to submit -- auto-submit simply refused to do it.
-    assert status == "ready_to_submit"
-    assert page.evaluate("() => !!window.submitted") is False
+    assert status == "submitted", tracker.notes
+    assert page.locator("text=Application Received!").count() == 1
     audit = [e for e in tracker.events if e[0] == "auto_submit"][0][2]
-    assert audit["eligible"] is False and audit["unapproved_field_count"] == 1
+    assert audit["eligible"] is True and audit["unapproved_field_count"] == 1
     assert "Notice period" not in json.dumps(audit) and "2 weeks" not in json.dumps(audit)

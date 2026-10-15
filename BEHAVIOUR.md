@@ -865,19 +865,23 @@ says the application was received, it is recorded as submitted by you.
 Set `AUTO_SUBMIT_VERIFIED_ONLY=true` in `.env` to allow it. Even then, the
 agent submits only when `safety.evaluate_auto_submit()` returns an eligible
 `AutoSubmitDecision`, accepted by `SubmissionGuardV0` only with its structured
-evidence and required-field comparisons valid, which requires **all** of:
+evidence (screenshot and page HTML on disk, and a recorded read-back of the form),
+which since 13 October 2026 requires **all** of:
 
 * the job title, company and canonical URL match the tracked application
   (tracking parameters are not a difference);
-* the attached resume and cover letter are the documents generated for this
-  application, verified by SHA-256 against the stored copies, not by file name;
-* every required field on the form **exactly** matches approved data — a value
-  the agent wrote from your profile/resume, an explicitly approved answer from
-  `data/_approved_answers.json`, or an existing value that equals a profile
-  value. Near-misses are refusals: "Springfield County" never matches "Springfield";
-* nothing uncertain is present: no blanks, form errors or warnings, no
-  ambiguous dropdown choice, no unsupported custom question, no attestation,
-  e-signature or consent checkbox, no CAPTCHA, no identity check.
+* every mandatory field is filled: no required field is blank and the form
+  shows no error;
+* none of your own rules is broken: no sponsorship or work-authorization answer
+  that contradicts your profile, no attestation, e-signature or consent
+  checkbox left for you, no identity or verification step, no CAPTCHA.
+
+That is the whole rule. It no longer asks whether each answer equals approved
+data, whether the attached files are byte-for-byte the generated ones, or
+whether the form shows a warning, an ambiguous dropdown choice or a custom
+question with no saved answer -- the agent submits with whatever it filled.
+Those comparisons are still recorded in `comparison.json` so you can see afterwards
+what was sent, but they no longer stop a submission.
 
 Before submitting it writes, into `output/<Company>_<Title>/evidence_<time>/`:
 a full-page screenshot, the page HTML, `comparison.json` (the field-by-field
@@ -1229,3 +1233,14 @@ categories (account creation/login/submission being held, blocked, rejected,
 or needing you) keep their sanitized message instead of the bare category name.
 Every value you typed, and every other category (filled fields, codes,
 passwords, answers), stays exactly as opaque as before.
+
+### Page recordings stay readable (f148)
+
+The pages the agent reads during a run, saved under
+`output/<Company>_<Title>/pages/<run>/`, are kept as the agent read them, not
+through the structural sanitizer above. Passwords, codes and other secrets are
+already hidden at the moment a page is read, so a recording never holds one;
+what it does hold -- the questions, the options and the answers on the form --
+stays on your machine so a run that stopped can be understood afterwards.
+Screenshots, DOM dumps, the account-page snapshots and the run log keep their
+privacy treatment.
