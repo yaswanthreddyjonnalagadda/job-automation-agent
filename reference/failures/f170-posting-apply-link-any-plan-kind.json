@@ -1,0 +1,14 @@
+{
+  "id": "f170",
+  "date": "2026-10-15",
+  "site": "Workday (Marathon Petroleum posting; any posting whose Apply is a link)",
+  "class": "The way a step was entered depended on the plan's own label for it, so a mislabelled plan sent a harmless link through the click path that must refuse it",
+  "symptom": "On Marathon's posting the agent stopped at the first page with 'final submission is only available through the verified gateway or human handoff', every attempt.",
+  "root_cause": "Workday's Apply is an <a role=button href='.../apply'>. press_next followed such a link by GET only when the plan's next_kind was open_application; when the plan called it a next or final step it was clicked, and the submission guard correctly refused a click on a control labelled Apply.",
+  "why_tests_missed": "The one entry test always built its plan with next_kind=open_application, the label the code expected.",
+  "fix": "press_next follows an Apply-labelled link with a GET on a posting page whatever the plan's next_kind, before any gate or click. follow_application_entry still refuses non-posting pages, form links, fragments and job boards.",
+  "tests": [
+    "tests/test_posting_apply_link_whatever_the_plan_calls_it.py::test_the_apply_link_is_followed_not_clicked"
+  ],
+  "prevention": "Decide how to enter a step from what the control is (a link with an address), not from what the planner called it."
+}

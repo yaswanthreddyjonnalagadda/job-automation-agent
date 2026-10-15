@@ -1348,3 +1348,9 @@ own script reacting to the search -- a browser tab this search did not ask for
 is closed immediately rather than left open, and a skill the widget's list does
 not recognize is followed by a short pause before the next search. Nothing
 about which skills are offered, chosen, or left blank changes.
+
+## Opening a posting's Apply link (f170)
+
+On a job posting, an Apply that is a link is opened by going to its address, whatever the plan
+calls the step. Nothing is clicked and nothing is submitted; the submission guard still refuses
+any click on a control that could send the application.

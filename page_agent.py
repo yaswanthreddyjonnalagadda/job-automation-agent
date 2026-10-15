@@ -6043,6 +6043,13 @@ class PageAgent:
             or (submit_word and step_finality != "NON_FINAL")
         if plan.page_kind == "job_description" and plan.next_kind == "open_application":
             final = False
+        # A posting's Apply is a link: its address opens the application with a plain GET, which submits nothing,
+        # so it is followed before any click -- whatever kind of step the plan called it (f170). Clicking it was
+        # refused by the submission guard, as a click on a button labelled Apply must be.
+        if plan.next_kind != "open_application" and hasattr(self.assistant, "follow_application_entry")                 and re.fullmatch(r"apply(?: now| for this job)?|start application|begin application", label, re.IGNORECASE):
+            if self.assistant.follow_application_entry(tab, self.locate(page, control.ref)):
+                self.settle(page, 2_500)
+                return "moved", page, "followed the posting's application link"
         if final:
             gate = self.submit_gate(page, controls)
             if gate:
