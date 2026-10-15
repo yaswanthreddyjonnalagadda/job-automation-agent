@@ -10,7 +10,8 @@ import json
 import re
 import logging
 import time
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Optional
 
 import anthropic
 
@@ -19,6 +20,61 @@ from jd_analyzer import JobDescription
 from resume_parser import ResumeData
 
 logger = logging.getLogger(__name__)
+
+# USD per million tokens, standard tier, as published at
+# platform.claude.com/docs/en/about-claude/pricing (checked 24 September
+# 2026). Keyed by model name; an unrecognised model (checked by exact name,
+# then by prefix, so a dated model ID like "claude-sonnet-5-20261201" still
+# matches "claude-sonnet-5") still has its tokens counted in Usage, just not
+# priced -- PLAN-003 section 6's "measure the cost per application, then cap
+# it" needs the count either way, and a new model shipping should never make
+# cost tracking silently wrong instead of visibly unpriced.
+TOKEN_PRICING_USD_PER_MTOK: dict[str, dict[str, float]] = {
+    "claude-sonnet-5": {"input": 2.00, "output": 10.00, "cache_write": 2.50, "cache_read": 0.20},
+}
+
+
+def _pricing_for(model: str) -> Optional[dict[str, float]]:
+    if model in TOKEN_PRICING_USD_PER_MTOK:
+        return TOKEN_PRICING_USD_PER_MTOK[model]
+    for name, rates in TOKEN_PRICING_USD_PER_MTOK.items():
+        if model.startswith(name):
+            return rates
+    return None
+
+
+@dataclass
+class Usage:
+    """Token counts across one or more API calls -- never a dollar figure by
+    itself, so a price list correction or a new model never silently
+    invalidates a total someone already recorded."""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    calls: int = 0
+
+    def __iadd__(self, other: "Usage") -> "Usage":
+        self.input_tokens += other.input_tokens
+        self.output_tokens += other.output_tokens
+        self.cache_creation_input_tokens += other.cache_creation_input_tokens
+        self.cache_read_input_tokens += other.cache_read_input_tokens
+        self.calls += other.calls
+        return self
+
+    def cost_usd(self, model: str) -> Optional[float]:
+        """The dollar cost of this usage at `model`'s published rate, or
+        None when the model isn't in TOKEN_PRICING_USD_PER_MTOK -- never a
+        silent zero that could be mistaken for "this cost nothing"."""
+        rates = _pricing_for(model)
+        if rates is None:
+            return None
+        return (
+            self.input_tokens * rates["input"]
+            + self.output_tokens * rates["output"]
+            + self.cache_creation_input_tokens * rates["cache_write"]
+            + self.cache_read_input_tokens * rates["cache_read"]
+        ) / 1_000_000
 
 
 def explain(exc: Exception) -> str:
@@ -69,6 +125,43 @@ class ClaudeClient:
     def __init__(self, config: AppConfig):
         self._config = config
         self._client = anthropic.Anthropic(api_key=config.anthropic_api_key)
+        # One ClaudeClient is created per application (apply_flow.brain_for
+        # is called once per job), so this total, unlike a module-level or
+        # process-wide counter, is already exactly PLAN-003 section 6's
+        # "cost per application" -- nothing needs to reset it between jobs.
+        self.usage = Usage()
+
+    def _record_usage(self, response: Any) -> None:
+        """Every token counts towards the running total, whatever happens to
+        the reply afterward -- a cut-off or unparseable JSON response still
+        cost real money, so this is called right after the API call
+        succeeds, never only after its content is accepted."""
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return
+        self.usage += Usage(
+            input_tokens=usage.input_tokens or 0,
+            output_tokens=usage.output_tokens or 0,
+            cache_creation_input_tokens=usage.cache_creation_input_tokens or 0,
+            cache_read_input_tokens=usage.cache_read_input_tokens or 0,
+            calls=1,
+        )
+
+    def cost_summary(self) -> dict[str, Any]:
+        """This client's running total: PLAN-003 section 6's "cost per
+        application" measurement. `estimated_cost_usd` is None when the
+        configured model isn't in TOKEN_PRICING_USD_PER_MTOK -- tokens are
+        still counted, just not priced."""
+        model = self._config.anthropic_model
+        return {
+            "model": model,
+            "calls": self.usage.calls,
+            "input_tokens": self.usage.input_tokens,
+            "output_tokens": self.usage.output_tokens,
+            "cache_creation_input_tokens": self.usage.cache_creation_input_tokens,
+            "cache_read_input_tokens": self.usage.cache_read_input_tokens,
+            "estimated_cost_usd": self.usage.cost_usd(model),
+        }
 
     @property
     def _model(self) -> str:
@@ -86,6 +179,7 @@ class ClaudeClient:
                     messages=[{"role": "user", "content": user_message}],
                     timeout=self._config.claude_request_timeout,
                 )
+                self._record_usage(response)
                 return "".join(
                     block.text for block in response.content if block.type == "text"
                 )
@@ -559,6 +653,7 @@ Rules -- follow every one:
                     messages=[{"role": "user", "content": user + cut_off}],
                     timeout=max(self._config.claude_request_timeout, 180.0),
                 )
+                self._record_usage(response)
                 raw = "".join(block.text for block in response.content if block.type == "text")
                 start, end = raw.find("{"), raw.rfind("}")
                 return self._extract_json(raw[start:end + 1] if start >= 0 and end > start else raw)
@@ -625,6 +720,7 @@ Rules -- follow every one:
                     messages=[{"role": "user", "content": user_content}],
                     timeout=self._config.claude_request_timeout,
                 )
+                self._record_usage(response)
                 raw = "".join(block.text for block in response.content if block.type == "text")
                 result = self._extract_json(raw)
                 return {"page": str(result.get("page") or "other"),

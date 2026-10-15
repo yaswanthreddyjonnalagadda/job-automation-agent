@@ -33,6 +33,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import atexit
 import importlib
 import inspect
 import json
@@ -1921,6 +1922,16 @@ def main() -> None:
     import repeated_entries
     experience_data = repeated_entries.with_profile(experience_data, profile, resume.raw_text)
     claude = brain_for(config, job)
+    # PLAN-003 section 6: measure the cost per application. brain_for makes a
+    # fresh ClaudeClient per job, so its running total already is one
+    # application's cost; atexit logs it exactly once regardless of which of
+    # this function's many `return`s ends up firing, without threading a log
+    # call through each of them. Session-brain mode's plan_page calls cost
+    # nothing (SessionPlanner asks this Claude session, not the API) and
+    # correctly do not add to it; document generation still goes through the
+    # real API in every mode and does count.
+    if hasattr(claude, "cost_summary"):
+        atexit.register(lambda: logger.info("CLAUDE_COST: %s", claude.cost_summary()))
 
     # Windows forbids <>:"/\|?* in folder names; a title with '|' crashed a run.
     folder = re.sub(r'[<>:"/\\|?*]+', "_", f"{job.company}_{job.title}".replace(" ", "_")).strip("._")[:120]

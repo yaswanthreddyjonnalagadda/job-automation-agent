@@ -157,6 +157,19 @@ PLACEHOLDER = re.compile(
     r"^[\s\-–—]*(no selection|select( one| an option)?|please select|choose( one| an option)?|make a selection|"
     r"none selected)?[\s\-–—.]*$", re.IGNORECASE)
 
+# Anti-bot decoy fields announce themselves in their own label -- Workday's
+# is literally "this input is for robots only, do not enter if you're
+# human" (Stryker, Staff Cloud DevSecOps Engineer, 23 September). Filling one
+# flags the whole application as automated, so it is never a match for any
+# profile key however plausible its label reads out of context ("Enter
+# website..."). browser_automation.py (the deprecated runtime) already
+# guards this; page_agent.py, the runtime apply_flow.py actually drives, did
+# not -- nothing stopped a field like this from reaching a Claude-assisted
+# fallback and being filled with a guessed URL.
+HONEYPOT = re.compile(
+    r"for robots only|do not enter if you'?re human|do not enter if you are human|"
+    r"leave (this field )?blank|honeypot", re.IGNORECASE)
+
 
 def _blank_choice_on_page(controls) -> bool:
     """A dropdown still showing its placeholder ("Choose an option"), whatever the agent made of it.
@@ -205,6 +218,11 @@ class Control:
     def holds_choices(self) -> bool:
         """A group whose choices have no reference of their own."""
         return self.role in ("radiogroup", "group", "list", "region") and bool(self.options)
+
+    @property
+    def is_honeypot(self) -> bool:
+        """An anti-bot decoy field, never a match for any profile key."""
+        return bool(HONEYPOT.search(f"{self.question} {self.name}"))
 
     @property
     def question(self) -> str:
@@ -2401,7 +2419,8 @@ class PageAgent:
             answerable_button = (control.role == "button" and control.GENERIC_NAMES.match(control.name.strip())
                                  and bool(control.container or control.group or control.context)) \
                 or is_workday_choice_button(control)
-            if (control.role not in ANSWER_ROLES and not answerable_button) or control.disabled or control.answer:
+            if (control.role not in ANSWER_ROLES and not answerable_button) or control.disabled \
+                    or control.answer or control.is_honeypot:
                 continue
             value, source = self._attestation_answer(control)
             if not value or control.ref in attestation_refs:
@@ -2809,7 +2828,8 @@ class PageAgent:
             # Only empty boxes here. A box that already holds something the
             # profile contradicts is put right in correct_from_profile, which
             # checks who put the value there before changing it.
-            if (control.role not in ANSWER_ROLES and not answerable_button) or control.disabled or control.answer:
+            if (control.role not in ANSWER_ROLES and not answerable_button) or control.disabled \
+                    or control.answer or control.is_honeypot:
                 continue
             group_key = control.group if control.role in ("radio", "checkbox", "switch") else ""
             if group_key and group_key in handled_groups:

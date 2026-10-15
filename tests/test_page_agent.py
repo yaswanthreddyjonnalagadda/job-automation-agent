@@ -290,6 +290,185 @@ def test_a_radio_button_carries_its_question():
     assert page_agent.answered_fields(controls) == [{"label": "Are you at least 18 years old? *", "value": "No"}]
 
 
+def test_honeypot_fields_are_recognised_by_any_of_their_usual_wordings():
+    """browser_automation.py (deprecated) already refused these; page_agent.py
+    -- the runtime apply_flow.py actually drives -- did not (found building
+    the Phase 1.3 offline test set on the Stryker recording below). The
+    class, not just Workday's own instance of it (CLAUDE.md 7)."""
+    for wording in (
+        "This input is for robots only, do not enter if you're human.",
+        "Do not enter if you are human.",
+        "Leave this field blank.",
+        "Leave blank",
+        "honeypot",
+    ):
+        assert page_agent.Control(ref="h", role="textbox", name=wording).is_honeypot, wording
+    real_field = page_agent.Control(ref="w", role="textbox", name="Personal website or portfolio")
+    assert not real_field.is_honeypot
+
+
+def test_a_honeypot_field_is_never_planned_as_an_answer(resume_file):
+    """The actual guarantee: profile_plan must never propose a value for it,
+    however plausible "Enter website" reads out of context."""
+    agent = make_agent(Planner(), resume_file)
+    trap = page_agent.Control(ref="h", role="textbox",
+                              name="Enter website. This input is for robots only, do not enter if you're human.")
+    plan = agent.profile_plan([trap], required=set(), still_open=[])
+    assert plan.answers == []
+
+
+def test_a_honeypot_never_reaches_the_still_open_list_claude_is_shown(page, resume_file):
+    """The real exposure this closes: apply_flow's own loop folds still_open
+    into the feedback string handed to Claude ("the agent could not answer
+    these itself: ...") when no profile match was found -- an invitation to
+    guess a value for exactly the field a bot must never touch. A stray
+    memory of some other application's real "Personal website" answer could
+    also have surfaced here through the owner's-earlier-answer recall a few
+    lines below in known_answer, fuzzy-matched on the word "website" alone;
+    the guard in answer_what_is_known heads off every such path at once by
+    never handing the control to known_answer in the first place."""
+    agent = make_agent(Planner(), resume_file)
+    trap = page_agent.Control(ref="h", role="textbox",
+                              name="Enter website. This input is for robots only, do not enter if you're human.")
+    filled, still_open = agent.answer_what_is_known(page, [trap], required=set())
+    assert filled == 0
+    assert still_open == []
+
+
+# --- the owner's own recordings: Inframark (Dayforce), Stryker (Workday) and
+# Chobani (SuccessFactors) -- PLAN-003 Phase 1.3's offline test set ----------------
+
+def test_inframark_blank_form_is_categorised_by_control_type():
+    snapshot = _recorded_page("Inframark_OT_Infrastructure_Engineer_-_Southeast", "pages", "page_01.txt")
+    controls = page_agent.parse_snapshot(snapshot)
+    by_ref = {c.ref: c for c in controls}
+    assert by_ref["e133"].role == "textbox" and by_ref["e133"].question == "Email Address *"
+    assert by_ref["e154"].role == "combobox" and by_ref["e154"].question == "Prefix"
+    assert by_ref["e438"].role == "checkbox" and by_ref["e438"].question == "Not Completed"
+    assert by_ref["e273"].role == "combobox" and by_ref["e273"].disabled       # State/Province waits on Country
+    # Address, education and employment each ask their own "Country" -- same
+    # words, different refs; nothing here says which is which yet (Phase 2).
+    assert by_ref["e261"].question == by_ref["e483"].question == "Country *"
+    assert by_ref["e605"].question == "Country"                                # employment's has no asterisk
+
+
+def test_inframark_autofilled_form_reads_back_ant_design_style_sibling_values():
+    """Dayforce shows a chosen value as text right beside the combobox, not
+    inside it (CLAUDE.md 3) -- this is the page recorded right after resume
+    import filled the form, and how the agent confirms what actually landed."""
+    snapshot = _recorded_page("Inframark_OT_Infrastructure_Engineer_-_Southeast", "pages", "page_02.txt")
+    controls = page_agent.parse_snapshot(snapshot)
+    by_ref = {c.ref: c for c in controls}
+    assert by_ref["e133"].answer == "jonnalagaddayaswanth06@gmail.com"
+    assert by_ref["e261"].answer == "United States of America"                 # Country
+    assert by_ref["e770"].answer == "Virginia"                                 # State/Province
+    assert by_ref["e232"].answer == "\U0001F1FA\U0001F1F8 +1"                  # mobile Country dialing code
+    assert by_ref["e218"].answer == ""                                        # home phone code: never filled
+
+
+def test_inframark_saved_summary_has_no_fillable_fields_left():
+    """Personal Information collapses to plain text once saved -- nothing
+    left to answer, and nothing invented that isn't there."""
+    snapshot = _recorded_page("Inframark_OT_Infrastructure_Engineer_-_Southeast", "pages", "page_03.txt")
+    controls = page_agent.parse_snapshot(snapshot)
+    answerable = [c for c in controls if c.role in page_agent.ANSWER_ROLES]
+    assert [c.question for c in answerable] == ["Language"]                    # the nav locale picker only
+
+
+def test_inframark_veteran_questionnaire_radios_are_found_a_known_gap_in_their_label():
+    """The three choices are read correctly as a group of radios; the
+    question text they inherit is not clean ("VeteranFormAnswers" -- an
+    internal field name Dayforce's own widget leaks into the accessibility
+    tree, ahead of which is only a run of disclosure paragraphs, not the
+    "Veteran Form Questionnaire" heading several lines above them). One
+    recording is not enough evidence to fix the class rather than this one
+    instance (CLAUDE.md 7), so the gap is recorded here rather than patched
+    blind -- Phase 2's evidence-weighted resolver is where it belongs."""
+    snapshot = _recorded_page("Inframark_OT_Infrastructure_Engineer_-_Southeast", "pages", "page_06.txt")
+    controls = page_agent.parse_snapshot(snapshot)
+    radios = [c for c in controls if c.role == "radio"]
+    assert {r.name for r in radios} == {
+        "I identify as one or more of the classifications of protected veteran listed above",
+        "I am not a protected veteran",
+        "I prefer not to answer",
+    }
+    assert {r.question for r in radios} == {"VeteranFormAnswers"}              # see docstring
+
+
+def test_stryker_create_account_step_finds_the_honeypot_and_the_real_fields():
+    snapshot = _recorded_page("Stryker_Employment_Company,_LLC_Staff_Cloud_DevSecOps_Engineer", "pages", "page_01.txt")
+    controls = page_agent.parse_snapshot(snapshot)
+    by_name = {c.name: c for c in controls}
+    assert by_name["Email Address"].role == "textbox"
+    assert by_name["Password"].role == "textbox"
+    trap = next(c for c in controls if "robots only" in c.name)
+    assert trap.is_honeypot is True
+    assert [c for c in controls if c.is_honeypot and c.ref != trap.ref] == []  # nothing else caught by mistake
+
+
+def test_stryker_blank_my_information_step_categorises_workdays_button_pickers():
+    """Country/State/How-Did-You-Hear are Workday "buttons" whose accessible
+    name bakes the label, the current value (or "Select One") and "Required"
+    into one string -- role=button, not combobox. The label always comes
+    first, so the keyword patterns known_answer already uses still match."""
+    snapshot = _recorded_page("Stryker_Employment_Company,_LLC_Staff_Cloud_DevSecOps_Engineer", "pages", "page_02.txt")
+    controls = page_agent.parse_snapshot(snapshot)
+    by_ref = {c.ref: c for c in controls}
+    assert by_ref["f4e254"].role == "button" and by_ref["f4e254"].name.startswith("Country")
+    assert by_ref["f4e297"].role == "button" and by_ref["f4e297"].name == "State Select One"
+    assert by_ref["f4e240"].role == "radio" and by_ref["f4e244"].role == "radio"
+    assert by_ref["f4e240"].question == by_ref["f4e244"].question == "Have you worked for Stryker before?"
+    assert by_ref["f4e328"].role == "textbox" and by_ref["f4e328"].answer == ""  # phone-code search box: see below
+
+
+def test_stryker_country_phone_code_value_is_not_recoverable_from_the_snapshot_alone():
+    """The committed value lives in an "items selected" listbox next to the
+    permanently-empty search box (23 September: this is what looped). A
+    plain snapshot read confirms both the textbox and the listbox control
+    read as unanswered; sites.workday._multiselect_selection reads the live
+    DOM directly instead, and is what actually fixed the loop
+    (test_workday_multiselect.py) -- this just pins down why a snapshot
+    read alone cannot."""
+    company = "Stryker_Employment_Company,_LLC_Staff_Cloud_DevSecOps_Engineer"
+    for name in ("page_02.txt", "page_03.txt"):
+        controls = page_agent.parse_snapshot(_recorded_page(company, "pages", name))
+        listbox = next(c for c in controls if c.role == "listbox")
+        assert listbox.answer == ""
+        assert listbox.options == ["United States of America (+1), press delete to clear value."]
+
+
+def test_stryker_filled_step_and_its_independent_re_snapshot_agree():
+    """page_03 and page_04 are two separate snapshots of the same filled
+    step; parsed independently, they must categorise identically."""
+    company = "Stryker_Employment_Company,_LLC_Staff_Cloud_DevSecOps_Engineer"
+    a = page_agent.parse_snapshot(_recorded_page(company, "pages", "page_03.txt"))
+    b = page_agent.parse_snapshot(_recorded_page(company, "pages", "page_04.txt"))
+    key = lambda controls: sorted((c.ref, c.role, c.question, c.answer) for c in controls)
+    assert key(a) == key(b)
+
+
+def test_chobani_signup_form_categorises_across_a_successfactors_page():
+    snapshot = _recorded_page("Chobani_Senior_Network_Engineer", "pages", "page_01.txt")
+    controls = page_agent.parse_snapshot(snapshot)
+    by_ref = {c.ref: c for c in controls}
+    assert by_ref["f1e75"].role == "textbox" and by_ref["f1e75"].question == "Email Address: *"
+    assert by_ref["f1e112"].role == "combobox" and by_ref["f1e112"].question == "Country"
+    assert by_ref["f1e121"].role == "textbox" and by_ref["f1e121"].disabled     # a disabled textbox, not a combobox
+    gender = [c for c in controls if c.role == "radio" and c.question == "Gender"]
+    assert {(r.name, r.checked) for r in gender} == {("No Selection", True), ("Female", False), ("Male", False)}
+    country_of_residence = by_ref["f1e298"]                                    # SAP's own native <select>
+    assert country_of_residence.answer == ""                                   # "- Select -" reads as unanswered
+    assert "Afghanistan" in country_of_residence.options and "United States" in country_of_residence.options
+    assert next(c for c in controls if c.role == "button" and c.name == "Apply").disabled is False
+
+
+def test_chobani_confirmation_page_has_nothing_left_to_answer():
+    snapshot = _recorded_page("Chobani_Senior_Network_Engineer", "pages", "page_02.txt")
+    controls = page_agent.parse_snapshot(snapshot)
+    assert [c for c in controls if c.role in page_agent.ANSWER_ROLES] == []
+    assert "Your application has been sent" in snapshot
+
+
 # --- a whole application ------------------------------------------------------------
 
 def test_a_whole_application_is_read_answered_and_submitted(page, resume_file):

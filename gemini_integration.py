@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 # model call added later cannot end up at the wrong company by default.
 ANSWERS = frozenset({"plan_page", "read_page", "choose_option", "answer_screening_questions", "answer_single_question"})
 DOCUMENTS = frozenset({"tailor_resume", "generate_cover_letter"})
+LOCAL = frozenset({"cost_summary"})   # reports kept on this machine; nothing is sent anywhere
 
 MIN_OUTPUT_TOKENS = 4_096       # Gemini counts its thinking in the limit: a 400-token answer would be cut off
 GEMMA_MAX_OUTPUT_TOKENS = 8_192

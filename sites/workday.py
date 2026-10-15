@@ -983,14 +983,21 @@ class WorkdayAdapter(SiteAdapter):
 
     @staticmethod
     def _multiselect_selection(page: Page, id_suffix: str, multiselect_id: str = "", index: int = 0) -> str:
-        """The value a Workday multiselect currently holds, as the text of
-        its selected-item pill ('' when empty).
+        """The value a Workday multiselect currently holds ('' when empty).
 
         Anchors on the container's own id rather than walking up from the
         input: while the prompt is open the input is relocated into the
-        popup, so its ancestors are the popup's, not the form field's. Reads
-        the pill rather than promptAriaInstruction, whose text is transient
-        ('Expanded' while the menu is opening)."""
+        popup, so its ancestors are the popup's, not the form field's.
+
+        Most multiselects show the committed value as a pill
+        ([data-automation-id="selectedItem"]). A search-driven single-choice
+        list -- Workday's own "Country Phone Code" widget, for one -- instead
+        keeps its value in a sibling "items selected" listbox while the
+        search input itself stays permanently empty; reading only pills
+        reported that field as empty forever, so the agent re-answered it
+        every pass and handed over with "could not set" (Stryker, 23
+        September). Falls back to that listbox, then to the widget's own
+        visually-hidden summary text, before giving up."""
         try:
             if multiselect_id:
                 box = page.locator(f"[data-uxi-element-id='{multiselect_id}']").first
@@ -1004,8 +1011,27 @@ class WorkdayAdapter(SiteAdapter):
                 box.evaluate(
                     """el => {
                         const box = el.closest('[data-automation-id="multiSelectContainer"]') || el;
+                        const clean = s => (s || '').replace(/,?\\s*press delete to clear value\\.?$/i, '').trim();
+
                         const pills = [...box.querySelectorAll('[data-automation-id="selectedItem"]')];
-                        return pills.map(p => (p.innerText || '').trim()).filter(Boolean).join(', ');
+                        const fromPills = pills.map(p => clean(p.innerText)).filter(Boolean).join(', ');
+                        if (fromPills) return fromPills;
+
+                        // A searchable single-choice list keeps its value in an
+                        // "items selected" listbox instead of a pill.
+                        const listbox = [...box.querySelectorAll('[role="listbox"]')]
+                            .find(lb => /items?\\s*selected/i.test(lb.getAttribute('aria-label') || ''));
+                        if (listbox) {
+                            const opt = listbox.querySelector('[role="option"]');
+                            const fromListbox = clean(opt && (opt.innerText || opt.getAttribute('aria-label')));
+                            if (fromListbox) return fromListbox;
+                        }
+
+                        // Last resort: the widget's own visually-hidden summary,
+                        // e.g. "1 item selected, United States of America (+1)".
+                        const hidden = [...box.querySelectorAll('[aria-hidden="true"]')]
+                            .map(n => n.innerText || '').find(t => /items?\\s*selected/i.test(t));
+                        return clean((hidden || '').replace(/^\\s*\\d+\\s*items?\\s*selected,?\\s*/i, ''));
                     }"""
                 )
                 or ""

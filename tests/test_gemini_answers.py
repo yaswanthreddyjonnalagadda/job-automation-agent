@@ -239,7 +239,7 @@ def test_every_model_call_is_sent_to_exactly_one_of_them():
     import inspect
     public = {name for name, value in vars(ClaudeClient).items()
               if inspect.isfunction(value) and not name.startswith("_")}
-    assert public == gemini.ANSWERS | gemini.DOCUMENTS
+    assert public == gemini.ANSWERS | gemini.DOCUMENTS | gemini.LOCAL
     assert not gemini.ANSWERS & gemini.DOCUMENTS
 
 
