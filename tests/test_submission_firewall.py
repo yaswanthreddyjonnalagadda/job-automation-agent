@@ -848,7 +848,7 @@ def test_handoff_waits_for_inflight_page_agent_progress_to_drain(page, tmp_path)
     assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
     guard = SimpleNamespace(deactivated=False)
     guard.bind_application = lambda _tracker, _key: None
-    guard.deactivate = lambda _page: setattr(guard, "deactivated", True)
+    guard.park_for_handoff = lambda: setattr(guard, "deactivated", True)
     assistant._submission_guard = guard
     assistant.tracker = JobTracker(tmp_path / "applications.db")
     assistant.tracker.create(dedup_key="job-1", title="Engineer", company="Example")
@@ -935,3 +935,83 @@ def test_resuming_automation_rearms_guard_before_navigation(page, tmp_path):
     assert assistant._submission_execution_state == "active"
     assert page.evaluate("window.submitted") is None
     assert assistant._submission_guard.denials(page)[0]["kind"] == "click"
+
+
+@pytest.mark.parametrize('opened_while_parked', [False, True])
+def test_handoff_popup_is_manual_until_all_tabs_are_rearmed(page, tmp_path, opened_while_parked):
+    install_submit_form(page)
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant._submission_guard = guarded(page)
+    assistant.tracker = JobTracker(tmp_path / 'applications.db')
+    assistant.tracker.create(dedup_key='job-1', title='Engineer', company='Example')
+    assistant.application_key = 'job-1'
+    page.context.route('https://survey.example.test/**', lambda route: route.fulfill(content_type='text/html', body=
+        '<form onsubmit="window.submitted=(window.submitted||0)+1;return false">'
+        '<button type="submit">Refuse to Take Survey</button></form>'))
+    popup = None
+    if not opened_while_parked:
+        popup = page.context.new_page()
+        popup.goto('https://survey.example.test/start')
+    assistant.human_handoff(page)
+    if opened_while_parked:
+        popup = page.context.new_page()
+        popup.goto('https://survey.example.test/start')
+    popup.get_by_role('button', name='Refuse to Take Survey').click()
+    assert popup.evaluate('window.submitted') == 1, (assistant._submission_guard.denials(popup), popup.content())
+    assert assistant._submission_execution_state == 'parked'
+    assistant.resume_automation(page)
+    popup.get_by_role('button', name='Refuse to Take Survey').click()
+    page.get_by_role('button', name='Submit Application').click()
+    assert popup.evaluate('window.submitted') == 1
+    assert page.evaluate('window.submitted') is None
+    later = page.context.new_page()
+    later.goto('https://survey.example.test/start')
+    later.get_by_role('button', name='Refuse to Take Survey').click()
+    assert later.evaluate('window.submitted') is None
+
+
+def test_handoff_reload_preserves_live_guard_capability_and_callbacks(page, tmp_path):
+    legacy = type('SubmissionGuardV0', (SubmissionGuardV0,), {'__module__': 'submission_guard'})
+    guard = legacy(page.context)
+    capability = guard._capability
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant._submission_guard = guard
+    assistant.tracker = JobTracker(tmp_path / 'applications.db')
+    assistant.tracker.create(dedup_key='job-1', title='Engineer', company='Example')
+    assistant.application_key = 'job-1'
+    assistant.human_handoff(page)
+    assert type(guard) is SubmissionGuardV0
+    assert guard._capability == capability
+    popup = page.context.new_page()
+    install_submit_form(popup)
+    popup.get_by_role('button', name='Submit Application').click()
+    assert popup.evaluate('window.submitted') == 1
+    assistant.resume_automation(page)
+    popup.get_by_role('button', name='Submit Application').click()
+    assert popup.evaluate('window.submitted') == 1
+
+
+def test_frame_callbacks_cannot_rearm_during_context_parking():
+    from types import SimpleNamespace
+    guard = SubmissionGuardV0.__new__(SubmissionGuardV0)
+    page = object()
+    guard._handoff_parked = True
+    guard._active_pages = {page}  # another tab has not yet been deactivated
+    armed = []
+    guard._activate_frame = lambda frame: armed.append(frame)
+    guard._activate_attached(page, SimpleNamespace())
+    guard._activate_navigated(page, SimpleNamespace())
+    assert not armed
+
+
+def test_inflight_frame_activation_finishes_deactivated_after_parking():
+    guard = SubmissionGuardV0.__new__(SubmissionGuardV0)
+    guard._handoff_parked = False
+    guard._capability = "synthetic-capability"
+    commands = []
+    def evaluate(expression, token):
+        commands.append(expression)
+        guard._handoff_parked = True  # handoff starts during an in-flight browser call
+    guard._activate_frame(SimpleNamespace(evaluate=evaluate))
+    assert '.activate(' in commands[0]
+    assert '.deactivate(' in commands[-1]

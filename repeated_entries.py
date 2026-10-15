@@ -155,7 +155,7 @@ def _identifies(shown: str, name: str) -> bool:
     return option_match.best_option([name], shown) is not None or option_match.best_option([shown], name) is not None
 
 
-def with_profile(history: dict, profile) -> dict:
+def with_profile(history: dict, profile, resume_text: str = "") -> dict:
     """The work history, with explicit profile subjects and missing education dates applied.
 
     The resume reader keeps only a degree's end; the owner's profile holds both ends ("JNTU Hyderabad, August
@@ -170,8 +170,23 @@ def with_profile(history: dict, profile) -> dict:
         candidates = [row for row in profile_degrees if _identifies(str(row[2]), str(record.get("school") or ""))]
         if len(candidates) > 1:
             candidates = [row for row in candidates if _identifies(str(row[0]), str(record.get("degree") or ""))]
-        if len(candidates) == 1 and str(candidates[0][1]).strip():
-            record["field"] = str(candidates[0][1]).strip()
+        if len(candidates) == 1:
+            level = str(candidates[0][0]).strip()
+            generic_level = bool(re.fullmatch(r"(?:bachelor|master)(?:'s|s)?", level, re.I))
+            if level and not generic_level:
+                record["degree"] = level  # an explicit owner degree outranks extraction
+            elif generic_level and resume_text:
+                # A generic profile level does not endorse an AI-inferred
+                # subtype. Ground that subtype in the matching source row.
+                for line in resume_text.splitlines():
+                    if not _identifies(str(candidates[0][2]), line):
+                        continue
+                    degree = re.search(r"\b(?:Bachelor|Master) of (?:Technology|Science|Arts|Engineering)\b", line, re.I)
+                    if degree and degree.group(0).lower().startswith(level.split("'")[0].rstrip("s").lower()):
+                        record["degree"] = degree.group(0)
+                        break
+            if str(candidates[0][1]).strip():
+                record["field"] = str(candidates[0][1]).strip()
         for school, start, end in (d[:3] for d in dated):
             if _identifies(str(school or ""), str(record.get("school") or "")):
                 record["start"] = record.get("start") or start

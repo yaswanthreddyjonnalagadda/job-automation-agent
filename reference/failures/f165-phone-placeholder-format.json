@@ -1,0 +1,14 @@
+{
+  "id": "f165",
+  "date": "2026-10-13",
+  "site": "MANTECH Avature",
+  "class": "Phone punctuation rejected by explicit numeric placeholder",
+  "symptom": "MANTECH rejected a ten-digit phone written with punctuation; the same number as ten plain digits passed.",
+  "root_cause": "The fill path ignored the explicit XXXXXXXXXX placeholder.",
+  "fix": "Honor an explicit ten-digit placeholder without changing the number; strip a leading US country code only with a United States profile, and leave other lengths/countries unchanged.",
+  "tests": [
+    "tests/test_phone_placeholder.py"
+  ],
+  "why_tests_missed": "Phone fixtures did not cover a portal requiring plain digits through its placeholder.",
+  "prevention": "Check identity-preserving formatting and keep unrelated international numbers unchanged."
+}

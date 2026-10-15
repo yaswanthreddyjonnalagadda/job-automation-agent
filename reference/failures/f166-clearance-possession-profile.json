@@ -1,0 +1,14 @@
+{
+  "id": "f166",
+  "date": "2026-10-13",
+  "site": "MANTECH Avature",
+  "class": "Known current clearance denial not resolved for possession questions",
+  "symptom": "The agent asked for help on current/active clearance and required TS/SCI possession despite the explicit saved No clearance fact.",
+  "root_cause": "Possession wording had no deterministic profile resolution and fell through to unavailable AI.",
+  "why_tests_missed": "Generic current possession and a named required clearance were not covered together.",
+  "fix": "Use explicit No current clearance only for direct have/possess-clearance questions. Past-clearance, willingness and objections remain distinct questions.",
+  "tests": [
+    "tests/test_clearance_possession.py"
+  ],
+  "prevention": "Keep negative qualification facts scoped to the exact question being answered."
+}

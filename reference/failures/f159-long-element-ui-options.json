@@ -1,0 +1,14 @@
+{
+  "id": "f159",
+  "date": "2026-10-13",
+  "site": "Cargill Paradox",
+  "class": "Offscreen offered choices treated as absent",
+  "symptom": "United States and Virginia were offered in live menus of 247 and 1229 options, but the agent could not select them.",
+  "root_cause": "The portal selector list omitted Element UI and the fallback read only eighty options.",
+  "why_tests_missed": "The live portal variant was not represented in regression fixtures.",
+  "fix": "Include the active Element UI menu, bulk-read all offered labels, use strict existing label matching, and verify the committed value.",
+  "tests": [
+    "tests/test_element_ui_choices.py"
+  ],
+  "prevention": "Retain synthetic coverage for the observed portal contract and preserve neighboring working behavior."
+}

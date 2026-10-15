@@ -1,0 +1,14 @@
+{
+  "id": "f164",
+  "date": "2026-10-13",
+  "site": "MANTECH Avature",
+  "class": "Explicit certification list not translated to Yes/No",
+  "symptom": "MANTECH received No certifications despite four credentials in the original resume.",
+  "root_cause": "The saved structured certification list was empty and generic certification questions lacked a deterministic presence answer.",
+  "fix": "Populate the local profile with four explicit original-resume credential names, and resolve generic any-certifications Yes/No questions from a nonempty profile list. Empty defaults remain unknown; no inference of a specific credential.",
+  "tests": [
+    "tests/test_certification_presence.py"
+  ],
+  "why_tests_missed": "Certification-list fixtures did not cover a generic Yes/No presence question.",
+  "prevention": "Test nonempty explicit lists, unknown empty defaults, and distinct named qualifications."
+}

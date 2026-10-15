@@ -1750,7 +1750,7 @@ class PageAgent:
                 try:
                     after = account_state.read_state(self.snapshot(page), password_boxes=self._password_boxes(tab))
                     logger.info("VERIFY_LINK: %s -- %s", "also signed the account in" if after.kind ==
-                                account_state.SIGNED_IN else "verified only; sign-in is still its own step",
+                                account_state.SIGNED_IN else "verification link opened; checking sign-in next",
                                 after)
                 except Exception:
                     pass
@@ -2437,7 +2437,7 @@ class PageAgent:
         if unresolved:
             return PagePlan(page_kind="application_form", answers=answers, for_owner=unresolved)
 
-        forward = self.profile_forward(controls)
+        forward = self.profile_forward(controls, snapshot)
         if forward is None:
             return PagePlan(page_kind="application_form", answers=answers)
         label = " ".join((forward.name or "").split())
@@ -2479,8 +2479,14 @@ class PageAgent:
                         "no AI call", plan.next_label)
         return plan
 
-    def profile_forward(self, controls: list[Control]) -> Optional[Control]:
+    def profile_forward(self, controls: list[Control], snapshot: str = "") -> Optional[Control]:
         """The safest clearly-labelled application action on a local-plan page."""
+        if re.search(r"must complete (?:an? |the )?assessment(?: test)? to continue", snapshot, re.I) \
+                and not re.search(r"you have completed the assessment", snapshot, re.I):
+            assessment = next((c for c in controls if c.role in PRESS_ROLES and not c.disabled
+                and re.fullmatch(r"\s*(?:take|start) assessment\s*", c.name or "", re.I)), None)
+            if assessment is not None:
+                return assessment
         options = [c for c in controls if c.role in PRESS_ROLES and c.name and not c.disabled
                    and FORWARD_LABEL.match(" ".join(c.name.split())) and not NEVER_PRESS.search(c.name)]
         if not options:
@@ -2589,6 +2595,15 @@ class PageAgent:
                 if val:
                     return val, src
             return explicit, "profile.answer_library"
+
+        # A current clearance denial also answers possession of a named
+        # required clearance. It says nothing about past clearance or ability
+        # and willingness to obtain one.
+        if re.search(r"\bdo you (?:currently )?(?:have|possess)\s+(?:a |an |any |the )?"
+                     r"(?:(?:current/active|current|active|required|security|TS/SCI|TS|SCI|top secret|secret)\s+)*clearance\b",
+                     question, re.I) \
+                and str(getattr(self.profile, "security_clearance", "")).strip().casefold() in {"no", "false"}:
+            return "No", "profile.security_clearance"
 
         # 2. Universal Concept & Synonym Engine (zero-cost, zero-heavy-RAM, cross-ATS)
         concept = concept_matcher.match_concept(
@@ -3755,7 +3770,7 @@ class PageAgent:
         except Exception as exc:
             logger.debug("Field inventory failed: %s", exc)
             return False
-        target = form_fields.resume_input(fields)
+        target = form_fields.resume_input(fields, Path(self.resume_file))
         if target is not None:
             from browser_automation import JobApplicationAssistant
             if JobApplicationAssistant._file_already_attached(target.frame, Path(self.resume_file).name):
@@ -4519,6 +4534,8 @@ class PageAgent:
                     timeout=2_000)
             except Exception:
                 input_type, placeholder = "", ""
+            if input_type == "tel" or re.search(r"phone|mobile|telephone", control.question, re.I):
+                fill_value = form_fields.phone_text(fill_value, placeholder, getattr(self.profile, "country", ""))
             # A date goes into a date box the one way every date is written (form_fields.date_text): in the box's own
             # format, whatever the answer's ("December 2022", "2 weeks", "12/15/2022"). An answer that is not a date
             # is not written into a date box: before, today's date went in its place.
@@ -5091,6 +5108,7 @@ class PageAgent:
 
         def _check_portal(val: str) -> bool:
             for selector in (
+                ".el-select-dropdown:visible .el-select-dropdown__item:not(.is-disabled)",
                 ".ant-select-dropdown:not(.ant-select-dropdown-hidden) [class*=ant-select-item-option]:visible",
                 ".ant-select-dropdown:not(.ant-select-dropdown-hidden) [role=option]:visible",
                 "[class*=ant-select-item-option]:visible",
@@ -5104,12 +5122,10 @@ class PageAgent:
                     portal_opts = tab.locator(selector)
                     count = portal_opts.count()
                     if count > 0:
-                        labels = []
-                        for i in range(min(count, 80)):
-                            try:
-                                labels.append(" ".join((portal_opts.nth(i).inner_text(timeout=300) or "").split()))
-                            except Exception:
-                                labels.append("")
+                        # Country/state menus can contain hundreds of rows.
+                        # Read the offered labels in one local DOM call instead
+                        # of truncating them or making one browser call per row.
+                        labels = [" ".join(text.split()) for text in portal_opts.all_text_contents()]
                         if any(labels):
                             pick = self._pick_label(labels, val)
                             if pick is not None:
@@ -5121,6 +5137,10 @@ class PageAgent:
                                     except Exception:
                                         portal_opts.nth(pick).evaluate("e => e.click()")
                                 tab.wait_for_timeout(500)
+                                if selector.startswith(".el-select-dropdown"):
+                                    committed = loc.input_value(timeout=1_500)
+                                    if not _fill_value_committed(committed, labels[pick]):
+                                        return False
                                 self._choice_methods[control.ref] = "portal_option"
                                 return True
                 except Exception:
@@ -6240,12 +6260,24 @@ class PageAgent:
     # -- small helpers --------------------------------------------------------------------
     @staticmethod
     def _password_boxes(tab) -> int:
-        """How many password boxes the page shows, frames included."""
+        """Count passwords in the active snapshot scope, including its frames."""
         try:
-            count = tab.locator("input[type=password]:visible").count()
+            dialogs = tab.locator('[role="dialog"]:visible, dialog[open]:visible')
+            in_dialog = bool(dialogs.count())
+            scope = dialogs.last if in_dialog else tab
+            count = scope.locator("input[type=password]:visible").count()
             for frame in tab.frames[1:]:
-                if not safety.is_captcha_frame(frame.url):
-                    count += frame.locator("input[type=password]:visible").count()
+                if safety.is_captcha_frame(frame.url):
+                    continue
+                if in_dialog:
+                    # Nested frame passwords belong to the dialog only when
+                    # their outermost embedding element is inside that dialog.
+                    owner = frame
+                    while owner.parent_frame and owner.parent_frame != tab.main_frame:
+                        owner = owner.parent_frame
+                    if not scope.evaluate("(dialog, element) => dialog.contains(element)", owner.frame_element()):
+                        continue
+                count += frame.locator("input[type=password]:visible").count()
             return count
         except Exception:
             return 0

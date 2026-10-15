@@ -18,7 +18,12 @@ pip install --upgrade pip
 pip install -r requirements.txt
 
 echo "=== [3/4] Installing Playwright Chromium & Native Dependencies ==="
-python -m playwright install --with-deps chromium
+if sudo -n true 2>/dev/null; then
+    python -m playwright install --with-deps chromium
+else
+    # System libraries are installed by bootstrap_worker.sh; no sudo needed for the browser itself.
+    python -m playwright install chromium
+fi
 
 echo "=== [4/4] Performing Synthetic Browser Launch Test ==="
 python -c "

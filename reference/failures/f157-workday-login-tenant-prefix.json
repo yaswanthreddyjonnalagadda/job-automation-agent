@@ -1,0 +1,14 @@
+{
+  "id": "f157",
+  "date": "2026-10-13",
+  "site": "Chipotle Workday",
+  "class": "Locale-less login URL treated job as the tenant site",
+  "symptom": "The login fallback opened /ChipotleCareers/job/login and returned a missing page.",
+  "root_cause": "The fallback assumed every Workday path began with locale/site.",
+  "why_tests_missed": "The live portal variant was not represented in regression fixtures.",
+  "fix": "Recognize an optional locale and preserve the actual tenant prefix and post-login redirect.",
+  "tests": [
+    "tests/test_workday_login_route.py"
+  ],
+  "prevention": "Retain synthetic coverage for the observed portal contract and preserve neighboring working behavior."
+}

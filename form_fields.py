@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+import geo_reference
 import option_match
 
 logger = logging.getLogger(__name__)
@@ -352,14 +353,42 @@ _NOT_RESUME = re.compile(r"cover\s*letter|photo|picture|avatar|profile image|tra
                          r"other documents?|writing sample|autofill|auto-fill|import|parse", re.IGNORECASE)
 
 
-def resume_input(fields: list[Field]) -> Optional[Field]:
+def phone_text(value: str, placeholder: str = "", country: str = "") -> str:
+    """Honor an explicit ten-digit phone placeholder without changing the number."""
+    if not re.search(r"(?<!X)X{10}(?!X)", placeholder or "", re.I):
+        return value
+    digits = re.sub(r"\D", "", value)
+    if len(digits) == 11 and digits.startswith("1") and geo_reference.country_code(country) == "US":
+        digits = digits[1:]
+    return digits if len(digits) == 10 else value
+
+
+def file_accepts(accept: str, path: Path) -> bool:
+    import mimetypes
+    mime = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+    types = [part.strip().lower() for part in (accept or "").split(",") if part.strip()]
+    return not types or any(part == path.suffix.lower() or part == mime or part == "*/*"
+        or (part.endswith("/*") and mime.startswith(part[:-1])) for part in types)
+
+
+def file_upload_rejected(page) -> bool:
+    alerts = page.locator("[role='alert']:visible, .el-message--error:visible")
+    return bool(alerts.count() and re.search(
+        r"invalid media type|unsupported file (?:type|format)|file type (?:is )?not (?:allowed|supported)",
+        " ".join(alerts.all_text_contents()), re.I))
+
+
+def resume_input(fields: list[Field], path: Optional[Path] = None) -> Optional[Field]:
     """The file input the resume goes in, told apart by the words around it, never by its own name alone.
 
     Most portals name the upload 'Attach', 'Choose File*', 'Drop or select' or 'From Device' (in the agent's
     recordings only 4 of 30 upload buttons had 'resume' near them); the section or block around it says what it
     is for. A second upload that re-fills the form from the resume ('Autofill from resume', 'Import Resume') is not
     the resume field."""
-    files = [f for f in fields if f.kind == "file" and not f.disabled]
+    supported = [path] if path is not None else [Path("resume" + suffix) for suffix in (".pdf", ".doc", ".docx", ".rtf", ".txt")]
+    files = [f for f in fields if f.kind == "file" and not f.disabled
+             and any(file_accepts(f.accept, candidate) for candidate in supported)
+             and not re.search(r"\bvideo\b", " ".join((f.label, f.question, f.name)), re.I)]
     if not files:
         return None
 
@@ -385,7 +414,7 @@ def attach_resume(page, path: Path, fields: Optional[list[Field]] = None) -> Opt
     """Puts the resume in its file input. Returns the field, or None when there is no such input or it would
     not take the file."""
     fields = fields if fields is not None else inventory(page)
-    target = resume_input(fields)
+    target = resume_input(fields, path)
     if target is None:
         return None
     try:
@@ -393,6 +422,9 @@ def attach_resume(page, path: Path, fields: Optional[list[Field]] = None) -> Opt
     except Exception as exc:
         logger.info("Could not put the resume in %r: %s", target.question or target.label or target.name,
                     str(exc).splitlines()[0][:120])
+        return None
+    page.wait_for_timeout(1_500)
+    if file_upload_rejected(page):
         return None
     return target
 

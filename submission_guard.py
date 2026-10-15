@@ -99,14 +99,19 @@ def _guard_script(capability: str) -> str:
       const finalForm = (form, submitter) => submitter
         ? Boolean(finalControl(submitter))
         : Array.from(form.elements).some(element => Boolean(finalControl(element)));
-      // Account helpers may authorize one dedicated registration form. A label
+      // Account helpers may authorize one dedicated credential form. A label
       // alone never exempts a button from final-submission containment.
-      const accountCreationControl = element => {
-        if (!(element instanceof HTMLButtonElement) || !element.form || element.disabled) return false;
-        if (!labels(element).length || !labels(element).every(
-            label => /^(create (?:my |your |an )?account|register|sign up)$/i.test(label))) return false;
-        const form = element.form;
-        const controls = Array.from(form.elements);
+      const credentialForm = element => element.form || element.closest('form');
+      const credentialControl = (element, action) => {
+        if (!(element instanceof Element) || !element.matches('button,[role=button]')
+            || !credentialForm(element) || element.disabled
+            || element.getAttribute('aria-disabled') === 'true') return false;
+        const actionLabel = action === 'creation'
+          ? /^(create (?:my |your |an )?account|register|sign up)$/i
+          : /^(sign in|log in|login)$/i;
+        if (!labels(element).length || !labels(element).every(label => actionLabel.test(label))) return false;
+        const form = credentialForm(element);
+        const controls = [...new Set([...form.elements, ...form.querySelectorAll('[role=button]')])];
         if (controls.some(e => e.matches?.('input[type=file],textarea,select'))
             || form.querySelector('[contenteditable=true]')) return false;
         const inputs = controls.filter(e => e instanceof HTMLInputElement
@@ -119,11 +124,13 @@ def _guard_script(capability: str) -> str:
             ...(e.getAttribute('aria-labelledby') || '').split(/\s+/)
               .map(id => document.getElementById(id)?.innerText || '')
           ].join(' '))));
-        if (passwords.length !== 2 || emails.length !== 1 || !emails[0].value.trim()
-            || !passwords[0].value || passwords[0].value !== passwords[1].value) return false;
+        if (passwords.length !== (action === 'creation' ? 2 : 1)
+            || emails.length !== 1 || !emails[0].value.trim() || !passwords[0].value
+            || (action === 'creation' && passwords[0].value !== passwords[1].value)) return false;
         if (inputs.some(e => !passwords.includes(e) && !emails.includes(e) && e.type !== 'checkbox')) return false;
         return !controls.some(e => e !== element && e.matches?.(selector)
-          && !labels(e).some(label => safeUtilityLabel.test(label)));
+          && !labels(e).some(label => safeUtilityLabel.test(label))
+          && !(labels(e).length && labels(e).every(label => actionLabel.test(label))));
       };
       const recordDenial = (kind, element) => {
         const item = {
@@ -141,11 +148,24 @@ def _guard_script(capability: str) -> str:
       };
       const authorizedClick = element => {
         const authorization = state.authorization;
-        if (!authorization || authorization.capability !== capability || authorization.element !== element) {
+        if (!authorization || authorization.capability !== capability) {
           return false;
         }
-        if (authorization.accountCreation
-            && (authorization.clickAllowed || !accountCreationControl(element))) return false;
+        if (authorization.credentialAction && authorization.element !== element
+            && authorization.element.getAttribute('role') === 'button'
+            && authorization.clickAllowed && !authorization.companionClickAllowed
+            && element instanceof HTMLButtonElement
+            && credentialForm(authorization.element) === authorization.form
+            && credentialForm(element) === authorization.form
+            && credentialControl(authorization.element, authorization.credentialAction)
+            && credentialControl(element, authorization.credentialAction)) {
+          authorization.companionClickAllowed = true;
+          return true;
+        }
+        if (authorization.element !== element) return false;
+        if (authorization.credentialAction
+            && (authorization.clickAllowed || credentialForm(element) !== authorization.form
+              || !credentialControl(element, authorization.credentialAction))) return false;
         authorization.clickAllowed = true;
         setTimeout(() => {
           if (state.authorization === authorization) state.authorization = null;
@@ -156,8 +176,13 @@ def _guard_script(capability: str) -> str:
         const authorization = state.authorization;
         return Boolean(authorization && authorization.capability === capability
           && authorization.form === form && authorization.clickAllowed
-          && (!authorization.accountCreation || ((!submitter || submitter === authorization.element)
-            && accountCreationControl(authorization.element))));
+          && (!authorization.credentialAction || (
+            credentialForm(authorization.element) === form
+            && credentialControl(authorization.element, authorization.credentialAction)
+            && (!submitter || submitter === authorization.element
+            || (authorization.element.getAttribute('role') === 'button'
+              && submitter && credentialForm(submitter) === form
+              && credentialControl(submitter, authorization.credentialAction))))));
       };
 
       // Named, stable function references -- not inline closures passed directly to
@@ -167,6 +192,15 @@ def _guard_script(capability: str) -> str:
       const onClick = event => {
         if (!state.active) return;
         const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
+        const credential = state.authorization;
+        const clicked = path.find(target => target instanceof Element && target.matches(selector));
+        if (credential?.credentialAction && (clicked === credential.element
+            || (credential.element.getAttribute('role') === 'button'
+              && clicked instanceof HTMLButtonElement && credentialForm(clicked) === credential.form))) {
+          if (authorizedClick(clicked)) return;
+          denyEvent(event, 'credential_shape_changed', clicked);
+          return;
+        }
         let candidate = null;
         for (const target of path) {
           candidate = finalControl(target);
@@ -245,8 +279,13 @@ def _guard_script(capability: str) -> str:
           return true;
         },
         authorizeAccountCreation(element, token) {
-          if (token !== capability || !state.active || !accountCreationControl(element)) return false;
-          state.authorization = {element, form: element.form, capability, accountCreation: true};
+          if (token !== capability || !state.active || !credentialControl(element, 'creation')) return false;
+          state.authorization = {element, form: credentialForm(element), capability, credentialAction: 'creation'};
+          return true;
+        },
+        authorizeAccountSignIn(element, token) {
+          if (token !== capability || !state.active || !credentialControl(element, 'sign_in')) return false;
+          state.authorization = {element, form: credentialForm(element), capability, credentialAction: 'sign_in'};
           return true;
         },
         clearAuthorization(token) {
@@ -279,6 +318,7 @@ class SubmissionGuardV0:
         self._active_pages: weakref.WeakSet = weakref.WeakSet()
         self._tracker: Any = None
         self._dedup_key = ""
+        self._handoff_parked = False
         context.add_init_script(script=self._script)
         for page in context.pages:
             for frame in page.frames:
@@ -342,8 +382,19 @@ class SubmissionGuardV0:
                 f"token => window.{_GUARD_NAME}.activate(token)",
                 self._capability,
             )
+        finally:
+            # Playwright navigation callbacks may be in flight when parking
+            # starts. Their final browser command must respect the new state.
+            if getattr(self, "_handoff_parked", False):
+                try:
+                    frame.evaluate(
+                        f"token => window.{_GUARD_NAME}.deactivate(token)", self._capability)
+                except PlaywrightError:
+                    logger.debug("Submission guard could not deactivate a closing frame")
 
     def activate(self, page: Any) -> None:
+        if getattr(self, "_handoff_parked", False):
+            return
         self._active_pages.add(page)
         if not getattr(page, "_jaa_submission_guard_console_listener", False):
             page.on("console", self._on_console)
@@ -356,14 +407,14 @@ class SubmissionGuardV0:
             self._activate_frame(frame)
 
     def _activate_attached(self, page: Any, frame: Any) -> None:
-        if page in self._active_pages:
+        if not getattr(self, "_handoff_parked", False) and page in self._active_pages:
             try:
                 self._activate_frame(frame)
             except PlaywrightError:
                 logger.debug("Submission guard could not activate a closing frame")
 
     def _activate_navigated(self, page: Any, frame: Any) -> None:
-        if page in self._active_pages:
+        if not getattr(self, "_handoff_parked", False) and page in self._active_pages:
             try:
                 self._activate_frame(frame)
             except PlaywrightError:
@@ -376,6 +427,20 @@ class SubmissionGuardV0:
                 f"token => window.{_GUARD_NAME}.deactivate(token)",
                 self._capability,
             )
+
+    def park_for_handoff(self) -> None:
+        """Called only after automation is durably parked for owner control."""
+        self._handoff_parked = True
+        for page in self.context.pages:
+            if not page.is_closed():
+                self.deactivate(page)
+
+    def resume_from_handoff(self, page: Any) -> None:
+        """Restore containment in every tab before the actor becomes active."""
+        self._handoff_parked = False
+        for candidate in dict.fromkeys([*self.context.pages, page]):
+            if not candidate.is_closed():
+                self.activate(candidate)
 
     @staticmethod
     def _frame_denials(frame: Any) -> list[dict]:
