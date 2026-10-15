@@ -126,7 +126,7 @@ form.apply button { padding:12px 22px; font-size:15px; }
 .pill.form_filled, .pill.prepared { background:var(--accent-soft); color:var(--accent); }
 .pill.interviewing, .pill.offer { background:var(--violet-soft); color:var(--violet); }
 .pill.rejected { background:var(--bad-soft); color:var(--bad); }
-.pill.skipped, .pill.disqualified_policy_mismatch { background:var(--grey-soft); color:var(--muted); }
+.pill.skipped, .pill.disqualified_policy_mismatch, .pill.job_not_found { background:var(--grey-soft); color:var(--muted); }
 
 /* --- tables --------------------------------------------------------------------------------------- */
 table { width:100%; border-collapse:collapse; }
@@ -276,6 +276,7 @@ STATUS_LABELS = {
     "prepared": "Prepared", "form_filled": "Filling in", "ready_to_submit": "Ready to submit",
     "needs_user_review": "Needs you", "submitted": "Submitted", "skipped": "Skipped",
     "DISQUALIFIED_POLICY_MISMATCH": "Skipped (policy)", "BLOCKED_VALIDATION_LOOP": "Stuck (needs you)",
+    "job_not_found": "Job doesn't exist",
     "interviewing": "Interviewing", "rejected": "Rejected", "offer": "Offer",
 }
 
@@ -292,7 +293,7 @@ def status_class(status: str) -> str:
 _GROUPS = {
     "needs": {"ready_to_submit", "needs_user_review", "blocked_validation_loop"},
     "done": {"submitted", "interviewing", "offer", "rejected"},
-    "skipped": {"skipped", "disqualified_policy_mismatch"},
+    "skipped": {"skipped", "disqualified_policy_mismatch", "job_not_found"},
 }
 
 

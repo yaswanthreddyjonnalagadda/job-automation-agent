@@ -78,7 +78,7 @@ from state_machine import (
     dump_forensic_failure,
 )
 from job_tracker import (
-    STATUS_FORM_FILLED, STATUS_NEEDS_USER_REVIEW, STATUS_READY_TO_SUBMIT, STATUS_SKIPPED,
+    STATUS_FORM_FILLED, STATUS_JOB_NOT_FOUND, STATUS_NEEDS_USER_REVIEW, STATUS_READY_TO_SUBMIT, STATUS_SKIPPED,
     STATUS_SUBMITTED, JobTracker,
 )
 from resume_parser import parse_resume
@@ -1159,6 +1159,20 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                     stage="application",
                     reason_code=ReasonCode.ACTION_VALIDATION_FAILED,
                     display_message=f"Disqualified by policy mismatch: {outcome.summary}",
+                    application_key=key,
+                )
+            return
+        if outcome.kind == "job_not_found":
+            tracker.update_status(key, STATUS_JOB_NOT_FOUND,
+                                  notes=f"Job does not exist: the employer's page says so -- {outcome.summary}")
+            logger.warning("SKIPPED: %s at %s -- the posting does not exist; run stopped", job.title, job.company)
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.RUN_STOPPED,
+                    component="page_agent",
+                    stage="application",
+                    reason_code=ReasonCode.NAVIGATION_FAILED,
+                    display_message=f"Job does not exist: {outcome.summary}",
                     application_key=key,
                 )
             return

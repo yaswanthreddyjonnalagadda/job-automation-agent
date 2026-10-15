@@ -533,7 +533,7 @@ def change_application_status(app_id: int):
     """Updates an application's status directly from the UI (e.g. submitted, needs_user_review, etc.)."""
     new_status = (request.form.get("status") or "").strip()
     valid_statuses = {"prepared", "form_filled", "ready_to_submit", "needs_user_review", "submitted", "skipped",
-                      "interviewing", "rejected", "offer"}   # what happened after submitting, for the Progress page
+                      "job_not_found", "interviewing", "rejected", "offer"}   # what happened after submitting, for the Progress page
     if new_status not in valid_statuses:
         return redirect(url_for("application", app_id=app_id, error="Invalid status."))
     tracker = get_tracker()
@@ -2026,6 +2026,7 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
         <option value="form_filled" {% if a.status == 'form_filled' %}selected{% endif %}>Filling in</option>
         <option value="prepared" {% if a.status == 'prepared' %}selected{% endif %}>Prepared</option>
         <option value="skipped" {% if a.status == 'skipped' %}selected{% endif %}>Skipped</option>
+        <option value="job_not_found" {% if a.status == 'job_not_found' %}selected{% endif %}>Job doesn't exist</option>
         <option value="interviewing" {% if a.status == 'interviewing' %}selected{% endif %}>Interviewing</option>
         <option value="rejected" {% if a.status == 'rejected' %}selected{% endif %}>Rejected</option>
         <option value="offer" {% if a.status == 'offer' %}selected{% endif %}>Offer</option>

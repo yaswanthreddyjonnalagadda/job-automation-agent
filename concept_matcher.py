@@ -883,8 +883,17 @@ def resolve_profile_value(
         spec = DATA_CONCEPTS[concept]
         field_name = str(spec.get("profile_field") or "")
         raw = getattr(profile, field_name, "") if field_name else ""
+        if concept == "CERTIFICATIONS" and isinstance(raw, (list, tuple)) and raw \
+                and re.fullmatch(r"(?:do you have|have you obtained|do you hold) (?:any )?(?:professional )?certifications?[?*\s]*", question.strip(), re.I) \
+                and {clean_text(option) for option in options or []} >= {"yes", "no"}:
+            return "Yes", "profile.certifications"
         if spec.get("resolver") == "skill_level":
             val = _skill_level(raw, question)
+        elif spec.get("resolver") == "text_if_true":
+            # A statement the owner has made once ("I require sponsorship before I am able to work"), given only
+            # while the profile fact behind it is true. When it is not, nothing is given: the question stays the
+            # owner's, never answered with another statement on the agent's own reading (f152).
+            val = str(spec.get("text") or "") if _is_yes(raw) else ""
         elif spec.get("resolver") == "yes_if_matches":
             # A Yes/No question about one kind of a stated fact: "Are you in OPT status?" is answered by the
             # work authorization the profile states (H-1B -> No), never guessed.

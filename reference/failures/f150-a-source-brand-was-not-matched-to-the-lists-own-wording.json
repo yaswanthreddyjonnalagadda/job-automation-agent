@@ -1,0 +1,20 @@
+{
+  "id": "f150",
+  "date": "2026-10-14",
+  "site": "Workday (Copart) 'How Did You Hear About Us?'; any 'where did you hear about us' list that names a job site with a descriptor",
+  "class": "A required choice was left blank because the owner's one-word answer is not any option's exact wording, and the matcher had no data saying a brand name means the option that begins with it",
+  "symptom": "Copart's application would not go on: 'The field How Did You Hear About Us? is required and must have a value.' The agent typed 'LinkedIn', left the list open and chose nothing, on four runs in a row. The saved page and a read-only look at the live list showed why: seven categories, and no option called 'LinkedIn' -- the job sites are 'Career Builder', 'Glassdoor', 'Indeed', 'LinkedIn corporate page', 'Monster' ..., and the only other LinkedIn option is 'Saw on personal LinkedIn feed'.",
+  "root_cause": "option_match.best_option compares the owner's answer with the list's words (same words, same place, a synonym group, or the option that starts with the answer and then only adds after punctuation). 'LinkedIn' is none of Copart's options, there was no synonym group for a job-site brand, and 'LinkedIn corporate page' adds a descriptor after a space, not punctuation, so the strict matcher correctly refused to guess -- but nothing in data told it that a brand answer means the one option that begins with the brand. The failure was invisible for days because the page recordings were redacted (f148) and the guard misread the nested list's clicks (f149).",
+  "why_tests_missed": "The existing matcher and nested-prompt tests used invented option names ('Referral network', 'Category') where the answer is exactly one option; no test used a real portal's wording for a source question, and the portal research behind reference/answer_equivalents.json covered degrees, languages, gender and veteran status but not 'how did you hear'.",
+  "fix": "Added a referral_source family to reference/answer_equivalents.json: one group per job-site or social brand (LinkedIn, Indeed, Glassdoor, Monster, ZipRecruiter, Dice, CareerBuilder, Handshake, Facebook, Instagram, Twitter, Google). The existing rule 3 in option_match then lets a brand reach the single option that begins with it ('LinkedIn' -> 'LinkedIn corporate page'), still never chooses between two such options, and never matches an option that merely contains the brand ('Saw on personal LinkedIn feed'). Data, not code: no brand or company literal decides anything in logic.",
+  "tests": [
+    "tests/test_referral_source_options.py::test_linkedin_reaches_the_one_linkedin_job_site_option",
+    "tests/test_referral_source_options.py::test_a_brand_never_chooses_between_two_options_that_begin_with_it",
+    "tests/test_referral_source_options.py::test_a_feed_post_that_only_contains_the_brand_is_not_the_job_site",
+    "tests/test_referral_source_options.py::test_an_exact_option_still_wins_over_a_longer_one",
+    "tests/test_referral_source_options.py::test_every_job_site_brand_in_the_data_reaches_its_one_descriptor_option",
+    "tests/test_referral_source_options.py::test_the_agent_walks_coparts_categories_and_chooses_the_linkedin_job_site",
+    "tests/test_referral_source_options.py::test_the_agent_leaves_a_source_the_list_does_not_offer_unchosen"
+  ],
+  "prevention": "When a strict matcher refuses to guess, make sure the 'same thing in other words' knowledge it relies on exists as data for every kind of question the agent meets, not only the ones already researched -- and build a test around a real portal's actual list the first time a question type is seen, not an invented one. A required field left blank by a refusal should be reported with the options the list offered, so the gap is visible the first time, not the fourth."
+}

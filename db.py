@@ -61,6 +61,7 @@ STATUS_NEEDS_USER_REVIEW = "needs_user_review"  # something needs a person: blan
                                                 # we could not verify
 STATUS_SUBMITTED = "submitted"                  # confirmed by the site or a confirmation email
 STATUS_SKIPPED = "skipped"
+STATUS_JOB_NOT_FOUND = "job_not_found"          # the employer's page says the posting is gone
 STATUS_DISQUALIFIED_POLICY_MISMATCH = "DISQUALIFIED_POLICY_MISMATCH"
 STATUS_BLOCKED_VALIDATION_LOOP = "BLOCKED_VALIDATION_LOOP"
 

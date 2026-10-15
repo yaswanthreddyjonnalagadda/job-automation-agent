@@ -1204,6 +1204,73 @@ or needing you) keep their sanitized message instead of the bare category name.
 Every value you typed, and every other category (filled fields, codes,
 passwords, answers), stays exactly as opaque as before.
 
+### A click that worked is not reported as refused (f149)
+
+The submission guard still refuses any click that could send the application. It
+no longer mistakes an ordinary click for a refused one when the clicked row
+disappears afterwards -- a list that closes once you choose, or a category that
+opens its sub-menu in place of its own row (Workday's nested "How Did You Hear
+About Us?"). The guard now reads its refusal counter from the page frame, which
+is still there after the row has gone, and a click that replaced the page's own
+document counts as a click that worked, because a refused click leaves the
+page exactly as it was. A real refusal is still read, still stops the click
+fallbacks, and any other failure to read the counter still counts as refused.
+
+### A date made of three boxes is written in order (f151)
+
+A form that asks for a date in separate Month, Day and Year boxes (Workday's
+"desired start date") is filled Month, then Day, then Year, whatever order the
+answers arrive in, because each box types into the next and any other order
+leaves an invalid date. Two dates on one page stay two dates.
+
+### Employment eligibility from your profile (f152)
+
+When a list asks you to describe your employment eligibility (permanent
+authorization, a temporary work permit, or needing sponsorship), the agent
+chooses "I require sponsorship before I am able to work" if your profile says you
+need sponsorship -- the statement you confirmed on 14 October 2026. If your
+profile does not say that, it chooses nothing and the question stays yours: it
+never picks "permanent" or "temporary" on its own reading of your profile.
+
+### A job that does not exist stops the run (f153)
+
+If the employer's page says the job is gone ("The page you are looking for
+doesn't exist." or "This job is no longer available"), the run stops and the
+application is recorded as **Job doesn't exist**, listed with your skipped jobs,
+instead of being handed to you. Because Workday shows the same page while its
+own service is down, the agent reloads the page twice, five seconds apart,
+before it decides; if the posting comes back, the run carries on.
+
+### Where you heard about the job (f150)
+
+Your usual answer to "How did you hear about us?" is a name such as LinkedIn,
+and a portal's list rarely uses that exact word: Copart's offers "LinkedIn
+corporate page" under Job Sites. The agent now takes a job-site or social brand
+(LinkedIn, Indeed, Glassdoor, Monster, ZipRecruiter, Dice, CareerBuilder,
+Handshake, Facebook, Instagram, Twitter, Google) as the one option that begins with
+it. It still never chooses between two such options, never takes an option that
+only mentions the brand ("Saw on personal LinkedIn feed"), and leaves the field for
+you when the list offers no option for your answer. The brands live in
+`reference/answer_equivalents.json` (`referral_source`).
+
+### Posting navigation and Review detection
+
+A posting's search fields outside its main content and explicitly identified talent-community subscription forms do not turn it into an application when the main content offers an Apply link outside a form. Application fields inside that main content still count, and an application already filled in this run is never reclassified as a posting. The agent follows the posting's application link with GET while retaining submission containment for the destination form.
+
+Review detection requires a visible Submit control or a visible active-step marker whose own visible text identifies Review. A search container with an active class, hidden location options, and hidden review/submit templates cannot establish that the application reached its final step.
+
+After both Review and ordinary handoffs, Continue, Resume/reload, and refresh re-arm submission containment before automation runs again. Ending or skipping the run does not re-arm it. Authentication holds still follow the existing owner-Continue policy.
+
+### Observed application-entry and attachment recovery (13 October 2026)
+
+Workday standalone login preserves tenant prefixes with and without a locale. Resume upload selects a slot compatible with the file and its purpose; a video-only or cover-letter slot is not a resume destination, and an explicit unsupported-type error is not attachment success. Custom Element UI country/state menus are read in full and their committed selection is checked. An explicit mandatory assessment entry takes priority over ordinary Next navigation until completion. An existing-account login beside multiple explicitly offered resume-entry alternatives is optional; actual authentication errors and required login pages retain their existing handling.
+
+Generic education levels in the profile do not validate extracted degree subtypes: matching original resume rows ground those subtypes, while explicit owner degrees retain priority. An explicit standalone closed-job notice stops form filling before job-search controls are treated as application fields; the official employer posting may still be available and must be checked separately.
+
+A generic “any certifications?” Yes/No question resolves to Yes from a nonempty explicit profile certification list; an empty default does not prove No, and a generic credential list does not prove a named qualification. Phone fields with an explicit ten-digit X placeholder use the same number as digits, removing a leading US country code only for a United States profile.
+
+An explicit No current security clearance answers direct current clearance-possession questions, including possession of a named required clearance, as No. It does not answer historical clearance, willingness, ability, or objections.
+
 ### Page recordings stay readable (f148)
 
 The pages the agent reads during a run, saved under

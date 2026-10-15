@@ -4819,6 +4819,7 @@ class JobApplicationAssistant:
             denial_count = SubmissionGuardV0.click_denial_count(locator)
         except Exception:
             denial_count = None
+        frame = SubmissionGuardV0.click_frame(locator)   # read after the click even if the element is gone
         for attempt, action in enumerate(
             (
                 lambda: locator.click(timeout=timeout_ms),
@@ -4829,12 +4830,12 @@ class JobApplicationAssistant:
         ):
             try:
                 action()
-                if SubmissionGuardV0.click_was_denied(locator, denial_count):
+                if SubmissionGuardV0.click_was_denied(locator, denial_count, frame):
                     logger.warning("SUBMISSION_GUARD_V0_DENIED: refusing click fallback")
                     return False
                 return True
             except Exception as exc:
-                if SubmissionGuardV0.click_was_denied(locator, denial_count):
+                if SubmissionGuardV0.click_was_denied(locator, denial_count, frame):
                     logger.warning("SUBMISSION_GUARD_V0_DENIED: refusing click fallback")
                     return False
                 logger.warning("Click strategy %d failed: %s", attempt, str(exc)[:120])
