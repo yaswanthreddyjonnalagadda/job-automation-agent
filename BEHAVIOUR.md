@@ -1336,3 +1336,12 @@ stays on your machine so a run that stopped can be understood afterwards.
 Screenshots, DOM dumps, the account-page snapshots and the run log keep their
 privacy treatment.
 
+
+## Workday skills search tab safety (f167)
+
+Filling Workday's "Type to Add Skills" widget searches each skill separately
+against the site's own list. Whatever opens one -- a misclick, or the page's
+own script reacting to the search -- a browser tab this search did not ask for
+is closed immediately rather than left open, and a skill the widget's list does
+not recognize is followed by a short pause before the next search. Nothing
+about which skills are offered, chosen, or left blank changes.
