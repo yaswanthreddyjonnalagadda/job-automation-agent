@@ -1006,6 +1006,13 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
     return status
 
 
+def resume_handoff_action(assistant, page, decision: str) -> None:
+    """Re-arm containment for a continuing handoff action, including Review."""
+    terminal = (*RUN_ENDS, "submitted_by_user", "skip", "decline", "abort", "quit")
+    if decision not in terminal and hasattr(assistant, "resume_automation"):
+        assistant.resume_automation(page)
+
+
 def run_page_agent(assistant, page, claude, config, profile, resume, job, tracker, key: str,
                    job_dir: Path, resume_file: Path, args, signal_path: Path,
                    experience_data: dict | None = None) -> None:
@@ -1221,6 +1228,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                         application_key=key,
                     )
                 return
+            resume_handoff_action(assistant, page, decision)
             if not page.is_closed():
                 agent.note_owner_changes(page)
             agent._ensure_state()
@@ -1316,9 +1324,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                     application_key=key,
                 )
             return
-        terminal_decisions = (*RUN_ENDS, "submitted_by_user", "skip", "decline", "abort", "quit")
-        if decision not in terminal_decisions and hasattr(assistant, "resume_automation"):
-            assistant.resume_automation(page)
+        resume_handoff_action(assistant, page, decision)
         if not page.is_closed():
             agent.note_owner_changes(page)
         refresh_answer_bank(tracker)
@@ -1912,6 +1918,8 @@ def main() -> None:
             return
 
     resume = parse_resume(config.resume_path)
+    import repeated_entries
+    experience_data = repeated_entries.with_profile(experience_data, profile, resume.raw_text)
     claude = brain_for(config, job)
 
     # Windows forbids <>:"/\|?* in folder names; a title with '|' crashed a run.

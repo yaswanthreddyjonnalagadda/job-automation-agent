@@ -346,6 +346,11 @@ class JobApplicationAssistant:
         if guard is None:
             guard = SubmissionGuardV0(page.context)
             self._submission_guard = guard
+        elif (type(guard).__module__, type(guard).__name__) == (
+                SubmissionGuardV0.__module__, SubmissionGuardV0.__name__):
+            # Keep the live context, capability and listeners when code reloads.
+            # Existing callbacks resolve activate() on this upgraded instance.
+            guard.__class__ = SubmissionGuardV0
         return guard
 
     def protect_submission(self, page: Page) -> None:
@@ -371,6 +376,7 @@ class JobApplicationAssistant:
                     raise RuntimeError("Cannot hand off without a persisted application identity")
                 guard = getattr(self, "_submission_guard", None)
                 if guard is not None:
+                    guard = self._ensure_submission_guard(page)
                     guard.bind_application(tracker, key)
                 tracker.record_submission_safety_event(
                     key, "MANUAL_HANDOFF_STARTED", {"execution_state": "parked"}
@@ -382,7 +388,7 @@ class JobApplicationAssistant:
             self._submission_execution_state = "parked"
             guard = getattr(self, "_submission_guard", None)
             if guard is not None:
-                guard.deactivate(page)
+                guard.park_for_handoff()
 
     def _execution_lock(self):
         lock = getattr(self, "_submission_execution_lock", None)
@@ -406,7 +412,8 @@ class JobApplicationAssistant:
         with self._execution_lock():
             guard = getattr(self, "_submission_guard", None)
             if guard is not None:
-                guard.activate(page)
+                guard = self._ensure_submission_guard(page)
+                guard.resume_from_handoff(page)
             self._submission_execution_state = "active"
 
     def _choose_channel(self) -> str:
@@ -1987,7 +1994,46 @@ class JobApplicationAssistant:
         # anything on the application, no page counts as the posting again.
         if getattr(self, "_form_filled_this_run", False):
             return False
-        if self.visible_input_count(page) > 3 or self.is_review_step(page):
+        field_count = self.visible_input_count(page)
+        # Posting chrome can contain a complete search or talent-community form.
+        # Only use the main landmark when its own Apply is a navigation link
+        # outside a form; application controls in main still count normally.
+        try:
+            mains = page.locator("main:visible, [role=main]:visible")
+            if mains.count() == 1:
+                main = mains.first
+                links = main.get_by_role("link", name=re.compile(r"^\s*apply\b", re.I))
+                if any(links.nth(i).is_visible() and links.nth(i).evaluate(
+                        """e => {
+                            const a = e.closest('a[href]');
+                            if (!a || a.closest('form') || a.hasAttribute('download')
+                                || (a.getAttribute('href') || '').trim().startsWith('#')) return false;
+                            const u = new URL(a.href, location.href);
+                            return ['http:', 'https:'].includes(u.protocol) && !u.username && !u.password
+                                && u.href !== location.href;
+                        }""")
+                       for i in range(min(links.count(), 5))):
+                    field_count = main.locator(
+                        "input:not([type=hidden]):not([type=search]):visible, select:visible, textarea:visible"
+                    ).evaluate_all(r"""fields => fields.filter(field => {
+                        const form = field.closest('form');
+                        if (!form || form.querySelector('input[type=password], input[type=file]')) return true;
+                        const actions = [...form.querySelectorAll('button, input[type=submit], [role=button]')]
+                            .filter(e => e.getClientRects().length)
+                            .map(e => (e.getAttribute('aria-label') || e.innerText || e.value || '')
+                                .replace(/\s+/g, ' ').trim());
+                        const join = /^(?:join|sign up for) (?:our |the )?talent (?:community|network)$/i;
+                        // An explicit subscription action identifies this auxiliary
+                        // form, including when it is nested in the main landmark.
+                        // Mixed application actions or credential/upload fields keep
+                        // every field in the application count.
+                        const auxiliary = actions.some(label => join.test(label)) && actions.every(
+                            label => join.test(label) || /^(?:add|remove) job alert$/i.test(label));
+                        return !auxiliary;
+                    }).length""")
+        except Exception:
+            pass  # An unreadable scope retains the conservative whole-page count.
+        if field_count > 3 or self.is_review_step(page):
             return False
         try:
             body = page.inner_text("body", timeout=5_000)
@@ -3092,7 +3138,7 @@ class JobApplicationAssistant:
         """True on the final review/summary step -- where auto mode stops and
         hands back to the human, because Submit is theirs to press."""
         try:
-            if page.locator("button:text-is('Submit'), [role='button']:text-is('Submit'), button:has-text('Submit Application')").count():
+            if page.locator("button:text-is('Submit'):visible, [role='button']:text-is('Submit'):visible, button:has-text('Submit Application'):visible").count():
                 return True
             return self.is_review_step_by_wizard_marker(page)
         except Exception:
@@ -3121,9 +3167,18 @@ class JobApplicationAssistant:
         real, uncontained submit). Left unchanged and still callable on its own: nothing below
         depends on it, but removing it would be an unrelated regression for any other caller."""
         try:
-            return page.locator(
-                "[aria-current='step']:has-text('Review'), [data-automation-id='progressBarActiveStep']:has-text('Review'), [class*='active']:has-text('Review')"
-            ).count() > 0
+            markers = page.locator(
+                "[aria-current='step']:visible, [data-automation-id='progressBarActiveStep']:visible, "
+                "[class*='active']:visible"
+            )
+            review = re.compile(r"^\s*review(?:\s+(?:your\s+)?application)?\s*$", re.I)
+            for i in range(markers.count()):
+                # Read visible text on the marker itself. A search form's class
+                # containing 'active' and hidden option containing 'Review' is
+                # neither a wizard step nor evidence of a final application.
+                if review.fullmatch(markers.nth(i).inner_text(timeout=2_000)):
+                    return True
+            return False
         except Exception:
             return False
 
@@ -3411,7 +3466,24 @@ class JobApplicationAssistant:
         ):
             loc = page.locator(selector).first
             try:
-                if loc.count() and loc.is_visible():
+                if not (loc.count() and loc.is_visible()
+                        and loc.locator("input[type=password]:visible").count() == 1):
+                    continue
+                # One password can also be registration. Require the form's
+                # own sign-in identity, never a background heading or link.
+                if loc.evaluate(r"""form => {
+                    const root = form.closest('[role=dialog], [aria-modal=true], '
+                        + '[data-behavior-click-outside-close=topmost]') || form;
+                    const headings = Array.from(root.querySelectorAll('h1,h2,h3,[role=heading]'))
+                        .map(e => (e.textContent || '').trim());
+                    if (headings.some(t => /\b(create (?:an |your |my )?account|register|sign ?up)\b/i.test(t)))
+                        return false;
+                    return /signInForm/i.test(form.getAttribute('data-automation-id') || '')
+                        || headings.some(t => /^(sign[ -]?in|log[ -]?in|login)\b/i.test(t))
+                        || Array.from(form.querySelectorAll('button,input[type=submit]')).some(e =>
+                            /^(sign[ -]?in|log[ -]?in|login)$/i.test(
+                                (e.getAttribute('aria-label') || e.value || e.innerText || '').trim()));
+                }"""):
                     return loc
             except Exception:
                 continue
@@ -3439,15 +3511,19 @@ class JobApplicationAssistant:
         """Navigates to the tenant's standalone login page, carrying the
         current page as the post-login redirect.
 
-        Workday's URLs are /<locale>/<site>/..., so the login page is
-        /<locale>/<site>/login. Returns False if the URL doesn't look like
-        that, leaving the caller on whatever page it was already on."""
+        Workday supports both /<locale>/<site>/... and /<site>/... .
+        Keep the tenant prefix intact without treating "job" as the site."""
         parsed = urlparse(page.url)
         parts = [p for p in parsed.path.split("/") if p]
-        if len(parts) < 2 or parts[2:3] == ["login"]:
+        if not parts:
             return False
+        localized = bool(re.fullmatch(r"[a-zA-Z]{2,3}-[a-zA-Z]{2}", parts[0]))
+        prefix_length = 2 if localized else 1
+        if len(parts) < prefix_length or parts[prefix_length:prefix_length + 1] == ["login"]:
+            return False
+        prefix = "/".join(parts[:prefix_length])
         target = (
-            f"{parsed.scheme}://{parsed.netloc}/{parts[0]}/{parts[1]}"
+            f"{parsed.scheme}://{parsed.netloc}/{prefix}"
             f"/login?redirect={quote(parsed.path, safe='')}"
         )
         try:
@@ -3745,6 +3821,19 @@ class JobApplicationAssistant:
             if candidate_state == "verification":
                 logger.warning("ACCOUNT_HELD: Workday is asking for account verification")
                 return False
+            # A single-password Sign In form owns the interaction, even when
+            # registration controls remain visible behind its modal.
+            scope = self._sign_in_scope(page)
+            if scope is not None and self._read_ats_password():
+                # Sign In opens as a modal ON TOP of Create Account, and that
+                # stacked state is unreliable to drive (fields clear, clicks
+                # land on the form underneath). The dedicated login page has
+                # exactly one form and signs in cleanly, so go there instead.
+                if page.locator("button:has-text('Create Account')").count() and self._goto_login_page(page):
+                    scope = self._sign_in_scope(page)
+                logger.info("Sign In form present; signing in rather than creating an account")
+                return self.attempt_auto_login(page, email, "", scope=scope, create_if_missing=False)
+
             if self._read_ats_password() and self._account_exists_message(page):
                 return self.sign_in_to_existing_account(page, email)
             if candidate_state in ("registration", "registration_error"):
@@ -3772,18 +3861,6 @@ class JobApplicationAssistant:
                 if self.fill_create_account_form(page, email):
                     return True
                 return False if self._create_form_attempted else self.create_ats_account(page, email)
-            # A sign-in form wins outright: the account exists by then, and
-            # re-registering just bounces back to this same gate.
-            scope = self._sign_in_scope(page)
-            if scope is not None and self._read_ats_password():
-                # Sign In opens as a modal ON TOP of Create Account, and that
-                # stacked state is unreliable to drive (fields clear, clicks
-                # land on the form underneath). The dedicated login page has
-                # exactly one form and signs in cleanly, so go there instead.
-                if page.locator("button:has-text('Create Account')").count() and self._goto_login_page(page):
-                    scope = self._sign_in_scope(page)
-                logger.info("Sign In form present; signing in rather than creating an account")
-                return self.attempt_auto_login(page, email, "", scope=scope)
 
             if pw_count == 0:
                 return False
@@ -4550,7 +4627,20 @@ class JobApplicationAssistant:
         if self.adapter(page).attachment_is_empty(page, "resume") is False:
             return True  # this platform already holds a resume
 
-        file_input = page.query_selector(file_input_selector)
+        # A generic file input may be a video recorder, cover letter, or
+        # another document slot. Respect its declared file types and purpose.
+        candidates = []
+        for candidate in page.query_selector_all(file_input_selector):
+            accept = (candidate.get_attribute("accept") or "").lower()
+            if not form_fields.file_accepts(accept, target):
+                continue
+            purpose = candidate.evaluate("""el => [el.name, el.id,
+                el.getAttribute('aria-label'), ...(Array.from(el.labels || []).map(x => x.textContent))]
+                .filter(Boolean).join(' ')""")
+            if re.search(r"cover[ _-]*letter|upload[ _-]*video|upload[ _-]*photo|transcript", purpose, re.I)                     and not re.search(r"resume|\bcv\b", purpose, re.I):
+                continue
+            candidates.append((bool(re.search(r"resume|\bcv\b", purpose, re.I)), candidate))
+        file_input = max(candidates, key=lambda item: item[0])[1] if candidates else None
         if not file_input:
             if self.upload_via_chooser(page, r"^\s*(upload|attach|add) (a |your )?(resume|cv)\s*$", target):
                 return True
@@ -4558,6 +4648,9 @@ class JobApplicationAssistant:
             return False
         file_input.set_input_files(str(target))
         page.wait_for_timeout(1_500)
+        if form_fields.file_upload_rejected(page):
+            logger.warning("Resume upload rejected by the page")
+            return False
         logger.info('ATTACHED: application document')
         tracker, key = getattr(self, "tracker", None), getattr(self, "application_key", "")
         if tracker is not None and key and hasattr(tracker, "record_event"):
@@ -5234,7 +5327,7 @@ class JobApplicationAssistant:
                     logger.warning("ACCOUNT_CREATE_FAILED: no Create Account button found")
                     return False
             guard = getattr(self, "_submission_guard", None)
-            if guard is not None and button.evaluate("e => Boolean(e.form)"):
+            if guard is not None and button.evaluate("e => Boolean(e.form || e.closest('form'))"):
                 clicked = guard.click_account_creation(page, button)
             else:
                 clicked = self._click_resiliently(button, timeout_ms=8_000)
@@ -5426,23 +5519,39 @@ class JobApplicationAssistant:
                 return False
         pw_locator.fill(password)
 
-        # Sign-in buttons are often duplicated (one hidden) or covered by a
-        # cookie banner, so go through the same resilient click path that the
-        # rest of the Workday flow uses instead of a bare .click().
-        for selector in (
+        # Ignore hidden duplicates. With containment armed, only the dedicated
+        # credential gateway may dispatch the sign-in; a failed dispatch must
+        # not be retried through other selectors or Enter.
+        candidates = [root.get_by_role('button', name=re.compile(r'^\s*(sign in|log in|login)\s*$', re.I))]
+        candidates.extend(root.locator(selector) for selector in (
             "button[data-automation-id='signInSubmitButton']",
             "button:has-text('Sign In')",
             "button:has-text('Sign in')",
             "button:has-text('Log In')",
             "button:has-text('Log in')",
             "button[type='submit']",
-        ):
-            if root.locator(selector).count() and self._click_resiliently(root.locator(selector).first):
-                page.wait_for_load_state("domcontentloaded", timeout=15000)
-                page.wait_for_timeout(3000)
-                logger.info("Attempted auto-login on %s", domain)
-                return self._after_login_attempt(page, email, create_if_missing)
+        ))
+        for buttons in candidates:
+            button = next((buttons.nth(i) for i in range(buttons.count())
+                           if buttons.nth(i).is_visible()), None)
+            if button is None:
+                continue
+            guard = getattr(self, "_submission_guard", None)
+            clicked = (guard.click_account_sign_in(page, button) if guard is not None
+                       else self._click_resiliently(button))
+            if not clicked:
+                logger.warning("LOGIN_NOT_DISPATCHED: sign-in click did not complete; not recording a rejection")
+                return False
+            page.wait_for_load_state("domcontentloaded", timeout=15000)
+            page.wait_for_timeout(3000)
+            logger.info("Attempted auto-login on %s", domain)
+            return self._after_login_attempt(page, email, create_if_missing)
 
+        # An armed guard requires an explicit credential-form capability; Enter
+        # cannot establish one and must not manufacture a rejected-login hold.
+        if getattr(self, "_submission_guard", None) is not None:
+            logger.warning("LOGIN_NOT_DISPATCHED: no supported dedicated sign-in button")
+            return False
         # Some ATS login forms submit on Enter even when no button matches.
         pw_locator.press("Enter")
         page.wait_for_load_state("domcontentloaded", timeout=15000)
@@ -6803,15 +6912,42 @@ class JobApplicationAssistant:
             except Exception:
                 pass
 
-    _VERIFIED = re.compile(r"verified|activated|confirmed|success|thank you|you can now (sign|log) ?in|welcome",
-                           re.IGNORECASE)
+    _VERIFIED = re.compile(
+        r"(?:account|email|e-mail)(?: address)? (?:has been |is |was |successfully )*"
+        r"(?:verified|activated|confirmed)|you can now (sign|log) ?in", re.IGNORECASE)
     _LINK_FAILED = re.compile(r"expired|invalid|no longer valid|already been used|could not (be )?verif|error",
                               re.IGNORECASE)
 
     def verify_account_by_email_link(self, page: Page) -> bool:
-        """The site has sent the owner a link to verify the account it just made: open that link from Gmail in a tab
-        of this browser, and say whether the site then shows the account verified (the owner's decision of 30
-        September 2026). On success the sign-in refused for the unverified account no longer holds it back."""
+        """Recover a live account-verification requirement using authorized mail.
+
+        A link that lands on Sign In permits authentication to continue; only
+        an explicit confirmation establishes that verification itself succeeded.
+        """
+        self._email_verification_outcome = "unconfirmed"
+        if self.why_not_read_a_code(page):
+            return False
+        state = account_state.read_state(page.locator("body").aria_snapshot(),
+                                         password_boxes=page.locator("input[type=password]:visible").count())
+        if state.kind != account_state.VERIFY_EMAIL:
+            return False
+        said = page.locator("body").inner_text()
+        if not re.search(r"an email has been sent|we(?:'ve| have)? sent", said, re.I):
+            resend = page.get_by_role("button", name=re.compile(
+                r"^(?:resend (?:account verification|verification email)|send verification email)$", re.I))
+            if resend.count() and resend.first.is_visible():
+                email = (getattr(self._config, "ats_email", "") or self._owner_profile().email).strip()
+                boxes = self._email_boxes(page)
+                if any(box.input_value().strip() and box.input_value().strip().lower() != email.lower()
+                       for box in boxes):
+                    self._login_paused = "The verification email address differs from the saved account."
+                    return False
+                for box in boxes:
+                    if not box.input_value().strip():
+                        self._type_email(page, box, email)
+                if not self._click_resiliently(resend.first, timeout_ms=8000):
+                    return False
+                page.wait_for_timeout(1000)
         link = self.verification_link_from_gmail(page)
         if not link:
             return False
@@ -6824,13 +6960,23 @@ class JobApplicationAssistant:
             except Exception:
                 tab.wait_for_timeout(3_000)
             said = " ".join((tab.locator("body").inner_text(timeout=10_000) or "").split())[:2000]
-            if self._LINK_FAILED.search(said) and not self._VERIFIED.search(said):
+            if self._LINK_FAILED.search(said):
+                self._email_verification_outcome = "failed"
                 self._login_paused = (f"the verification link {host} emailed you did not work (it may have expired): "
                                       f"use 'Resend Account Verification' on the site, open the new email's link, then "
                                       f"press Continue")
                 logger.warning("VERIFY_LINK: the site did not take the link")
                 return False
-            logger.info("VERIFY_LINK_OK: opened the verification link -- the account on %s is verified", host)
+            if not self._VERIFIED.search(said):
+                state = account_state.read_state(tab.locator("body").aria_snapshot(),
+                                                 password_boxes=tab.locator("input[type=password]:visible").count())
+                if state.kind == account_state.SIGN_IN_FORM:
+                    self._email_verification_outcome = "sign_in_required"
+                    logger.info("VERIFY_LINK: link opened a sign-in form; authentication is still unconfirmed")
+                    return True
+                return False
+            self._email_verification_outcome = "verified"
+            logger.info("VERIFY_LINK_OK: the site confirmed account verification on %s", host)
             email = (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip() \
                 or getattr(self._owner_profile(), "email", "")
             login_guard.clear_hold(host, email)        # the refusal was for an unverified account

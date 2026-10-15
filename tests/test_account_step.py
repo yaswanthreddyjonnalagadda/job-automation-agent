@@ -199,23 +199,14 @@ def test_a_refusal_left_over_from_an_earlier_attempt_does_not_start_a_reset(page
     assert ("reset", "jane@example.com") not in assistant.calls
 
 
-def test_a_refusal_remembered_from_an_earlier_run_starts_the_reset_not_a_retype(page, tmp_path):
-    """Mutual of Enumclaw, 29 September, 18:54: the password page came up, the earlier run's refusal was on record,
-    and the run stopped with 'sign-in paused' -- without trying the reset the owner's rule calls for."""
+@pytest.mark.parametrize("gate_succeeds", [True, False])
+def test_prior_run_rejection_does_not_force_reset_or_owner_hold(page, tmp_path, gate_succeeds):
+    """Owner removed cross-run rejection gates on 12 October; live outcomes still govern."""
     import login_guard
     login_guard.record_sign_in("jobs.example.com", "jane@example.com", ok=False)
     serve(page, SIGN_IN)
-    assistant = Assistant(exists=True, resets=True)
-    assert step(page, agent(assistant, tmp_path)) is True
-    assert assistant.calls == [("reset", "jane@example.com")]          # the password is never typed again
-
-
-def test_a_reset_that_stops_says_why_and_the_password_is_not_retyped(page, tmp_path):
-    import login_guard
-    login_guard.record_sign_in("jobs.example.com", "jane@example.com", ok=False)
-    serve(page, SIGN_IN)
-    assistant = Assistant(exists=True, resets=False)
+    assistant = Assistant(exists=True, gate=gate_succeeds, resets=True)
     a = agent(assistant, tmp_path)
-    assert step(page, a) is False and a.account_blocker
-    assert step(page, a) is False and a.account_blocker
-    assert assistant.calls == [("reset", "jane@example.com")]
+    assert step(page, a) is gate_succeeds
+    assert assistant.calls == [("gate", "jane@example.com")]
+    assert not a.account_blocker

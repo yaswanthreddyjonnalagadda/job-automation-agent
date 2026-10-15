@@ -1,0 +1,17 @@
+{
+  "id": "f155",
+  "date": "2026-10-12",
+  "site": "Chipotle Workday account verification",
+  "class": "Stale verification recovery and unsupported success classification",
+  "symptom": "An unverified account remained at Sign In while the agent searched Gmail without requesting a fresh verification email; an Invalid Token page could be reported as verified.",
+  "root_cause": "The verification reader had no resend step and treated absence of a recognized failure as success. Generic Welcome or Thank You text overrode invalid-token errors.",
+  "why_tests_missed": "No regression exercised a rejected verification link with generic welcome text or the live resend-to-email sequence.",
+  "fix": "Require a current portal verification requirement and authorized mail access. Use the visible resend control unless email dispatch is already confirmed; preserve a different owner-entered account. Reject invalid links regardless of generic greetings, require explicit verification evidence, and distinguish a sign-in landing from verified status. Live recovery requested a fresh Chipotle email, opened its link, and reached authenticated Candidate Home after sign-in.",
+  "tests": [
+    "tests/test_verification_recovery.py::test_link_outcome_requires_evidence",
+    "tests/test_verification_recovery.py::test_resend_precedes_mail_search_unless_already_sent",
+    "tests/test_verification_recovery.py::test_mail_not_opened_without_permission_or_current_requirement",
+    "tests/test_verification_recovery.py::test_resend_preserves_different_owner_entered_email"
+  ],
+  "prevention": "Test observed portal outcomes rather than clicks, and cover stale-token failures, live verification prerequisites and owner identity preservation."
+}

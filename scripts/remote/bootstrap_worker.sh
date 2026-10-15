@@ -28,7 +28,7 @@ sudo apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv git curl \
     libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
     libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
-    libgbm1 libasound2 libpango-1.0-0 libcairo2
+    libgbm1 libasound2t64 libpango-1.0-0 libcairo2
 
 echo "=== [4/5] Setting up Application Directory & Permissions ==="
 INSTALL_DIR="/opt/job-automation-agent"
