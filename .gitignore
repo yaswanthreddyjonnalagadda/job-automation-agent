@@ -50,3 +50,7 @@ data/*.backup*.json
 data/checkpoints/
 data/run_metrics.jsonl
 sandbox/
+
+# Local working files: scratch output, backups of the owner's data (never pushed).
+scratch/
+data/*.bak
