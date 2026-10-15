@@ -1339,3 +1339,12 @@ privacy treatment.
 ### Cloud browser startup
 
 Cloud installation verifies a headed persistent Chromium context with the sandbox enabled under Xvfb, matching the worker's browser mode. On Ubuntu hosts that restrict unprivileged user namespaces, an administrator runs `scripts/remote/configure_browser_sandbox.sh` after installing or upgrading Playwright. It installs an AppArmor user-namespace exception for the exact installed Chromium executable; it does not change the system-wide restriction. A failed sandbox startup fails the verification instead of passing with different browser settings.
+
+## Workday skills search tab safety (f167)
+
+Filling Workday's "Type to Add Skills" widget searches each skill separately
+against the site's own list. Whatever opens one -- a misclick, or the page's
+own script reacting to the search -- a browser tab this search did not ask for
+is closed immediately rather than left open, and a skill the widget's list does
+not recognize is followed by a short pause before the next search. Nothing
+about which skills are offered, chosen, or left blank changes.

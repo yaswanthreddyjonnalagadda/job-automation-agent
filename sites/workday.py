@@ -649,6 +649,19 @@ class WorkdayAdapter(SiteAdapter):
              e.closest('[data-automation-id="monikerSearchBox"]')))
         """))
 
+    @staticmethod
+    def _close_unexpected_tabs(page, known_pages: set) -> None:
+        """One search can drive several open/type/escape cycles against a heavy widget; never
+        let a tab this didn't ask for linger (f167) -- a click any of those steps makes is only
+        ever meant to reach the skills popup, and a stray new tab left open is both resource
+        pressure a long Workday session does not need and a risk that a later call keeps using
+        `page` while actually talking to the wrong tab."""
+        for extra in set(page.context.pages) - known_pages:
+            try:
+                extra.close()
+            except Exception:
+                pass
+
     def select_skills(self, assistant, page, field, values: list[str]) -> tuple[list[str], list[str]]:
         """Search each supported skill separately and verify its committed tag."""
         import option_match
@@ -661,6 +674,7 @@ class WorkdayAdapter(SiteAdapter):
         for value in dict.fromkeys(v.strip() for v in values if v.strip()):
             if option_match.best_option(selected(), value) is not None:
                 continue
+            known_pages = set(page.context.pages)
             self._open_prompt(assistant, page, field, widget)
             field.fill("")
             field.type(value, delay=10)
@@ -672,7 +686,8 @@ class WorkdayAdapter(SiteAdapter):
             if index is not None:
                 rows.nth(index).click(timeout=3_000)
                 page.wait_for_timeout(300)
-            if option_match.best_option(selected(), value) is None:
+            found_missing = option_match.best_option(selected(), value) is None
+            if found_missing:
                 missing.append(value)
             field.fill("")
             page.keyboard.press("Escape")
@@ -680,6 +695,9 @@ class WorkdayAdapter(SiteAdapter):
                 heading = page.get_by_role("heading", name="Skills", exact=True)
                 if heading.count() == 1:
                     heading.click(timeout=3_000)
+            self._close_unexpected_tabs(page, known_pages)
+            if found_missing:
+                page.wait_for_timeout(400)  # let the widget settle before the next search, rather than hammering it
         return selected(), missing
 
     def select_from_searchable_input(
