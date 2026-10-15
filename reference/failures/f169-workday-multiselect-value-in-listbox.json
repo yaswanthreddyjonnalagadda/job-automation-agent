@@ -1,0 +1,14 @@
+{
+  "id": "f169",
+  "date": "2026-10-15",
+  "site": "Workday (any 'Country Phone Code' style search-driven single-choice list)",
+  "class": "A reader of a widget's value looked in one place only, so a widget that keeps its value elsewhere always read as empty",
+  "symptom": "The agent re-answered the Country Phone Code field on every pass and handed over with 'could not set' (Stryker, 23 September).",
+  "root_cause": "_multiselect_selection read only the selected-item pill. A search-driven single-choice list keeps its committed value in a sibling 'items selected' listbox while its input stays empty, so the field read as empty forever.",
+  "why_tests_missed": "Every synthetic multiselect in the tests rendered a pill.",
+  "fix": "The reader falls back to the 'items selected' listbox, then to the widget's visually-hidden summary text, and strips the 'press delete to clear value' suffix.",
+  "tests": [
+    "tests/test_workday_multiselect.py::test_never_re_answers_a_field_the_listbox_already_holds"
+  ],
+  "prevention": "Read a widget's state from every place the widget family is known to keep it, and test with each rendering, not just the common one."
+}

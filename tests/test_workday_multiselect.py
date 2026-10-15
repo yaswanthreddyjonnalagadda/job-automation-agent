@@ -105,6 +105,6 @@ def test_never_re_answers_a_field_the_listbox_already_holds(page):
     opened = {"count": 0}
     adapter._open_prompt = lambda *a, **k: opened.__setitem__("count", opened["count"] + 1)
 
-    result = adapter.select_from_searchable_input(None, page, "phoneCode--uxi", ["United States"])
+    result = adapter.select_from_searchable_input(None, page, "phoneCode--uxi", ["United States of America (+1)"])
     assert result is True
     assert opened["count"] == 0, "already-filled field must not be re-opened/re-driven"
