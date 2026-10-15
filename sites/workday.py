@@ -13,12 +13,47 @@ import json
 import logging
 import re
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
 from playwright.sync_api import Page
 
 from .base import SiteAdapter
+
+
+def posting_state(url: str, timeout: float = 8.0) -> Optional[str]:
+    """What the employer's own public job listing says about a Workday posting (f154).
+
+    "exists" when the listing holds the requisition, "gone" when the listing answers and does not, "down" when
+    it cannot answer (an error, a timeout, a reply that is not a listing), None for an address that is not a
+    Workday posting. The posting's own data address is no help: Copart's answered 403 and 502 for a removed
+    requisition and 404 for one that never existed, so a removed job was indistinguishable from an outage.
+    The listing, searched by the requisition number, answers the same way on every tenant."""
+    parts = urlsplit(url or "")
+    host = parts.netloc.lower()
+    segments = [s for s in parts.path.split("/") if s]
+    if not host.endswith(".myworkdayjobs.com") or "job" not in segments:
+        return None
+    at = segments.index("job")
+    requisition = segments[-1].rsplit("_", 1)[-1] if "_" in segments[-1] else ""
+    if at < 1 or not requisition:
+        return None
+    api = f"https://{host}/wday/cxs/{host.split('.')[0]}/{segments[at - 1]}/jobs"
+    body = json.dumps({"appliedFacets": {}, "limit": 20, "offset": 0, "searchText": requisition}).encode()
+    try:
+        request = urllib.request.Request(api, data=body, method="POST", headers={
+            "Content-Type": "application/json", "Accept": "application/json"})
+        with urllib.request.urlopen(request, timeout=timeout) as reply:
+            listing = json.loads(reply.read().decode("utf-8", "replace"))
+        postings = listing["jobPostings"]
+        if not isinstance(postings, list):
+            return "down"
+    except Exception:
+        return "down"
+    return "exists" if any(requisition in str(p.get("externalPath", "")) for p in postings if isinstance(p, dict)) else "gone"
 
 logger = logging.getLogger("browser_automation")
 

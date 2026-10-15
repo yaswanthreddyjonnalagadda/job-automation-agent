@@ -1274,7 +1274,11 @@ doesn't exist." or "This job is no longer available"), the run stops and the
 application is recorded as **Job doesn't exist**, listed with your skipped jobs,
 instead of being handed to you. Because Workday shows the same page while its
 own service is down, the agent reloads the page twice, five seconds apart,
-before it decides; if the posting comes back, the run carries on.
+and then, on a Workday site, asks the employer's own job listing whether the
+posting's requisition number is still there. Only a listing that answers and
+does not hold it counts as gone. A listing that cannot answer is not an answer:
+the run then stops for you with "could not be checked, try again later" and does
+not call the job gone. If the listing holds the job, the run carries on.
 
 ### Where you heard about the job (f150)
 

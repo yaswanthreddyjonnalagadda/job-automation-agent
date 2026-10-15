@@ -3040,6 +3040,25 @@ class PageAgent:
                 return ""
         return message
 
+    @staticmethod
+    def _posting_verdict(tab) -> tuple[str, str]:
+        """("ok" | "gone" | "down", the notice) for a page that may say the job does not exist (f154).
+
+        After the reloads of _posting_gone, a Workday posting is looked up in the employer's own listing: absent
+        there, it is gone; the listing not answering means the site is down and nothing is known; present there,
+        the page was wrong. Another portal has only its page, read twice more."""
+        message = PageAgent._posting_gone(tab)
+        if not message:
+            return "ok", ""
+        from sites import workday
+        state = workday.posting_state(getattr(tab, "url", ""))
+        if state == "down":
+            return "down", ("The employer's job site is not answering right now, so it could not be checked whether "
+                            "this posting still exists; try again later")
+        if state == "exists":
+            return "ok", ""
+        return "gone", message
+
     def _run_locked(self, page) -> Outcome:
         self._ensure_state()
         tries = 0
@@ -3055,9 +3074,11 @@ class PageAgent:
             if hasattr(self.assistant, "protect_submission"):
                 self.assistant.protect_submission(tab)
             self._current_host = urlparse(getattr(tab, "url", "")).netloc.lower()
-            gone = self._posting_gone(tab)
-            if gone:
-                return Outcome("job_not_found", page, [gone])
+            kind, notice = self._posting_verdict(tab)
+            if kind == "gone":
+                return Outcome("job_not_found", page, [notice])
+            if kind == "down":
+                return Outcome("owner_needed", page, [notice])
             if not self._resume_autofill_attempted and self.resume_file \
                     and hasattr(self.assistant, "autofill_from_resume"):
                 try:

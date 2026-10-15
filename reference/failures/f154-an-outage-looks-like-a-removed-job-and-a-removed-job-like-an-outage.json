@@ -1,0 +1,23 @@
+{
+  "id": "f154",
+  "date": "2026-10-15",
+  "site": "Workday (Copart) -- the notice 'The page you are looking for doesn't exist.'; any Workday posting",
+  "class": "Two different causes produced the same page, and the check that told them apart (reloading twice) could not: a site that is down for a day looks like a job that has been removed, and a removed job's own data address looks like an outage",
+  "symptom": "Copart's posting page said 'The page you are looking for doesn't exist.' and the job's data address answered HTTP 403 or 502 (a never-existing posting answered a clean 404), so it was unclear whether the job was removed or the site was down. The first version of the check (f153) could only reload the page twice, which cannot separate a short outage from a removal and could not separate a long outage at all.",
+  "root_cause": "The page notice is not evidence by itself, and neither is the posting's own data address: Copart's answered 403/502 for a removed requisition and 404 only for a posting that never existed, so reading its status code would have called a removed job 'site down'. The employer's public job listing, searched by the requisition number, answers the same way on every tenant: it holds the requisition (exists), answers without it (gone), or cannot answer (down). Nothing consulted it.",
+  "why_tests_missed": "f153's tests used a fake page that changed or did not change after a reload; none asked what the employer's own listing says, so there was no case where the page and the site disagreed, and no test said that 'the site could not answer' is a different result from 'the job is gone'.",
+  "fix": "sites/workday.py posting_state() searches the employer's public listing for the requisition number taken from the posting address and returns exists / gone / down (None for an address that is not a Workday posting). PageAgent._posting_verdict() applies it after the two reloads: gone ends the run with the job_not_found status, down hands the run to the owner with 'could not be checked, try again later' (it does not claim the job is gone), exists means the page was wrong and the run goes on. Checked live: on Rackspace and Copart a listed requisition is found by its number; Copart's JR110107 and every Las Vegas posting were absent, so the job really had been removed.",
+  "tests": [
+    "tests/test_job_that_does_not_exist.py::test_a_requisition_the_listing_does_not_hold_is_gone",
+    "tests/test_job_that_does_not_exist.py::test_a_requisition_the_listing_holds_exists",
+    "tests/test_job_that_does_not_exist.py::test_a_listing_that_cannot_answer_is_not_a_verdict",
+    "tests/test_job_that_does_not_exist.py::test_a_listing_that_answers_without_postings_data_is_not_a_verdict",
+    "tests/test_job_that_does_not_exist.py::test_only_a_workday_posting_address_is_looked_up",
+    "tests/test_job_that_does_not_exist.py::test_gone_in_the_listing_and_on_the_page_is_a_job_that_does_not_exist",
+    "tests/test_job_that_does_not_exist.py::test_a_site_that_cannot_answer_is_reported_as_down_not_as_a_job_that_does_not_exist",
+    "tests/test_job_that_does_not_exist.py::test_a_posting_the_listing_holds_is_not_called_gone_whatever_the_page_says",
+    "tests/test_job_that_does_not_exist.py::test_another_portal_is_judged_by_its_own_page_after_the_reloads",
+    "tests/test_job_that_does_not_exist.py::test_a_normal_page_is_ok_and_asks_nobody"
+  ],
+  "prevention": "Before telling the owner that something no longer exists, ask the system that owns the fact (the employer's listing), not the page that may be showing an error; and keep 'could not find out' as its own answer that never becomes 'it is gone'. When two causes produce the same symptom, find the observation that differs between them on a real case of each before writing the check."
+}
