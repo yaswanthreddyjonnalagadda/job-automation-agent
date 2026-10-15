@@ -66,21 +66,20 @@ def test_how_a_site_words_its_code_step_is_not_what_decides():
     assert not hasattr(emailed_codes, "HUMAN_CHECK")
 
 
-def test_reads_are_limited_across_runs_and_forgotten_after_a_day(monkeypatch):
-    for _ in range(login_guard.MAX_CODE_READS):
+def test_the_number_of_reads_never_limits_a_read():
+    """The owner removed the daily cap on emailed-code reads (12 October 2026): the history is diagnostic only."""
+    for _ in range(25):
         assert emailed_codes.why_not(ALLOWED, URL) is None
         login_guard.record_code_read(HOST, EMAIL)
-    why = emailed_codes.why_not(ALLOWED, URL)
-    assert why and "24 hours" in why
-    later = datetime.now(timezone.utc) + timedelta(hours=25)
-    monkeypatch.setattr(login_guard, "_now", lambda: later)
     assert emailed_codes.why_not(ALLOWED, URL) is None
 
 
-def test_the_reads_of_one_account_are_not_the_reads_of_another():
-    for _ in range(login_guard.MAX_CODE_READS):
+def test_the_reads_are_still_recorded_per_account_and_kept_small():
+    for _ in range(25):
         login_guard.record_code_read(HOST, EMAIL)
-    assert emailed_codes.why_not(ALLOWED, "https://other.example-ats.com/login") is None
+    mine = login_guard._entry(login_guard._load(), HOST, EMAIL)
+    other = login_guard._entry(login_guard._load(), "other.example-ats.com", EMAIL)
+    assert 1 <= len(mine["code_reads"]) <= 20 and not other.get("code_reads")
 
 
 # --- every reader goes through it ---------------------------------------------------------------------
@@ -132,8 +131,7 @@ def test_the_mail_reader_reads_the_code_when_the_rule_allows_it_and_counts_the_r
     page = employer_page(context)
     assert assistant_for(ALLOWED).passcode_from_gmail(page, wait_seconds=5) == "482913"
     assert hits
-    assert len(login_guard._recent(login_guard._entry(login_guard._load(), HOST, EMAIL).get("code_reads"),
-                                   login_guard._now())) == 1
+    assert len(login_guard._entry(login_guard._load(), HOST, EMAIL).get("code_reads")) == 1
 
 
 @pytest.mark.parametrize("profile, body", [
@@ -159,14 +157,14 @@ def test_a_code_the_site_says_confirms_a_human_is_read_when_no_captcha_is_showin
     assert hits
 
 
-def test_the_reader_stops_at_the_limit(context):
+def test_the_reader_does_not_stop_at_a_count(context):
     hits = []
     serve_mail(context, hits)
     page = employer_page(context)
-    for _ in range(login_guard.MAX_CODE_READS):
+    for _ in range(25):
         login_guard.record_code_read(HOST, EMAIL)
-    assert assistant_for(ALLOWED).passcode_from_gmail(page, wait_seconds=5) == ""
-    assert hits == []
+    assert assistant_for(ALLOWED).passcode_from_gmail(page, wait_seconds=5) == "482913"
+    assert hits
 
 
 FORGOT_SITE = """<html><body><h2>Sign In</h2><input type="email"><input type="password"><button>Sign In</button>

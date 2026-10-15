@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+import geo_reference
 import option_match
 
 logger = logging.getLogger(__name__)
@@ -357,7 +358,7 @@ def phone_text(value: str, placeholder: str = "", country: str = "") -> str:
     if not re.search(r"(?<!X)X{10}(?!X)", placeholder or "", re.I):
         return value
     digits = re.sub(r"\D", "", value)
-    if len(digits) == 11 and digits.startswith("1") and country.strip().casefold() in {"united states", "usa", "us"}:
+    if len(digits) == 11 and digits.startswith("1") and geo_reference.country_code(country) == "US":
         digits = digits[1:]
     return digits if len(digits) == 10 else value
 
