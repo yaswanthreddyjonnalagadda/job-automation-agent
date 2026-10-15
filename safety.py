@@ -720,14 +720,14 @@ def canonical_url(url: str) -> str:
     return urlunparse(parsed._replace(query=urlencode(keep), path=parsed.path.rstrip("/"), fragment=""))
 
 
-# Report keys that always block a submission, with how to say so.
+# Report keys that always block a submission, with how to say so. The owner's rule
+# (13 October 2026): submit once every mandatory field is filled and the form is
+# clean -- not when every answer equals approved data. A legal-answer conflict
+# (sponsorship / work authorization against the profile) still blocks.
 BLOCKING_REPORT_KEYS = (
     ("required_still_blank", "required field(s) still blank"),
     ("errors_shown", "the form is showing error(s)"),
-    ("warnings_shown", "the form is showing warning(s)"),
-    ("unanswered_questions", "question(s) the agent could not answer from approved data"),
-    ("ambiguous_choices", "dropdown choice(s) that are not an exact match"),
-    ("unsupported_questions", "custom question(s) with no approved answer"),
+    ("legal_answer_conflicts", "an answer that contradicts your profile"),
     ("attestations_pending", "attestation/e-signature/consent left for you"),
     ("identity_checks", "an identity or verification step"),
 )
@@ -767,37 +767,16 @@ def evaluate_auto_submit(
     if canonical_url(job.get("url", "")) != canonical_url(tracked.get("url", "")):
         reasons.append("the application URL is not the tracked posting's URL")
 
-    # 2. the attached documents are the ones generated for this application
-    uploaded = {Path(d).name for d in uploaded_documents if d}
-    expected = {Path(d).name for d in expected_documents if d}
-    if expected - uploaded:
-        reasons.append("expected document(s) not attached: " + ", ".join(sorted(expected - uploaded)))
-    if uploaded - expected:
-        reasons.append("document(s) on the form were not generated for this application: "
-                       + ", ".join(sorted(uploaded - expected)))
-    if expected and not documents_verified:
-        # File names alone prove nothing; the caller confirms the local files
-        # are byte-for-byte the documents stored for this application.
-        reasons.append("the attached document(s) could not be verified against the stored versions")
-
-    # 3. the form itself is clean
+    # 2. the form itself is clean: every mandatory field filled, nothing the
+    #    site flags. (The documents and each answer's match to approved data are
+    #    still recorded in the comparison report for the audit trail, but no
+    #    longer decide the submission -- owner's rule of 13 October 2026.)
     for key, text in BLOCKING_REPORT_KEYS:
         items = report.get(key) or []
         if items:
             reasons.append(f"{text}: " + "; ".join(str(i) for i in items[:4]))
     if report.get("captcha"):
         reasons.append("a CAPTCHA is on the page")
-
-    # 4. every required field matches approved data exactly
-    for comparison in comparisons:
-        if not comparison.required:
-            continue
-        if not comparison.approved:
-            reasons.append(f"no approved value for required field {comparison.label!r}")
-        elif not comparison.matches:
-            reasons.append(
-                f"{comparison.label!r} holds {comparison.on_form!r}; approved value is {comparison.approved!r}"
-            )
 
     return AutoSubmitDecision(
         eligible=not reasons,

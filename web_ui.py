@@ -2102,7 +2102,7 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
       <h2>Verified auto-submit</h2>
       <div class="card">
         <p class="hint" style="margin-top:0">Setting: <strong>{{ 'on' if auto_submit_on else 'off' }}</strong>
-           (AUTO_SUBMIT_VERIFIED_ONLY). The agent submits only when every check passes.</p>
+           (AUTO_SUBMIT_VERIFIED_ONLY). The agent submits once every mandatory field is filled and the form shows no error.</p>
         {% if decision %}
           <p><span class="pill {{ 'submitted' if decision.eligible else 'needs_user_review' }}">{{ 'Eligible' if decision.eligible else 'Not eligible' }}</span>
              <span class="muted">decided {{ decision.decided_at }}</span></p>
