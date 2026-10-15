@@ -20,20 +20,6 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    services:
-      # tests/test_dashboard.py talks to the tracker's Postgres database. This
-      # one exists only for the length of the job; its password is not a secret.
-      postgres:
-        # Docker's public ECR mirror avoids Docker Hub's shared-runner pull limit.
-        image: public.ecr.aws/docker/library/postgres:16
-        env:
-          POSTGRES_USER: job_agent
-          POSTGRES_PASSWORD: ci-only
-          POSTGRES_DB: job_agent
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U job_agent"
-          --health-interval 5s --health-timeout 5s --health-retries 12
     env:
       PYTHONUTF8: "1"
       POSTGRES_HOST: 127.0.0.1
@@ -43,6 +29,18 @@ jobs:
       POSTGRES_PASSWORD: ci-only
     steps:
       - uses: actions/checkout@v4
+
+      # tests/test_dashboard.py talks to the tracker's Postgres database. It is the PostgreSQL 16 that ships on the
+      # runner, started here: a service container had to pull its image from a registry, and every registry we
+      # tried (Docker Hub, then AWS ECR Public) turned the shared runners away with "toomanyrequests: Data limit
+      # exceeded", failing the job at "Initialize containers" before a single test ran. The password is not a secret.
+      - name: Start PostgreSQL
+        run: |
+          sudo systemctl start postgresql.service
+          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE ROLE job_agent LOGIN SUPERUSER PASSWORD 'ci-only';"
+          sudo -u postgres createdb -O job_agent job_agent
+          for _ in $(seq 1 30); do pg_isready -h 127.0.0.1 -p 5432 -U job_agent && break; sleep 1; done
+          PGPASSWORD=ci-only psql -h 127.0.0.1 -U job_agent -d job_agent -c "select version();"
 
       - uses: actions/setup-python@v5
         with:
