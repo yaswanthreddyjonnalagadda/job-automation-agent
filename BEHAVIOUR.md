@@ -809,6 +809,11 @@ carries on.
   host your own), so it never carries an answer you typed, a password, a code or
   an email address -- values in quotes are cut and the text goes through the
   same secret scrubbing as the logs. A missing network never stops an application.
+* **What it tells you.** A stop that needs you (CAPTCHA, a question it cannot answer, or
+  anything else that stops the form), at high priority and with the console link when there is one;
+  and how an application ended: **Submitted**, **Ready to submit** (press Submit at the laptop),
+  **Job doesn't exist**, and **Run failed** (the site's name only). Each is sent once, when the
+  status changes, never for something you changed by hand, and never with the tracker's notes.
 * **The console** (`phone_console.py`): set `PHONE_CONSOLE=on` and install Tailscale on
   the laptop and the phone. The alert then links to a private page on the laptop's
   Tailscale address (never any other address, and it is only open while a run is waiting

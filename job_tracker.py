@@ -28,6 +28,7 @@ from typing import Any, Iterator, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import diagnostics
+import phone_alert
 logger = logging.getLogger(__name__)
 
 _SUBMISSION_EVENT_FIELDS = {
@@ -782,6 +783,8 @@ class JobTracker:
             conn.execute("UPDATE applications SET status = ?, notes = COALESCE(?, notes), updated_at = ? "
                          "WHERE dedup_key = ?", (status, notes, _now(), dedup_key))
         logger.info("Updated application %s -> status=%s", dedup_key[:12], status)
+        if current is not None and not by_owner and current.status != status:
+            phone_alert.status_changed(current.company, current.title, status)   # how it ended, on the owner's phone
 
     def get(self, dedup_key: str) -> Optional[ApplicationRecord]:
         with self._connect() as conn:

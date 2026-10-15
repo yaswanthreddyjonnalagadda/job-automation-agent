@@ -67,3 +67,39 @@ def describe_need(company: str, title: str, kind: str, reasons: Iterable[str]) -
         head, priority, tags = "Needs you", 4, ("warning",)
     detail = "; ".join(reasons[:3])
     return f"{head}: {company}".strip(": "), f"{job}. {detail}".strip(), priority, tags
+
+
+# How an application ended. Announced by the tracker whenever a run changes its status (one place decides it);
+# "needs_user_review" is not here: the wait for the owner announces that stop, with the console link.
+STATUS_ALERTS = {
+    "submitted": ("Submitted", 3, ("white_check_mark",), "The employer confirmed it."),
+    "ready_to_submit": ("Ready to submit", 4, ("point_up",), "Everything is filled in; press Submit at the laptop."),
+    "job_not_found": ("Job doesn't exist", 2, ("x",), "The employer's page says it is gone; the run stopped."),
+}
+
+
+def status_changed(company: str, title: str, status: str) -> bool:
+    """Tell the owner how an application ended, when it ended in one of STATUS_ALERTS. Never raises."""
+    try:
+        head, priority, tags, line = STATUS_ALERTS[status]
+    except KeyError:
+        return False
+    try:
+        job = f"{company} - {title}".strip(" -")
+        return send(f"{head}: {company}".strip(": "), f"{job}. {line}", priority=priority, tags=tags)
+    except Exception:
+        return False
+
+
+def run_ended(url: str, exit_code: int) -> bool:
+    """A run that ended in a failure (not a finish, and not one of the expected stops). Names the site, never the address."""
+    import run_outcomes
+    if exit_code == 0 or exit_code in run_outcomes.EXPECTED_STOPS:
+        return False
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(url).netloc.lower() or "a job site"
+        return send(f"Run failed: {host}", f"The run for {host} ended with an error (exit {exit_code}); "
+                    "see the dashboard.", priority=4, tags=("warning",))
+    except Exception:
+        return False
