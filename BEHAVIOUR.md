@@ -1355,3 +1355,9 @@ On a job posting, an Apply that is a link is opened by going to its address, wha
 calls the step. Nothing is clicked and nothing is submitted; the submission guard still refuses
 any click on a control that could send the application.
 
+
+## Account forms with a disclosure button (f171)
+
+A "Read More" / "Learn More" button inside the Create Account form (it only expands the consent text) no longer
+stops the account-creation click. Any other button the agent does not recognise in that form still does, and
+nothing that could send the application is ever authorised.

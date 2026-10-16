@@ -162,7 +162,7 @@ SUBMIT_LABEL_RE = re.compile(
 # Finding 1, 7 October 2026: a label need not be a known SUBMIT_LABEL_RE synonym to be final).
 SAFE_UTILITY_LABEL_RE = re.compile(
     r"^\s*(add|remove|delete|clear|upload|choose file|browse|replace( file)?|edit|change|"
-    r"show|hide|toggle|view|print|download|close|dismiss|expand|collapse|"
+    r"show|hide|toggle|view|print|download|close|dismiss|expand|collapse|read (?:more|less)|learn more|see (?:more|less)|"
     r"cancel|back|previous|skip|finish later|apply later|continue later|resume later|"
     r"come back later|save( (for later|draft|and (continue|finish) later))?)\b",
     re.IGNORECASE,
