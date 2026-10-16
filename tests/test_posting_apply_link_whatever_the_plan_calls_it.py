@@ -41,3 +41,23 @@ def test_the_apply_link_is_followed_not_clicked(assistant, page, tmp_path, kind)
     assert page.url.endswith("/job/apply?source=x")
     assert page.evaluate("window.clicked") is None
     assert assistant._submission_guard.denial_count(page) == 0
+
+
+FOOTER = ("<p>If you need a reasonable accommodation, a Human Resources representative will review your request "
+          "and contact you to discuss it.</p>")
+POSTING = ('<h1>Engineer</h1><h2>Responsibilities</h2><p>Build systems. Qualifications and requirements.</p>'
+           '<a role="button" href="/job/apply">Apply</a>')
+
+
+def test_a_posting_footer_that_says_review_your_request_is_still_a_posting(assistant, page):
+    """f170: Marathon's footer 'will review your request' read as the application's review step, so the posting
+    was not recognised and its Apply link was clicked instead of followed."""
+    page.set_content(POSTING + FOOTER)
+    assert assistant.on_job_description(page)
+
+
+@pytest.mark.parametrize("text", ["Review your application before you submit it.", "Review and submit",
+                                  "Please review your answers.", "Review your information"])
+def test_the_applications_own_review_wording_is_still_not_a_posting(assistant, page, text):
+    page.set_content(POSTING + f"<p>{text}</p>")
+    assert not assistant.on_job_description(page)

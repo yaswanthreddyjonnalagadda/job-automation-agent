@@ -2040,7 +2040,8 @@ class JobApplicationAssistant:
         except Exception:
             return False
         if not self._JOB_DESCRIPTION_WORDS.search(body) or re.search(
-                r"review (your|and submit)|submit (your|this) application", body, re.IGNORECASE):
+                r"review and submit\b|review your (application|answers|responses|submission|information|details)\b"
+                r"|submit (your|this) application", body, re.IGNORECASE):
             return False
         control = self.find_apply_control(page)
         if control is not None:
