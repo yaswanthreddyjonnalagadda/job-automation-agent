@@ -6839,8 +6839,11 @@ class JobApplicationAssistant:
         email = (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
         if not email:
             email = (getattr(self._owner_profile(), "email", "") or "").strip()
-        account = email if self._PLAIN_MAILBOX.match(email) else "0"
-        return f"https://mail.google.com/mail/u/{account}/#search/{query}"
+        if self._PLAIN_MAILBOX.match(email):
+            # ?authuser=<address> picks that signed-in account (checked on real Gmail); /mail/u/<address>/ does not
+            # work -- Gmail answers "Temporary Error".
+            return f"https://mail.google.com/mail/?authuser={quote(email)}#search/{query}"
+        return f"https://mail.google.com/mail/u/0/#search/{query}"
 
     def why_not_read_a_code(self, page: Page, email: str = "") -> Optional[str]:
         """emailed_codes.why_not for the page in front of the agent: None when it may read a code from the
