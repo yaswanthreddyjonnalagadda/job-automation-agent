@@ -916,6 +916,14 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
         logger.warning("LEGAL_ANSWER_CONFLICT: %s", conflict)
     # Did the agent actually do anything here? A status of "ready to submit"
     # has to mean a filled form, not an empty page with no errors on it.
+    # A review step shows its answers as text: no inputs, but the application's own Submit button. That page is
+    # the form (f186: Invesco's Workday Review was reported "never reached").
+    if not form_fields and not getattr(assistant, "_seen_application_form", False):
+        try:
+            if hasattr(assistant, "find_submit_button") and assistant.find_submit_button(page) is not None:
+                assistant._seen_application_form = True
+        except Exception as exc:
+            logger.debug("Could not look for the Submit button: %s", exc)
     report["form_reached"] = bool(getattr(assistant, "_seen_application_form", False)) or bool(form_fields)
     report["fields_filled"] = sum(1 for f in form_fields if (f.get("value") or "").strip())
     report["documents_attached"] = len(

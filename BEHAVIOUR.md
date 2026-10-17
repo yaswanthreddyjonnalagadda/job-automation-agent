@@ -1432,3 +1432,10 @@ If a question the form does not require (marked "Required" or with a star) is st
 for your answer -- Invesco's Veteran Status has no "I am not a veteran" -- the agent leaves it blank, notes that it did,
 and carries on, instead of stopping the run. It never guesses another row for you. A question the form requires, or an
 optional one that holds some other value, still comes to you.
+
+## The review step is the application (f186)
+
+When the agent stops at a review step -- your answers shown as text, with the application's Submit button and no
+fields to fill -- it reports the application as ready for you to check and submit. It used to say "the application form
+was never reached" there, because the page had no fields. A page with neither fields nor the Submit button (a sign-in
+page, say) still reads as not reached.
