@@ -7,7 +7,6 @@ This integration reconciles and unifies the four completed, post-Phase-0 workstr
 1. **PR #14 (`fix/dashboard-cockpit-rendering`)**: Live Agent Cockpit, desktop handoff cards, answer transparency ledger, and database-health fixes.
 2. **PR #15 (`fix/application-run-recovery`)**: Application entry / Apply button recovery, false CAPTCHA mitigation, confirmation/receipt verification, Gmail waiting grace periods, and run outcome taxonomy. (Strictly supersedes PR #14).
 3. **PR #13 (`feature/structured-diagnostics`)**: Shared-schema telemetry consumer, bounded diagnostic event logs, Stop-Cause Bundles, and handoff session security.
-4. **`feature/zero-cost-remote-workers`**: Remote autonomous execution daemon, SQLite WAL durable job queue, resource admission control, CI offload, and Windows laptop workload elimination ($0.00 ongoing cost).
 
 ---
 
@@ -23,7 +22,7 @@ This integration reconciles and unifies the four completed, post-Phase-0 workstr
 ### Dependency & Overlap Analysis
 - **PR #14 vs PR #15**: PR #15 is built directly on top of PR #14 (`df32e27`), containing all UI cockpit features plus runtime recovery fixes. **Decision: PR #15 strictly SUPERSEDES PR #14.**
 - **PR #13 vs PR #15**: File sets are disjoint (PR #13 focused on diagnostics and session security; PR #15 focused on runtime flow and UI templates). **Decision: COMPLEMENTARY.**
-- **PR #13 Gaps Closed**: PR #13 was in draft due to missing runtime `run_id` propagation causing events to be dropped with `run_id="default"`. We implemented thread-bound execution context in `runtime_events.py` and threaded `--run-id` through `apply.py`, `worker_daemon.py`, and `apply_flow.py`. **Decision: INTEGRATED & CLOSED.**
+- **PR #13 Gaps Closed**: PR #13 was in draft due to missing runtime `run_id` propagation causing events to be dropped with `run_id="default"`. We implemented thread-bound execution context in `runtime_events.py` and threaded `--run-id` through `apply.py` and `apply_flow.py`. **Decision: INTEGRATED & CLOSED.**
 - **Remote Workers vs PR #15**: Zero-cost remote execution shared the exact runtime files and added infrastructure and durable queue abstractions. **Decision: COMPLEMENTARY.**
 
 ---
@@ -89,7 +88,6 @@ flowchart TD
 1. **Elimination of Silent "default" Run IDs**:
    - Added execution context binding via `RuntimeEvent.set_current_run(run_id, application_key)` and `RuntimeEvent.get_current_run()`.
    - `apply_flow.py` accepts `--run-id` or generates an execution ID, binding it to the current thread and execution context.
-   - `apply.py` and `worker_daemon.py` pass the queue job ID as `--run-id`.
    - Fallback to `"default"` is eliminated across the repository; uncontextualized calls generate unique cryptographic IDs.
 2. **Runtime Consumer Lifecycle**:
    - `StructuredLogConsumer` starts automatically at the beginning of `apply_flow.py`.
@@ -117,19 +115,6 @@ flowchart TD
 
 ---
 
-## 7. Windows Offload Measurements
-
-Detailed empirical report: [docs/infrastructure/windows-offload-verification.md](file:///c:/Users/jonna/job-automation-agent/docs/infrastructure/windows-offload-verification.md)
-
-| Metric | Before Offload | After Offload | Impact |
-| :--- | :--- | :--- | :--- |
-| **Local Chromium Processes** | 3 – 5 processes | **0 processes** | **100% offloaded** |
-| **Windows Peak RAM Usage** | 12.4 – 14.8 GB | 2.6 – 3.2 GB | **~78% reduction** |
-| **Windows Peak CPU Usage** | 75% – 98% | 8% – 18% | **~80% reduction** |
-| **Developer Feedback Loop** | 120s – 180s | 3.9s – 8.2s | **~95% faster** |
-
----
-
 ## 8. Independent Adversarial Review (10/10 Invariants Verified)
 
 | Adversarial Vector | Invariant & Defense | Status |
@@ -151,9 +136,7 @@ Detailed empirical report: [docs/infrastructure/windows-offload-verification.md]
 
 - **PR #15 Runtime Recovery & UI Cockpit**: **57 passed** in 127.93s (`tests/test_ui_cockpit.py`, `tests/test_run_recovery_regressions.py`)
 - **PR #13 Structured Diagnostics & Security**: **77 passed** in 128.84s (`tests/test_handoff_session_security.py`, `tests/test_shared_diagnostics_integration.py`, `tests/test_structured_diagnostics.py`)
-- **Remote Workers & Durable Queue**: **14 passed** in 43.94s (`tests/test_durable_queue.py`, `tests/test_remote_b1_b5_regressions.py`, `tests/test_remote_independence.py`, `tests/test_resource_manager.py`, `tests/test_worker_manager.py`)
 - **Post-Phase-0 Integration Suite**: **5 passed** in 8.16s (`tests/test_post_phase0_integration.py`)
-- **Remote Smoke Verification**: **1 passed** in 3.98s (`tests/test_remote_smoke_verification.py`)
 - **Core Targeted Suite**: **77 passed** in 99.86s
 - **Replay Guard Hook**: **609 saved pages (261 distinct)** verified identical interpretation without any regressions.
 

@@ -1225,19 +1225,6 @@ console 512 KiB (the category-only projection is much smaller); screenshots
 16 MiB; manifests 64 KiB. Oversized sanitized text may be truncated with a
 manifest flag; oversized JSON becomes valid truncation metadata.
 
-### Cloud browser startup
-
-Cloud installation verifies a headed persistent Chromium context with the sandbox enabled under Xvfb, matching the worker's browser mode. On Ubuntu hosts that restrict unprivileged user namespaces, an administrator runs `scripts/remote/configure_browser_sandbox.sh` after installing or upgrading Playwright. It installs an AppArmor user-namespace exception for the exact installed Chromium executable; it does not change the system-wide restriction. A failed sandbox startup fails the verification instead of passing with different browser settings.
-
-Authentication classification uses the same active dialog for its accessibility snapshot and password count. Registration fields and frames behind a Sign In modal do not turn it into an account-creation step. Password frames inside the active dialog remain supported, and account checkpoints and attempt limits still apply.
-
-A recognized single-password Sign In form takes priority over registration content behind it. That sign-in action uses the configured credentials within existing attempt limits and cannot fall back to creating another account. An explicit account verification requirement still takes priority.
-
-With final-submission containment armed, the account helper may authorize one Sign In click only on a dedicated form containing one filled email/username and one filled password. Mixed application forms remain blocked, and the capability expires after that click. A blocked or undispatched login stops without an Enter retry or a fabricated rejected-login record; an actually dispatched unsuccessful login still counts against the existing durable limits.
-
-Dedicated credential actions can target an accessible button wrapper over a native submit button. The helper chooses the accessible Sign In control first. The gateway validates the wrapper's enclosing native form, checks both native and ARIA button controls for mixed application actions, and revalidates before accepting a companion native submit event. Account creation uses the same guarded path for these wrappers; no forced click or unguarded form submission is used.
-
-An authorized credential wrapper may delegate one click to a matching native button in the same validated form. A second delegated click is blocked, and mixed-form validation still applies at every dispatch boundary.
 
 ### Site-authored error and status text now survives (f147)
 
@@ -1336,9 +1323,6 @@ stays on your machine so a run that stopped can be understood afterwards.
 Screenshots, DOM dumps, the account-page snapshots and the run log keep their
 privacy treatment.
 
-### Cloud browser startup
-
-Cloud installation verifies a headed persistent Chromium context with the sandbox enabled under Xvfb, matching the worker's browser mode. On Ubuntu hosts that restrict unprivileged user namespaces, an administrator runs `scripts/remote/configure_browser_sandbox.sh` after installing or upgrading Playwright. It installs an AppArmor user-namespace exception for the exact installed Chromium executable; it does not change the system-wide restriction. A failed sandbox startup fails the verification instead of passing with different browser settings.
 
 ## Workday skills search tab safety (f167)
 
@@ -1348,3 +1332,10 @@ own script reacting to the search -- a browser tab this search did not ask for
 is closed immediately rather than left open, and a skill the widget's list does
 not recognize is followed by a short pause before the next search. Nothing
 about which skills are offered, chosen, or left blank changes.
+
+## No remote worker (removed 17 October 2026)
+
+The agent runs on this computer only. The Oracle Cloud remote worker -- its connection, the job queue, the worker daemon
+and manager, the deploy and update scripts, and the "Oracle Runtime Worker" check on the System Health page -- has been
+removed. The Health page no longer says "ORACLE WORKER OFFLINE" or lists workers. Oracle's job-portal handling (employers
+whose careers site runs on Oracle Recruiting Cloud) is unchanged.

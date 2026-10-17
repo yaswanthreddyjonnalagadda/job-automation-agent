@@ -13,13 +13,10 @@ from pathlib import Path
 import pytest
 
 import diagnostics
-from durable_queue import DurableJobQueue, JobState
 from handoff import Handoff, CAPTCHA, set_active_handoff, resolve_active_handoff
 from handoff_session import HandoffStore, opaque_ref
-from remote_client import RemoteControlClient
 from runtime_events import EventName, ReasonCode, RuntimeEvent, RootCauseCategory
 from structured_logging import SchemaBinding, StructuredLogConsumer
-from worker_manager import WorkerRegistry, WorkerStatus, WorkerType, WorkerCapability
 
 
 def test_real_run_id_and_stop_cause_bundle_integration(tmp_path):
@@ -137,87 +134,6 @@ def test_real_run_id_and_stop_cause_bundle_integration(tmp_path):
 
     finally:
         RuntimeEvent.clear_current_run()
-
-
-def test_adversarial_remote_lease_failure_and_reconciliation(tmp_path):
-    """Proves Section 7: Lease expiry moves to RECOVERY_REQUIRED; live state reconciles before re-attempt."""
-    db_path = tmp_path / "queue.db"
-    queue = DurableJobQueue(db_path=db_path)
-
-    # 1. Enqueue job
-    job = queue.enqueue(job_url="https://company.example/apply/123", priority=1)
-    jid = job.job_id
-
-    # 2. Worker 1 claims job with 1-second lease
-    claimed = queue.claim_next_lease(worker_id="worker-node-1", lease_duration_seconds=0.1)
-    assert claimed.job_id == jid
-    assert claimed.status == JobState.LEASED
-
-    # 3. Simulate Worker 1 process crash / network drop
-    time.sleep(0.2)  # lease expires
-
-    # 4. Control plane reaps stale leases
-    stale_count = queue.reconcile_expired_leases()
-    assert stale_count == 1
-
-    expired_job = queue.get_job(jid)
-    # B1 & B3 INVARIANT: Job MUST NOT be auto-requeued to QUEUED or blindly re-executed!
-    assert expired_job.status == JobState.RECOVERY_REQUIRED
-
-    # 5. Worker 2 attempts to claim next queued job: nothing is available
-    claimed_by_2 = queue.claim_next_lease(worker_id="worker-node-2", lease_duration_seconds=30.0)
-    assert claimed_by_2 is None
-
-    # 6. Reconcile live state:
-    # Scenario A: Live page check discovers submission was already confirmed before worker died
-    def reconcile_with_live_page(job_obj, was_submitted_on_page: bool):
-        if was_submitted_on_page:
-            queue.update_status(job_obj.job_id, worker_id=None, new_status=JobState.COMPLETED,
-                                notes="Live page confirmed submission completed before crash")
-        else:
-            # Safe to retry because live page confirms form is still unsubmitted
-            queue.update_status(job_obj.job_id, worker_id=None, new_status=JobState.QUEUED,
-                                notes="Reconciled: page unsubmitted; safe to retry")
-
-    # Simulate submission did occur
-    reconcile_with_live_page(expired_job, was_submitted_on_page=True)
-    final_job = queue.get_job(jid)
-    assert final_job.status == JobState.COMPLETED
-
-    # No duplicate submission possible!
-    assert queue.claim_next_lease(worker_id="worker-node-2") is None
-
-
-def test_adversarial_two_workers_concurrency(tmp_path):
-    """Proves Section 12: Two workers cannot claim or own the same active job."""
-    db_path = tmp_path / "queue.db"
-    queue = DurableJobQueue(db_path=db_path)
-
-    queue.enqueue(job_url="https://company.example/apply/456")
-
-    # Worker 1 claims
-    w1_claim = queue.claim_next_lease("worker-1", lease_duration_seconds=60.0)
-    assert w1_claim is not None
-
-    # Worker 2 tries concurrently
-    w2_claim = queue.claim_next_lease("worker-2", lease_duration_seconds=60.0)
-    assert w2_claim is None
-
-
-def test_adversarial_stale_worker_cannot_renew_lost_lease(tmp_path):
-    """Proves Section 12: Stale worker loses lease and cannot renew after expiry."""
-    db_path = tmp_path / "queue.db"
-    queue = DurableJobQueue(db_path=db_path)
-
-    job = queue.enqueue(job_url="https://company.example/apply/789")
-    queue.claim_next_lease("worker-1", lease_duration_seconds=0.1)
-
-    time.sleep(0.2)
-    queue.reconcile_expired_leases()
-
-    # Worker 1 wakes up and tries to renew
-    renewed = queue.renew_lease(job.job_id, worker_id="worker-1", extension_seconds=60.0)
-    assert renewed is False
 
 
 def test_remote_captcha_handoff_preserves_same_session(tmp_path):
