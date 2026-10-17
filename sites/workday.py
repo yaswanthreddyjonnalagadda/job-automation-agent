@@ -302,6 +302,33 @@ class WorkdayAdapter(SiteAdapter):
                 candidates.extend(str(value) for value in values if str(value).strip())
         return list(dict.fromkeys(candidates))
 
+    def _school_list_is_empty(self, assistant, page: Page, index: int) -> bool:
+        """True when the School search-and-pick list of entry `index` holds nothing at all (f183).
+
+        Invesco's tenant answers its schools call with 200 and shows 'No Items.' for every search, even an empty one: no
+        school can be chosen, whoever applies. The server answers a moment after the list opens, so it is read three
+        times over a few seconds, and any real option ends the wait."""
+        field = page.locator("input[id$='--school']").nth(index)
+        try:
+            if field.count() == 0:
+                return False
+            field.click(timeout=3_000)
+            for _ in range(3):
+                page.wait_for_timeout(1_500)
+                options = [t.strip() for t in page.locator("[data-automation-id='promptOption']").all_inner_texts()
+                           if t.strip()] or [t.strip() for t in page.get_by_role("option").all_inner_texts() if t.strip()]
+                if options and not all(re.fullmatch(r"no items\.?", o, re.IGNORECASE) for o in options):
+                    return False
+            return True
+        except Exception as exc:
+            logger.debug("Could not read the school list: %s", str(exc).splitlines()[0][:100])
+            return False
+        finally:
+            try:
+                page.keyboard.press("Escape")
+            except Exception:
+                pass
+
     def fill_education_section(self, assistant, page: Page, education: list[dict]) -> None:
         self.delete_all_entries(assistant, page, "Education", "Certifications")
         # Some Workday tenants collect only school, degree and field of study.
@@ -317,6 +344,13 @@ class WorkdayAdapter(SiteAdapter):
         school_probe = "input[id$='--schoolName'], [data-automation-id='formField-school']"
         for i, edu in enumerate(education):
             self._ensure_entry_slot(assistant, page, "Education", school_probe, i)
+            if i == 0 and self._school_list_is_empty(assistant, page, 0):
+                # Education is optional on Workday, and an entry whose required School can never be chosen only
+                # blocks the form: the section is left empty (f183).
+                logger.warning("EDUCATION_SKIPPED: this employer's school list is empty (Workday shows 'No Items.' for "
+                               "every search) -- Education is optional, so the section is left empty")
+                self.delete_all_entries(assistant, page, "Education", "Certifications")
+                return
             school = edu.get("school", "")
             if page.locator("input[id$='--schoolName']").count() > i:
                 self.fill_by_id_suffix(assistant, page, "--schoolName", i, school)

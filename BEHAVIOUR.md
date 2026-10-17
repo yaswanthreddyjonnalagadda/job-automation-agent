@@ -1409,3 +1409,11 @@ double-click "Sign In Agent Browser.bat", sign in to the Gmail your job accounts
 the agent's browser. The agent's browser (real Chrome, `BROWSER_CHANNEL=chrome`) no longer announces itself as
 automated, because Google refuses to sign anyone in on one that does. The agent never types a Google password, and it
 reads only the verification link from your mail, as before.
+
+## A school list that holds nothing (f183)
+
+Some employers' Workday draws School as a search-and-pick list that is empty for their tenant ("No Items." for every
+search, even an empty one). Nobody can choose a school there, and an Education entry would make School required. Since
+Education is optional, the agent then leaves the section empty rather than adding an entry it cannot finish, and logs
+why. A list that offers schools, even if it loads slowly, is filled as before; a school missing from a list that does
+offer others still comes to you.
