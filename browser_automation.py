@@ -511,7 +511,11 @@ class JobApplicationAssistant:
             no_viewport=True,
             # The agent's Chrome is stopped by force when a run is stopped, so the next start asked
             # "Restore pages?" in a bubble over the page: not shown.
-            args=["--start-maximized", "--disable-session-crashed-bubble", "--hide-crash-restore-bubble"],
+            args=["--start-maximized", "--disable-session-crashed-bubble", "--hide-crash-restore-bubble",
+                  # Not announced as automated (f181): Google refuses to sign anyone in on a browser that says it
+                  # is automated, and the owner signs in to Gmail here so the agent can read a verification email.
+                  "--disable-blink-features=AutomationControlled"],
+            ignore_default_args=["--enable-automation"],
             # Deny browser-level permission requests (push notifications, location, etc.)
             # so they don't block the application mid-form
             permissions=[],  # Empty list = deny all permissions

@@ -1401,3 +1401,11 @@ When the site, signed in as you, says in its own words that you already applied 
 for this job."), and this run did not send anything, the run ends with the status "Already applied". The site's words
 are kept in the note, the browser closes, and you are told on your phone. It is never counted as an application the
 agent submitted. A confirmation page that does not say you applied before still comes to you.
+
+## Signing in to Gmail in the agent's browser (f181)
+
+The agent reads an account-verification email from the Gmail its own browser is signed in to. That sign-in is yours:
+double-click "Sign In Agent Browser.bat", sign in to the Gmail your job accounts use, then close the window; it stays in
+the agent's browser. The agent's browser (real Chrome, `BROWSER_CHANNEL=chrome`) no longer announces itself as
+automated, because Google refuses to sign anyone in on one that does. The agent never types a Google password, and it
+reads only the verification link from your mail, as before.
