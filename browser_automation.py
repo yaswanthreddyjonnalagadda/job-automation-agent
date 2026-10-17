@@ -5283,7 +5283,7 @@ class JobApplicationAssistant:
                             break
                     logger.info("ACCOUNT: data privacy statement %s", "accepted" if accepted else "opened, but no Accept button found")
                     page.wait_for_timeout(1_500)
-            needs_candidate_acknowledgment, held_boxes = False, []
+            needs_candidate_acknowledgment, held_boxes, ticked_ids = False, [], []
             for box in visible(page.locator("input[type='checkbox']")):
                 label = ""
                 box_id = box.get_attribute("id")
@@ -5305,6 +5305,7 @@ class JobApplicationAssistant:
                         if self._account_acknowledgment_is_authorized(label, profile):
                             if self._tick_checkbox(box):
                                 logger.info("ACCOUNT: accepted owner-authorized account acknowledgment")
+                                ticked_ids.append(box.get_attribute("id") or "")
                             else:
                                 needs_candidate_acknowledgment = True
                                 held_boxes.append(label.strip()[:70])
@@ -5317,6 +5318,7 @@ class JobApplicationAssistant:
                 if agree and self._is_account_consent(label, context) and not box.is_checked():
                     if self._tick_checkbox(box):
                         logger.info("ACCOUNT: accepted required privacy acknowledgment")
+                        ticked_ids.append(box.get_attribute("id") or "")
                     else:
                         needs_candidate_acknowledgment = True
                         held_boxes.append(label.strip()[:70])
@@ -5355,6 +5357,24 @@ class JobApplicationAssistant:
             if not self._email_kept(self._email_boxes(page), email):
                 logger.warning("ACCOUNT_CREATE_FAILED: the email did not stay filled before submit")
                 return self._account_form_failed("the email did not stay filled just before pressing Create Account")
+
+            # A redraw can clear a box ticked earlier (Workday, Marathon: "Please check the box to continue"): read
+            # each one back and tick it again; one that will not stay ticked stops the run with that reason (f178).
+            for box_id in ticked_ids:
+                if not box_id:
+                    continue
+                try:
+                    again = page.locator(f"input[id={json.dumps(box_id)}]").first
+                    if again.count() == 0:
+                        continue
+                    if not again.is_checked():
+                        self._tick_checkbox(again)
+                    if not again.is_checked():
+                        logger.warning("ACCOUNT_CREATE_FAILED: a consent box would not stay ticked")
+                        return self._account_form_failed(
+                            "the consent box would not stay ticked -- tick it yourself, then press Continue")
+                except Exception as exc:
+                    logger.debug("Could not read a consent box back: %s", str(exc).splitlines()[0][:100])
 
             submit = page.get_by_role(
                 "button", name=re.compile(r"^\s*(create (my )?account|register|sign up|submit)\s*$", re.IGNORECASE)
