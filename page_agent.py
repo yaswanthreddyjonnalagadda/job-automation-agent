@@ -5613,6 +5613,12 @@ class PageAgent:
                 if country and (code in name or value.strip() in name) and geo_reference.country_code(name) == country:
                     logger.info('FIELD_ACTION: application field handled')
                     return i
+        # A bare Yes among rows that differ in what the owner would be saying about sponsorship follows the profile,
+        # and is never the row that would be a false statement (f184).
+        needs = getattr(self.profile, "requires_visa_sponsorship", None)
+        decided, index = option_match.sponsorship_choice(names, value, None if needs is None else concept_matcher._is_yes(needs))
+        if decided:
+            return index
         index = self.assistant._best_option(names, [value])
         if index is None:
             index = closest_choice(names, value)

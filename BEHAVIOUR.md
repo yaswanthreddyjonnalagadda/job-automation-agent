@@ -1417,3 +1417,11 @@ search, even an empty one). Nobody can choose a school there, and an Education e
 Education is optional, the agent then leaves the section empty rather than adding an entry it cannot finish, and logs
 why. A list that offers schools, even if it loads slowly, is filled as before; a school missing from a list that does
 offer others still comes to you.
+
+## "Yes, without restrictions" or "Yes, with company sponsorship" (f184)
+
+When a list offers both rows for a question like "Are you legally eligible to work in this country?", your answer "Yes"
+means the row your profile supports: if your profile says you need visa sponsorship, the agent chooses **"Yes, with
+company sponsorship"**, never "Yes, without restrictions" (which would be false). If your profile says you do not need
+sponsorship it chooses the unrestricted row. If your profile does not say, or the list offers only the row that would be
+untrue for you, the question comes to you. Lists without sponsorship wording are answered as before.
