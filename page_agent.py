@@ -1711,7 +1711,8 @@ class PageAgent:
             state = account_state.AccountState(account_state.VERIFY_EMAIL, "the site's own account page says so",
                                                state.google_offered, state.password_boxes, state.form_error)
         try:
-            exists = self.assistant.account_on_record() is True
+            expected = getattr(self.assistant, "account_expected", None)
+            exists = (expected() if callable(expected) else self.assistant.account_on_record()) is True
         except Exception:
             exists = False
         memory = account_state.Memory(

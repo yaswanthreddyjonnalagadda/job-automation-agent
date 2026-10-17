@@ -680,6 +680,16 @@ class JobTracker:
                                (employer.strip().lower(),)).fetchone()
         return dict(row) if row else None
 
+    def applied_before(self, employer: str) -> bool:
+        """True when an application to this employer was submitted before: an account exists there, whether or not
+        this agent made it (owner's rule, 17 October 2026: sign in, never make a second account)."""
+        import employer_names
+        if not employer_names.employer_key(employer):
+            return False
+        with self._connect() as conn:
+            rows = conn.execute("SELECT company FROM applications WHERE status = ?", (STATUS_SUBMITTED,)).fetchall()
+        return any(employer_names.same_employer(employer, row["company"] or "") for row in rows)
+
     def record_ats_account(self, employer: str, email: str, login_host: str, method: str) -> None:
         now = _now()
         with self._connect() as conn:

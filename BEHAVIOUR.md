@@ -1361,3 +1361,12 @@ any click on a control that could send the application.
 A "Read More" / "Learn More" button inside the Create Account form (it only expands the consent text) no longer
 stops the account-creation click. Any other button the agent does not recognise in that form still does, and
 nothing that could send the application is ever authorised.
+
+## Sign in or create an account (f173)
+
+The agent uses Google sign-in wherever the site offers it, picking your already-signed-in Google account; it never
+types a Google password. Where there is no Google option, it checks whether you have applied to the same employer
+before (an account on record, or an application already sent): if so it signs in with the configured ATS password and
+does not create an account. Only an employer it has never dealt with gets a new account. If a sign-in is refused on
+an account the agent only inferred from an earlier application, it then creates one; if it was refused on an account
+it has on record, it follows the existing reset rules.

@@ -3842,7 +3842,7 @@ class JobApplicationAssistant:
                 # An account already exists here and the page offers Sign In:
                 # sign in rather than registering again -- registration cannot
                 # succeed for an email that already has an account.
-                if self._read_ats_password() and self.account_on_record() and self._has_sign_in_affordance(page):
+                if self._read_ats_password() and self.account_expected() and self._has_sign_in_affordance(page):
                     logger.info("ACCOUNT: an account already exists here -- signing in instead of registering")
                     if self._goto_login_page(page):
                         return self.attempt_auto_login(page, email, "", scope=self._sign_in_scope(page))
@@ -4964,6 +4964,22 @@ class JobApplicationAssistant:
             logger.warning("Could not check the account record: %s", exc)
             return None
 
+    def applied_before(self) -> bool:
+        """Whether an application to this employer was submitted before (an account exists there)."""
+        tracker, employer = getattr(self, "tracker", None), (getattr(self, "employer", "") or "").strip()
+        if tracker is None or not employer or not hasattr(tracker, "applied_before"):
+            return False
+        try:
+            return bool(tracker.applied_before(employer))
+        except Exception as exc:
+            logger.warning("Could not check earlier applications: %s", exc)
+            return False
+
+    def account_expected(self) -> bool:
+        """An account is expected here: one is on record, or we have applied to this employer before. Then the
+        agent signs in; only a client never dealt with gets a new account (owner's rule, 17 October 2026)."""
+        return self.account_on_record() is True or self.applied_before()
+
     def remember_account(self, page: Page, email: str, method: str) -> None:
         tracker, employer = getattr(self, "tracker", None), (getattr(self, "employer", "") or "").strip()
         if tracker is not None and employer and hasattr(tracker, "record_ats_account"):
@@ -5480,7 +5496,7 @@ class JobApplicationAssistant:
         # Don't try saved credentials on an employer we have no account with:
         # IGT rejected them twice before anyone checked. Create the account
         # instead when the page offers to.
-        if create_if_missing and self.account_on_record() is False \
+        if create_if_missing and self.account_on_record() is False and not self.applied_before() \
                 and self._create_account_control(page) is not None:
             return self.create_account_from_link(page, email)
 
