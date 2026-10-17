@@ -79,7 +79,7 @@ from state_machine import (
     dump_forensic_failure,
 )
 from job_tracker import (
-    STATUS_FORM_FILLED, STATUS_JOB_NOT_FOUND, STATUS_NEEDS_USER_REVIEW, STATUS_READY_TO_SUBMIT, STATUS_SKIPPED,
+    STATUS_ALREADY_APPLIED, STATUS_FORM_FILLED, STATUS_JOB_NOT_FOUND, STATUS_NEEDS_USER_REVIEW, STATUS_READY_TO_SUBMIT, STATUS_SKIPPED,
     STATUS_SUBMITTED, JobTracker,
 )
 from resume_parser import parse_resume
@@ -116,6 +116,15 @@ class JsonLogHandler(logging.Handler):
         diagnostics.append_log_record(self._path, record)
 
 
+
+
+def record_already_applied(tracker, key, job, outcome) -> None:
+    """The site says this account already applied: record it with the site's words and end the run (f180). Never
+    a submission by the agent -- this run did not send it."""
+    tracker.update_status(key, STATUS_ALREADY_APPLIED,
+                          notes=f"Already applied: {outcome.summary} (this run sent nothing)")
+    logger.warning("ALREADY_APPLIED: %s at %s -- the site says this account already applied; run stopped",
+                   getattr(job, "title", ""), getattr(job, "company", ""))
 
 def refresh_answer_bank(tracker) -> None:
     """Rebuilds the answer bank from the tracker (answer_bank.py): when a run starts, and after each wait for the owner,
@@ -907,6 +916,14 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
         logger.warning("LEGAL_ANSWER_CONFLICT: %s", conflict)
     # Did the agent actually do anything here? A status of "ready to submit"
     # has to mean a filled form, not an empty page with no errors on it.
+    # A review step shows its answers as text: no inputs, but the application's own Submit button. That page is
+    # the form (f186: Invesco's Workday Review was reported "never reached").
+    if not form_fields and not getattr(assistant, "_seen_application_form", False):
+        try:
+            if hasattr(assistant, "find_submit_button") and assistant.find_submit_button(page) is not None:
+                assistant._seen_application_form = True
+        except Exception as exc:
+            logger.debug("Could not look for the Submit button: %s", exc)
     report["form_reached"] = bool(getattr(assistant, "_seen_application_form", False)) or bool(form_fields)
     report["fields_filled"] = sum(1 for f in form_fields if (f.get("value") or "").strip())
     report["documents_attached"] = len(
@@ -1167,6 +1184,18 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                     stage="application",
                     reason_code=ReasonCode.ACTION_VALIDATION_FAILED,
                     display_message=f"Disqualified by policy mismatch: {outcome.summary}",
+                    application_key=key,
+                )
+            return
+        if outcome.kind == "already_applied":
+            record_already_applied(tracker, key, job, outcome)
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.RUN_STOPPED,
+                    component="page_agent",
+                    stage="application",
+                    reason_code=ReasonCode.ACTION_VALIDATION_FAILED,
+                    display_message=f"Already applied: {outcome.summary}",
                     application_key=key,
                 )
             return

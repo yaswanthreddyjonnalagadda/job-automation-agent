@@ -1348,3 +1348,94 @@ own script reacting to the search -- a browser tab this search did not ask for
 is closed immediately rather than left open, and a skill the widget's list does
 not recognize is followed by a short pause before the next search. Nothing
 about which skills are offered, chosen, or left blank changes.
+
+## Opening a posting's Apply link (f170)
+
+On a job posting, an Apply that is a link is opened by going to its address, whatever the plan
+calls the step. Nothing is clicked and nothing is submitted; the submission guard still refuses
+any click on a control that could send the application.
+
+
+## Account forms with a disclosure button (f171)
+
+A "Read More" / "Learn More" button inside the Create Account form (it only expands the consent text) no longer
+stops the account-creation click. Any other button the agent does not recognise in that form still does, and
+nothing that could send the application is ever authorised.
+
+## Sign in or create an account (f173)
+
+The agent uses Google sign-in wherever the site offers it, picking your already-signed-in Google account; it never
+types a Google password. Where there is no Google option, it checks whether you have applied to the same employer
+before (an account on record, or an application already sent): if so it signs in with the configured ATS password and
+does not create an account. Only an employer it has never dealt with gets a new account. If a sign-in is refused on
+an account the agent only inferred from an earlier application, it then creates one; if it was refused on an account
+it has on record, it follows the existing reset rules.
+
+## A refused Create Account press leaves nothing pending (f175)
+
+If the browser guard refuses the Create Account press, nothing was pressed and no account exists, so the agent
+forgets that it was about to press and can try again. Only a press that may really have happened stops the run
+with "check whether the account now exists".
+
+## When Create Account cannot be completed, the stop says why (f176)
+
+If the agent cannot finish the Create Account form -- no ATS password set, a CAPTCHA, a box only you may tick, a
+box that would not keep what was typed, no Create Account button, or the site keeping the form open -- the run stops
+and names that reason ("Create Account was not completed on <site>: ..."). It never goes on to press the form's
+button as if it were an ordinary page.
+
+## A consent box labelled only "Yes, I consent" (f179)
+
+Its meaning is the text above it, and that text is what the consent rule judges. If it agrees only to creating the
+account, the agent ticks it. Your standing decision of 2 October 2026: if the same required consent also agrees to
+calls and text messages *about your application* (Marathon Petroleum's: "recurring calls and text messages, including
+by automated means, regarding my application or employment opportunities"), the agent ticks it too. If it agrees to
+anything else -- marketing, promotions, newsletters, sharing or selling your data, terms and conditions, a declaration --
+the agent does not tick it and does not press Create Account: the run stops and shows you the words the box agrees to.
+This is only for the consent a site requires to create the account; a separate text-message box on an application still
+follows your preferred contact method.
+
+## "Already applied" (f180)
+
+When the site, signed in as you, says in its own words that you already applied for the job ("You've already applied
+for this job."), and this run did not send anything, the run ends with the status "Already applied". The site's words
+are kept in the note, the browser closes, and you are told on your phone. It is never counted as an application the
+agent submitted. A confirmation page that does not say you applied before still comes to you.
+
+## Signing in to Gmail in the agent's browser (f181)
+
+The agent reads an account-verification email from the Gmail its own browser is signed in to. That sign-in is yours:
+double-click "Sign In Agent Browser.bat", sign in to the Gmail your job accounts use, then close the window; it stays in
+the agent's browser. The agent's browser (real Chrome, `BROWSER_CHANNEL=chrome`) no longer announces itself as
+automated, because Google refuses to sign anyone in on one that does. The agent never types a Google password, and it
+reads only the verification link from your mail, as before.
+
+## A school list that holds nothing (f183)
+
+Some employers' Workday draws School as a search-and-pick list that is empty for their tenant ("No Items." for every
+search, even an empty one). Nobody can choose a school there, and an Education entry would make School required. Since
+Education is optional, the agent then leaves the section empty rather than adding an entry it cannot finish, and logs
+why. A list that offers schools, even if it loads slowly, is filled as before; a school missing from a list that does
+offer others still comes to you.
+
+## "Yes, without restrictions" or "Yes, with company sponsorship" (f184)
+
+When a list offers both rows for a question like "Are you legally eligible to work in this country?", your answer "Yes"
+means the row your profile supports: if your profile says you need visa sponsorship, the agent chooses **"Yes, with
+company sponsorship"**, never "Yes, without restrictions" (which would be false). If your profile says you do not need
+sponsorship it chooses the unrestricted row. If your profile does not say, or the list offers only the row that would be
+untrue for you, the question comes to you. Lists without sponsorship wording are answered as before.
+
+## An optional question the form cannot take (f185)
+
+If a question the form does not require (marked "Required" or with a star) is still blank because its list has no row
+for your answer -- Invesco's Veteran Status has no "I am not a veteran" -- the agent leaves it blank, notes that it did,
+and carries on, instead of stopping the run. It never guesses another row for you. A question the form requires, or an
+optional one that holds some other value, still comes to you.
+
+## The review step is the application (f186)
+
+When the agent stops at a review step -- your answers shown as text, with the application's Submit button and no
+fields to fill -- it reports the application as ready for you to check and submit. It used to say "the application form
+was never reached" there, because the page had no fields. A page with neither fields nor the Submit button (a sign-in
+page, say) still reads as not reached.

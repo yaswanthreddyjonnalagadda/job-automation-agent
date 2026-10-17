@@ -1,0 +1,17 @@
+{
+  "id": "f179",
+  "date": "2026-10-17",
+  "site": "Workday (Marathon Petroleum Create Account; any bare 'Yes, I consent' box)",
+  "class": "A control's own label was judged where its meaning lives in the text above it, so a required consent was never given and the form was pressed without it",
+  "symptom": "Create Account was pressed and Workday answered 'Please check the box to continue' on every run since 15 October.",
+  "root_cause": "Marathon's consent box is labelled only 'Yes, I consent'. The agent judged the label (a bare agreement, never recognised as account-creation consent), left the box clear and pressed Create Account. The paragraph above the box also agrees to recurring calls and texts about the application, which the safety rule could not accept even when read.",
+  "why_tests_missed": "Consent fixtures labelled the box with its meaning ('I agree to creating this account...'); none used a bare label. My own probes read a checkbox's .value ('on' always) as ticked, which hid the problem for several runs.",
+  "fix": "A bare consent is judged by the text it stands under (_consent_text_of). Following the owner's decision of 2 October 2026, safety.is_account_creation_consent accepts a sentence that only agrees to calls/texts about the application inside a required account consent; marketing, sharing data, terms and declarations stay the owner's, and the stop shows the words the box agrees to.",
+  "tests": [
+    "tests/test_bare_consent_means_the_text_above.py::test_a_consent_only_to_creating_the_account_is_ticked",
+    "tests/test_bare_consent_means_the_text_above.py::test_calls_and_texts_about_the_application_inside_the_account_consent_are_agreed_to",
+    "tests/test_bare_consent_means_the_text_above.py::test_a_consent_that_also_agrees_to_marketing_is_left_for_the_owner_with_its_words",
+    "tests/test_bare_consent_means_the_text_above.py::test_only_calls_and_texts_about_the_application_ride_along_with_account_consent"
+  ],
+  "prevention": "Judge a control by what it means to the person reading the page (its surrounding text), not only by its own label; and never read a checkbox's .value as its state."
+}

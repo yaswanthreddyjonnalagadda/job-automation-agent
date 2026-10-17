@@ -1,0 +1,15 @@
+{
+  "id": "f186",
+  "date": "2026-10-17",
+  "site": "Workday (Invesco Review, step 5 of 5); any portal whose last step shows the answers as text",
+  "class": "Whether the application form was reached was judged from the inputs on the current page, and a review step has none",
+  "symptom": "The run filled all four steps and stopped at Review with Submit showing, but the status said 'The application form was never reached -- nothing has been filled in. Open it in the browser, sign in if it asks, and start the application again.' The owner submitted it 30 seconds later.",
+  "root_cause": "hand_over set form_reached from read_back_fields (the inputs on the page in front of it) or _seen_application_form, which only wait_for_signal sets -- after hand_over has already written the status. A review page lists the answers as text with the application's Submit button and no inputs, so it read as a page before the form.",
+  "why_tests_missed": "Every hand_over test page had at least one input; none was a text-only review step.",
+  "fix": "hand_over treats a page that holds the application's Submit button (find_submit_button) as the form, the same signal wait_for_signal already used, before the status is decided. A page with neither inputs nor that button is still 'never reached'.",
+  "tests": [
+    "tests/test_review_page_counts_as_the_form.py::test_a_review_step_with_submit_and_no_inputs_is_the_form",
+    "tests/test_review_page_counts_as_the_form.py::test_a_page_with_no_inputs_and_no_submit_is_still_never_reached"
+  ],
+  "prevention": "Decide 'did we reach the form' from what the run has seen (the application's Submit button, any filled step), not from the inputs on the last page alone."
+}

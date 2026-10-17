@@ -1,0 +1,15 @@
+{
+  "id": "f171",
+  "date": "2026-10-16",
+  "site": "Workday (Marathon Petroleum Create Account form; any credential form with a disclosure button)",
+  "class": "A closed vocabulary of harmless button labels decided whether a credential form could be authorised, so a harmless label outside the list blocked the whole form",
+  "symptom": "After the posting was opened, the run stopped at Create Account: 'the account-creation click could not be confirmed; check the page before trying again'.",
+  "root_cause": "The guard authorises an account-creation click only when every other button in the form is a known non-final label. Marathon's form has a 'Read More' button (expands the consent text), which was not on the list ('Show More' was), so the click was never authorised.",
+  "why_tests_missed": "Every credential-form fixture contained only the fields and the one Create Account button; none had a disclosure button like the real form.",
+  "fix": "read more / read less / learn more / see more / see less are known non-final utility labels (safety.SAFE_UTILITY_LABEL_RE). An unknown action button such as 'Confirm & Send' still blocks authorisation.",
+  "tests": [
+    "tests/test_account_form_with_read_more.py::test_a_read_more_button_does_not_stop_the_account_click",
+    "tests/test_account_form_with_read_more.py::test_an_unknown_action_button_still_blocks_the_account_click"
+  ],
+  "prevention": "Test the guard against a copy of each real portal's form, not a minimal one; keep the label list fail-closed so an unrecognised button blocks rather than passes."
+}

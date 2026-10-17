@@ -257,6 +257,25 @@ def waiting_note_for(signal_path: Path) -> Path:
     return signal_path.with_name(signal_path.name.replace("_signal_", "_waiting_", 1))
 
 
+POSTING_WORDS = re.compile(
+    r"responsibilities|qualifications|requirements|job description|about the (role|job|position)|"
+    r"what you('ll| will) do|who you are|job (id|number|requisition)|posted",
+    re.IGNORECASE)
+# The application's own review wording -- narrow on purpose: a posting's footer can say "review your request" (f170).
+APPLICATION_REVIEW_WORDS = re.compile(
+    r"review and submit\b|review your (application|answers|responses|submission|information|details)\b"
+    r"|submit (your|this) application", re.IGNORECASE)
+
+
+def looks_like_posting_text(text: str) -> bool:
+    """Whether the words of a page say it is a job posting rather than the application's own review step.
+
+    One function, used live by on_job_description() and by replay_guard on every saved page, so a change to these
+    words that flips any real page is shown before it is committed (f174)."""
+    text = text or ""
+    return bool(POSTING_WORDS.search(text)) and not APPLICATION_REVIEW_WORDS.search(text)
+
+
 class JobApplicationAssistant:
     """One instance = one long-lived, visible browser session that persists
     login cookies between runs via a local user-data directory."""
@@ -492,7 +511,11 @@ class JobApplicationAssistant:
             no_viewport=True,
             # The agent's Chrome is stopped by force when a run is stopped, so the next start asked
             # "Restore pages?" in a bubble over the page: not shown.
-            args=["--start-maximized", "--disable-session-crashed-bubble", "--hide-crash-restore-bubble"],
+            args=["--start-maximized", "--disable-session-crashed-bubble", "--hide-crash-restore-bubble",
+                  # Not announced as automated (f181): Google refuses to sign anyone in on a browser that says it
+                  # is automated, and the owner signs in to Gmail here so the agent can read a verification email.
+                  "--disable-blink-features=AutomationControlled"],
+            ignore_default_args=["--enable-automation"],
             # Deny browser-level permission requests (push notifications, location, etc.)
             # so they don't block the application mid-form
             permissions=[],  # Empty list = deny all permissions
@@ -1978,10 +2001,7 @@ class JobApplicationAssistant:
         except Exception:
             return 0
 
-    _JOB_DESCRIPTION_WORDS = re.compile(
-        r"responsibilities|qualifications|requirements|job description|about the (role|job|position)|"
-        r"what you('ll| will) do|who you are|job (id|number|requisition)|posted",
-        re.IGNORECASE)
+    _JOB_DESCRIPTION_WORDS = POSTING_WORDS
 
     def on_job_description(self, page: Page) -> bool:
         """True when the page is a job posting rather than the application.
@@ -2039,8 +2059,7 @@ class JobApplicationAssistant:
             body = page.inner_text("body", timeout=5_000)
         except Exception:
             return False
-        if not self._JOB_DESCRIPTION_WORDS.search(body) or re.search(
-                r"review (your|and submit)|submit (your|this) application", body, re.IGNORECASE):
+        if not looks_like_posting_text(body):
             return False
         control = self.find_apply_control(page)
         if control is not None:
@@ -3841,7 +3860,7 @@ class JobApplicationAssistant:
                 # An account already exists here and the page offers Sign In:
                 # sign in rather than registering again -- registration cannot
                 # succeed for an email that already has an account.
-                if self._read_ats_password() and self.account_on_record() and self._has_sign_in_affordance(page):
+                if self._read_ats_password() and self.account_expected() and self._has_sign_in_affordance(page):
                     logger.info("ACCOUNT: an account already exists here -- signing in instead of registering")
                     if self._goto_login_page(page):
                         return self.attempt_auto_login(page, email, "", scope=self._sign_in_scope(page))
@@ -4963,6 +4982,22 @@ class JobApplicationAssistant:
             logger.warning("Could not check the account record: %s", exc)
             return None
 
+    def applied_before(self) -> bool:
+        """Whether an application to this employer was submitted before (an account exists there)."""
+        tracker, employer = getattr(self, "tracker", None), (getattr(self, "employer", "") or "").strip()
+        if tracker is None or not employer or not hasattr(tracker, "applied_before"):
+            return False
+        try:
+            return bool(tracker.applied_before(employer))
+        except Exception as exc:
+            logger.warning("Could not check earlier applications: %s", exc)
+            return False
+
+    def account_expected(self) -> bool:
+        """An account is expected here: one is on record, or we have applied to this employer before. Then the
+        agent signs in; only a client never dealt with gets a new account (owner's rule, 17 October 2026)."""
+        return self.account_on_record() is True or self.applied_before()
+
     def remember_account(self, page: Page, email: str, method: str) -> None:
         tracker, employer = getattr(self, "tracker", None), (getattr(self, "employer", "") or "").strip()
         if tracker is not None and employer and hasattr(tracker, "record_ats_account"):
@@ -5065,14 +5100,19 @@ class JobApplicationAssistant:
             logger.info("Could not save the account page: %s", str(exc).splitlines()[0][:100])
 
     def _visible_error_texts(self, page: Page) -> list[str]:
+        """What the page says went wrong. Workday's field errors are <p data-automation-id="inputAlert"> under the
+        field ("Please check the box to continue"), neither role=alert nor an error class (f177); their "Error :"
+        prefix is read by screen readers and dropped here."""
         try:
-            alerts = page.locator("[role=alert], [class*=error i]")
+            alerts = page.locator("[role=alert], [class*=error i], [data-automation-id=inputAlert]")
             texts = []
             for index in range(alerts.count()):
                 alert = alerts.nth(index)
                 if alert.is_visible():
                     text = alert.inner_text()
-                    if isinstance(text, str) and text.strip():
+                    if isinstance(text, str):
+                        text = re.sub(r"^\s*error\s*:\s*", "", text.strip(), flags=re.IGNORECASE)
+                    if isinstance(text, str) and text.strip() and text.strip() not in texts:
                         texts.append(text.strip())
             return texts
         except Exception:
@@ -5100,6 +5140,30 @@ class JobApplicationAssistant:
         if re.search(r"\bterms?(?:\s+and\s+conditions?)?\b", label, re.IGNORECASE):
             return False
         return safety.is_privacy_consent(label) or safety.is_account_creation_consent(label)
+
+    # A box whose own words say only that it agrees -- the meaning is in the text above it.
+    _BARE_CONSENT = re.compile(r"^(yes,?\s*)?(i\s+)?(consent|agree|accept|acknowledge)\.?$", re.IGNORECASE)
+
+    def _consent_text_of(self, box, label: str) -> str:
+        """What a checkbox agrees to: its label, and for a bare "Yes, I consent" also the text it stands under --
+        the paragraphs before it in its section (including any folded behind "Read More"). (f179)"""
+        label = " ".join((label or "").split())
+        if not self._BARE_CONSENT.search(label):
+            return label
+        try:
+            above = box.evaluate("""e => {
+                let node = e, text = '';
+                while (node && node.tagName !== 'FORM' && text.length < 1500) {
+                    let sib = node.previousElementSibling;
+                    while (sib && text.length < 1500) { text = (sib.textContent || '') + ' ' + text; sib = sib.previousElementSibling; }
+                    if (text.trim().length > 40) break;
+                    node = node.parentElement;
+                }
+                return text;
+            }""") or ""
+        except Exception:
+            above = ""
+        return f"{' '.join(above.split())} {label}".strip()
 
     @staticmethod
     def _tick_checkbox(box) -> bool:
@@ -5140,22 +5204,28 @@ class JobApplicationAssistant:
         # account saved as existing on that evidence sent the next run to sign in to nothing.
         return adapter.candidate_account_state(page) in ("application", "candidate_home")
 
+    def _account_form_failed(self, reason: str) -> bool:
+        """Every way the Create Account form can fail says why, and the run stops on the reason (f176). Returns False."""
+        self._account_form_failure = reason
+        return False
+
     def fill_create_account_form(self, page: Page, email: str) -> bool:
         """Fills a careers-site Create Account form: email (and its retype),
         the .env password (and its retype), first/last name, country, and only
         the agreement checkboxes the owner has authorized. Marketing opt-ins
         ("hear more about career opportunities") are left unticked. Records
         the account when the site accepts it."""
+        self._account_form_failure = ""
         password = self._read_ats_password()
         if not password:
             logger.info("No ATS_PASSWORD set; leaving account creation to the user")
-            return False
+            return self._account_form_failed("no ATS_PASSWORD is set in Settings, so the agent has no password to give the site")
         if not safety.password_allowed(page.url):
             logger.warning("ACCOUNT_HELD: %s is not a site the agent creates accounts on", urlparse(page.url).netloc)
-            return False
+            return self._account_form_failed("the agent does not create accounts on this site")
         if safety.captcha_visible(page):
             logger.warning("ACCOUNT_HELD: a CAPTCHA is on the account form -- only you can complete it")
-            return False
+            return self._account_form_failed("a CAPTCHA is on the form: only you can complete it")
         visible = lambda loc: [loc.nth(i) for i in range(loc.count()) if loc.nth(i).is_visible()]
         pw_fields = visible(page.locator("input[type='password']"))
         if len(pw_fields) < 2 and not (len(pw_fields) == 1 and self._heading_says_create(page)):
@@ -5175,12 +5245,12 @@ class JobApplicationAssistant:
             if not email_fields:
                 logger.warning("ACCOUNT_CREATE_FAILED: found no email box on the Create Account form "
                                "-- not submitting the passwords alone")
-                return False
+                return self._account_form_failed("the form shows no email box the agent can recognise")
             for box in email_fields:
                 self._type_email(page, box, email)
             if not self._email_kept(self._email_boxes(page) or email_fields, email):
                 logger.warning("ACCOUNT_CREATE_FAILED: the email box did not keep the address -- not submitting")
-                return False
+                return self._account_form_failed("the email box did not keep the address typed into it")
             for box in pw_fields:
                 box.click()
                 box.press("Control+A")
@@ -5191,7 +5261,7 @@ class JobApplicationAssistant:
             password_values = [(box.input_value() or "") for box in pw_fields]
             if not self._password_pair_matches(password_values, password):
                 logger.warning("ACCOUNT_CREATE_FAILED: password confirmation did not retain both entries")
-                return False
+                return self._account_form_failed("the password boxes did not keep both entries")
 
             if full_name:
                 for field in self.detect_form_fields(page):
@@ -5241,7 +5311,7 @@ class JobApplicationAssistant:
                             break
                     logger.info("ACCOUNT: data privacy statement %s", "accepted" if accepted else "opened, but no Accept button found")
                     page.wait_for_timeout(1_500)
-            needs_candidate_acknowledgment = False
+            needs_candidate_acknowledgment, held_boxes, ticked_ids = False, [], []
             for box in visible(page.locator("input[type='checkbox']")):
                 label = ""
                 box_id = box.get_attribute("id")
@@ -5263,23 +5333,40 @@ class JobApplicationAssistant:
                         if self._account_acknowledgment_is_authorized(label, profile):
                             if self._tick_checkbox(box):
                                 logger.info("ACCOUNT: accepted owner-authorized account acknowledgment")
+                                ticked_ids.append(box.get_attribute("id") or "")
                             else:
                                 needs_candidate_acknowledgment = True
+                                held_boxes.append(label.strip()[:70])
                                 logger.info("LEFT_FOR_YOU: could not tick %r", label.strip()[:70])
                         else:
                             needs_candidate_acknowledgment = True
+                            held_boxes.append(label.strip()[:70])
                             logger.info("LEFT_FOR_YOU: account form requires %r", label.strip()[:70])
                     continue
-                if agree and self._is_account_consent(label, context) and not box.is_checked():
+                # A box labelled only "Yes, I consent" / "I agree" means the text it stands under: that text is
+                # what safety.py judges (Marathon Petroleum on Workday: the paragraph above the box agrees to
+                # creating the account and to recurring calls and texts about the application).
+                meaning = self._consent_text_of(box, label)
+                if agree and self._is_account_consent(meaning, context) and not box.is_checked():
                     if self._tick_checkbox(box):
                         logger.info("ACCOUNT: accepted required privacy acknowledgment")
+                        ticked_ids.append(box.get_attribute("id") or "")
                     else:
                         needs_candidate_acknowledgment = True
+                        held_boxes.append(label.strip()[:70])
                         logger.info("LEFT_FOR_YOU: could not tick %r", label.strip()[:70])
+                elif not box.is_checked() and self._BARE_CONSENT.search(label.strip()):
+                    # A consent the agent may not give: pressing Create Account without it only meets "Please check
+                    # the box to continue". The stop shows the words the box agrees to.
+                    needs_candidate_acknowledgment = True
+                    above = " ".join(meaning.split())
+                    above = above[:-len(label.strip())].strip() if above.lower().endswith(label.strip()) else above
+                    held_boxes.append(f"{label.strip()[:40]!r}, which agrees to: ...{above[-260:]}")
+                    logger.info("LEFT_FOR_YOU: account form requires a consent box only you may tick")
 
             if needs_candidate_acknowledgment:
                 logger.warning("ACCOUNT_HELD: a terms or attestation checkbox needs the candidate")
-                return False
+                return self._account_form_failed("a box only you may tick: " + "; ".join(dict.fromkeys(held_boxes)) + " -- tick it, then press Continue")
 
             # Workday re-renders as the name, country and terms are filled,
             # which clears the keyboard-set password fields: re-enter and
@@ -5301,7 +5388,7 @@ class JobApplicationAssistant:
                 password_values = [(box.input_value() or "") for box in pw_fields]
                 if not self._password_pair_matches(password_values, password):
                     logger.warning("ACCOUNT_CREATE_FAILED: password did not stay filled before submit")
-                    return False
+                    return self._account_form_failed("the password did not stay filled just before pressing Create Account")
             # The same re-render can clear the email: type it again where it is gone.
             email_fields = self._email_boxes(page)
             for box in email_fields:
@@ -5309,7 +5396,25 @@ class JobApplicationAssistant:
                     self._type_email(page, box, email)
             if not self._email_kept(self._email_boxes(page), email):
                 logger.warning("ACCOUNT_CREATE_FAILED: the email did not stay filled before submit")
-                return False
+                return self._account_form_failed("the email did not stay filled just before pressing Create Account")
+
+            # A redraw can clear a box ticked earlier (Workday, Marathon: "Please check the box to continue"): read
+            # each one back and tick it again; one that will not stay ticked stops the run with that reason (f178).
+            for box_id in ticked_ids:
+                if not box_id:
+                    continue
+                try:
+                    again = page.locator(f"input[id={json.dumps(box_id)}]").first
+                    if again.count() == 0:
+                        continue
+                    if not again.is_checked():
+                        self._tick_checkbox(again)
+                    if not again.is_checked():
+                        logger.warning("ACCOUNT_CREATE_FAILED: a consent box would not stay ticked")
+                        return self._account_form_failed(
+                            "the consent box would not stay ticked -- tick it yourself, then press Continue")
+                except Exception as exc:
+                    logger.debug("Could not read a consent box back: %s", str(exc).splitlines()[0][:100])
 
             submit = page.get_by_role(
                 "button", name=re.compile(r"^\s*(create (my )?account|register|sign up|submit)\s*$", re.IGNORECASE)
@@ -5325,7 +5430,7 @@ class JobApplicationAssistant:
                 button = page.locator("input[type='submit'][value*='Create' i]").first
                 if not button.count():
                     logger.warning("ACCOUNT_CREATE_FAILED: no Create Account button found")
-                    return False
+                    return self._account_form_failed("no Create Account button was found on the form")
             guard = getattr(self, "_submission_guard", None)
             if guard is not None and button.evaluate("e => Boolean(e.form || e.closest('form'))"):
                 clicked = guard.click_account_creation(page, button)
@@ -5356,7 +5461,7 @@ class JobApplicationAssistant:
                 logger.warning("ACCOUNT_CREATE_FAILED: the site kept the form open%s",
                                f" -- {' / '.join(errors)[:200]}" if errors else "")
                 self._save_account_failure(page, site)
-                return False
+                return self._account_form_failed("the site kept the form open" + (f" -- {' / '.join(errors)[:200]}" if errors else ""))
             if not self._account_creation_is_confirmed(page):
                 logger.warning(
                     "ACCOUNT_UNVERIFIED: Workday left registration without Candidate Home or application evidence"
@@ -5379,7 +5484,7 @@ class JobApplicationAssistant:
             return True
         except Exception as exc:
             logger.exception("ACCOUNT_CREATE_FAILED: %s", str(exc).splitlines()[0][:160])
-            return False
+            return self._account_form_failed("an error stopped the form: " + str(exc).splitlines()[0][:120])
 
     def create_ats_account(self, page: Page, email: str) -> bool:
         """Completes an employer ATS 'Create Account' form: fills both
@@ -5479,7 +5584,7 @@ class JobApplicationAssistant:
         # Don't try saved credentials on an employer we have no account with:
         # IGT rejected them twice before anyone checked. Create the account
         # instead when the page offers to.
-        if create_if_missing and self.account_on_record() is False \
+        if create_if_missing and self.account_on_record() is False and not self.applied_before() \
                 and self._create_account_control(page) is not None:
             return self.create_account_from_link(page, email)
 
@@ -6618,7 +6723,7 @@ class JobApplicationAssistant:
         tab = page.context.new_page()
         try:
             query = quote(f"{company} newer_than:2d")
-            tab.goto(f"https://mail.google.com/mail/u/0/#search/{query}", wait_until="domcontentloaded", timeout=45_000)
+            tab.goto(self._gmail_search_url(query), wait_until="domcontentloaded", timeout=45_000)
             try:
                 tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)
             except Exception:
@@ -6724,6 +6829,22 @@ class JobApplicationAssistant:
         except Exception:
             return None
 
+    _PLAIN_MAILBOX = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+
+    def _gmail_search_url(self, query: str) -> str:
+        """The Gmail search for `query` in the account the job accounts use (f182), not whichever Google account
+        comes first in this browser: the owner has more than one. Gmail opens a given account by address and shows
+        a sign-in when that account is not signed in here, which the mail readers already treat as 'this browser
+        isn't signed in to Gmail'. An address that is not a plain mailbox is never put into the address."""
+        email = (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
+        if not email:
+            email = (getattr(self._owner_profile(), "email", "") or "").strip()
+        if self._PLAIN_MAILBOX.match(email):
+            # ?authuser=<address> picks that signed-in account (checked on real Gmail); /mail/u/<address>/ does not
+            # work -- Gmail answers "Temporary Error".
+            return f"https://mail.google.com/mail/?authuser={quote(email)}#search/{query}"
+        return f"https://mail.google.com/mail/u/0/#search/{query}"
+
     def why_not_read_a_code(self, page: Page, email: str = "") -> Optional[str]:
         """emailed_codes.why_not for the page in front of the agent: None when it may read a code from the
         owner's mail, else why not."""
@@ -6759,7 +6880,7 @@ class JobApplicationAssistant:
                         safe_metadata={"employer": employer},
                     )
                 query = quote("newer_than:1h (passcode OR \"one-time\" OR verification OR code)")
-                tab.goto(f"https://mail.google.com/mail/u/0/#search/{query}", wait_until="domcontentloaded", timeout=45_000)
+                tab.goto(self._gmail_search_url(query), wait_until="domcontentloaded", timeout=45_000)
                 try:
                     tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)
                 except Exception:
@@ -6849,7 +6970,7 @@ class JobApplicationAssistant:
                         safe_metadata={"site_url": site_url},
                     )
                 query = quote("newer_than:1h (verify OR verification OR activate OR confirm)")
-                tab.goto(f"https://mail.google.com/mail/u/0/#search/{query}", wait_until="domcontentloaded",
+                tab.goto(self._gmail_search_url(query), wait_until="domcontentloaded",
                          timeout=45_000)
                 try:
                     tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)

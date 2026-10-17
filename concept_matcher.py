@@ -767,6 +767,13 @@ def resolve_profile_value(
     elif concept == "WORK_AUTHORIZATION":
         val = str(getattr(profile, "authorized_for_any_employer", "") or getattr(profile, "legally_eligible_to_work", "Yes")).strip()
         src = "profile.authorized_for_any_employer"
+        if options:
+            import option_match
+            needs = getattr(profile, "requires_visa_sponsorship", None)
+            decided, index = option_match.sponsorship_choice(
+                list(options), val, None if needs is None else _is_yes(needs))
+            if decided:
+                return (options[index] if index is not None else ""), src
     elif concept == "VISA_SPONSORSHIP":
         sponsorship = getattr(profile, "requires_visa_sponsorship", False)
         val = "Yes" if sponsorship else "No"

@@ -137,6 +137,10 @@ CONFIRMATION_TEXT = re.compile(
     r"your application is complete|"
     r"(?<!if )(?<!jobs )(?<!positions )(?:you've|you have) (?:successfully |already )?applied(?! before|\?|\s+to check)",
     re.IGNORECASE)
+# The site's own notice that this account applied before (Workday: "You've already applied for this job.").
+ALREADY_APPLIED_TEXT = re.compile(
+    r"\byou(?:[’']ve|\s+have)?\s+already\s+applied\s+(?:for|to)\s+(?:this|the)\s+(?:job|position|role|requisition|posting)",
+    re.IGNORECASE)
 # The words that say, beyond doubt, the application has already arrived.
 RECEIVED_TEXT = re.compile(
     r"we('ve| have) received your application|your application (has been|was) (received|submitted|sent)|"
@@ -1711,7 +1715,8 @@ class PageAgent:
             state = account_state.AccountState(account_state.VERIFY_EMAIL, "the site's own account page says so",
                                                state.google_offered, state.password_boxes, state.form_error)
         try:
-            exists = self.assistant.account_on_record() is True
+            expected = getattr(self.assistant, "account_expected", None)
+            exists = (expected() if callable(expected) else self.assistant.account_on_record()) is True
         except Exception:
             exists = False
         memory = account_state.Memory(
@@ -1828,12 +1833,20 @@ class PageAgent:
                     "account creation could not be safely recorded; retry after checkpoint "
                     "storage is available")
                 return False
+            guard = getattr(self.assistant, "_submission_guard", None)
+            if guard is not None:
+                guard.last_credential_click = ""
             try:
                 self.assistant._last_login_rejected = False     # only a refusal of this attempt counts below
                 if self.assistant.handle_auth_gate(tab, email):
                     return True
             except Exception as exc:
                 logger.warning("LOGIN: %s", str(exc).splitlines()[0][:120])
+            # The guard refused the press, or the form gave up before any press was tried: no account was made, and
+            # the "about to press" marker would only block every later run (f175). A press that may have happened
+            # ("unknown", "performed") keeps its marker.
+            if making_account and guard is not None and getattr(guard, "last_credential_click", None) in ("", "not_performed"):
+                self._resolve_pending_account_creation(host)
             # The password just typed was refused: what to do about a refusal is the table's (account_state),
             # asked now rather than after the sign-in page has been read as a form of questions for the owner.
             if not making_account and getattr(self.assistant, "_last_login_rejected", False):
@@ -1850,8 +1863,25 @@ class PageAgent:
                     self.notes.append(note)
                     logger.info("LOGIN: %s", note[:200])
                 self.account_blocker = note
+            elif making_account:
+                # The form did not go through. The run stops on the reason it gave -- never on the guard's
+                # refusal of an ordinary press of the account form's own button, which says nothing (f176).
+                failure = str(getattr(self.assistant, "_account_form_failure", "") or "")
+                if failure or self._create_still_showing(tab):
+                    self.account_blocker = (f"Create Account was not completed on {host}: "
+                                            f"{failure or 'the new-account form is still showing'}. "
+                                            "Fix it there, then press Continue")
+                    logger.info("LOGIN: %s", self.account_blocker[:200])
             return False
         return False
+
+    def _create_still_showing(self, tab) -> bool:
+        """After a create attempt that did not get in: is the new-account form still what the page shows?"""
+        try:
+            state = account_state.read_state(self.snapshot(tab), password_boxes=self._password_boxes(tab))
+            return state.kind == account_state.CREATE_FORM
+        except Exception:
+            return False
 
     def _reset_refused_password(self, tab, host: str, email: str) -> bool:
         """Resets a refused password to the same ATS password with the code emailed to the owner, and signs in
@@ -3182,6 +3212,8 @@ class PageAgent:
             if self._site_confirms(tab):
                 if self.final_pressed:
                     return Outcome("submitted", page, ["the site confirmed the application"])
+                if self._says_already_applied(tab):
+                    return Outcome("already_applied", page, ["the site says you already applied for this job"])
                 return Outcome("owner_needed", page, ["the site says this application was already sent"])
             if self.sign_in_step(page, controls):
                 self.settle(page)
@@ -3431,6 +3463,8 @@ class PageAgent:
             if (plan.page_kind == "confirmation" or self._site_confirms(tab)) and self._site_confirms(tab):
                 if self.final_pressed:
                     return Outcome("submitted", page, ["the site confirmed the application"])
+                if self._says_already_applied(tab):
+                    return Outcome("already_applied", page, ["the site says you already applied for this job"])
                 return Outcome("owner_needed", page, ["the site says this application was already sent"])
 
             given = (self.correct_from_profile(page, plan, controls)
@@ -3465,7 +3499,9 @@ class PageAgent:
                     feedback = "these answers did not stay on the page, try another way: " + "; ".join(missing)
                     logger.info("NOT STUCK: %s -- reading the page again", "; ".join(missing)[:200])
                     continue
-                return Outcome("owner_needed", page, [f"could not set: {m}" for m in missing])
+                missing = self._drop_optional(missing, after)
+                if missing:
+                    return Outcome("owner_needed", page, [f"could not set: {m}" for m in missing])
             # Only the last step must be complete before the agent presses on.
             about_to_send = plan.next_kind in ("final_submit", "none") or safety.is_submit_label(plan.next_label)
             blockers = self.blockers(page, plan, after, about_to_send=about_to_send)
@@ -3996,6 +4032,28 @@ class PageAgent:
             if not ok:
                 missing.append(f"{before.question[:60]} = {answer.value[:40]!r}")
         return missing
+
+    def _drop_optional(self, missing: list[str], after: list[Control]) -> list[str]:
+        """The answers that did not stay, without the ones for an OPTIONAL question that is still blank (f185).
+
+        Invesco's optional Veteran Status list has no 'I am not a veteran' row: the answer cannot stay, and stopping the
+        whole run for a question the form does not require is wrong. Such a question is left blank, with a note. A
+        required question, one that holds some other value, or one not on the page keeps its stop."""
+        kept: list[str] = []
+        for item in missing:
+            question, _, wanted = item.partition(" = ")
+            control = next((c for c in after if c.question and (c.question[:60] == question or c.question.startswith(question))), None)
+            blank = control is not None and (not (control.answer or "").strip() or bool(PLACEHOLDER.match(control.answer.strip())))
+            required = control is not None and (
+                bool(_REQUIRED_STAR.search(control.question or "")) or bool(re.search(r"\brequired\b", control.name or "", re.IGNORECASE)))
+            if control is not None and blank and not required:
+                note = f"{question}: left blank -- this form's list does not offer your answer ({wanted})"
+                if note not in self.notes:
+                    self.notes.append(note)
+                logger.info("OPTIONAL_LEFT_BLANK: %s", note[:160])
+                continue
+            kept.append(item)
+        return kept
 
     def refusal(self, page, answer: Answer, control: Control, controls: list[Control] = (),
                 correcting: bool = False) -> str:
@@ -5579,6 +5637,12 @@ class PageAgent:
                 if country and (code in name or value.strip() in name) and geo_reference.country_code(name) == country:
                     logger.info('FIELD_ACTION: application field handled')
                     return i
+        # A bare Yes among rows that differ in what the owner would be saying about sponsorship follows the profile,
+        # and is never the row that would be a false statement (f184).
+        needs = getattr(self.profile, "requires_visa_sponsorship", None)
+        decided, index = option_match.sponsorship_choice(names, value, None if needs is None else concept_matcher._is_yes(needs))
+        if decided:
+            return index
         index = self.assistant._best_option(names, [value])
         if index is None:
             index = closest_choice(names, value)
@@ -6043,6 +6107,13 @@ class PageAgent:
             or (submit_word and step_finality != "NON_FINAL")
         if plan.page_kind == "job_description" and plan.next_kind == "open_application":
             final = False
+        # A posting's Apply is a link: its address opens the application with a plain GET, which submits nothing,
+        # so it is followed before any click -- whatever kind of step the plan called it (f170). Clicking it was
+        # refused by the submission guard, as a click on a button labelled Apply must be.
+        if plan.next_kind != "open_application" and hasattr(self.assistant, "follow_application_entry")                 and re.fullmatch(r"apply(?: now| for this job)?|start application|begin application", label, re.IGNORECASE):
+            if self.assistant.follow_application_entry(tab, self.locate(page, control.ref)):
+                self.settle(page, 2_500)
+                return "moved", page, "followed the posting's application link"
         if final:
             gate = self.submit_gate(page, controls)
             if gate:
@@ -6310,6 +6381,14 @@ class PageAgent:
                 return True
             return any(f.locator("input[type=password]:visible").count() for f in tab.frames[1:]
                        if not safety.is_captcha_frame(f.url))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _says_already_applied(tab) -> bool:
+        """True when the page itself says this account already applied for the job (f180)."""
+        try:
+            return bool(ALREADY_APPLIED_TEXT.search(tab.inner_text("body", timeout=3_000) or ""))
         except Exception:
             return False
 

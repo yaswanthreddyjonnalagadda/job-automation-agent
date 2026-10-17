@@ -80,6 +80,32 @@ def _only_one(hits: list[int]) -> Optional[int]:
     return unique[0] if len(unique) == 1 else None
 
 
+# Rows that differ only in what the applicant would be saying about sponsorship (f184).
+_SPONSORED = re.compile(
+    r"\bwith\s+(?:company\s+|employer\s+|visa\s+)?sponsorship\b|\brequire\w*\s+(?:visa\s+)?sponsorship\b"
+    r"|\bsponsorship\s+(?:is\s+)?required\b", re.IGNORECASE)
+_UNRESTRICTED = re.compile(
+    r"\bwithout\s+(?:any\s+)?(?:restrictions?|sponsorship)\b|\bno\s+(?:visa\s+)?sponsorship\b"
+    r"|\b(?:does|do)\s+not\s+require\s+(?:visa\s+)?sponsorship\b", re.IGNORECASE)
+
+
+def sponsorship_choice(options: list[str], answer: str, needs_sponsorship: Optional[bool]) -> tuple[bool, Optional[int]]:
+    """(decided, index) for a bare Yes among rows that say what the applicant would need: 'Yes, without restrictions',
+    'Yes, with company sponsorship'. An applicant who needs sponsorship is the sponsored row; one who does not is the
+    unrestricted row; when the profile is silent (None), or only the row that would be a false statement is offered, nothing
+    is chosen -- the question stays the owner's. Lists that do not speak of sponsorship are not decided here."""
+    if not re.fullmatch(r"\s*yes\.?\s*", answer or "", re.IGNORECASE):
+        return False, None
+    sponsored = [i for i, o in enumerate(options) if _SPONSORED.search(o)]
+    unrestricted = [i for i, o in enumerate(options) if _UNRESTRICTED.search(o) and not _SPONSORED.search(o)]
+    if not (sponsored or unrestricted):
+        return False, None
+    if needs_sponsorship is None:
+        return True, None
+    rows = sponsored if needs_sponsorship else unrestricted
+    return True, (rows[0] if rows else None)
+
+
 def best_option(options: list[str], answer: str) -> Optional[int]:
     """The index of the option that is the answer, or None when none is -- or when two are equally good. An answer the
     list does not offer is looked for once more as its broader term ("South Asian" as "Asian"), never narrower."""

@@ -1,0 +1,18 @@
+{
+  "id": "f176",
+  "date": "2026-10-17",
+  "site": "Any create-account form (Workday: Marathon Petroleum)",
+  "class": "A step that fails silently hands its page to the next, more general step, which then does the wrong thing and reports something unrelated",
+  "symptom": "Marathon stopped with 'final submission is only available through the verified gateway or human handoff' while the page still showed the Create Account form and no account existed.",
+  "root_cause": "fill_create_account_form has about a dozen ways to return False and only two said why. With no reason given, the page agent read the account form as an ordinary page, pressed its own 'Create Account' button the normal way, and the submission guard refused that press. The stop named neither the real cause nor the form.",
+  "why_tests_missed": "The tests checked that a failed create stopped the run, not that the stop carried the reason or that nothing else touched the form afterwards.",
+  "fix": "Every exit of the form-filler records its reason (_account_form_failure). After a create that did not go through, sign_in_step stops with that reason, or 'the new-account form is still showing', and never lets the form reach the ordinary press-next path.",
+  "tests": [
+    "tests/test_account_form_names_its_failure.py::test_no_password_configured_is_named",
+    "tests/test_account_form_names_its_failure.py::test_a_form_with_no_create_button_is_named",
+    "tests/test_account_form_names_its_failure.py::test_a_box_only_the_owner_may_tick_is_named",
+    "tests/test_account_form_names_its_failure.py::test_a_good_form_leaves_no_failure_behind",
+    "tests/test_account_form_names_its_failure.py::test_the_run_stops_on_the_reason_and_never_presses_the_form_as_a_page"
+  ],
+  "prevention": "A step that gives up must say why and must end the run's attempt on that page; never let a failed specific step fall through to a general one. Every return-False path of an action carries a reason."
+}

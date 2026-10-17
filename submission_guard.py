@@ -314,6 +314,7 @@ class SubmissionGuardV0:
     def __init__(self, context: Any):
         self.context = context
         self._capability = secrets.token_urlsafe(32)
+        self.last_credential_click = ""   # "performed" | "not_performed" | "unknown" -- see _click_credentials
         self._script = _guard_script(self._capability)
         self._active_pages: weakref.WeakSet = weakref.WeakSet()
         self._tracker: Any = None
@@ -499,6 +500,11 @@ class SubmissionGuardV0:
         return self._click_credentials(page, locator, "authorizeAccountSignIn")
 
     def _click_credentials(self, page: Any, locator: Any, authorization_method: str) -> bool:
+        """One credential click. `last_credential_click` says what happened to the press, so a caller that
+        recorded 'about to press' can clear it when nothing was pressed (f175): "not_performed" -- refused before
+        the click, or the click was intercepted and denied; "unknown" -- the click itself raised, so it may have
+        reached the page; "performed" -- pressed and not denied."""
+        self.last_credential_click = "not_performed"
         if not safety.password_allowed(page.url):
             return False
         self.activate(page)
@@ -509,8 +515,13 @@ class SubmissionGuardV0:
                 self._capability,
             ):
                 return False
+            self.last_credential_click = "unknown"
             locator.click(timeout=8_000)
-            return self.denial_count(page) <= before
+            if self.denial_count(page) <= before:
+                self.last_credential_click = "performed"
+                return True
+            self.last_credential_click = "not_performed"
+            return False
         except PlaywrightError:
             logger.warning("ACCOUNT_ACTION_BLOCKED: dedicated credential click could not complete")
             return False
