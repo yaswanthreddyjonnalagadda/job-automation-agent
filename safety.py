@@ -129,12 +129,38 @@ _BEYOND_ACCOUNT_CREATION_RE = re.compile(
 )
 
 
+# Calls and texts about the application itself, bundled into the account consent the site requires
+# (Marathon Petroleum on Workday: "I agree to receive recurring calls and text messages, including by
+# automated means, regarding my application or employment opportunities"). The owner's standing
+# decision of 2 October 2026: such a sentence inside a required account-creation consent may be
+# agreed to. Only that sentence: one that also speaks of marketing, newsletters, promotions, or
+# sharing or selling data is still the owner's.
+_APPLICATION_CONTACT_RE = re.compile(
+    r"\b(calls?|text messages?|texts|sms)\b[^.]{0,120}\b(regarding|about|related to|concerning)\b[^.]{0,20}"
+    r"\b(application|candidacy|employment|job|recruit\w*|hiring)\b",
+    re.IGNORECASE,
+)
+_NOT_ABOUT_THE_APPLICATION_RE = re.compile(
+    r"\bnewsletters?\b|\bmarketing\b|\bpromotion|\boffers?\b|\bshare\b|\bsell\b|\bthird[- ]part(y|ies)\b",
+    re.IGNORECASE,
+)
+
+
+def _without_application_contact(text: str) -> str:
+    """The text with each sentence that only agrees to calls/texts about the application taken out."""
+    sentences = re.split(r"(?<=[.!?])\s*(?=[A-Z])", text)
+    return " ".join(s for s in sentences
+                    if not (_APPLICATION_CONTACT_RE.search(s) and not _NOT_ABOUT_THE_APPLICATION_RE.search(s)))
+
+
 def is_account_creation_consent(text: str) -> bool:
-    """True for a box that only consents to creating the account the owner asked for."""
+    """True for a box that only consents to creating the account the owner asked for -- and, the owner's
+    decision of 2 October 2026, to calls and texts about the application that the same consent bundles in."""
     text = " ".join((text or "").split())
     if not text or not _ACCOUNT_CREATION_RE.search(text):
         return False
-    return not (is_attestation(text) or _BEYOND_ACCOUNT_CREATION_RE.search(text))
+    rest = _without_application_contact(text)
+    return not (is_attestation(text) or _BEYOND_ACCOUNT_CREATION_RE.search(rest))
 
 
 # --------------------------------------------------------------------------

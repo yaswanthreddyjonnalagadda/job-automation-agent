@@ -5137,6 +5137,30 @@ class JobApplicationAssistant:
             return False
         return safety.is_privacy_consent(label) or safety.is_account_creation_consent(label)
 
+    # A box whose own words say only that it agrees -- the meaning is in the text above it.
+    _BARE_CONSENT = re.compile(r"^(yes,?\s*)?(i\s+)?(consent|agree|accept|acknowledge)\.?$", re.IGNORECASE)
+
+    def _consent_text_of(self, box, label: str) -> str:
+        """What a checkbox agrees to: its label, and for a bare "Yes, I consent" also the text it stands under --
+        the paragraphs before it in its section (including any folded behind "Read More"). (f179)"""
+        label = " ".join((label or "").split())
+        if not self._BARE_CONSENT.search(label):
+            return label
+        try:
+            above = box.evaluate("""e => {
+                let node = e, text = '';
+                while (node && node.tagName !== 'FORM' && text.length < 1500) {
+                    let sib = node.previousElementSibling;
+                    while (sib && text.length < 1500) { text = (sib.textContent || '') + ' ' + text; sib = sib.previousElementSibling; }
+                    if (text.trim().length > 40) break;
+                    node = node.parentElement;
+                }
+                return text;
+            }""") or ""
+        except Exception:
+            above = ""
+        return f"{' '.join(above.split())} {label}".strip()
+
     @staticmethod
     def _tick_checkbox(box) -> bool:
         """Ticks a checkbox and says whether it ended up ticked. Workday draws its
@@ -5315,7 +5339,11 @@ class JobApplicationAssistant:
                             held_boxes.append(label.strip()[:70])
                             logger.info("LEFT_FOR_YOU: account form requires %r", label.strip()[:70])
                     continue
-                if agree and self._is_account_consent(label, context) and not box.is_checked():
+                # A box labelled only "Yes, I consent" / "I agree" means the text it stands under: that text is
+                # what safety.py judges (Marathon Petroleum on Workday: the paragraph above the box agrees to
+                # creating the account and to recurring calls and texts about the application).
+                meaning = self._consent_text_of(box, label)
+                if agree and self._is_account_consent(meaning, context) and not box.is_checked():
                     if self._tick_checkbox(box):
                         logger.info("ACCOUNT: accepted required privacy acknowledgment")
                         ticked_ids.append(box.get_attribute("id") or "")
@@ -5323,6 +5351,14 @@ class JobApplicationAssistant:
                         needs_candidate_acknowledgment = True
                         held_boxes.append(label.strip()[:70])
                         logger.info("LEFT_FOR_YOU: could not tick %r", label.strip()[:70])
+                elif not box.is_checked() and self._BARE_CONSENT.search(label.strip()):
+                    # A consent the agent may not give: pressing Create Account without it only meets "Please check
+                    # the box to continue". The stop shows the words the box agrees to.
+                    needs_candidate_acknowledgment = True
+                    above = " ".join(meaning.split())
+                    above = above[:-len(label.strip())].strip() if above.lower().endswith(label.strip()) else above
+                    held_boxes.append(f"{label.strip()[:40]!r}, which agrees to: ...{above[-260:]}")
+                    logger.info("LEFT_FOR_YOU: account form requires a consent box only you may tick")
 
             if needs_candidate_acknowledgment:
                 logger.warning("ACCOUNT_HELD: a terms or attestation checkbox needs the candidate")

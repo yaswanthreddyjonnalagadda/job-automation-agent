@@ -51,7 +51,7 @@ def test_a_box_cleared_by_a_redraw_is_ticked_again_before_the_press(page):
 
 def test_a_box_that_will_not_stay_ticked_stops_the_run_with_a_reason(page):
     serve(page, FORM)
-    page.evaluate("document.getElementById('c').addEventListener('click', e => setTimeout(() => e.target.checked = false, 0))")
+    page.evaluate("document.getElementById('c').addEventListener('click', e => e.preventDefault())")
     a = assistant(page)
     assert not a.fill_create_account_form(page, "owner@example.com")
     assert "box" in a._account_form_failure.lower() and "tick" in a._account_form_failure.lower()

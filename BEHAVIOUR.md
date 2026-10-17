@@ -1383,3 +1383,14 @@ If the agent cannot finish the Create Account form -- no ATS password set, a CAP
 box that would not keep what was typed, no Create Account button, or the site keeping the form open -- the run stops
 and names that reason ("Create Account was not completed on <site>: ..."). It never goes on to press the form's
 button as if it were an ordinary page.
+
+## A consent box labelled only "Yes, I consent" (f179)
+
+Its meaning is the text above it, and that text is what the consent rule judges. If it agrees only to creating the
+account, the agent ticks it. Your standing decision of 2 October 2026: if the same required consent also agrees to
+calls and text messages *about your application* (Marathon Petroleum's: "recurring calls and text messages, including
+by automated means, regarding my application or employment opportunities"), the agent ticks it too. If it agrees to
+anything else -- marketing, promotions, newsletters, sharing or selling your data, terms and conditions, a declaration --
+the agent does not tick it and does not press Create Account: the run stops and shows you the words the box agrees to.
+This is only for the consent a site requires to create the account; a separate text-message box on an application still
+follows your preferred contact method.
