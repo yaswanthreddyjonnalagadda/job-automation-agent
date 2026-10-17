@@ -75,6 +75,7 @@ STATUS_ALERTS = {
     "submitted": ("Submitted", 3, ("white_check_mark",), "The employer confirmed it."),
     "ready_to_submit": ("Ready to submit", 4, ("point_up",), "Everything is filled in; press Submit at the laptop."),
     "job_not_found": ("Job doesn't exist", 2, ("x",), "The employer's page says it is gone; the run stopped."),
+    "already_applied": ("Already applied", 2, ("information_source",), "The site says you already applied; the run stopped."),
 }
 
 

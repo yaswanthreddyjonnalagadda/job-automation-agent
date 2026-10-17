@@ -137,6 +137,10 @@ CONFIRMATION_TEXT = re.compile(
     r"your application is complete|"
     r"(?<!if )(?<!jobs )(?<!positions )(?:you've|you have) (?:successfully |already )?applied(?! before|\?|\s+to check)",
     re.IGNORECASE)
+# The site's own notice that this account applied before (Workday: "You've already applied for this job.").
+ALREADY_APPLIED_TEXT = re.compile(
+    r"\byou(?:[’']ve|\s+have)?\s+already\s+applied\s+(?:for|to)\s+(?:this|the)\s+(?:job|position|role|requisition|posting)",
+    re.IGNORECASE)
 # The words that say, beyond doubt, the application has already arrived.
 RECEIVED_TEXT = re.compile(
     r"we('ve| have) received your application|your application (has been|was) (received|submitted|sent)|"
@@ -3208,6 +3212,8 @@ class PageAgent:
             if self._site_confirms(tab):
                 if self.final_pressed:
                     return Outcome("submitted", page, ["the site confirmed the application"])
+                if self._says_already_applied(tab):
+                    return Outcome("already_applied", page, ["the site says you already applied for this job"])
                 return Outcome("owner_needed", page, ["the site says this application was already sent"])
             if self.sign_in_step(page, controls):
                 self.settle(page)
@@ -3457,6 +3463,8 @@ class PageAgent:
             if (plan.page_kind == "confirmation" or self._site_confirms(tab)) and self._site_confirms(tab):
                 if self.final_pressed:
                     return Outcome("submitted", page, ["the site confirmed the application"])
+                if self._says_already_applied(tab):
+                    return Outcome("already_applied", page, ["the site says you already applied for this job"])
                 return Outcome("owner_needed", page, ["the site says this application was already sent"])
 
             given = (self.correct_from_profile(page, plan, controls)
@@ -6343,6 +6351,14 @@ class PageAgent:
                 return True
             return any(f.locator("input[type=password]:visible").count() for f in tab.frames[1:]
                        if not safety.is_captcha_frame(f.url))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _says_already_applied(tab) -> bool:
+        """True when the page itself says this account already applied for the job (f180)."""
+        try:
+            return bool(ALREADY_APPLIED_TEXT.search(tab.inner_text("body", timeout=3_000) or ""))
         except Exception:
             return False
 

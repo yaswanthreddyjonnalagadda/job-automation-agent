@@ -1394,3 +1394,10 @@ anything else -- marketing, promotions, newsletters, sharing or selling your dat
 the agent does not tick it and does not press Create Account: the run stops and shows you the words the box agrees to.
 This is only for the consent a site requires to create the account; a separate text-message box on an application still
 follows your preferred contact method.
+
+## "Already applied" (f180)
+
+When the site, signed in as you, says in its own words that you already applied for the job ("You've already applied
+for this job."), and this run did not send anything, the run ends with the status "Already applied". The site's words
+are kept in the note, the browser closes, and you are told on your phone. It is never counted as an application the
+agent submitted. A confirmation page that does not say you applied before still comes to you.

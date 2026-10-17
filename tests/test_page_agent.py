@@ -695,7 +695,7 @@ def test_already_applied_page_is_detected_and_reported(page, resume_file):
     page.set_content('<h3>Principal Engineer</h3><p>You\'ve already applied for this job.</p><a href="#">View My Applications</a>')
     planner = SimpleNamespace(plan_page=lambda s, f, fb="": {"page_kind": "application_form", "next": {"kind": "none"}})
     outcome = make_agent(planner, resume_file).run(page)
-    assert outcome.kind == "owner_needed" and "already sent" in outcome.summary
+    assert outcome.kind == "already_applied" and "already applied" in outcome.summary
 
 
 def test_an_answer_that_does_not_stay_is_never_submitted_blank(page, resume_file):
