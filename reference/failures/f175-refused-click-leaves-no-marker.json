@@ -1,0 +1,16 @@
+{
+  "id": "f175",
+  "date": "2026-10-17",
+  "site": "Any site where the agent presses Create Account (Workday)",
+  "class": "A durable 'about to do it' marker was written before a non-idempotent action and only ever cleared by a later success, so an action that provably never happened blocked every retry",
+  "symptom": "After the 16 October stop, every Marathon run ended at once with 'an earlier attempt may already have pressed Create Account ... check whether the account now exists', though the guard had refused that press and no account was made.",
+  "root_cause": "sign_in_step records account_creation_dispatched before handing to the guard. When the guard refused the click, nothing cleared the marker; it was only resolved when a later page read showed the create form was behind us.",
+  "why_tests_missed": "Tests covered the marker being set and cleared on success, never the click being refused between the two.",
+  "fix": "SubmissionGuardV0 records last_credential_click ('performed' | 'not_performed' | 'unknown') for every credential click. sign_in_step clears the marker when the outcome is 'not_performed'; a press that may have happened ('unknown' or 'performed') keeps it.",
+  "tests": [
+    "tests/test_refused_account_click_leaves_no_marker.py::test_the_guard_says_whether_it_pressed_the_account_button",
+    "tests/test_refused_account_click_leaves_no_marker.py::test_a_click_the_guard_never_let_through_leaves_nothing_pending",
+    "tests/test_refused_account_click_leaves_no_marker.py::test_a_press_that_may_have_happened_stays_pending"
+  ],
+  "prevention": "Pair every 'about to do X' marker with an explicit 'X did not happen' resolution, driven by the component that knows (here the guard), not only by a later observation of success."
+}

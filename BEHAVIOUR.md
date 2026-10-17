@@ -1370,3 +1370,9 @@ before (an account on record, or an application already sent): if so it signs in
 does not create an account. Only an employer it has never dealt with gets a new account. If a sign-in is refused on
 an account the agent only inferred from an earlier application, it then creates one; if it was refused on an account
 it has on record, it follows the existing reset rules.
+
+## A refused Create Account press leaves nothing pending (f175)
+
+If the browser guard refuses the Create Account press, nothing was pressed and no account exists, so the agent
+forgets that it was about to press and can try again. Only a press that may really have happened stops the run
+with "check whether the account now exists".
