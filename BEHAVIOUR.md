@@ -1376,3 +1376,10 @@ it has on record, it follows the existing reset rules.
 If the browser guard refuses the Create Account press, nothing was pressed and no account exists, so the agent
 forgets that it was about to press and can try again. Only a press that may really have happened stops the run
 with "check whether the account now exists".
+
+## When Create Account cannot be completed, the stop says why (f176)
+
+If the agent cannot finish the Create Account form -- no ATS password set, a CAPTCHA, a box only you may tick, a
+box that would not keep what was typed, no Create Account button, or the site keeping the form open -- the run stops
+and names that reason ("Create Account was not completed on <site>: ..."). It never goes on to press the form's
+button as if it were an ordinary page.

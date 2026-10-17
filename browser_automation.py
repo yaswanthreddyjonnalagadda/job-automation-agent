@@ -5171,22 +5171,28 @@ class JobApplicationAssistant:
         # account saved as existing on that evidence sent the next run to sign in to nothing.
         return adapter.candidate_account_state(page) in ("application", "candidate_home")
 
+    def _account_form_failed(self, reason: str) -> bool:
+        """Every way the Create Account form can fail says why, and the run stops on the reason (f176). Returns False."""
+        self._account_form_failure = reason
+        return False
+
     def fill_create_account_form(self, page: Page, email: str) -> bool:
         """Fills a careers-site Create Account form: email (and its retype),
         the .env password (and its retype), first/last name, country, and only
         the agreement checkboxes the owner has authorized. Marketing opt-ins
         ("hear more about career opportunities") are left unticked. Records
         the account when the site accepts it."""
+        self._account_form_failure = ""
         password = self._read_ats_password()
         if not password:
             logger.info("No ATS_PASSWORD set; leaving account creation to the user")
-            return False
+            return self._account_form_failed("no ATS_PASSWORD is set in Settings, so the agent has no password to give the site")
         if not safety.password_allowed(page.url):
             logger.warning("ACCOUNT_HELD: %s is not a site the agent creates accounts on", urlparse(page.url).netloc)
-            return False
+            return self._account_form_failed("the agent does not create accounts on this site")
         if safety.captcha_visible(page):
             logger.warning("ACCOUNT_HELD: a CAPTCHA is on the account form -- only you can complete it")
-            return False
+            return self._account_form_failed("a CAPTCHA is on the form: only you can complete it")
         visible = lambda loc: [loc.nth(i) for i in range(loc.count()) if loc.nth(i).is_visible()]
         pw_fields = visible(page.locator("input[type='password']"))
         if len(pw_fields) < 2 and not (len(pw_fields) == 1 and self._heading_says_create(page)):
@@ -5206,12 +5212,12 @@ class JobApplicationAssistant:
             if not email_fields:
                 logger.warning("ACCOUNT_CREATE_FAILED: found no email box on the Create Account form "
                                "-- not submitting the passwords alone")
-                return False
+                return self._account_form_failed("the form shows no email box the agent can recognise")
             for box in email_fields:
                 self._type_email(page, box, email)
             if not self._email_kept(self._email_boxes(page) or email_fields, email):
                 logger.warning("ACCOUNT_CREATE_FAILED: the email box did not keep the address -- not submitting")
-                return False
+                return self._account_form_failed("the email box did not keep the address typed into it")
             for box in pw_fields:
                 box.click()
                 box.press("Control+A")
@@ -5222,7 +5228,7 @@ class JobApplicationAssistant:
             password_values = [(box.input_value() or "") for box in pw_fields]
             if not self._password_pair_matches(password_values, password):
                 logger.warning("ACCOUNT_CREATE_FAILED: password confirmation did not retain both entries")
-                return False
+                return self._account_form_failed("the password boxes did not keep both entries")
 
             if full_name:
                 for field in self.detect_form_fields(page):
@@ -5272,7 +5278,7 @@ class JobApplicationAssistant:
                             break
                     logger.info("ACCOUNT: data privacy statement %s", "accepted" if accepted else "opened, but no Accept button found")
                     page.wait_for_timeout(1_500)
-            needs_candidate_acknowledgment = False
+            needs_candidate_acknowledgment, held_boxes = False, []
             for box in visible(page.locator("input[type='checkbox']")):
                 label = ""
                 box_id = box.get_attribute("id")
@@ -5296,9 +5302,11 @@ class JobApplicationAssistant:
                                 logger.info("ACCOUNT: accepted owner-authorized account acknowledgment")
                             else:
                                 needs_candidate_acknowledgment = True
+                                held_boxes.append(label.strip()[:70])
                                 logger.info("LEFT_FOR_YOU: could not tick %r", label.strip()[:70])
                         else:
                             needs_candidate_acknowledgment = True
+                            held_boxes.append(label.strip()[:70])
                             logger.info("LEFT_FOR_YOU: account form requires %r", label.strip()[:70])
                     continue
                 if agree and self._is_account_consent(label, context) and not box.is_checked():
@@ -5306,11 +5314,12 @@ class JobApplicationAssistant:
                         logger.info("ACCOUNT: accepted required privacy acknowledgment")
                     else:
                         needs_candidate_acknowledgment = True
+                        held_boxes.append(label.strip()[:70])
                         logger.info("LEFT_FOR_YOU: could not tick %r", label.strip()[:70])
 
             if needs_candidate_acknowledgment:
                 logger.warning("ACCOUNT_HELD: a terms or attestation checkbox needs the candidate")
-                return False
+                return self._account_form_failed("a box only you may tick: " + "; ".join(dict.fromkeys(held_boxes)) + " -- tick it, then press Continue")
 
             # Workday re-renders as the name, country and terms are filled,
             # which clears the keyboard-set password fields: re-enter and
@@ -5332,7 +5341,7 @@ class JobApplicationAssistant:
                 password_values = [(box.input_value() or "") for box in pw_fields]
                 if not self._password_pair_matches(password_values, password):
                     logger.warning("ACCOUNT_CREATE_FAILED: password did not stay filled before submit")
-                    return False
+                    return self._account_form_failed("the password did not stay filled just before pressing Create Account")
             # The same re-render can clear the email: type it again where it is gone.
             email_fields = self._email_boxes(page)
             for box in email_fields:
@@ -5340,7 +5349,7 @@ class JobApplicationAssistant:
                     self._type_email(page, box, email)
             if not self._email_kept(self._email_boxes(page), email):
                 logger.warning("ACCOUNT_CREATE_FAILED: the email did not stay filled before submit")
-                return False
+                return self._account_form_failed("the email did not stay filled just before pressing Create Account")
 
             submit = page.get_by_role(
                 "button", name=re.compile(r"^\s*(create (my )?account|register|sign up|submit)\s*$", re.IGNORECASE)
@@ -5356,7 +5365,7 @@ class JobApplicationAssistant:
                 button = page.locator("input[type='submit'][value*='Create' i]").first
                 if not button.count():
                     logger.warning("ACCOUNT_CREATE_FAILED: no Create Account button found")
-                    return False
+                    return self._account_form_failed("no Create Account button was found on the form")
             guard = getattr(self, "_submission_guard", None)
             if guard is not None and button.evaluate("e => Boolean(e.form || e.closest('form'))"):
                 clicked = guard.click_account_creation(page, button)
@@ -5387,7 +5396,7 @@ class JobApplicationAssistant:
                 logger.warning("ACCOUNT_CREATE_FAILED: the site kept the form open%s",
                                f" -- {' / '.join(errors)[:200]}" if errors else "")
                 self._save_account_failure(page, site)
-                return False
+                return self._account_form_failed("the site kept the form open" + (f" -- {' / '.join(errors)[:200]}" if errors else ""))
             if not self._account_creation_is_confirmed(page):
                 logger.warning(
                     "ACCOUNT_UNVERIFIED: Workday left registration without Candidate Home or application evidence"
@@ -5410,7 +5419,7 @@ class JobApplicationAssistant:
             return True
         except Exception as exc:
             logger.exception("ACCOUNT_CREATE_FAILED: %s", str(exc).splitlines()[0][:160])
-            return False
+            return self._account_form_failed("an error stopped the form: " + str(exc).splitlines()[0][:120])
 
     def create_ats_account(self, page: Page, email: str) -> bool:
         """Completes an employer ATS 'Create Account' form: fills both

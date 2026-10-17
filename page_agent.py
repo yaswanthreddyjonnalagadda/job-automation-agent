@@ -1858,8 +1858,25 @@ class PageAgent:
                     self.notes.append(note)
                     logger.info("LOGIN: %s", note[:200])
                 self.account_blocker = note
+            elif making_account:
+                # The form did not go through. The run stops on the reason it gave -- never on the guard's
+                # refusal of an ordinary press of the account form's own button, which says nothing (f176).
+                failure = str(getattr(self.assistant, "_account_form_failure", "") or "")
+                if failure or self._create_still_showing(tab):
+                    self.account_blocker = (f"Create Account was not completed on {host}: "
+                                            f"{failure or 'the new-account form is still showing'}. "
+                                            "Fix it there, then press Continue")
+                    logger.info("LOGIN: %s", self.account_blocker[:200])
             return False
         return False
+
+    def _create_still_showing(self, tab) -> bool:
+        """After a create attempt that did not get in: is the new-account form still what the page shows?"""
+        try:
+            state = account_state.read_state(self.snapshot(tab), password_boxes=self._password_boxes(tab))
+            return state.kind == account_state.CREATE_FORM
+        except Exception:
+            return False
 
     def _reset_refused_password(self, tab, host: str, email: str) -> bool:
         """Resets a refused password to the same ATS password with the code emailed to the owner, and signs in
