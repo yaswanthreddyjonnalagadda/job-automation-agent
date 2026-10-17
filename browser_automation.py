@@ -257,6 +257,25 @@ def waiting_note_for(signal_path: Path) -> Path:
     return signal_path.with_name(signal_path.name.replace("_signal_", "_waiting_", 1))
 
 
+POSTING_WORDS = re.compile(
+    r"responsibilities|qualifications|requirements|job description|about the (role|job|position)|"
+    r"what you('ll| will) do|who you are|job (id|number|requisition)|posted",
+    re.IGNORECASE)
+# The application's own review wording -- narrow on purpose: a posting's footer can say "review your request" (f170).
+APPLICATION_REVIEW_WORDS = re.compile(
+    r"review and submit\b|review your (application|answers|responses|submission|information|details)\b"
+    r"|submit (your|this) application", re.IGNORECASE)
+
+
+def looks_like_posting_text(text: str) -> bool:
+    """Whether the words of a page say it is a job posting rather than the application's own review step.
+
+    One function, used live by on_job_description() and by replay_guard on every saved page, so a change to these
+    words that flips any real page is shown before it is committed (f174)."""
+    text = text or ""
+    return bool(POSTING_WORDS.search(text)) and not APPLICATION_REVIEW_WORDS.search(text)
+
+
 class JobApplicationAssistant:
     """One instance = one long-lived, visible browser session that persists
     login cookies between runs via a local user-data directory."""
@@ -1978,10 +1997,7 @@ class JobApplicationAssistant:
         except Exception:
             return 0
 
-    _JOB_DESCRIPTION_WORDS = re.compile(
-        r"responsibilities|qualifications|requirements|job description|about the (role|job|position)|"
-        r"what you('ll| will) do|who you are|job (id|number|requisition)|posted",
-        re.IGNORECASE)
+    _JOB_DESCRIPTION_WORDS = POSTING_WORDS
 
     def on_job_description(self, page: Page) -> bool:
         """True when the page is a job posting rather than the application.
@@ -2039,9 +2055,7 @@ class JobApplicationAssistant:
             body = page.inner_text("body", timeout=5_000)
         except Exception:
             return False
-        if not self._JOB_DESCRIPTION_WORDS.search(body) or re.search(
-                r"review and submit\b|review your (application|answers|responses|submission|information|details)\b"
-                r"|submit (your|this) application", body, re.IGNORECASE):
+        if not looks_like_posting_text(body):
             return False
         control = self.find_apply_control(page)
         if control is not None:
