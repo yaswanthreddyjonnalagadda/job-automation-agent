@@ -3499,7 +3499,9 @@ class PageAgent:
                     feedback = "these answers did not stay on the page, try another way: " + "; ".join(missing)
                     logger.info("NOT STUCK: %s -- reading the page again", "; ".join(missing)[:200])
                     continue
-                return Outcome("owner_needed", page, [f"could not set: {m}" for m in missing])
+                missing = self._drop_optional(missing, after)
+                if missing:
+                    return Outcome("owner_needed", page, [f"could not set: {m}" for m in missing])
             # Only the last step must be complete before the agent presses on.
             about_to_send = plan.next_kind in ("final_submit", "none") or safety.is_submit_label(plan.next_label)
             blockers = self.blockers(page, plan, after, about_to_send=about_to_send)
@@ -4030,6 +4032,28 @@ class PageAgent:
             if not ok:
                 missing.append(f"{before.question[:60]} = {answer.value[:40]!r}")
         return missing
+
+    def _drop_optional(self, missing: list[str], after: list[Control]) -> list[str]:
+        """The answers that did not stay, without the ones for an OPTIONAL question that is still blank (f185).
+
+        Invesco's optional Veteran Status list has no 'I am not a veteran' row: the answer cannot stay, and stopping the
+        whole run for a question the form does not require is wrong. Such a question is left blank, with a note. A
+        required question, one that holds some other value, or one not on the page keeps its stop."""
+        kept: list[str] = []
+        for item in missing:
+            question, _, wanted = item.partition(" = ")
+            control = next((c for c in after if c.question and (c.question[:60] == question or c.question.startswith(question))), None)
+            blank = control is not None and (not (control.answer or "").strip() or bool(PLACEHOLDER.match(control.answer.strip())))
+            required = control is not None and (
+                bool(_REQUIRED_STAR.search(control.question or "")) or bool(re.search(r"\brequired\b", control.name or "", re.IGNORECASE)))
+            if control is not None and blank and not required:
+                note = f"{question}: left blank -- this form's list does not offer your answer ({wanted})"
+                if note not in self.notes:
+                    self.notes.append(note)
+                logger.info("OPTIONAL_LEFT_BLANK: %s", note[:160])
+                continue
+            kept.append(item)
+        return kept
 
     def refusal(self, page, answer: Answer, control: Control, controls: list[Control] = (),
                 correcting: bool = False) -> str:

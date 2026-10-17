@@ -1425,3 +1425,10 @@ means the row your profile supports: if your profile says you need visa sponsors
 company sponsorship"**, never "Yes, without restrictions" (which would be false). If your profile says you do not need
 sponsorship it chooses the unrestricted row. If your profile does not say, or the list offers only the row that would be
 untrue for you, the question comes to you. Lists without sponsorship wording are answered as before.
+
+## An optional question the form cannot take (f185)
+
+If a question the form does not require (marked "Required" or with a star) is still blank because its list has no row
+for your answer -- Invesco's Veteran Status has no "I am not a veteran" -- the agent leaves it blank, notes that it did,
+and carries on, instead of stopping the run. It never guesses another row for you. A question the form requires, or an
+optional one that holds some other value, still comes to you.
