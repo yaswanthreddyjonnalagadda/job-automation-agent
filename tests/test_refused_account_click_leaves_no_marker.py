@@ -62,6 +62,12 @@ def test_a_click_the_guard_never_let_through_leaves_nothing_pending(page, tmp_pa
     assert a._pending_account_creation("jobs.example.com") == (False, False)
 
 
+def test_a_form_that_gave_up_before_any_press_leaves_nothing_pending(page, tmp_path):
+    """The form-filler left early (a box only the owner may tick, a box that kept nothing): no press, no account."""
+    a = run_create_step(page, tmp_path, "")
+    assert a._pending_account_creation("jobs.example.com") == (False, False)
+
+
 @pytest.mark.parametrize("outcome", ["unknown", "performed", None])
 def test_a_press_that_may_have_happened_stays_pending(page, tmp_path, outcome):
     a = run_create_step(page, tmp_path, outcome)

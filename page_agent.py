@@ -1838,9 +1838,10 @@ class PageAgent:
                     return True
             except Exception as exc:
                 logger.warning("LOGIN: %s", str(exc).splitlines()[0][:120])
-            # The guard refused the press, so no account was made: the "about to press" marker would only block
-            # every later run (f175). A press that may have happened keeps its marker.
-            if making_account and guard is not None and getattr(guard, "last_credential_click", "") == "not_performed":
+            # The guard refused the press, or the form gave up before any press was tried: no account was made, and
+            # the "about to press" marker would only block every later run (f175). A press that may have happened
+            # ("unknown", "performed") keeps its marker.
+            if making_account and guard is not None and getattr(guard, "last_credential_click", None) in ("", "not_performed"):
                 self._resolve_pending_account_creation(host)
             # The password just typed was refused: what to do about a refusal is the table's (account_state),
             # asked now rather than after the sign-in page has been read as a form of questions for the owner.
