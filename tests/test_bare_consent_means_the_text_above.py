@@ -6,10 +6,9 @@ ticked the box, and pressed Create Account; Workday answered 'Please check the b
 owner's standing decision: a required consent that agrees to creating the account, and to calls and texts about the
 application, is ticked. Marketing, sharing data, terms, declarations stay the owner's -- with the words shown.
 """
-from types import SimpleNamespace
-
 import pytest
 
+import config
 import safety
 from browser_automation import JobApplicationAssistant
 from submission_guard import SubmissionGuardV0
@@ -34,7 +33,9 @@ FORM = """<form onsubmit="window.created = (window.created || 0) + 1; return fal
 def assistant(page):
     a = JobApplicationAssistant.__new__(JobApplicationAssistant)
     a.values = safety.AgentValues()
-    a._profile = SimpleNamespace(accept_application_privacy_prompts=True, sign_attestations=False, full_name="", email="")
+    # A complete profile: with fields missing the agent re-reads the owner's own settings, and the test would then
+    # depend on whose machine it runs on (CI: privacy notices off; the owner: on).
+    a._profile = config.UserProfile(accept_application_privacy_prompts=True)
     a.detect_form_fields = lambda _: []
     a._submission_guard = SubmissionGuardV0(page.context)
     a._read_ats_password = lambda: "Synthetic-Password1!"
