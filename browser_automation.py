@@ -5096,14 +5096,19 @@ class JobApplicationAssistant:
             logger.info("Could not save the account page: %s", str(exc).splitlines()[0][:100])
 
     def _visible_error_texts(self, page: Page) -> list[str]:
+        """What the page says went wrong. Workday's field errors are <p data-automation-id="inputAlert"> under the
+        field ("Please check the box to continue"), neither role=alert nor an error class (f177); their "Error :"
+        prefix is read by screen readers and dropped here."""
         try:
-            alerts = page.locator("[role=alert], [class*=error i]")
+            alerts = page.locator("[role=alert], [class*=error i], [data-automation-id=inputAlert]")
             texts = []
             for index in range(alerts.count()):
                 alert = alerts.nth(index)
                 if alert.is_visible():
                     text = alert.inner_text()
-                    if isinstance(text, str) and text.strip():
+                    if isinstance(text, str):
+                        text = re.sub(r"^\s*error\s*:\s*", "", text.strip(), flags=re.IGNORECASE)
+                    if isinstance(text, str) and text.strip() and text.strip() not in texts:
                         texts.append(text.strip())
             return texts
         except Exception:

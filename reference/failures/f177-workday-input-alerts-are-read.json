@@ -1,0 +1,16 @@
+{
+  "id": "f177",
+  "date": "2026-10-17",
+  "site": "Workday (Marathon Petroleum Create Account; every Workday form field error)",
+  "class": "The site's own error text was shown in a form the agent did not read, so a refusal reached the owner as 'the site kept the form open' with no words",
+  "symptom": "Marathon's Create Account was pressed and refused; four runs stopped with no reason because the agent could not see why.",
+  "root_cause": "_visible_error_texts read only role=alert and class '...error'. Workday renders each field error as <p data-automation-id='inputAlert'>Please check the box to continue</p> with an 'Error :' prefix and sets aria-invalid on the field.",
+  "why_tests_missed": "The error fixtures used role=alert, the shape other portals use; none had Workday's.",
+  "fix": "_visible_error_texts also reads [data-automation-id=inputAlert] and drops the 'Error :' prefix, so the stop carries the site's own words.",
+  "tests": [
+    "tests/test_workday_input_alerts_are_read.py::test_a_workday_input_alert_is_read_as_an_error_text",
+    "tests/test_workday_input_alerts_are_read.py::test_an_ordinary_page_has_no_error_text",
+    "tests/test_workday_input_alerts_are_read.py::test_a_refused_create_account_carries_the_sites_own_words"
+  ],
+  "prevention": "Take each portal's real error markup from a captured page, not from the markup most portals use; and make every refusal carry the site's words."
+}
