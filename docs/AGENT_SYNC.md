@@ -44,7 +44,7 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 | **6. Safety, Provenance & Guards** | `safety.py`, `submission_guard.py`, `provenance.py`, `visible_desktop.py`, `web_guard.py` | **Owner approval required to modify `safety.py`.** Enforces `SubmissionGuardV0`, attestation rules, blocked password domains, and `may_overrule()` provenance. |
 | **7. AI Providers & Documents** | `ai_models.py`, `model_ladder.py`, `ai_choice.py`, `gemini_integration.py`, `claude_integration.py`, `claude_answers.py`, `openai_integration.py`, `jd_analyzer.py`, `resume_parser.py`, `resume_pdf.py`, `profile_setup.py`, `web_setup.py` | Model quota ladders (Gemini/Claude/OpenAI), resume parsing/tailoring, cover letter generation, and profile onboarding. |
 | **8. Persistence, Diagnostics & Replay** | `tracking.py`, `job_tracker.py`, `db.py`, `checkpoint.py`, `recovery.py`, `diagnostics.py`, `runtime_events.py`, `structured_logging.py`, `stop_cause.py`, `run_diagnostics.py`, `replay_guard.py`, `next_project_knowledge.py` | SQLite/Postgres application tracker, Stop-Cause diagnostic bundles, privacy sanitization, and the 609-page pre-commit `replay_guard.py`. |
-| **9. Handoff & Remote Workers** | `handoff.py`, `handoff_session.py`, `phone_console.py`, `phone_alert.py`, `ui_shell.py`, `web_progress.py`, `durable_queue.py`, `worker_daemon.py`, `worker_manager.py`, `resource_manager.py`, `remote_client.py`, `ssh_remote_client.py`, `remote_cli.py` | Live Agent Cockpit handoff controls, mobile/desktop alerts, SQLite WAL durable queue, and zero-cost remote worker daemon. |
+| **9. Handoff & Alerts** | `handoff.py`, `handoff_session.py`, `phone_console.py`, `phone_alert.py`, `ui_shell.py`, `web_progress.py` | Live Agent Cockpit handoff controls and mobile/desktop alerts. **The Oracle remote worker is being removed** ([PR #35](https://github.com/yaswanthreddyjonnalagadda/job-automation-agent/pull/35), owner's instruction 17 Oct 2026): `durable_queue.py`, `worker_daemon.py`, `worker_manager.py`, `resource_manager.py`, `remote_client.py`, `ssh_remote_client.py`, `remote_cli.py` and `scripts/remote/` -- do not extend them. Oracle Recruiting Cloud as a *job portal* (`reference/ats_fields/oracle.json`) stays. |
 
 ---
 
@@ -52,6 +52,8 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 
 - **Active Working Branch**: `fix/posting-apply-link-any-plan` (Open **[PR #34](https://github.com/yaswanthreddyjonnalagadda/job-automation-agent/pull/34)**)
 - **Default Base Branch**: `main`
+- **Other open PR**: [PR #35](https://github.com/yaswanthreddyjonnalagadda/job-automation-agent/pull/35) `chore/remove-oracle-worker` -- removes the Oracle remote worker (44 files). Both #34 and #35 append to the end of `BEHAVIOUR.md`; whichever merges second needs that one conflict resolved.
+- **Live test job**: Invesco Workday (application 62, R-13974) -- got through account creation, email verification, My Experience (f183) and Application Questions (f184); f185 (optional Veteran Status) is the latest fix being verified on it.
 - **Latest Failure Catalogue ID**: `f185` (`reference/failures/f185-optional-question-left-blank.json`) — **Next available ID: `f186`**
 - **Recently Completed Fixes on Active Branch (`f170`–`f185`)**:
   - `f170`–`f180`: Workday posting Apply-link GET navigation, active-dialog account scoping, `"applied before"` $\rightarrow$ Sign In rule, Create Account error reading & consent re-verification, and `"Already applied"` terminal status.
