@@ -6723,7 +6723,7 @@ class JobApplicationAssistant:
         tab = page.context.new_page()
         try:
             query = quote(f"{company} newer_than:2d")
-            tab.goto(f"https://mail.google.com/mail/u/0/#search/{query}", wait_until="domcontentloaded", timeout=45_000)
+            tab.goto(self._gmail_search_url(query), wait_until="domcontentloaded", timeout=45_000)
             try:
                 tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)
             except Exception:
@@ -6829,6 +6829,19 @@ class JobApplicationAssistant:
         except Exception:
             return None
 
+    _PLAIN_MAILBOX = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+
+    def _gmail_search_url(self, query: str) -> str:
+        """The Gmail search for `query` in the account the job accounts use (f182), not whichever Google account
+        comes first in this browser: the owner has more than one. Gmail opens a given account by address and shows
+        a sign-in when that account is not signed in here, which the mail readers already treat as 'this browser
+        isn't signed in to Gmail'. An address that is not a plain mailbox is never put into the address."""
+        email = (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
+        if not email:
+            email = (getattr(self._owner_profile(), "email", "") or "").strip()
+        account = email if self._PLAIN_MAILBOX.match(email) else "0"
+        return f"https://mail.google.com/mail/u/{account}/#search/{query}"
+
     def why_not_read_a_code(self, page: Page, email: str = "") -> Optional[str]:
         """emailed_codes.why_not for the page in front of the agent: None when it may read a code from the
         owner's mail, else why not."""
@@ -6864,7 +6877,7 @@ class JobApplicationAssistant:
                         safe_metadata={"employer": employer},
                     )
                 query = quote("newer_than:1h (passcode OR \"one-time\" OR verification OR code)")
-                tab.goto(f"https://mail.google.com/mail/u/0/#search/{query}", wait_until="domcontentloaded", timeout=45_000)
+                tab.goto(self._gmail_search_url(query), wait_until="domcontentloaded", timeout=45_000)
                 try:
                     tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)
                 except Exception:
@@ -6954,7 +6967,7 @@ class JobApplicationAssistant:
                         safe_metadata={"site_url": site_url},
                     )
                 query = quote("newer_than:1h (verify OR verification OR activate OR confirm)")
-                tab.goto(f"https://mail.google.com/mail/u/0/#search/{query}", wait_until="domcontentloaded",
+                tab.goto(self._gmail_search_url(query), wait_until="domcontentloaded",
                          timeout=45_000)
                 try:
                     tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)

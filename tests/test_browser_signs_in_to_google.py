@@ -48,3 +48,8 @@ def test_the_window_stays_visible_and_the_sandbox_on(tmp_path):
 def test_the_sign_in_helper_loads_and_only_opens_the_browser_when_run():
     import sign_in_browser
     assert callable(sign_in_browser.main) and sign_in_browser.SIGN_IN_URL.startswith("https://accounts.google.com/")
+
+
+def test_the_helper_offers_to_add_the_job_account_not_to_continue_as_an_old_one():
+    import sign_in_browser
+    assert "AddSession" in sign_in_browser.SIGN_IN_URL

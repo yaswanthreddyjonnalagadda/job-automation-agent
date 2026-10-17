@@ -15,7 +15,9 @@ import sys
 import config
 from browser_automation import JobApplicationAssistant
 
-SIGN_IN_URL = "https://accounts.google.com/ServiceLogin?service=mail&continue=https://mail.google.com/mail/"
+# Google's "add another account" page, not the plain sign-in: this browser may already hold a Google login (an
+# earlier one), and the plain page would just continue as that account and never offer the one the job accounts use.
+SIGN_IN_URL = "https://accounts.google.com/AddSession?service=mail&continue=https%3A%2F%2Fmail.google.com%2Fmail%2F"
 
 
 def main() -> int:
@@ -25,7 +27,7 @@ def main() -> int:
         context = assistant._context
         page = context.pages[0] if context.pages else context.new_page()
         page.goto(SIGN_IN_URL, wait_until="domcontentloaded")
-        print("Sign in to the Gmail your job accounts use, in the window that opened.")
+        print("Add the Gmail your job accounts use (\"Use another account\" if asked), in the window that opened.")
         print("Then close that window; your sign-in stays in the agent's browser.")
         try:
             context.wait_for_event("close", timeout=0)
