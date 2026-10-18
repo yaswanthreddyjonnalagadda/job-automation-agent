@@ -1756,7 +1756,10 @@ class PageAgent:
             self._verify_asked.add(host)
             verify = getattr(self.assistant, "verify_account_by_email_link", None)
             try:
-                verified = bool(verify and verify(tab))
+                if verify and host in self._created_at and state.kind != account_state.VERIFY_EMAIL:
+                    verified = bool(verify(tab, just_created=True))     # refused right after it was made (f195)
+                else:
+                    verified = bool(verify and verify(tab))
             except Exception as exc:
                 logger.warning("VERIFY_LINK: %s", str(exc).splitlines()[0][:120])
                 verified = False
@@ -1782,9 +1785,13 @@ class PageAgent:
                 except Exception:
                     pass
                 return True
-            self.account_blocker = str(getattr(self.assistant, "_login_paused", "") or "") \
-                or account_state.next_step(state, replace(memory, verify_tried=True)).why
-            return False
+            memory = replace(memory, verify_tried=True)
+            step = account_state.next_step(state, memory)
+            paused = str(getattr(self.assistant, "_login_paused", "") or "")
+            if paused or step.action != account_state.RESET_PASSWORD:
+                self.account_blocker = paused or step.why
+                return False
+            # No link in the mail for an account made here: the reset to the ATS password is next, now (f195).
         if step.action == account_state.RESET_PASSWORD:
             if email and self._reset_refused_password(tab, host, email):
                 return True

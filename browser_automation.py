@@ -7050,18 +7050,21 @@ class JobApplicationAssistant:
     _LINK_FAILED = re.compile(r"expired|invalid|no longer valid|already been used|could not (be )?verif|error",
                               re.IGNORECASE)
 
-    def verify_account_by_email_link(self, page: Page) -> bool:
+    def verify_account_by_email_link(self, page: Page, just_created: bool = False) -> bool:
         """Recover a live account-verification requirement using authorized mail.
 
         A link that lands on Sign In permits authentication to continue; only
         an explicit confirmation establishes that verification itself succeeded.
+        `just_created`: the agent made this account here in this run and the sign-in was refused -- Workday words an
+        unverified new account as "wrong email or password", never "verify" (f195).
         """
         self._email_verification_outcome = "unconfirmed"
         if self.why_not_read_a_code(page):
             return False
         state = account_state.read_state(page.locator("body").aria_snapshot(),
                                          password_boxes=page.locator("input[type=password]:visible").count())
-        if state.kind != account_state.VERIFY_EMAIL:
+        refused_new = just_created and state.kind in (account_state.WRONG_PASSWORD, account_state.SIGN_IN_FORM)
+        if state.kind != account_state.VERIFY_EMAIL and not refused_new:
             return False
         said = page.locator("body").inner_text()
         if not re.search(r"an email has been sent|we(?:'ve| have)? sent", said, re.I):

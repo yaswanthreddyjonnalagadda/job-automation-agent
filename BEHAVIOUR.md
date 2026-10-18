@@ -1491,3 +1491,11 @@ job postings extract the tenant employer from the URL path when microdata is abs
 - **The review stop waits for you (f193).** A run's "waiting" note no longer overwrites its own Continue/Stop signal.
 - **Your most specific saved answer wins (f194).** When several of your saved answers match a question, the one saved
   for exactly that question -- or the one that covers most of it -- answers it, not whichever comes first in the file.
+
+## A new account that is refused at sign-in (f195)
+
+When the agent has just created your account on a site and the site then refuses the sign-in -- Workday says only
+"You may have entered the wrong email address or password or your account might be locked." while a new account's
+email is not verified yet -- the agent no longer hands that page to you straight away. It first opens the verification
+link the site emailed you (from your Gmail, as before). If no link arrives, it resets the password to the ATS password
+in Settings with the code the site emails. Only if that does not work either is the sign-in left for you.

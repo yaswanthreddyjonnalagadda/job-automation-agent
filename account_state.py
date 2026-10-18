@@ -296,8 +296,9 @@ class Step:
 
 
 def _knows_account(memory: Memory) -> bool:
-    """The site knows this account: it is on record, or the site took the email and asked for its password."""
-    return memory.account_exists or memory.email_given
+    """The site knows this account: it is on record, the site took the email and asked for its password, or the agent
+    created it here in this run (f195)."""
+    return memory.account_exists or memory.email_given or memory.created
 
 
 def next_step(state: AccountState, memory: Memory) -> Step:
@@ -331,6 +332,11 @@ def next_step(state: AccountState, memory: Memory) -> Step:
         # asked for its password -- whose password it refused is reset to the same ATS password with the code
         # emailed to the owner, once per site per run. 'Wrong email or password' alone does not say the account
         # exists, so an unknown one stays the owner's. (Mutual of Enumclaw, iCIMS, 29 September.)
+        # An account made here moments ago and then refused is, on Workday, one whose email is not verified yet -- the
+        # site says only "wrong email or password" (R. L. Polk, 18 October; f195): its emailed link comes first.
+        if memory.created and not memory.verify_tried:
+            return Step(VERIFY_BY_LINK, "the account just made here was refused: a new account is usually refused "
+                                        "until its email is verified -- opening the link the site emailed")
         if _knows_account(memory) and not memory.reset_tried:
             return Step(RESET_PASSWORD, "the site knows this account and refused its password: resetting it to the "
                                         "ATS password with the code emailed to you")
