@@ -69,6 +69,15 @@
       "patterns": ["\\brate\\s+your\\s+(?:skill|proficiency|experience|expertise|knowledge)", "\\bskill\\s+level\\s+(?:with|in)\\b", "\\bproficiency\\s+(?:level\\s+)?(?:with|in)\\b"],
       "profile_field": "skill_levels",
       "resolver": "skill_level"
+    },
+    "GOVERNMENT_ASSISTANCE": {
+      "patterns": [
+        "\\bgovernment\\s+assistance\\b",
+        "\\b(?:tanf|afdc|snap|food\\s+stamps)\\b",
+        "\\bwelfare\\s+program\\b",
+        "\\btemporary\\s+assistance\\s+for\\s+needy\\s+families\\b"
+      ],
+      "profile_field": "received_government_assistance"
     }
   },
   "more_wordings": {

@@ -110,7 +110,7 @@ CONCEPTS: dict[str, dict[str, Any]] = {
             r"\b(?:mobile|cell|cellphone|primary\s*phone|contact\s*number|phone\s*number|telephone)\b",
             r"^\W*phone\W*$",
         ],
-        "negative": r"home\s*phone|work\s*phone|employer\s*phone|office\s*phone|supervisor|emergency|fax|\bconsent\b|\bsms\b|text\s+(?:message|communication)",
+        "negative": r"home\s*phone|work\s*phone|employer\s*phone|office\s*phone|supervisor|emergency|fax|\bconsent\b|\bsms\b|text\s+(?:message|communication)|verify.*identity|identity.*verif|receive.*(?:verification|security|one[- ]?time)\s+code",
     },
     "PHONE_COUNTRY_CODE": {
         "patterns": [
@@ -143,7 +143,7 @@ CONCEPTS: dict[str, dict[str, Any]] = {
             r"\b(?:do|are)\s+you\s+(?:currently\s+)?(?:reside|residing|live|living|located|based)\s+(?:in|within)\b",
             r"\bare\s+you\s+(?:currently\s+)?(?:a\s+)?(?:legal\s+)?resident\s+of\b",
         ],
-        "negative": r"willing|relocat|commut|miles|distance|near",
+        "negative": r"^\W*(?:which|what|where)\b|willing|relocat|commut|miles|distance|near",
     },
     "CITY": {
         "patterns": [

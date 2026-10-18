@@ -31,7 +31,7 @@ SAFE_EXTENSIONS = {'.html', '.txt', '.json', '.png', '.log', '.jsonl'}
 PLACEHOLDER = '<redacted-value>'
 
 # Exact labels only; no keyword test that might bless an applicant's answer.
-SAFE_LABELS = frozenset('application|personal information|contact information|first name|middle name|last name|full name|email|phone|address|city|state|postal code|country|password|verification code|resume|cover letter|education|work experience|experience|review|continue|next|back|save|submit|submit application|sign in|create account|required|optional'.split('|'))
+SAFE_LABELS = frozenset('application|personal information|contact information|my information|my experience|application questions|voluntary disclosures|self identify|terms and conditions|first name|middle name|last name|full name|email|phone|address|city|state|postal code|country|password|verification code|resume|cover letter|education|work experience|experience|school or university|degree|field of study|job title|company|location|review|continue|save and continue|save & continue|next|back|save|submit|submit application|sign in|create account|autofill with resume|apply manually|use my last application|select one|add|delete|required|optional'.split('|'))
 SAFE_ROLES = frozenset('button textbox checkbox radio combobox listbox option heading link group form dialog alert navigation main document generic text paragraph list listitem spinbutton iframe separator status progressbar banner'.split())
 SAFE_TAGS = frozenset('html head body main section article div span p h1 h2 h3 h4 h5 h6 label legend fieldset form input textarea select option button a ul ol li table thead tbody tr th td nav header footer dialog br hr'.split())
 # A role whose own text is the site speaking to the user, not a form field's label.
@@ -586,11 +586,11 @@ LOG_OPERATIONS = frozenset("""
     ACCOUNT_HELD ACCOUNT_STATE ACCOUNT_UNVERIFIED ACCOUNT_VERIFIED AI_ANSWERED_QUESTION ANSWERED
     ANSWER_BANK ANSWER_LIBRARY APPLY_ENTRY_BLOCKED APPLY_ENTRY_NAVIGATED ATTACHED AUTOFILL AUTO_SUBMIT
     AUTO_SUBMIT_FAILED BLOCKED_VALIDATION_LOOP BRAIN CHOICE CHOICES CODE CONSENT CONSENT_SCAN CORRECTED
-    COVER_LETTER_REJECTED COVER_LETTER_RETRY DISQUALIFIED_POLICY_MISMATCH DROPPED DUPLICATE ENTRIES
+    COVER_LETTER_REJECTED COVER_LETTER_RETRY DISQUALIFIED_POLICY_MISMATCH DROPPED DUPLICATE EDUCATION_SKIPPED ENTRIES
     ENTRY EVIDENCE FIELD_ACTION FIELD_COMMITTED FIELD_PRESERVED FINISHED FORENSIC_CAPTURE FORM_ERROR
     GEMINI GMAIL GOTO HANDOFF KEPT KNEW LEARNED LEFT_FOR_YOU LEGAL_ANSWER_CONFLICT LOCATION_SWEEP LOGIN
     LOGIN_BLOCKED LOGIN_FAILED LOGIN_HELD LOGIN_NO_ACCOUNT LOGIN_OK LOGIN_PAUSED LOGIN_REJECTED LOOKED
-    NEEDS_USER_REVIEW NEXT NEXT_STUCK NO_NEXT_BUTTON OPEN_ANSWER PAGE_FULLY_KNOWN PASSCODE PASSCODE_OK
+    NEEDS_USER_REVIEW NEXT NEXT_STUCK NO_NEXT_BUTTON OPEN_ANSWER OPTIONAL_LEFT_BLANK PAGE_FULLY_KNOWN PASSCODE PASSCODE_OK
     PHONE_ALERT PHONE_CONSOLE
     PLATFORM_ANSWER POSTING_PAGE PROFILE_ANSWER PROFILE_CREATED PROFILE_DIALOG READ READY_TO_SUBMIT
     READ_FROM_EARLIER_RUN RECALLED RECOVERY RECOVERY_OK RECOVERY_REJECTED RELOAD_FAILED RELOAD_REJECTED
@@ -609,7 +609,7 @@ LOG_OPERATIONS = frozenset("""
 # (email, token, code). Every other LOG_OPERATIONS category keeps the fully-opaque default.
 CONTENT_PRESERVING_OPERATIONS = frozenset("""
     ACCOUNT_CREATE_FAILED ACCOUNT_CREATE_BLOCKED ACCOUNT_CREATED ACCOUNT_HELD ACCOUNT_UNVERIFIED
-    FORM_ERROR VALIDATION_FAILED LOGIN_BLOCKED LOGIN_FAILED LOGIN_HELD LOGIN_NO_ACCOUNT LOGIN_PAUSED
+    EDUCATION_SKIPPED FORM_ERROR VALIDATION_FAILED LOGIN_BLOCKED LOGIN_FAILED LOGIN_HELD LOGIN_NO_ACCOUNT LOGIN_PAUSED
     LOGIN_REJECTED SUBMISSION_BLOCKED SUBMIT_HELD NEEDS_USER_REVIEW HANDOFF
     DISQUALIFIED_POLICY_MISMATCH SCREENING_QA_FAILED BLOCKED_VALIDATION_LOOP LEGAL_ANSWER_CONFLICT
 """.split())

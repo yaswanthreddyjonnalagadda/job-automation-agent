@@ -767,4 +767,18 @@ def dsn_from_env() -> str:
 
 
 def get_tracker() -> PostgresTracker:
-    return PostgresTracker(dsn_from_env())
+    import os
+    import socket
+
+    dsn = dsn_from_env()
+    host = os.getenv("POSTGRES_HOST", "127.0.0.1")
+    port = os.getenv("POSTGRES_PORT", "5432")
+    try:
+        with socket.create_connection((host, int(port)), timeout=0.2):
+            pass
+    except OSError as exc:
+        raise psycopg.OperationalError(
+            f"connection to server at {host!r}, port {port} failed: {exc}"
+        ) from exc
+    return PostgresTracker(dsn)
+

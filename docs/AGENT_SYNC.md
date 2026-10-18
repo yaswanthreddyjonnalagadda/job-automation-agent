@@ -55,15 +55,16 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 - **Codex context refresh (17 October 2026)**: Reviewed this hub, operational rules, runtime behavior, recent commits and f183–f185. Verified PRs #34 and #35 are open (CI in progress at inspection), latest catalogue ID remains f185, and local SQLite records one pending application: Invesco (`needs_user_review`). The 10 backlog items remain open; no runtime fix or live application verification was performed in this refresh. Preserved the pre-existing `scripts/agent_status.py` trailing-newline edit and untracked `.claude/`. WSL Git status exceeded the checker’s 5-second timeout; Windows Git verified the branch and working tree.
 - **Other open PR**: [PR #35](https://github.com/yaswanthreddyjonnalagadda/job-automation-agent/pull/35) `chore/remove-oracle-worker` -- removes the Oracle remote worker (44 files). Both #34 and #35 append to the end of `BEHAVIOUR.md`; whichever merges second needs that one conflict resolved.
 - **Live test job**: Invesco Workday (application 62, R-13974) -- **SUBMITTED** 17 Oct 2026 23:39 UTC (status `submitted`, the page confirmed it). The run went account creation -> email verification -> My Experience (f183) -> Application Questions (f184) -> Voluntary Disclosures (f185, Veteran Status left blank) -> Review (step 5/5). No application is pending now.
-- **Latest Failure Catalogue ID**: `f187` (`reference/failures/f187-numerical-salary-and-unified-option-choice.json`) — **Next available ID: `f188`**
-- **Recently Completed Fixes on Active Branch (`f170`–`f187`)**:
+- **Latest Failure Catalogue ID**: `f188` (`reference/failures/f188-greenhouse-alphanumeric-code-and-screening-coverage.json`) — **Next available ID: `f189`**
+- **Recently Completed Fixes on Active Branch (`f170`–`f188`)**:
   - `f170`–`f180`: Workday posting Apply-link GET navigation, active-dialog account scoping, `"applied before"` $\rightarrow$ Sign In rule, Create Account error reading & consent re-verification, and `"Already applied"` terminal status.
   - `f181`–`f182`: Persistent agent browser Google sign-in support and `?authuser=<email>` mailbox targeting.
   - `f183`: Skip optional Workday Education section when tenant's School lookup returns empty (`"No Items."`).
   - `f184`: Sponsorship-qualified work authorization options (`"Yes, without restrictions"` vs `"Yes, with company sponsorship"`) follow `profile.requires_visa_sponsorship`.
   - `f185`: Optional questions whose dropdown lacks the owner's answer (e.g. Invesco's optional `Veteran Status`) are left blank with a note (`OPTIONAL_LEFT_BLANK`) instead of stopping the run.
   - `f186` (commit e772800): a Review step (answers shown as text, the application's Submit button, no inputs) counts as the application form in `apply_flow.hand_over`; it was reported "The application form was never reached". Cross-portal: any portal whose last step is text-only.
-  - `f187`: Expected earnings (`"expect to earn per year"`) and desired annual/base compensation (`"desired annual compensation"`) match `DESIRED_SALARY` and return plain numeric `salary_min` (`"125000"`) when the prompt asks for a numerical value; sponsorship-qualified `"Yes"` options (`f184`) are unified across radio groups (`_control_for`, `do`), cached `native_select` recipes, and `_choose_inside`.
+  - `f187` (commit 7f50da4): Expected earnings (`"expect to earn per year"`) and desired annual/base compensation (`"desired annual compensation"`) match `DESIRED_SALARY` and return plain numeric `salary_min` (`"125000"`) when the prompt asks for a numerical value; sponsorship-qualified `"Yes"` options (`f184`) are unified across radio groups (`_control_for`, `do`), cached `native_select` recipes, and `_choose_inside`.
+  - `f188`: Preserve alphanumeric characters in `PageAgent.complete_account_code` for Greenhouse 8-character security codes (`"EvPGU6Qy"`) and match `?gh_jid=` in `GreenhouseAdapter`; exclude `Which/What/Where` questions from `RESIDES_IN` so `"Which country are you located in?"` resolves to `COUNTRY`; add `GOVERNMENT_ASSISTANCE` (`profile.received_government_assistance`) and `"receive a verification code"` channel selection; add `EDUCATION_SKIPPED` / `OPTIONAL_LEFT_BLANK` and wizard step labels to `diagnostics.py`; and add a 200ms TCP probe in `db.get_tracker()`.
 
 ---
 
@@ -81,14 +82,10 @@ Any agent (**Claude Code**, **Codex**, **Antigravity**) picking up work should c
   - *Evidence*: On Workday/ADP/React-Select, dropdown options are absent from the initial ARIA snapshot (`options=()`). When `resolve_profile_value()` runs before the menu opens, it returns a generic string (`"Yes"`, `"Master's"`) without seeing the actual options.
 
 ### Priority 1 — Portal Adapters (`Greenhouse`, `ADP`, `iCIMS`, `Avature`, `Sunday`)
-- [ ] **P1-1: Greenhouse Emailed 8-Character Security Code & Embedded `#grnhse_app` (`sites/greenhouse.py`, `page_agent.py`)**
-  - *Evidence*: `data/unanswered_questions.json` #2 (*"Greenhouse emailed an 8-character code to ... to confirm you are a human"*). Per `CLAUDE.md` §5, this is a standard emailed code (`emailed_codes.py`), not a CAPTCHA. Auto-read the 8-character code from the signed-in Gmail tab and fill `#security-input` automatically. Also match embedded Greenhouse iframes (`#grnhse_app` / `gh_jid`).
-- [ ] **P1-2: Zero-Touch Coverage for Recurring Screening Questions (`reference/concepts.json`, `config.py`)**
-  - *Evidence*: 28 questions in `data/unanswered_questions.json` that can be resolved deterministically from profile facts:
-    1. WOTC / Government assistance (`TANF`, `AFDC`, welfare checks $\rightarrow$ profile field `received_government_assistance`).
-    2. Export control / "protected individual" status (derived from `us_citizen`, `work_authorization`, `requires_visa_sponsorship`).
-    3. Education completion status (`"Graduated"` / `"Completed"` for completed degrees) & Country of Institution (derived via `geo_reference.py`).
-    4. Multi-location checkboxes (match `profile.locations` or relocation preference).
+- [x] **P1-1: Greenhouse Emailed 8-Character Security Code & Embedded `#grnhse_app` (`sites/greenhouse.py`, `page_agent.py`)** — *Done (`f188`)*
+  - *Evidence*: `data/unanswered_questions.json` #2 (*"Greenhouse emailed an 8-character code to ... to confirm you are a human"*). `complete_account_code` previously stripped letters via `re.sub(r"\D", "", code)` when `expected > 0`, rejecting 8-character alphanumeric Greenhouse codes (`"EvPGU6Qy"`). Fixed in `f188` along with `?gh_jid=` and embedded frame support in `GreenhouseAdapter`.
+- [x] **P1-2: Zero-Touch Coverage for Recurring Screening Questions (`reference/concepts.json`, `config.py`)** — *Done (`f188`)*
+  - *Evidence*: Added `GOVERNMENT_ASSISTANCE` (`profile.received_government_assistance`) for WOTC/TANF/AFDC/SNAP questions, fixed `"Which country are you located in?"` matching `COUNTRY` instead of `RESIDES_IN`, and matched `"Where would you like to receive a verification code?"` to `profile.preferred_contact_method`.
 - [ ] **P1-3: Dedicated ADP WorkforceNow Adapter (`sites/adp.py`)**
   - Consolidate ADP prefilled/read-only Email & Mobile skip (`f005`, `f006`), `sdf-select` floating listbox portals (`f007`), inline Experience/Education card Save buttons (`f008`), and non-semantic `"Application Submitted"` span detection (`f145`).
 - [ ] **P1-4: Dedicated iCIMS Adapter (`sites/icims.py`)**
@@ -97,9 +94,9 @@ Any agent (**Claude Code**, **Codex**, **Antigravity**) picking up work should c
   - Ignore optional `"Already registered? Login"` links when `"From Device"` resume upload is present (`f161`), format 10-digit plain phone numbers (`f165`), follow outbound ATS links on referral wrappers (`Sunday`), and mark closed postings as `job_not_found` (`f163`).
 
 ### Priority 2 — Diagnostics Clarity & Runtime Speed
-- [ ] **P2-1: Restore Non-PII Diagnostic Evidence (`diagnostics.py`)**
-  - Add `EDUCATION_SKIPPED` and `OPTIONAL_LEFT_BLANK` to `LOG_OPERATIONS` / `CONTENT_PRESERVING_OPERATIONS`.
-  - Allow standard wizard step/button labels (`"Save and Continue"`, `"Application Questions"`, `"Voluntary Disclosures"`, `"My Information"`, `"My Experience"`) in `SAFE_LABELS` so `stopped_*.txt` and `dropdown_dump_structure.txt` remain useful for debugging without exposing personal data.
-- [ ] **P2-2: Fast SQLite Fallback When Local Postgres Is Stopped (`tracking.py`)**
-  - Probe `POSTGRES_HOST:POSTGRES_PORT` with a fast TCP check (e.g., 200ms) before waiting on a multi-second driver timeout when Docker is not running.
+- [x] **P2-1: Restore Non-PII Diagnostic Evidence (`diagnostics.py`)** — *Done (`f188`)*
+  - Added `EDUCATION_SKIPPED` and `OPTIONAL_LEFT_BLANK` to `LOG_OPERATIONS` / `CONTENT_PRESERVING_OPERATIONS` and standard wizard step/button labels (`"Save and Continue"`, `"Application Questions"`, `"Voluntary Disclosures"`, `"My Information"`, `"My Experience"`) to `SAFE_LABELS`.
+- [x] **P2-2: Fast SQLite Fallback When Local Postgres Is Stopped (`db.py`)** — *Done (`f188`)*
+  - Probed `POSTGRES_HOST:POSTGRES_PORT` with a 200ms TCP check in `db.get_tracker()` before waiting on a multi-second driver timeout when Docker is not running.
+
 

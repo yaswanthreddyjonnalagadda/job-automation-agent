@@ -126,6 +126,7 @@ class UserProfile:
     preferred_language: str = ""
     people_managed: str = ""
     outside_business_interests_with_competitors: str = ""
+    received_government_assistance: str = ""
     # Asked by many forms, and only yours to answer (30 September: with none of these in the profile the AI
     # guessed them). Empty = the question comes to you once, and your answer is kept.
     preferred_name: str = ""           # empty = you have none: the box is left blank

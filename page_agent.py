@@ -2309,15 +2309,22 @@ class PageAgent:
         try:
             # A different code each time: the last one was refused.
             expected = len(boxes) if len(boxes) > 1 else 0
+            if not expected:
+                m_len = re.search(r"\b(\d+)\s*[- ]?(?:character|digit|letter)\s+code\b", local_context, re.IGNORECASE)
+                if m_len:
+                    expected = int(m_len.group(1))
             code = self.assistant.passcode_from_gmail(tab, previous=self._last_code, length=expected)
             if code and expected:
                 # It must fit the boxes: a number picked out of the wrong part
                 # of the message was typed in and refused ("The code isn't
-                # valid. Enter a valid code.").
-                digits = re.sub(r"\D", "", code)
-                code = digits if len(digits) == expected else ""
+                # valid. Enter a valid code."). Greenhouse's 8-character code
+                # holds letters and digits ("EvPGU6Qy"), whereas digit-per-box
+                # steps ("digit 1 of six") take only digits.
+                digits_only = bool(re.search(r"\bdigit\b", local_context, re.IGNORECASE))
+                cleaned = re.sub(r"\D" if digits_only else r"[^A-Za-z0-9]", "", code)
+                code = cleaned if len(cleaned) == expected else ""
                 if not code:
-                    logger.info("CODE: your mail doesn't show a %d-digit code yet", expected)
+                    logger.info("CODE: your mail doesn't show a %d-character code yet", expected)
                     return False
             if not code and self._last_code and not self._asked_for_new_code:
                 # The last code was refused and no newer mail has come: ask the
@@ -2562,15 +2569,21 @@ class PageAgent:
                 r'\b(?:i have|use|have a)\b.*\bpreferred name\b', question, re.I):
             preferred = str(getattr(self.profile, 'preferred_name', '') or '').strip()
             return ('checked' if preferred else 'unchecked'), 'profile.preferred_name'
-        if re.search(r'verify.*identity|identity.*verif', question, re.I) and control.options:
-            channels = {channel: [label for label in control.options
-                                  if re.search(rf'\b{channel}\b', label, re.I)]
-                        for channel in ('email', 'phone')}
-            if channels['email'] and channels['phone']:
-                preferred = str(getattr(self.profile, 'preferred_contact_method', '') or '').lower()
-                channel = 'phone' if preferred in ('phone', 'sms', 'text', 'text message') else 'email'
-                if len(channels[channel]) == 1:
+        if re.search(
+            r'verify.*identity|identity.*verif|receive\s+(?:a\s+|your\s+)?(?:verification|security|one[- ]?time)\s+code',
+            question,
+            re.I,
+        ):
+            preferred = str(getattr(self.profile, 'preferred_contact_method', '') or '').lower()
+            channel = 'phone' if preferred in ('phone', 'sms', 'text', 'text message') else 'email'
+            if control.options:
+                channels = {ch: [label for label in control.options
+                                 if re.search(rf'\b{ch}\b', label, re.I)]
+                            for ch in ('email', 'phone')}
+                if channels['email'] and channels['phone'] and len(channels[channel]) == 1:
                     return channels[channel][0], 'profile.preferred_contact_method'
+            elif control.role == 'radio':
+                return ('Phone' if channel == 'phone' else 'Email'), 'profile.preferred_contact_method'
         if control.role in ('radio', 'radiogroup', 'group', 'combobox', 'listbox') \
                 and _TEXT_MESSAGES.search(question) \
                 and re.search(r'consent|agree|receiv|opt.?in|send', question, re.I):

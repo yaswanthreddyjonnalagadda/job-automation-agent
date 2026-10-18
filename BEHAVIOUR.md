@@ -1451,3 +1451,14 @@ In addition, sponsorship-qualified "Yes" options ("Yes, without restrictions" vs
 follow `profile.requires_visa_sponsorship` across radio button groups, cached native `<select>` elements, and group
 choices just as they do on custom dropdowns.
 
+## Greenhouse 8-character alphanumeric codes, country location questions, and WOTC coverage (f188)
+
+When Greenhouse emails an 8-character alphanumeric security code ("EvPGU6Qy") and the form either shows 8 character
+boxes or states "enter the 8-character code", the code-entry step keeps letters as well as digits (only digit-labeled
+boxes such as "digit 1 of six" strip non-digits). Embedded Greenhouse boards using `?gh_jid=` also match the
+Greenhouse adapter and inspect embedded Greenhouse frames for attachment state. Questions asking "Which country are you
+located in?" now resolve to `COUNTRY` (`profile.country`) rather than `RESIDES_IN`; "Where would you like to receive a
+verification code?" selects your preferred contact channel (`Email` by default) on both dropdowns and radio buttons;
+and WOTC government-assistance questions (TANF, AFDC, SNAP) map to `profile.received_government_assistance`.
+
+
