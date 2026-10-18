@@ -1439,3 +1439,15 @@ When the agent stops at a review step -- your answers shown as text, with the ap
 fields to fill -- it reports the application as ready for you to check and submit. It used to say "the application form
 was never reached" there, because the page had no fields. A page with neither fields nor the Submit button (a sign-in
 page, say) still reads as not reached.
+
+## Numerical expected earnings and sponsorship-qualified radio/select choices (f187)
+
+Questions asking what you expect to earn per year or your desired annual/base compensation ("What would you expect to
+earn per year in the position for which you have applied? Please provide a numerical value.", "What is your desired
+annual compensation?") are recognized as `DESIRED_SALARY` from your profile instead of falling through to an open-ended
+AI paragraph. When the question asks for a numerical value ("numerical value", "numbers only", "single number",
+"whole number"), the agent fills your plain numeric `salary_min` (`125000`) rather than a `$min - $max` range string.
+In addition, sponsorship-qualified "Yes" options ("Yes, without restrictions" vs "Yes, with company sponsorship") now
+follow `profile.requires_visa_sponsorship` across radio button groups, cached native `<select>` elements, and group
+choices just as they do on custom dropdowns.
+

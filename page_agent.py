@@ -4427,7 +4427,7 @@ class PageAgent:
         matches = [c for c in controls if c.role in ANSWER_ROLES and _same_question(c.question, question)]
         radios = [c for c in matches if c.role == "radio"]
         if radios:
-            index = self.assistant._best_option([c.name for c in radios], [value])
+            index = self._match_option([c.name for c in radios], value)
             return radios[index] if index is not None else None
         return matches[0] if matches else None
 
@@ -4532,7 +4532,7 @@ class PageAgent:
                     if identity is not None:
                         self._mark_recipe_failed(identity)
                 elif method == "native_select" and control.options:
-                    index = self.assistant._best_option(control.options, [answer.value])
+                    index = self._match_option(control.options, answer.value)
                     if index is not None:
                         chosen_text = None
                         try:
@@ -4825,21 +4825,25 @@ class PageAgent:
             if control.role == "checkbox" and real_group \
                     and answer.value.strip().lower() not in ("checked", "true", "unchecked", "false", ""):
                 return self._tick_several(page, group, answer.value)
-            index = self.assistant._best_option([c.name for c in group], [answer.value])
+            sponsorship_decided, index = self._sponsorship_option([c.name for c in group], answer.value)
+            if not sponsorship_decided:
+                index = self.assistant._best_option([c.name for c in group], [answer.value])
             if control.toggle or any(c.toggle for c in group):
                 if index is None:
                     logger.info("No choice matching %r for %r among %s", answer.value, control.question[:50],
                                 [c.name for c in group][:8])
                     return False
                 return self._press_toggle(page, group[index])
-            if index is None and not real_group:
+            if index is None and not real_group and not sponsorship_decided:
                 role_filter = control.role if control.role in ("radio", "checkbox", "switch") else "radio"
                 all_radios = [c for c in snapshot_controls if c.role == role_filter]
-                fallback_idx = self.assistant._best_option([c.name for c in all_radios], [answer.value])
+                sponsorship_decided, fallback_idx = self._sponsorship_option([c.name for c in all_radios], answer.value)
+                if not sponsorship_decided:
+                    fallback_idx = self.assistant._best_option([c.name for c in all_radios], [answer.value])
                 if fallback_idx is not None:
                     group = all_radios
                     index = fallback_idx
-            if index is None and not real_group:
+            if index is None and not real_group and not sponsorship_decided:
                 try:
                     candidates = [answer.value]
                     if re.search(r"\bnot\b.*\bveteran\b", answer.value, re.I):
@@ -5639,8 +5643,7 @@ class PageAgent:
                     return i
         # A bare Yes among rows that differ in what the owner would be saying about sponsorship follows the profile,
         # and is never the row that would be a false statement (f184).
-        needs = getattr(self.profile, "requires_visa_sponsorship", None)
-        decided, index = option_match.sponsorship_choice(names, value, None if needs is None else concept_matcher._is_yes(needs))
+        decided, index = self._sponsorship_option(names, value)
         if decided:
             return index
         index = self.assistant._best_option(names, [value])
@@ -5649,6 +5652,21 @@ class PageAgent:
             if index is not None:
                 logger.info('FIELD_ACTION: application field handled')
         return index
+
+    def _sponsorship_option(self, options: list[str], value: str) -> tuple[bool, Optional[int]]:
+        """(decided, index) for a bare Yes among sponsorship-qualified options ('Yes, without restrictions' vs
+        'Yes, with company sponsorship'), resolved from profile.requires_visa_sponsorship (f184, f187)."""
+        needs = getattr(self.profile, "requires_visa_sponsorship", None)
+        return option_match.sponsorship_choice(
+            list(options), value, None if needs is None else concept_matcher._is_yes(needs)
+        )
+
+    def _match_option(self, options: list[str], value: str) -> Optional[int]:
+        """Index of the option matching `value`, honouring sponsorship-qualified Yes choices before _best_option."""
+        decided, index = self._sponsorship_option(options, value)
+        if decided:
+            return index
+        return self.assistant._best_option(list(options), [value])
 
     def _pick_label(self, labels: list[str], value: str) -> Optional[int]:
         """Which of a list's labels answers `value`. A country or US state is
@@ -5687,9 +5705,11 @@ class PageAgent:
     def _choose_inside(self, page, control: Control, value: str) -> bool:
         """Clicks the choice inside a group -- by what it says, since it has no
         reference of its own."""
-        index = self.assistant._best_option(control.options, [value])
-        if index is None:
-            index = closest_choice(control.options, value)
+        decided, index = self._sponsorship_option(control.options, value)
+        if not decided:
+            index = self.assistant._best_option(control.options, [value])
+            if index is None:
+                index = closest_choice(control.options, value)
         if index is None:
             logger.info("No choice matching %r for %r among %s", value, control.question[:50], control.options[:6])
             return False

@@ -74,6 +74,11 @@
   "more_wordings": {
     "PREVIOUSLY_EMPLOYED": ["\\bworked\\s+(?:with|for)\\s+us\\s+before\\b", "\\bhave\\s+you\\s+(?:ever\\s+)?worked\\s+(?:with|for)\\s+us\\b"],
     "PREFERRED_CONTACT": ["\\bpreferred\\s+(?:method|way|mode)\\s+of\\s+contact\\b"],
-    "NOTICE_PERIOD": ["\\bdate\\s+available\\s+to\\s+start\\b", "\\bavailable\\s+start\\s+date\\b", "\\bearliest\\s+(?:possible\\s+)?start(?:\\s+date)?\\b", "\\bwhen\\s+can\\s+you\\s+start\\b"]
+    "NOTICE_PERIOD": ["\\bdate\\s+available\\s+to\\s+start\\b", "\\bavailable\\s+start\\s+date\\b", "\\bearliest\\s+(?:possible\\s+)?start(?:\\s+date)?\\b", "\\bwhen\\s+can\\s+you\\s+start\\b"],
+    "DESIRED_SALARY": [
+      "\\bexpect(?:ed)?\\s+to\\s+earn\\b",
+      "\\bexpected\\s+(?:annual\\s+|yearly\\s+|base\\s+)?(?:earnings?|salary|pay|compensation)\\b",
+      "\\bdesired\\s+(?:annual\\s+|yearly\\s+|base\\s+|total\\s+)?(?:salary|pay|compensation)\\b"
+    ]
   }
 }

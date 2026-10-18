@@ -33,7 +33,7 @@ def _git(*args: str) -> str:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=5,
+            timeout=20,
         )
         return res.stdout.strip()
     except Exception as exc:
@@ -155,3 +155,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

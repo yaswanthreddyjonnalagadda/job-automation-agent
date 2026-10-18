@@ -836,7 +836,13 @@ def resolve_profile_value(
     elif concept == "DESIRED_SALARY":
         minimum = str(getattr(profile, "salary_min", "") or "").strip()
         maximum = str(getattr(profile, "salary_max", "") or "").strip()
-        if minimum and maximum:
+        if minimum and re.search(
+            r"\b(?:numerical\s+value|numbers?\s+only|numeric\s+value|in\s+numbers|whole\s+number|single\s+number)\b",
+            question or "",
+            re.IGNORECASE,
+        ):
+            val = str(int(float(minimum)))
+        elif minimum and maximum:
             val = f"${int(float(minimum)):,} - ${int(float(maximum)):,}"
         elif minimum:
             val = str(minimum)
