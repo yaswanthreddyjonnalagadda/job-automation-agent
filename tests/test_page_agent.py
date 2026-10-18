@@ -1212,10 +1212,12 @@ def test_a_code_the_site_says_confirms_a_human_is_entered_when_no_captcha_is_sho
     owner's own application, and the owner decided (25 September 2026) that the agent enters it itself: it
     once stopped a Praxis application one step short of done. What stays the owner's is a CAPTCHA."""
     page.set_content(HUMAN_CHECK_PAGE)
-    agent = _code_agent(page, resume_file)
+    # The page asks for an 8-character code, and since f188 the length is read from it: a 6-digit stand-in was
+    # rightly refused. Greenhouse's real codes hold letters and digits.
+    agent = _code_agent(page, resume_file, code="EvPGU6Qy")
     controls = page_agent.parse_snapshot(agent.snapshot(page))
     assert agent.complete_account_code(page, controls, agent.snapshot(page)) is True
-    assert page.locator("#c").input_value() == "482913"
+    assert page.locator("#c").input_value() == "EvPGU6Qy"
 
 
 def test_a_code_beside_a_real_captcha_is_never_entered(page, resume_file):
