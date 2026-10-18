@@ -420,8 +420,14 @@ def fetch_schema_org_job(url: str) -> dict | None:
         return None
     return {
         "title": " ".join(title.split()),
-        # "IGT, a Nevada Corporation" -> "IGT"
-        "company": prop("hiringOrganization").split(",")[0].strip() or urlparse(url).netloc.split(".")[-2].upper(),
+        # "IGT, a Nevada Corporation" -> "IGT"; vendor hosts use URL path (e.g. Versant on SmartRecruiters)
+        "company": (
+            prop("hiringOrganization").split(",")[0].strip()
+            if (prop("hiringOrganization").split(",")[0].strip() and not any(
+                v in prop("hiringOrganization").split(",")[0].strip().lower().replace(" ", "") for v in ATS_VENDORS
+            ))
+            else (_company_from_url(url) or prop("hiringOrganization").split(",")[0].strip() or urlparse(url).netloc.split(".")[-2].upper())
+        ),
         "location": ", ".join(p for p in (prop("addressLocality"), prop("addressRegion")) if p),
         "url": url,
         "raw_text": clean(description)[:20000],

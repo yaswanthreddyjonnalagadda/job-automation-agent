@@ -2086,6 +2086,15 @@ class JobApplicationAssistant:
                 return page
             page = page.top  # the site has left its frame
         try:
+            adapter = self.adapter(page)
+            if hasattr(adapter, "find_application_frame"):
+                app_frame = adapter.find_application_frame(page)
+                if app_frame is not None:
+                    logger.info("The application form is in a platform-targeted frame (%s); working inside it",
+                                getattr(adapter, "name", "adapter"))
+                    self.note_page_changed()
+                    return FramedPage(page, app_frame)
+
             if self.visible_input_count(page) > 3:
                 return page  # the outer page is the form
 

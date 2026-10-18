@@ -15,6 +15,7 @@ from .ashby import AshbyAdapter
 from .base import SiteAdapter, merge_placeholders
 from .eightfold import EightfoldAdapter
 from .greenhouse import GreenhouseAdapter
+from .icims import IcimsAdapter
 from .lever import LeverAdapter
 from .successfactors import SuccessFactorsAdapter
 from .workday import WorkdayAdapter
@@ -27,6 +28,7 @@ ADAPTERS: tuple[type[SiteAdapter], ...] = (
     GreenhouseAdapter,
     LeverAdapter,
     AshbyAdapter,
+    IcimsAdapter,
     EightfoldAdapter,   # last: it also matches employer-hosted /careers/ paths
 )
 

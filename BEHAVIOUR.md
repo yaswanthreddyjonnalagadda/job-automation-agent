@@ -1461,4 +1461,18 @@ located in?" now resolve to `COUNTRY` (`profile.country`) rather than `RESIDES_I
 verification code?" selects your preferred contact channel (`Email` by default) on both dropdowns and radio buttons;
 and WOTC government-assistance questions (TANF, AFDC, SNAP) map to `profile.received_government_assistance`.
 
+## SmartRecruiters guest apply, option range matching, file upload decoupling, and iCIMS scoping (f189)
+
+On SmartRecruiters and other guest apply forms, a field asking to "Confirm your email" alongside applicant personal fields
+(First Name, Last Name, Phone, Resume) is recognized as an application form input rather than being misclassified as an
+account verification gate (`VERIFY_EMAIL`). Verification-sent notifications on account creation pages (e.g. Workday) are
+recognized and prompt verification link retrieval before attempting sign-in. Option selection now supports numeric
+intervals for total annual compensation and expected earnings buckets (e.g. choosing "$111,000 - $120,000/yr" for an
+expected salary of 120000 or "$120,000") and years of experience. File upload buttons ("Choose file", "Upload file",
+"Browse") are decoupled from generic dropdown placeholders so Playwright never clicks them as select inputs to open native
+OS file dialogs. iCIMS portals are handled by a dedicated adapter (`sites/icims.py`) that scopes form filling to
+`#icims_content_iframe` to prevent outer corporate header search bars from hijacking application navigation, and ATS vendor
+job postings extract the tenant employer from the URL path when microdata is absent or records the software vendor name.
+
+
 

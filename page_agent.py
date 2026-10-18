@@ -217,6 +217,10 @@ class Control:
         r"^(attach( file)?|choose file|upload( file)?|browse|add file|select file|select one( required)?)$",
         re.IGNORECASE,
     )
+    GENERIC_DROPDOWN_NAMES = re.compile(
+        r"^(select one( required)?|select( an option)?|choose one)$",
+        re.IGNORECASE,
+    )
 
     @property
     def holds_choices(self) -> bool:
@@ -2453,7 +2457,7 @@ class PageAgent:
         answers: list[Answer] = []
         attestation_refs: set[str] = set()
         for control in controls:
-            answerable_button = (control.role == "button" and control.GENERIC_NAMES.match(control.name.strip())
+            answerable_button = (control.role == "button" and control.GENERIC_DROPDOWN_NAMES.match(control.name.strip())
                                  and bool(control.container or control.group or control.context)) \
                 or is_workday_choice_button(control)
             if (control.role not in ANSWER_ROLES and not answerable_button) or control.disabled \
@@ -2864,7 +2868,7 @@ class PageAgent:
         sorted_controls = sorted(controls, key=_ctrl_prio)
 
         for control in sorted_controls:
-            answerable_button = (control.role == "button" and control.GENERIC_NAMES.match(control.name.strip())
+            answerable_button = (control.role == "button" and control.GENERIC_DROPDOWN_NAMES.match(control.name.strip())
                                  and bool(control.container or control.group or control.context)) \
                 or is_workday_choice_button(control)
 

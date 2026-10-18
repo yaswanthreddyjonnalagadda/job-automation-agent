@@ -92,7 +92,9 @@ _VERIFY = re.compile(
 _UNVERIFIED = re.compile(
     r"verify your (account|email|e-mail)( address)? (before|to) (you )?(sign|log) ?in|request a (new )?verification "
     r"(email|e-mail|link)|(account|email|e-mail)( address)? (is |has )?(not|n't) (been |yet )*(verified|activated|"
-    r"confirmed)|unverified (account|email)|account (may |might )?needs? (to be )?(verified|verification|activated)",
+    r"confirmed)|unverified (account|email)|account (may |might )?needs? (to be )?(verified|verification|activated)|"
+    r"we('ve| have)? sent (you )?(an? )?(?:verification |activation )?(?:email|e-mail|link|message)|"
+    r"(?:verification|activation) (?:email|e-mail|link) (?:has been |was )?sent",
     re.IGNORECASE)
 _CREATE = re.compile(r"\bcreate (an |your )?account\b|\bregister\b|\bsign ?up\b", re.IGNORECASE)
 _SIGN_IN = re.compile(r"\bsign ?in\b|\blog ?in\b", re.IGNORECASE)
@@ -199,7 +201,7 @@ def read_state(snapshot: str, password_boxes: Optional[int] = None) -> AccountSt
     if wants_code:
         return state(CODE_ENTRY, _first(_CODE, texts))
     said = _first(_VERIFY, texts)
-    if said and not passwords:
+    if said and not passwords and not _application_fields(snapshot):
         return state(VERIFY_EMAIL, said)
     if step and int(step.group(1)) >= 1 and not passwords and not on_account_step_is_current(snapshot):
         return state(SIGNED_IN, step.group(0))
@@ -252,8 +254,8 @@ def says_create(headings) -> bool:
 
 def _application_fields(snapshot: str) -> bool:
     # 'Email address' is a sign-in box, not a street address.
-    return bool(re.search(r'- (textbox|combobox) "[^"]*(first name|last name|phone|street address|address line|'
-                          r'home address|resume)', snapshot or "", re.IGNORECASE))
+    return bool(re.search(r'- (textbox|combobox|button) "[^"]*(first name|last name|phone|street address|address line|'
+                          r'home address|resume|cv)', snapshot or "", re.IGNORECASE))
 
 
 # ---------------------------------------------------------------------------

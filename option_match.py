@@ -170,7 +170,8 @@ def _best_option(options: list[str], answer: str) -> Optional[int]:
     #    choices, or none, and there is no answer. A Yes is never read this way: several choices can mean yes.
     if want in ("no", "none", "never"):
         return _only_one([i for i, o in real if _SAYS_NO.match(plain(o)) and not _DECLINES.search(plain(o))])
-    return None
+    # 6. numeric / salary / experience range buckets (e.g. '$111,000 - $120,000/yr' for '120000')
+    return _numeric_range_match(real, answer)
 
 
 # "I don't wish to answer" opens like a no, and is not one.
@@ -180,3 +181,84 @@ _DECLINES = re.compile(r"\b(?:wish|want|prefer|choose|like)\s+(?:not\s+)?to\s+(?
 
 _SAYS_NO = re.compile(r"^(?:no|not|never|none|neither|i\s+(?:have|had|do|did|am|was|will)\s+not|"
                       r"i\s+(?:havent|hadnt|dont|didnt|wasnt|wont|am\s+not))\b")
+
+
+def _parse_val(text: str) -> Optional[float]:
+    """Extract a single numeric value from a currency/number string like '$120,000', '120k', '125000'."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    clean_letters = re.sub(
+        r"[\s\$,€£¥kK+/\-–—.]|\b(?:yr|year|years|month|months|hr|hour|hours|per|annual|base|salary|exp|experience)\b",
+        "", text, flags=re.I)
+    if clean_letters and not clean_letters.isdigit():
+        return None
+    m = re.search(r"(\d+(?:,\d{3})*(?:\.\d+)?)\s*([kK])?", text)
+    if not m:
+        return None
+    num = float(m.group(1).replace(",", ""))
+    if m.group(2):
+        num *= 1000
+    return num
+
+
+def _parse_range_option(text: str) -> Optional[tuple[float, float]]:
+    """Parse range boundaries (low, high) from an option like '$111,000 - $120,000/yr', '< $20k', or '5+ years'."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    # 1. Range: A to B or A - B
+    m_range = re.search(
+        r"(\$?\s*\d+(?:,\d{3})*(?:\.\d+)?\s*[kK]?)\s*(?:-|–|—|\bto\b)\s*(\$?\s*\d+(?:,\d{3})*(?:\.\d+)?\s*[kK]?)",
+        text)
+    if m_range:
+        low = _parse_val(m_range.group(1))
+        high = _parse_val(m_range.group(2))
+        if low is not None and high is not None:
+            return (min(low, high), max(low, high))
+    # 2. Lower bound only: '300,000+', 'over $300k', '> 5'
+    m_lower = re.search(
+        r"(?:over|more than|greater than|>)\s*(\$?\s*\d+(?:,\d{3})*(?:\.\d+)?\s*[kK]?)|"
+        r"(\$?\s*\d+(?:,\d{3})*(?:\.\d+)?\s*[kK]?)\s*(?:\+|and (?:above|more)|or more)",
+        text, re.I)
+    if m_lower:
+        val_str = m_lower.group(1) or m_lower.group(2)
+        low = _parse_val(val_str)
+        if low is not None:
+            return (low, float("inf"))
+    # 3. Upper bound only: 'Below $20,000', '< 1 year', 'under 30k'
+    m_upper = re.search(
+        r"(?:below|under|less than|up to|<)\s*(\$?\s*\d+(?:,\d{3})*(?:\.\d+)?\s*[kK]?)",
+        text, re.I)
+    if m_upper:
+        high = _parse_val(m_upper.group(1))
+        if high is not None:
+            return (0.0, high)
+    return None
+
+
+def _numeric_range_match(real: list[tuple[int, str]], answer: str) -> Optional[int]:
+    target = _parse_val(answer)
+    if target is None:
+        return None
+    ranges = []
+    for i, o in real:
+        rng = _parse_range_option(o)
+        if rng:
+            ranges.append((i, rng[0], rng[1], o))
+    if len(ranges) < 2:
+        return None
+    matching = []
+    for i, low, high, o in ranges:
+        if low <= target <= high:
+            matching.append(i)
+    if len(matching) == 1:
+        return matching[0]
+    if len(matching) > 1:
+        for idx in matching:
+            entry = next((e for e in ranges if e[0] == idx), None)
+            if entry and entry[1] <= target < entry[2]:
+                return idx
+        return matching[0]
+    return None
+
