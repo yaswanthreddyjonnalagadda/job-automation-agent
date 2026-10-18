@@ -89,6 +89,10 @@ class Writers:
         if name.startswith("__"):
             raise AttributeError(name)
         if not self._found:
+            if name not in DOCUMENTS:
+                # A probe for anything else (hasattr(brain, "cost_summary")) is answered "absent": a non-
+                # AttributeError here went through hasattr and stopped the run before the browser opened (f190).
+                raise AttributeError(name)
             from claude_integration import ClaudeIntegrationError
             raise ClaudeIntegrationError("no writer has a key in Settings -- your own resume is attached as it is")
         if name not in DOCUMENTS:

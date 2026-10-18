@@ -82,11 +82,23 @@ def _only_one(hits: list[int]) -> Optional[int]:
 
 # Rows that differ only in what the applicant would be saying about sponsorship (f184).
 _SPONSORED = re.compile(
-    r"\bwith\s+(?:company\s+|employer\s+|visa\s+)?sponsorship\b|\brequire\w*\s+(?:visa\s+)?sponsorship\b"
+    r"\bwith\s+(?:company\s+|employer\s+|visa\s+)?sponsorship\b|\b(?:require|need)\w*\s+(?:visa\s+)?sponsorship\b"
     r"|\bsponsorship\s+(?:is\s+)?required\b", re.IGNORECASE)
 _UNRESTRICTED = re.compile(
     r"\bwithout\s+(?:any\s+)?(?:restrictions?|sponsorship)\b|\bno\s+(?:visa\s+)?sponsorship\b"
-    r"|\b(?:does|do)\s+not\s+require\s+(?:visa\s+)?sponsorship\b", re.IGNORECASE)
+    r"|\b(?:(?:does|do|will)\s+not|don'?t|won'?t)\s+(?:now\s+or\s+in\s+the\s+future\s+)?(?:require|need)\s+"
+    r"(?:visa\s+)?sponsorship\b", re.IGNORECASE)
+
+
+def sponsorship_said(text: str) -> Optional[bool]:
+    """What an option says the applicant needs: True for sponsorship ("No, I need sponsorship now", "Yes, with company
+    sponsorship"), False for none ("Yes, without restrictions", "I do not need sponsorship"), None when it does not
+    speak of sponsorship. The one reading of such rows, for choosing one and for checking one (f184, f191)."""
+    if _UNRESTRICTED.search(text or ""):
+        return False
+    if _SPONSORED.search(text or ""):
+        return True
+    return None
 
 
 def sponsorship_choice(options: list[str], answer: str, needs_sponsorship: Optional[bool]) -> tuple[bool, Optional[int]]:
@@ -96,8 +108,8 @@ def sponsorship_choice(options: list[str], answer: str, needs_sponsorship: Optio
     is chosen -- the question stays the owner's. Lists that do not speak of sponsorship are not decided here."""
     if not re.fullmatch(r"\s*yes\.?\s*", answer or "", re.IGNORECASE):
         return False, None
-    sponsored = [i for i, o in enumerate(options) if _SPONSORED.search(o)]
-    unrestricted = [i for i, o in enumerate(options) if _UNRESTRICTED.search(o) and not _SPONSORED.search(o)]
+    sponsored = [i for i, o in enumerate(options) if sponsorship_said(o) is True]
+    unrestricted = [i for i, o in enumerate(options) if sponsorship_said(o) is False]
     if not (sponsored or unrestricted):
         return False, None
     if needs_sponsorship is None:

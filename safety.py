@@ -469,8 +469,16 @@ def legal_answer_conflicts(form_fields: list[dict], profile) -> list[str]:
                 conflicts.append(f"{question[:90]} -- the form says {value[:30]!r}, but you do not need sponsorship")
         elif _AUTHORIZED_Q.search(question):
             said_no = bool(re.match(r"^\W*(no|n)\b", value, re.IGNORECASE))
+            # "No, I need sponsorship now" answers what the applicant needs, not whether they may work: it is checked
+            # against the sponsorship the profile says (Datadog, 18 October; f191). A bare "No" is still a denial.
+            import option_match
+            sponsorship = option_match.sponsorship_said(value) if value else None
             if not value:
                 conflicts.append(f"{question[:90]} -- not answered")
+            elif sponsorship is not None:
+                if sponsorship != needs_sponsorship:
+                    conflicts.append(f"{question[:90]} -- the form says {value[:30]!r}, but you "
+                                     f"{'need' if needs_sponsorship else 'do not need'} sponsorship")
             elif authorized and said_no:
                 conflicts.append(f"{question[:90]} -- the form says {value[:30]!r}, but you are authorized to work")
     return conflicts

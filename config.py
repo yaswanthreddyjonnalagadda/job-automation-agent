@@ -313,6 +313,9 @@ class AppConfig:
 # A form's box for one of these is left blank; any other empty field is a question for the owner.
 BLANK_MEANS_NONE = frozenset({"middle_name", "preferred_name", "prefix", "security_clearance_level",
                               "phone_home", "phone_work", "portfolio_url", "address_line2"})
+# When a form REQUIRES one of those, the profile field that truthfully stands in for "none" (f192: a person with no
+# preferred name is called by their first name). A required box with no stand-in here stays for the owner.
+REQUIRED_STAND_IN = {"preferred_name": "first_name"}
 
 
 def get_user_profile() -> UserProfile:

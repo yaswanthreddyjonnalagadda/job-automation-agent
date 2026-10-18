@@ -67,7 +67,7 @@ import option_match
 import repeated_entries
 import login_guard
 import open_answers
-from config import BLANK_MEANS_NONE, resume_to_attach, site_prefill_policy
+from config import BLANK_MEANS_NONE, REQUIRED_STAND_IN, resume_to_attach, site_prefill_policy
 from interaction import (
     click_resiliently,
     commit_draft_cards,
@@ -788,7 +788,7 @@ _REQUIRED_STAR = re.compile(r"^\s*[*✱]|[*✱]\s*:?\s*$")
 def required_questions(snapshot: str) -> set[str]:
     """The questions a form marks with a star."""
     marked = set(re.findall(r'- generic "([^"]{2,120})" \[ref=[\w-]+\]: "\*"', snapshot or ""))
-    marked |= {m.strip() for m in re.findall(r'- generic \[ref=[\w-]+\]: ([^\n]{2,120}?) \*$',
+    marked |= {m.strip() for m in re.findall(r'- generic \[ref=[\w-]+\]: ([^\n]{2,120}?) ?\*$',
                                              snapshot or "", re.MULTILINE)}
     return {" ".join(q.split()) for q in marked if q.strip()}
 
@@ -2404,27 +2404,40 @@ class PageAgent:
         return self._profile_answer_library
 
     def library_answer(self, question: str, exact_only: bool = False) -> str:
-        """The explicitly saved answer matching *question*, if any."""
+        """The explicitly saved answer matching *question*, if any.
+
+        When several match, the most specific answers (f194): a saved exact question first, then the pattern that
+        covers the most of the question -- never simply the first in the file (re:status answered the OPT question
+        "Graduated" over its own saved "No")."""
+        best: tuple[float, object] | None = None
         for key, raw_value in self._answer_library().items():
             if not isinstance(key, str):
                 continue
             is_regex = key.startswith("re:")
             if exact_only and is_regex:
                 continue
-            matches = _same_question(key, question) if not is_regex else False
             if is_regex:
                 try:
-                    matches = bool(re.search(key[3:], question or "", re.IGNORECASE))
+                    found = re.search(key[3:], question or "", re.IGNORECASE)
                 except re.error:
                     logger.warning("Ignoring invalid answer-library pattern %r", key[:80])
-                    matches = False
-            if not matches:
-                continue
-            value = raw_value.get("value", "") if isinstance(raw_value, dict) else raw_value
-            if isinstance(value, bool):
-                return "Yes" if value else "No"
-            return str(value or "").strip()
-        return ""
+                    found = None
+                if not found:
+                    continue
+                score = float(found.end() - found.start())
+            else:
+                if not _same_question(key, question):
+                    continue
+                score = float("inf")
+            if best is None or score > best[0]:
+                best = (score, raw_value)
+        if best is None:
+            return ""
+        raw_value = best[1]
+        value = raw_value.get("value", "") if isinstance(raw_value, dict) else raw_value
+        if isinstance(value, bool):
+            return "Yes" if value else "No"
+        return str(value or "").strip()
 
     @staticmethod
     def _attestation_text(control: Control) -> str:
@@ -2693,6 +2706,9 @@ class PageAgent:
                 replacement = "N/A" if "*" in question or "required" in question.lower() else ""
                 return replacement, "profile.middle_name"
             if str(src).startswith("profile.") and str(src).split(".", 1)[1] in BLANK_MEANS_NONE:
+                stand_in = self._required_stand_in(str(src).split(".", 1)[1], control)
+                if stand_in:
+                    return stand_in
                 return "", src               # the profile's word that there is none (no preferred name)
 
         # 3. Regex patterns from data/profile_answers.json
@@ -2852,6 +2868,7 @@ class PageAgent:
         """
         filled, open_questions = 0, []
         handled_groups: set[str] = set()
+        self._required_now = set(required or ())
 
         # Topological sorting: Country -> State -> City -> Others
         def _ctrl_prio(ctrl):
@@ -4930,6 +4947,24 @@ class PageAgent:
         if _REQUIRED_STAR.search(control.question or "") or _REQUIRED_STAR.search(control.name or ""):
             return False
         return not any(q.endswith("*") and _same_question(q.rstrip("*"), control.question) for q in still_open or ())
+
+    def _asked_as_required(self, control: Control) -> bool:
+        """Whether the form marks this box required: a star on its label, or the page's starred questions."""
+        if _REQUIRED_STAR.search(control.question or "") or _REQUIRED_STAR.search(control.name or ""):
+            return True
+        if re.search(r"\brequired\b", control.name or "", re.IGNORECASE):
+            return True
+        return any(_same_question(q, control.question) for q in (getattr(self, "_required_now", None) or ()))
+
+    def _required_stand_in(self, field: str, control: Control) -> tuple[str, str] | None:
+        """(value, source) for a REQUIRED box whose profile field is blank on purpose, from config.REQUIRED_STAND_IN
+        (f192: Datadog's required "Preferred First Name*" was answered "" and emptied). None when the box is optional,
+        has no stand-in, or the stand-in is blank too."""
+        other = REQUIRED_STAND_IN.get(field)
+        if not other or not self._asked_as_required(control):
+            return None
+        value = str(getattr(self.profile, other, "") or "").strip()
+        return (value, f"profile.{other}") if value else None
 
     def _profile_says_none(self, source: str) -> bool:
         """Whether a blank answer is the profile's own word: its field exists and is empty on purpose (no middle

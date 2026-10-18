@@ -1476,3 +1476,18 @@ job postings extract the tenant employer from the URL path when microdata is abs
 
 
 
+
+## Datadog audit fixes (f190-f194)
+
+- **No writer key no longer stops the run (f190).** With no AI writer set in Settings, the run used to stop before the
+  browser opened. It now goes on and attaches your own resume as it is, as it always promised.
+- **"No, I need sponsorship now" is your true answer, not a conflict (f191).** When a work-authorization list's rows say
+  what you need ("No, I need sponsorship now", "Yes, with company sponsorship", "Yes, without restrictions"), the agent
+  checks the chosen row against whether your profile says you need sponsorship -- not against its first word. A bare
+  "No" to "Are you authorized to work?" is still flagged.
+- **A required "Preferred name" takes your first name (f192).** If your profile has no preferred name and the form
+  requires one (a star, or marked required), the agent types your first name and leaves it there. An optional
+  preferred-name box is still left blank. A label written "Name*" (no space before the star) now counts as required.
+- **The review stop waits for you (f193).** A run's "waiting" note no longer overwrites its own Continue/Stop signal.
+- **Your most specific saved answer wins (f194).** When several of your saved answers match a question, the one saved
+  for exactly that question -- or the one that covers most of it -- answers it, not whichever comes first in the file.

@@ -254,7 +254,9 @@ class FramedPage:
 def waiting_note_for(signal_path: Path) -> Path:
     """The note beside a signal file that says its run is waiting for the owner (_waiting_<name>.txt)."""
     signal_path = Path(signal_path)
-    return signal_path.with_name(signal_path.name.replace("_signal_", "_waiting_", 1))
+    note = signal_path.with_name(signal_path.name.replace("_signal_", "_waiting_", 1))
+    # A name without "_signal_" came back unchanged: the note overwrote the signal and was read as one (f193).
+    return note if note != signal_path else signal_path.with_name("_waiting_" + signal_path.name)
 
 
 POSTING_WORDS = re.compile(
