@@ -12,3 +12,4 @@
   ],
   "prevention": "Whenever reading or clearing durable application checkpoints, always check both the human-readable slug key and assistant.submission_key hash aliases."
 }
+
