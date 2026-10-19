@@ -96,7 +96,7 @@ _UNVERIFIED = re.compile(
     r"we('ve| have)? sent (you )?(an? )?(?:verification |activation )?(?:email|e-mail|link|message)|"
     r"(?:verification|activation) (?:email|e-mail|link) (?:has been |was )?sent",
     re.IGNORECASE)
-_CREATE = re.compile(r"\bcreate (an |your )?account\b|\bregister\b|\bsign ?up\b", re.IGNORECASE)
+_CREATE = re.compile(r"\bcreate (an |your )?account\b|\bregister\b|\bsign ?up\b|\bcreate (your |a )?profile\b", re.IGNORECASE)
 _SIGN_IN = re.compile(r"\bsign ?in\b|\blog ?in\b", re.IGNORECASE)
 _WAYS_IN = re.compile(r"(?:sign|log)[\s-]?(?:in|on|up) (?:with|using|via) (google|email|linkedin|apple|microsoft|"
                       r"facebook)|continue with (google|email)|"

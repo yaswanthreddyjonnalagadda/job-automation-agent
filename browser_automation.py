@@ -3847,6 +3847,7 @@ class JobApplicationAssistant:
     def handle_auth_gate(self, page: Page, email: str) -> bool:
         """Handle an employer ATS account gate without guessing its state."""
         try:
+            page = self.open_embedded_form(page)
             candidate_state = self.adapter(page).candidate_account_state(page)
             if candidate_state == "verification":
                 logger.warning("ACCOUNT_HELD: Workday is asking for account verification")
@@ -5020,7 +5021,7 @@ class JobApplicationAssistant:
     @staticmethod
     def _create_account_control(root):
         pattern = re.compile(
-            r"^\s*(create (an |a new |your |my )?account|register( now)?|sign up|new user\??)\s*$", re.IGNORECASE
+            r"^\s*(create (an |a new |your |my )?account|create (your |a |my )?profile|register( now)?|sign up|submit profile|new user\??)\s*$", re.IGNORECASE
         )
         for role in ("link", "button"):
             loc = root.get_by_role(role, name=pattern)
@@ -5428,7 +5429,7 @@ class JobApplicationAssistant:
                     logger.debug("Could not read a consent box back: %s", str(exc).splitlines()[0][:100])
 
             submit = page.get_by_role(
-                "button", name=re.compile(r"^\s*(create (my )?account|register|sign up|submit)\s*$", re.IGNORECASE)
+                "button", name=re.compile(r"^\s*(create (my |your )?account|create (my |your )?profile|register|sign up|submit|submit profile)\s*$", re.IGNORECASE)
             )
             button = next((submit.nth(i) for i in range(submit.count()) if submit.nth(i).is_visible()), None)
             if button is None and self._heading_says_create(page):
@@ -5731,7 +5732,7 @@ class JobApplicationAssistant:
     # and pressed Create Account with the passwords alone (28 September).
     _EMAIL_BOX_JS = r"""(scope) => {
         const root = scope || document;
-        const want = /e-?mail|user\s*-?name|user\s*id|login\s*id/i;
+        const want = /e-?mail|user\s*-?name|user\s*id|login(\s*id)?\b/i;
         const skip = new Set(['password', 'hidden', 'checkbox', 'radio', 'submit', 'button', 'file',
                               'image', 'reset', 'range', 'color']);
         document.querySelectorAll('[data-agent-email-box]').forEach(e => e.removeAttribute('data-agent-email-box'));

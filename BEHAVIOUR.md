@@ -1507,3 +1507,12 @@ watches the browser page progression. As soon as the site submits and navigates 
 (the URL path changes or password inputs disappear), the agent immediately carries on with the application without
 waiting indefinitely, even if the site keeps third-party CAPTCHA scripts or invisible widget frames embedded in its layout.
 
+## Owner Continue clears uncertain account creation marker (f197)
+
+When an account creation attempt was interrupted (leaving an advisory `account_creation_dispatched` marker in the
+checkpoint) and the agent stopped to ask you to verify whether the account exists on the site, clicking Continue
+on the dashboard or signal file now clears the pending marker so the agent can execute the owner-approved retry,
+rather than repeatedly stopping with the same advisory note. Additionally, iCIMS Candidate Profile builder forms
+inside `#icims_content_iframe` are classified as registration and their "Submit Profile" button is properly targeted.
+
+

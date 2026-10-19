@@ -2348,6 +2348,16 @@ def main() -> None:
                 continue
 
             if decision == "continue":
+                if hasattr(tracker, "read_checkpoint") and hasattr(tracker, "write_checkpoint"):
+                    try:
+                        cp = tracker.read_checkpoint(key)
+                        if cp and (cp.get("pending_action") or "").startswith("account_creation_dispatched@"):
+                            logger.info("OWNER_CONTINUE: clearing pending account creation marker %s after owner review",
+                                        cp.get("pending_action"))
+                            updated = checkpoint.merge_update(cp, application_key=key, pending_action="")
+                            tracker.write_checkpoint(key, updated)
+                    except Exception as exc:
+                        logger.warning("Could not clear pending account creation on continue: %s", exc)
                 advanced = assistant.click_next_step(page)
                 if not advanced:
                     if getattr(assistant, "_stuck_on", "") == "BLOCKED_VALIDATION_LOOP":

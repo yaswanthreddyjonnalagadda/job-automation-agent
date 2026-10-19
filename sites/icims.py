@@ -76,3 +76,31 @@ class IcimsAdapter(SiteAdapter):
             pass
         return None
 
+    def candidate_account_state(self, page) -> str:
+        """Classifies iCIMS Candidate Profile / account screens."""
+        scope = self._scope(page)
+        try:
+            body = scope.locator("body").inner_text(timeout=3_000) or ""
+            password_count = scope.locator("input[type=password]:visible").count()
+        except Exception:
+            return ""
+        if password_count >= 2 or (password_count >= 1 and re.search(r"\b(create|build|submit)\s+(your\s+)?profile\b", body, re.IGNORECASE)):
+            return "registration"
+        if password_count == 1 and re.search(r"\b(log\s*in|returning candidate|sign\s*in)\b", body, re.IGNORECASE):
+            return "sign_in"
+        return ""
+
+    def create_account_extras(self, assistant, page) -> None:
+        """Fills iCIMS Login box if not already filled by email typing."""
+        scope = self._scope(page)
+        try:
+            profile = getattr(assistant, "_profile", None)
+            email = getattr(profile, "email", "")
+            if email:
+                login_box = scope.locator("input#login, input[name='login'], input[id*='login' i], input[name*='login' i]").first
+                if login_box.count() and login_box.is_visible() and not (login_box.input_value() or "").strip():
+                    login_box.fill(email)
+        except Exception:
+            pass
+
+
