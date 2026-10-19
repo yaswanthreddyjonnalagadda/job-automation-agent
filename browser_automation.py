@@ -5123,6 +5123,7 @@ class JobApplicationAssistant:
             folder = Path("logs") / "account_failures"
             folder.mkdir(parents=True, exist_ok=True)
             stem = f"{datetime.now():%Y%m%d_%H%M%S}_ACCOUNT"
+            diagnostics.capture_form_state(page, folder / f"{stem}.state.json")
             diagnostics.capture_safe_screenshot(page, folder / f"{stem}.png")
             diagnostics.write_safe_text(folder / f"{stem}.txt",
                 diagnostics.sanitize_snapshot(page.locator("body").aria_snapshot(mode="ai")))
@@ -8038,6 +8039,24 @@ class JobApplicationAssistant:
                 return
             time.sleep(min(0.3, remaining))
 
+    def _captcha_observation_page(self, page):
+        """Observe an embedded ATS without opening/navigating it during handoff.
+
+        apply_flow hands the wait the outer tab, while account creation works in
+        the application frame. Reuse the adapter's frame selection and FramedPage's
+        replacement tracking so the wait sees the same challenge and form.
+        """
+        if page is None or getattr(page, "top", None) is not None:
+            return page
+        try:
+            find_frame = getattr(self.adapter(page), "find_application_frame", None)
+            frame = find_frame(page) if callable(find_frame) else None
+            if frame is not None:
+                return FramedPage(page, frame)
+        except Exception:
+            pass
+        return page
+
     def _wait_for_signal(
         self, signal_path: Path, poll_seconds: float = 2.0, timeout_seconds: float = 1800.0,
         page: Optional[Page] = None, left_form_seconds: float = 600.0, for_captcha: bool = False,
@@ -8090,15 +8109,18 @@ class JobApplicationAssistant:
         blanks_checked_at, filled_since, last_look = 0.0, None, None
         captcha_start_path = ""
         captcha_start_passwords = 0
+        captcha_page = self._captcha_observation_page(page)
+        captcha_top = getattr(captcha_page, "top", None)
+        captcha_top_url = getattr(captcha_top, "url", "")
         if page is not None:
             try:
-                cur_url = getattr(page, "url", "") or ""
+                cur_url = getattr(captcha_page, "url", "") or ""
                 captcha_start_path = urlparse(cur_url).path
-                captcha_start_passwords = page.locator("input[type=password]").count()
+                captcha_start_passwords = captcha_page.locator("input[type=password]").count()
             except Exception:
                 pass
             try:
-                captcha_seen = bool(safety.captcha_visible(page))
+                captcha_seen = bool(safety.captcha_visible(captcha_page))
             except Exception:
                 captcha_seen = False
             waiting_on_captcha = waiting_on_captcha or captcha_seen
@@ -8142,10 +8164,19 @@ class JobApplicationAssistant:
                         return "refresh"
                     continue
                 if waiting_on_captcha:
+                    # A detached/replaced frame temporarily falls back to the outer
+                    # document. Its lack of password boxes is not progress evidence.
+                    if captcha_top is not None and captcha_top.url == captcha_top_url:
+                        try:
+                            if captcha_page.frame() == captcha_top.main_frame:
+                                captcha_gone_polls = 0
+                                continue
+                        except Exception:
+                            continue
                     try:
-                        cur_url = getattr(page, "url", "") or ""
+                        cur_url = getattr(captcha_page, "url", "") or ""
                         cur_path = urlparse(cur_url).path
-                        cur_passwords = page.locator("input[type=password]").count()
+                        cur_passwords = captcha_page.locator("input[type=password]").count()
                         page_moved_on = bool(
                             (captcha_start_path and cur_path and cur_path != captcha_start_path)
                             or (captcha_start_passwords > 0 and cur_passwords == 0)
@@ -8159,7 +8190,7 @@ class JobApplicationAssistant:
                         return "refresh"
 
                     try:
-                        visible = bool(safety.captcha_visible(page))
+                        visible = bool(safety.captcha_visible(captcha_page))
                     except Exception:
                         visible = None      # mid-navigation: look again next poll
                     if visible:

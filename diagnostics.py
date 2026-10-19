@@ -145,6 +145,62 @@ def sanitize_snapshot(text: str, context: PrivacyContext | None = None) -> str:
     return '\n'.join(out)
 
 
+def capture_form_state(page, path: Path) -> bool:
+    """Save boolean/count evidence for a silent form stop, never labels or values.
+
+    Screenshots and text projections can conceal the reason a form stayed open.
+    Inspect each non-challenge frame for native validity and guard denial kinds.
+    This is observation only: no checkValidity(), submission, or field changes.
+    """
+    import safety
+    kinds = {'click', 'enter', 'form_submit', 'javascript_form_submit',
+             'javascript_request_submit', 'credential_shape_changed'}
+    flags = ('valueMissing', 'typeMismatch', 'patternMismatch', 'tooLong', 'tooShort',
+             'rangeUnderflow', 'rangeOverflow', 'stepMismatch', 'badInput', 'customError')
+    frames = getattr(page, 'frames', None) or [page]
+    evidence = []
+    for index, frame in enumerate(frames[:30]):
+        if safety.is_captcha_frame(getattr(frame, 'url', '')):
+            continue
+        item = {'frame_index': index, 'readable': False}
+        try:
+            raw = frame.evaluate("""flags => {
+                const shown = e => !!e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
+                const fields = [...document.querySelectorAll('input,select,textarea')].slice(0, 500);
+                const submits = [...document.querySelectorAll('button[type=submit],input[type=submit]')];
+                const denials = window.__jaaSubmissionGuardV0?.denials() || [];
+                return {
+                    fields: fields.map(e => ({visible: shown(e), required: !!e.required,
+                        disabled: !!e.disabled, filled: !!e.value, password: e.type === 'password',
+                        valid: e.validity ? e.validity.valid : true,
+                        failures: flags.filter(f => e.validity?.[f] === true)})),
+                    submit_count: submits.length,
+                    disabled_submits: submits.filter(e => e.disabled).length,
+                    visible_alerts: [...document.querySelectorAll('[role=alert]')].filter(shown).length,
+                    denial_kinds: denials.slice(-100).map(d => d.kind)
+                };
+            }""", list(flags))
+            # Only fixed keys, booleans, bounded counts and known enums cross the
+            # boundary. Even unexpected browser-controlled strings are discarded.
+            item['readable'] = True
+            item['fields'] = [
+                {**{key: field.get(key) is True for key in
+                    ('visible', 'required', 'disabled', 'filled', 'password', 'valid')},
+                 'failures': [flag for flag in flags if flag in field.get('failures', [])]}
+                for field in raw.get('fields', [])[:500] if type(field) is dict]
+            for key in ('submit_count', 'disabled_submits', 'visible_alerts'):
+                count = raw.get(key)
+                if type(count) is int and 0 <= count <= 100000:
+                    item[key] = count
+            denials = raw.get('denial_kinds', [])
+            item['guard_denials'] = {kind: denials.count(kind) for kind in sorted(kinds)
+                                    if kind in denials}
+        except Exception:
+            item['readable'] = False
+        evidence.append(item)
+    return write_safe_text(path, json.dumps({'schema_version': 1, 'frames': evidence}))
+
+
 def sanitize_console_logs(entries) -> list[dict]:
     result = []
     if type(entries) is not list:
@@ -247,6 +303,8 @@ def _regular_path(path: Path) -> bool:
 
 def _safe_artifact_name(name):
     if name in DIAGNOSTIC_FILES or DIAGNOSTIC_PATTERNS.fullmatch(name):
+        return True
+    if re.fullmatch(r'(?:stopped_[0-9_]+|[0-9_]+_ACCOUNT)\.state\.json', name):
         return True
     match = re.fullmatch(r'[0-9_]+_([A-Za-z_]+)\.(?:txt|png)', name)
     if not match:

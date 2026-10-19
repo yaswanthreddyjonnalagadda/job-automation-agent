@@ -141,4 +141,3 @@ def test_apply_flow_continue_clears_all_key_aliases():
 
     cp = tracker.read_checkpoint(submission_key)
     assert cp["pending_action"] == ""
-

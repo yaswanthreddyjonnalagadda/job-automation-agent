@@ -1455,7 +1455,15 @@ class PageAgent:
         if owner_acted:
             host = (getattr(self, "_current_host", "") or urlparse(getattr(getattr(self, "job", None), "url", "")).netloc).lower()
             login_guard.owner_resumed(host or "")
+            pending, unavailable = self._pending_account_creation(host)
             self._resolve_pending_account_creation(host)
+            if pending and not unavailable:
+                still_pending, unavailable = self._pending_account_creation(host)
+                if not still_pending and not unavailable:
+                    # Owner review resolved an uncertain attempt, not a confirmed
+                    # account. Clear the matching in-memory retry hold as well.
+                    # Keep confirmed creation history for verification recovery.
+                    self._created_at.discard(host)
         self._google_reloads = {}   # ... and give a dead Google button its fresh loads again
         self.account_blocker = ""
         self._account_seen = {}

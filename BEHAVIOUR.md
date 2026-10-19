@@ -1544,3 +1544,10 @@ When resuming an application after owner handoff or restart, `apply_flow.py` and
 clear any pending `account_creation_dispatched` checkpoint markers across all key aliases (the human-readable slug
 key and the 64-character SHA-256 submission key). This prevents runs from getting trapped in an infinite
 `ACCOUNT_CREATION_UNCERTAIN` loop when resuming after an interrupted account creation or CAPTCHA step.
+
+
+On embedded ATS account forms, CAPTCHA handoff observes the application frame even when the outer page stays unchanged. It follows a replaced frame and keeps waiting if the frame temporarily disappears. The wait also retains an explicit CAPTCHA reason from an account-creation stop. No CAPTCHA is solved by the agent.
+
+An explicit owner Continue that successfully clears a pending account-creation checkpoint also clears the matching in-memory attempt hold. Automatic refresh, failed checkpoint writes, and confirmed creation history do not receive this reset.
+
+Stopped-page and account-failure captures include a `.state.json` report of field validity flags, filled/required/disabled booleans, submit counts, visible-alert counts and known submission-guard denial types. This report excludes field values, labels, URLs, and CAPTCHA-frame contents, and follows the existing artifact retention rules.

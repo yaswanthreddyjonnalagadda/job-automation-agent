@@ -1,0 +1,20 @@
+{
+  "id": "f204",
+  "date": "2026-10-19",
+  "site": "iCIMS / Mutual of Enumclaw; shared authentication and handoff paths",
+  "class": "Sanitized stop artifacts omit structural evidence needed to diagnose a silent form stall",
+  "symptom": "Mutual of Enumclaw profile stays open without a visible error according to the owner; saved screenshots are fully masked and text exports hide most labels and values.",
+  "root_cause": "Stop capture saves masked image/text only; browser validity flags, disabled submit state and browser guard denial kinds are not captured alongside the stop.",
+  "why_tests_missed": "Privacy tests enforce redaction but do not require useful structural evidence for silent authentication stalls.",
+  "fix": "Write a bounded .state.json alongside stop and account-failure evidence. Persist only booleans, counts and known validity/denial enums from non-challenge frames; no labels, values, URLs, secrets or CAPTCHA contents.",
+  "evidence": [
+    "output/Mutual_of_Enumclaw_Insurance_Company_Network_Engineer/stopped_20261019_004005.txt",
+    "output/Mutual_of_Enumclaw_Insurance_Company_Network_Engineer/stopped_20261019_004005.png"
+  ],
+  "validation": "Synthetic invalid fields, disabled submit, guard denial and private-string sentinels; new reports only become available in a run using the patch.",
+  "tests": [
+    "tests/test_embedded_captcha_handoff.py::test_stop_evidence_preserves_validity_and_guard_reason_without_private_text",
+    "tests/test_embedded_captcha_handoff.py::test_stop_evidence_never_inspects_challenge_contents"
+  ],
+  "prevention": "Preserve decision-relevant structural facts when text and screenshots must be redacted."
+}

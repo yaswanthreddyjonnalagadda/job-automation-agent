@@ -601,6 +601,7 @@ def save_stop_page(page, job_dir: Path) -> None:
     try:
         stem = Path(job_dir) / f"stopped_{datetime.now():%Y%m%d_%H%M%S}"
         stem.parent.mkdir(parents=True, exist_ok=True)
+        diagnostics.capture_form_state(page, stem.with_suffix('.state.json'))
         diagnostics.capture_safe_screenshot(page, stem.with_suffix(".png"))
         diagnostics.write_safe_text(stem.with_suffix(".txt"),
             diagnostics.sanitize_snapshot(page.locator("body").aria_snapshot(mode="ai")))
@@ -1320,7 +1321,12 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             logger.info("  %s", reason)
         for note in agent.notes[:5]:
             logger.info("  worth checking: %s", note)
-        if outcome.kind == "captcha":
+        # Account creation can report owner_needed with a CAPTCHA reason. Use
+        # the account helper's explicit reason so a redraw at wait entry cannot lose
+        # the reason for this stop. The wait still requires live evidence.
+        waiting_for_captcha = outcome.kind == "captcha" or (
+            any("a CAPTCHA is on the form" in reason for reason in outcome.reasons))
+        if waiting_for_captcha:
             logger.info("Solve it in the browser window: the agent notices when it is gone and carries on by "
                         "itself (Continue on the dashboard works too).")
         elif any("still blank" in r for r in outcome.reasons):
@@ -1340,7 +1346,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                                   "reasons": list(outcome.reasons)[:5] or list(agent.notes)[:3]}
         try:
             decision = assistant.wait_for_signal(signal_path, timeout_seconds=args.timeout, page=page,
-                                                 for_captcha=outcome.kind == "captcha",
+                                                 for_captcha=waiting_for_captcha,
                                                  for_blanks=any("still blank" in r for r in outcome.reasons))
         except TimeoutError:
             logger.info("No instruction received; the application is left as it is, unsubmitted.")
