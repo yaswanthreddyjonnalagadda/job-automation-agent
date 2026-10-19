@@ -1530,3 +1530,10 @@ Portals like iCIMS that render profile creation and sign-in actions with `<input
 `<input type="button">` (instead of standard HTML5 `<button>` elements) are now fully recognized and
 authorized by `SubmissionGuardV0`'s credential and candidate profile creation gateways, eliminating
 false-positive click blocks when creating ATS accounts or candidate profiles.
+
+## Dynamic CAPTCHA detection after account or profile submission (f200)
+
+When submitting an account creation or candidate profile form triggers an interactive CAPTCHA modal
+(such as hCaptcha on iCIMS profile builder), the filler detects the newly presented CAPTCHA immediately
+rather than mistaking the held-open form for a generic validation failure. The run enters the dedicated
+CAPTCHA handoff loop, prompting the user and resuming as soon as the challenge is completed.

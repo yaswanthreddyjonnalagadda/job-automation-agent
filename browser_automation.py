@@ -5489,6 +5489,9 @@ class JobApplicationAssistant:
                 errors = self._visible_error_texts(page)
                 has_validation_error = self._account_form_has_validation_error(page)
             if still_on_form or has_validation_error:
+                if safety.captcha_visible(page):
+                    logger.warning("ACCOUNT_HELD: a CAPTCHA appeared on the account form -- only you can complete it")
+                    return self._account_form_failed("a CAPTCHA is on the form: only you can complete it")
                 if self._account_exists_message(page, include_body=True):
                     return self.sign_in_to_existing_account(page, email)
                 logger.warning("ACCOUNT_CREATE_FAILED: the site kept the form open%s",
