@@ -1515,4 +1515,11 @@ on the dashboard or signal file now clears the pending marker so the agent can e
 rather than repeatedly stopping with the same advisory note. Additionally, iCIMS Candidate Profile builder forms
 inside `#icims_content_iframe` are classified as registration and their "Submit Profile" button is properly targeted.
 
+## Candidate profile gateway and step finality on multi-step ATS builders (f198)
 
+ATS portals that build a candidate profile before the application form (such as iCIMS `/candidate?from=profilebuilder`)
+combine candidate contact details, file uploads, login credentials, and a button labeled "Submit Profile".
+The agent now recognizes candidate profile creation actions through a dedicated, authorized gateway that validates
+matching passwords and email while strictly enforcing that no final application submission button exists on the form.
+Furthermore, intermediate wizard step progression (e.g. iCIMS "Step 1 of 3", "Step 2 of 3") is recognized as non-final,
+ensuring multi-step registration and application flows proceed smoothly to the final review step without premature stops.

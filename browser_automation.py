@@ -3249,6 +3249,25 @@ class JobApplicationAssistant:
             }
         }
 
+        // iCIMS active step indicator: vetted against real recorded production pages
+        // (output/Mutual_of_Enumclaw_Insurance_Company_Network_Engineer/pages/*/page_*.txt).
+        // Accessible step text format: "Step N of M. <Step Name>(Current Step)"
+        const icimsStepRe = /\bstep\s+(\d+)\s+of\s+(\d+)\b.*\(current\s+step\)/i;
+        const icimsMarkers = Array.from(document.querySelectorAll("li, [role='listitem']")).filter(el => {
+            const txt = (el.textContent || '').trim();
+            return icimsStepRe.test(txt);
+        });
+        if (icimsMarkers.length === 1) {
+            const m = icimsStepRe.exec((icimsMarkers[0].textContent || '').trim());
+            if (m) {
+                const current = parseInt(m[1], 10), total = parseInt(m[2], 10);
+                if (total > 0) {
+                    if (current >= total) return "FINAL";
+                    if (visible(icimsMarkers[0])) return "NON_FINAL";
+                }
+            }
+        }
+
         // No generic, non-Workday signal is accepted as NON_FINAL authority. A second
         // closure review, 7 October 2026, found that role="progressbar" combined with
         // aria-posinset/aria-setsize (this file's own prior attempt at a stronger,
@@ -5446,6 +5465,8 @@ class JobApplicationAssistant:
             guard = getattr(self, "_submission_guard", None)
             if guard is not None and button.evaluate("e => Boolean(e.form || e.closest('form'))"):
                 clicked = guard.click_account_creation(page, button)
+                if not clicked and hasattr(guard, "click_candidate_profile"):
+                    clicked = guard.click_candidate_profile(page, button)
             else:
                 clicked = self._click_resiliently(button, timeout_ms=8_000)
             if not clicked:

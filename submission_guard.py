@@ -132,6 +132,35 @@ def _guard_script(capability: str) -> str:
           && !labels(e).some(label => safeUtilityLabel.test(label))
           && !(labels(e).length && labels(e).every(label => actionLabel.test(label))));
       };
+      // Profile helpers may authorize candidate profile creation on ATS registration steps
+      // (e.g. iCIMS Profile Builder) that collect basic identity and credentials before the application.
+      const candidateProfileControl = element => {
+        if (!(element instanceof Element) || !element.matches('button,[role=button]')
+            || !credentialForm(element) || element.disabled
+            || element.getAttribute('aria-disabled') === 'true') return false;
+        const profileLabel = /^(submit profile|create (?:your |a |my )?profile|register|create (?:my |your |an )?account)$/i;
+        if (!labels(element).length || !labels(element).some(label => profileLabel.test(label))) return false;
+        const form = credentialForm(element);
+        const controls = [...new Set([...form.elements, ...form.querySelectorAll('[role=button]')])];
+        if (form.querySelector('[contenteditable=true]')) return false;
+        const inputs = controls.filter(e => e instanceof HTMLInputElement
+          && !e.disabled && e.type !== 'hidden' && e.getClientRects().length);
+        const passwords = inputs.filter(e => e.type === 'password');
+        if (passwords.length < 1 || !passwords[0].value) return false;
+        if (passwords.length >= 2 && passwords[0].value !== passwords[1].value) return false;
+        const emails = inputs.filter(e => e.type !== 'password' && e.type !== 'checkbox'
+          && (e.type === 'email' || /e-?mail/i.test([
+            e.getAttribute('aria-label'), e.name, e.id, e.getAttribute('data-automation-id'),
+            e.placeholder, ...Array.from(e.labels || []).map(l => l.innerText),
+            ...(e.getAttribute('aria-labelledby') || '').split(/\s+/)
+              .map(id => document.getElementById(id)?.innerText || '')
+          ].join(' '))));
+        if (emails.length < 1 || !emails[0].value.trim()) return false;
+        if (controls.some(e => e !== element && labels(e).some(l => /submit application|send application/i.test(l)))) return false;
+        return true;
+      };
+      const validCredentialControl = (element, action) =>
+        action === 'candidate_profile' ? candidateProfileControl(element) : credentialControl(element, action);
       const recordDenial = (kind, element) => {
         const item = {
           sequence: ++state.sequence,
@@ -157,15 +186,15 @@ def _guard_script(capability: str) -> str:
             && element instanceof HTMLButtonElement
             && credentialForm(authorization.element) === authorization.form
             && credentialForm(element) === authorization.form
-            && credentialControl(authorization.element, authorization.credentialAction)
-            && credentialControl(element, authorization.credentialAction)) {
+            && validCredentialControl(authorization.element, authorization.credentialAction)
+            && validCredentialControl(element, authorization.credentialAction)) {
           authorization.companionClickAllowed = true;
           return true;
         }
         if (authorization.element !== element) return false;
         if (authorization.credentialAction
             && (authorization.clickAllowed || credentialForm(element) !== authorization.form
-              || !credentialControl(element, authorization.credentialAction))) return false;
+              || !validCredentialControl(element, authorization.credentialAction))) return false;
         authorization.clickAllowed = true;
         setTimeout(() => {
           if (state.authorization === authorization) state.authorization = null;
@@ -178,11 +207,11 @@ def _guard_script(capability: str) -> str:
           && authorization.form === form && authorization.clickAllowed
           && (!authorization.credentialAction || (
             credentialForm(authorization.element) === form
-            && credentialControl(authorization.element, authorization.credentialAction)
+            && validCredentialControl(authorization.element, authorization.credentialAction)
             && (!submitter || submitter === authorization.element
             || (authorization.element.getAttribute('role') === 'button'
               && submitter && credentialForm(submitter) === form
-              && credentialControl(submitter, authorization.credentialAction))))));
+              && validCredentialControl(submitter, authorization.credentialAction))))));
       };
 
       // Named, stable function references -- not inline closures passed directly to
@@ -281,6 +310,11 @@ def _guard_script(capability: str) -> str:
         authorizeAccountCreation(element, token) {
           if (token !== capability || !state.active || !credentialControl(element, 'creation')) return false;
           state.authorization = {element, form: credentialForm(element), capability, credentialAction: 'creation'};
+          return true;
+        },
+        authorizeCandidateProfile(element, token) {
+          if (token !== capability || !state.active || !candidateProfileControl(element)) return false;
+          state.authorization = {element, form: credentialForm(element), capability, credentialAction: 'candidate_profile'};
           return true;
         },
         authorizeAccountSignIn(element, token) {
@@ -494,6 +528,10 @@ class SubmissionGuardV0:
     def click_account_creation(self, page: Any, locator: Any) -> bool:
         """One account-helper click, limited to a dedicated credential form."""
         return self._click_credentials(page, locator, "authorizeAccountCreation")
+
+    def click_candidate_profile(self, page: Any, locator: Any) -> bool:
+        """One candidate profile creation click, authorized on an ATS profile creation step."""
+        return self._click_credentials(page, locator, "authorizeCandidateProfile")
 
     def click_account_sign_in(self, page: Any, locator: Any) -> bool:
         """One sign-in click, without authorizing application submission."""
