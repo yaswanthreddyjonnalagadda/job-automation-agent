@@ -103,7 +103,8 @@ def _guard_script(capability: str) -> str:
       // alone never exempts a button from final-submission containment.
       const credentialForm = element => element.form || element.closest('form');
       const credentialControl = (element, action) => {
-        if (!(element instanceof Element) || !element.matches('button,[role=button]')
+        if (!(element instanceof Element)
+            || !element.matches('button, input[type=submit], input[type=button], [role=button]')
             || !credentialForm(element) || element.disabled
             || element.getAttribute('aria-disabled') === 'true') return false;
         const actionLabel = action === 'creation'
@@ -135,7 +136,8 @@ def _guard_script(capability: str) -> str:
       // Profile helpers may authorize candidate profile creation on ATS registration steps
       // (e.g. iCIMS Profile Builder) that collect basic identity and credentials before the application.
       const candidateProfileControl = element => {
-        if (!(element instanceof Element) || !element.matches('button,[role=button]')
+        if (!(element instanceof Element)
+            || !element.matches('button, input[type=submit], input[type=button], [role=button]')
             || !credentialForm(element) || element.disabled
             || element.getAttribute('aria-disabled') === 'true') return false;
         const profileLabel = /^(submit profile|create (?:your |a |my )?profile|register|create (?:my |your |an )?account)$/i;
@@ -183,7 +185,7 @@ def _guard_script(capability: str) -> str:
         if (authorization.credentialAction && authorization.element !== element
             && authorization.element.getAttribute('role') === 'button'
             && authorization.clickAllowed && !authorization.companionClickAllowed
-            && element instanceof HTMLButtonElement
+            && (element instanceof HTMLButtonElement || element instanceof HTMLInputElement)
             && credentialForm(authorization.element) === authorization.form
             && credentialForm(element) === authorization.form
             && validCredentialControl(authorization.element, authorization.credentialAction)
@@ -225,7 +227,8 @@ def _guard_script(capability: str) -> str:
         const clicked = path.find(target => target instanceof Element && target.matches(selector));
         if (credential?.credentialAction && (clicked === credential.element
             || (credential.element.getAttribute('role') === 'button'
-              && clicked instanceof HTMLButtonElement && credentialForm(clicked) === credential.form))) {
+              && (clicked instanceof HTMLButtonElement || clicked instanceof HTMLInputElement)
+              && credentialForm(clicked) === credential.form))) {
           if (authorizedClick(clicked)) return;
           denyEvent(event, 'credential_shape_changed', clicked);
           return;

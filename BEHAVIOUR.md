@@ -1523,3 +1523,10 @@ The agent now recognizes candidate profile creation actions through a dedicated,
 matching passwords and email while strictly enforcing that no final application submission button exists on the form.
 Furthermore, intermediate wizard step progression (e.g. iCIMS "Step 1 of 3", "Step 2 of 3") is recognized as non-final,
 ensuring multi-step registration and application flows proceed smoothly to the final review step without premature stops.
+
+## Input submit elements supported in credential and candidate profile gateways (f199)
+
+Portals like iCIMS that render profile creation and sign-in actions with `<input type="submit">` or
+`<input type="button">` (instead of standard HTML5 `<button>` elements) are now fully recognized and
+authorized by `SubmissionGuardV0`'s credential and candidate profile creation gateways, eliminating
+false-positive click blocks when creating ATS accounts or candidate profiles.

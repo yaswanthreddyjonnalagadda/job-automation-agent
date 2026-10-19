@@ -85,6 +85,17 @@ def test_candidate_profile_gateway_authorizes_icims_profile_form(page):
     assert page.evaluate("window.created") == 1
 
 
+def test_candidate_profile_gateway_authorizes_input_submit_control(page):
+    serve_profile(page, ICIMS_PROFILE_FORM.replace(
+        '<button type="submit">Submit Profile</button>',
+        '<input type="submit" value="Submit Profile">'
+    ))
+    guard = SubmissionGuardV0(page.context)
+    button = page.locator('input[type="submit"]')
+    assert guard.click_candidate_profile(page, button)
+    assert page.evaluate("window.created") == 1
+
+
 def test_candidate_profile_gateway_rejects_mismatched_passwords(page):
     serve_profile(page, ICIMS_PROFILE_FORM.replace('value="Synthetic-Password1!"', 'value="DiffPass1!"', 1))
     guard = SubmissionGuardV0(page.context)
