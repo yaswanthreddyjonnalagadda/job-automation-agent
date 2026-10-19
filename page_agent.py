@@ -1453,7 +1453,9 @@ class PageAgent:
         # The owner has looked at whatever held the sign-in back (a rejection, an account to verify):
         # it may try again. The day's limit on rejected sign-ins still applies (login_guard).
         if owner_acted:
-            login_guard.owner_resumed(getattr(self, "_current_host", "") or "")
+            host = (getattr(self, "_current_host", "") or urlparse(getattr(getattr(self, "job", None), "url", "")).netloc).lower()
+            login_guard.owner_resumed(host or "")
+            self._resolve_pending_account_creation(host)
         self._google_reloads = {}   # ... and give a dead Google button its fresh loads again
         self.account_blocker = ""
         self._account_seen = {}
@@ -1617,18 +1619,34 @@ class PageAgent:
         dispatched merely because its durable guard could not be consulted. Read fresh from
         durable storage on every call, with no in-memory cache -- the same restart-safety
         pattern `login_guard.py` already uses for its own durable, cross-process state."""
-        key = self._application_key()
-        if not key or self.tracker is None or not hasattr(self.tracker, "read_checkpoint"):
+        if self.tracker is None or not hasattr(self.tracker, "read_checkpoint"):
             return False, False
-        try:
-            payload = self.tracker.read_checkpoint(key)
-        except Exception:
-            logger.warning("Could not read the account-creation checkpoint on %s -- "
-                           "treating Create Account as unsafe to dispatch", host)
-            return False, True
-        if not payload:
-            return False, False
-        return str(payload.get("pending_action") or "") == f"account_creation_dispatched@{host}", False
+        candidate_keys = [
+            k for k in dict.fromkeys([
+                self._application_key(),
+                getattr(self, "key", ""),
+                getattr(getattr(self, "assistant", None), "submission_key", ""),
+            ]).keys() if k
+        ]
+        storage_unavailable = False
+        for key in candidate_keys:
+            try:
+                payload = self.tracker.read_checkpoint(key)
+            except Exception:
+                logger.warning("Could not read the account-creation checkpoint on %s -- "
+                               "treating Create Account as unsafe to dispatch", host)
+                storage_unavailable = True
+                continue
+            if not payload:
+                continue
+            pending = str(payload.get("pending_action") or "")
+            if pending == f"account_creation_dispatched@{host}":
+                return True, False
+            if host:
+                pending_host = pending.split("@", 1)[1] if "@" in pending else ""
+                if pending.startswith("account_creation_dispatched@") and (pending_host == host or host in pending_host or pending_host in host):
+                    return True, False
+        return False, storage_unavailable
 
     def _mark_account_creation_dispatched(self, host: str) -> bool:
         """Durably records that Create Account is about to be pressed on `host`, BEFORE it is
@@ -1674,21 +1692,35 @@ class PageAgent:
         (it can at worst cause one unnecessary owner hand-off on a later, unrelated create
         attempt for the same application), so a read/write failure here only logs -- it does
         not need the dispatch path's fail-closed treatment."""
-        key = self._application_key()
-        if not key or self.tracker is None or not hasattr(self.tracker, "read_checkpoint") \
+        if self.tracker is None or not hasattr(self.tracker, "read_checkpoint") \
                 or not hasattr(self.tracker, "write_checkpoint"):
             return
-        try:
-            existing = self.tracker.read_checkpoint(key)
-        except Exception:
-            return
-        if not existing or str(existing.get("pending_action") or "") != f"account_creation_dispatched@{host}":
-            return
-        updated = checkpoint.merge_update(existing, application_key=key, pending_action="")
-        try:
-            self.tracker.write_checkpoint(key, updated)
-        except Exception:
-            logger.warning("Could not durably clear account-creation dispatch marker for %s", host)
+        candidate_keys = [
+            k for k in dict.fromkeys([
+                self._application_key(),
+                getattr(self, "key", ""),
+                getattr(getattr(self, "assistant", None), "submission_key", ""),
+            ]).keys() if k
+        ]
+        for key in candidate_keys:
+            try:
+                existing = self.tracker.read_checkpoint(key)
+            except Exception:
+                continue
+            if not existing:
+                continue
+            pending = str(existing.get("pending_action") or "")
+            if not pending.startswith("account_creation_dispatched@"):
+                continue
+            if host:
+                pending_host = pending.split("@", 1)[1] if "@" in pending else ""
+                if pending_host and pending_host != host and host not in pending_host and pending_host not in host:
+                    continue
+            updated = checkpoint.merge_update(existing, application_key=key, pending_action="")
+            try:
+                self.tracker.write_checkpoint(key, updated)
+            except Exception:
+                logger.warning("Could not durably clear account-creation dispatch marker for %s", host)
 
     def sign_in_step(self, page, controls: list[Control]) -> bool:
         """Signs in where the page asks for it. True when something was done.

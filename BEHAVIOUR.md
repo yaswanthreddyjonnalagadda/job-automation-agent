@@ -1537,3 +1537,10 @@ When submitting an account creation or candidate profile form triggers an intera
 (such as hCaptcha on iCIMS profile builder), the filler detects the newly presented CAPTCHA immediately
 rather than mistaking the held-open form for a generic validation failure. The run enters the dedicated
 CAPTCHA handoff loop, prompting the user and resuming as soon as the challenge is completed.
+
+## Owner Continue clears pending account creation across key aliases (f201)
+
+When resuming an application after owner handoff or restart, `apply_flow.py` and `PageAgent.forget_sign_in_attempts`
+clear any pending `account_creation_dispatched` checkpoint markers across all key aliases (the human-readable slug
+key and the 64-character SHA-256 submission key). This prevents runs from getting trapped in an infinite
+`ACCOUNT_CREATION_UNCERTAIN` loop when resuming after an interrupted account creation or CAPTCHA step.

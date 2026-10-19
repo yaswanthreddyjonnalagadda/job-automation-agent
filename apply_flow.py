@@ -1362,6 +1362,20 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
         # Only the owner's Continue lifts a hold on a sign-in (login_guard): a code reload, a refresh
         # or a re-upload says nothing about whether the account was looked at.
         agent.forget_sign_in_attempts(owner_acted=(decision == "continue"))
+        if decision == "continue":
+            if hasattr(tracker, "read_checkpoint") and hasattr(tracker, "write_checkpoint"):
+                for k in dict.fromkeys([key, getattr(assistant, "submission_key", ""), getattr(agent, "_application_key", lambda: "")()]):
+                    if not k:
+                        continue
+                    try:
+                        cp = tracker.read_checkpoint(k)
+                        if cp and (cp.get("pending_action") or "").startswith("account_creation_dispatched@"):
+                            logger.info("OWNER_CONTINUE: clearing pending account creation marker %s after owner review",
+                                        cp.get("pending_action"))
+                            updated = checkpoint.merge_update(cp, application_key=k, pending_action="")
+                            tracker.write_checkpoint(k, updated)
+                    except Exception as exc:
+                        logger.warning("Could not clear pending account creation on continue: %s", exc)
         if decision == "submitted_by_user":
             evidence = getattr(assistant, "_confirmation_evidence", "") or "the page confirmed it"
             status, note = safety.verification_status(evidence)
@@ -2349,15 +2363,18 @@ def main() -> None:
 
             if decision == "continue":
                 if hasattr(tracker, "read_checkpoint") and hasattr(tracker, "write_checkpoint"):
-                    try:
-                        cp = tracker.read_checkpoint(key)
-                        if cp and (cp.get("pending_action") or "").startswith("account_creation_dispatched@"):
-                            logger.info("OWNER_CONTINUE: clearing pending account creation marker %s after owner review",
-                                        cp.get("pending_action"))
-                            updated = checkpoint.merge_update(cp, application_key=key, pending_action="")
-                            tracker.write_checkpoint(key, updated)
-                    except Exception as exc:
-                        logger.warning("Could not clear pending account creation on continue: %s", exc)
+                    for k in dict.fromkeys([key, getattr(assistant, "submission_key", ""), getattr(agent, "_application_key", lambda: "")()]):
+                        if not k:
+                            continue
+                        try:
+                            cp = tracker.read_checkpoint(k)
+                            if cp and (cp.get("pending_action") or "").startswith("account_creation_dispatched@"):
+                                logger.info("OWNER_CONTINUE: clearing pending account creation marker %s after owner review",
+                                            cp.get("pending_action"))
+                                updated = checkpoint.merge_update(cp, application_key=k, pending_action="")
+                                tracker.write_checkpoint(k, updated)
+                        except Exception as exc:
+                            logger.warning("Could not clear pending account creation on continue: %s", exc)
                 advanced = assistant.click_next_step(page)
                 if not advanced:
                     if getattr(assistant, "_stuck_on", "") == "BLOCKED_VALIDATION_LOOP":

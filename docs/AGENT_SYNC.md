@@ -55,8 +55,9 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 - **Codex context refresh (17 October 2026)**: Reviewed this hub, operational rules, runtime behavior, recent commits and f183–f185. Verified PRs #34 and #35 are open (CI in progress at inspection), latest catalogue ID remains f185, and local SQLite records one pending application: Invesco (`needs_user_review`). The 10 backlog items remain open; no runtime fix or live application verification was performed in this refresh. Preserved the pre-existing `scripts/agent_status.py` trailing-newline edit and untracked `.claude/`. WSL Git status exceeded the checker’s 5-second timeout; Windows Git verified the branch and working tree.
 - **Other open PR**: [PR #35](https://github.com/yaswanthreddyjonnalagadda/job-automation-agent/pull/35) `chore/remove-oracle-worker` -- removes the Oracle remote worker (44 files). Both #34 and #35 append to the end of `BEHAVIOUR.md`; whichever merges second needs that one conflict resolved.
 - **Live test job**: Invesco Workday (application 62, R-13974) -- **SUBMITTED** 17 Oct 2026 23:39 UTC (status `submitted`, the page confirmed it). The run went account creation -> email verification -> My Experience (f183) -> Application Questions (f184) -> Voluntary Disclosures (f185, Veteran Status left blank) -> Review (step 5/5). No application is pending now.
-- **Latest Failure Catalogue ID**: `f200` (`reference/failures/f200-post-submit-captcha-detection.json`) — **Next available ID: `f201`**
-- **Recently Completed Fixes on Active Branch (`f170`–`f200`)**:
+- **Latest Failure Catalogue ID**: `f201` (`reference/failures/f201-owner-continue-clears-checkpoint-key-aliases.json`) — **Next available ID: `f202`**
+- **Recently Completed Fixes on Active Branch (`f170`–`f201`)**:
+  - `f201`: Clear pending account creation marker across key aliases on owner continue (`page_agent.py`, `apply_flow.py`).
   - `f200`: Dynamic CAPTCHA detection after account or profile submission (`browser_automation.py`).
   - `f199`: Support HTMLInputElement (`input[type=submit]`) in credential and candidate profile creation gateways (`submission_guard.py`).
   - `f198`: Candidate profile gateway and iCIMS step finality on multi-step ATS builders (`submission_guard.py`, `browser_automation.py`).
