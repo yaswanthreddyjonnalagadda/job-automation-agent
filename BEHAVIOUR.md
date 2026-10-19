@@ -1499,3 +1499,11 @@ When the agent has just created your account on a site and the site then refuses
 email is not verified yet -- the agent no longer hands that page to you straight away. It first opens the verification
 link the site emailed you (from your Gmail, as before). If no link arrives, it resets the password to the ATS password
 in Settings with the code the site emails. Only if that does not work either is the sign-in left for you.
+
+## A CAPTCHA stop ends when the page moves on (f196)
+
+When the agent stops for a CAPTCHA (such as hCaptcha on iCIMS profile creation) and you solve it, the wait loop
+watches the browser page progression. As soon as the site submits and navigates to the next page or application step
+(the URL path changes or password inputs disappear), the agent immediately carries on with the application without
+waiting indefinitely, even if the site keeps third-party CAPTCHA scripts or invisible widget frames embedded in its layout.
+

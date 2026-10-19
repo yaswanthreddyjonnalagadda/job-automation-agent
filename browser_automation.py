@@ -8063,7 +8063,15 @@ class JobApplicationAssistant:
         # has stayed the same for a while (the owner has stopped typing), it carries on by itself -- the owner asked
         # why they had to press Continue as well (30 September). Continue still works at any time.
         blanks_checked_at, filled_since, last_look = 0.0, None, None
+        captcha_start_path = ""
+        captcha_start_passwords = 0
         if page is not None:
+            try:
+                cur_url = getattr(page, "url", "") or ""
+                captcha_start_path = urlparse(cur_url).path
+                captcha_start_passwords = page.locator("input[type=password]").count()
+            except Exception:
+                pass
             try:
                 captcha_seen = bool(safety.captcha_visible(page))
             except Exception:
@@ -8109,6 +8117,22 @@ class JobApplicationAssistant:
                         return "refresh"
                     continue
                 if waiting_on_captcha:
+                    try:
+                        cur_url = getattr(page, "url", "") or ""
+                        cur_path = urlparse(cur_url).path
+                        cur_passwords = page.locator("input[type=password]").count()
+                        page_moved_on = bool(
+                            (captcha_start_path and cur_path and cur_path != captcha_start_path)
+                            or (captcha_start_passwords > 0 and cur_passwords == 0)
+                        )
+                    except Exception:
+                        page_moved_on = False
+
+                    if page_moved_on:
+                        logger.info("The page moved on (%s) -- carrying on with the application", cur_url)
+                        page.wait_for_timeout(2_000)
+                        return "refresh"
+
                     try:
                         visible = bool(safety.captcha_visible(page))
                     except Exception:
