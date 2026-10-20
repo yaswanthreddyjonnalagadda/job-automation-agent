@@ -131,3 +131,24 @@ def test_the_key_delay_varies_but_stays_in_a_human_range(monkeypatch):
     monkeypatch.setenv("HUMAN_TYPING_DELAY_MS", "not a number")
     assert 30 <= interaction.keystroke_delay_ms() <= 64
 
+def test_same_text_rejects_dropped_password_characters_and_decimals():
+    assert interaction._same_text("Synthetic#Pass1", "Synthetic#Pass1", is_password=True)
+    assert not interaction._same_text("SyntheticPass1", "Synthetic#Pass1", is_password=True)
+    assert not interaction._same_text("SyntheticPass1", "Synthetic#Pass1", is_password=False)
+    assert not interaction._same_text("125050", "1250.50", is_password=False)
+    assert not interaction._same_text("mixedcase", "MixedCase", is_password=False)
+    assert not interaction._same_text("(123) 456-7890", "1234567890", is_password=True)
+
+
+def test_password_and_decimal_drop_triggers_fallback_fill(page):
+    page.set_content(KEY_LOG.replace('type="text"', 'type="password"') +
+                     "<script>box.addEventListener('keydown', e => {if(e.key === '#') e.preventDefault()});</script>")
+    box = page.locator("#box")
+    interaction.type_text(box, "Synthetic#Pass1")
+    assert box.input_value() == "Synthetic#Pass1"
+
+    page.set_content(KEY_LOG +
+                     "<script>box.addEventListener('keydown', e => {if(e.key === '.') e.preventDefault()});</script>")
+    box = page.locator("#box")
+    interaction.fill_and_dispatch(box, "1250.50")
+    assert box.input_value() == "1250.50"

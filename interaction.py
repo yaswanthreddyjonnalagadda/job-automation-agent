@@ -59,13 +59,31 @@ def _pause(seconds: float) -> None:
     time.sleep(seconds)
 
 
-def _same_text(shown: str, wanted: str) -> bool:
-    """The box holds what was typed. A masked box may add its own punctuation ('(555) 123-4567'),
-    so letters and digits are compared, in order."""
+def _is_phone_formatting(shown: str, wanted: str) -> bool:
+    """True only when `shown` and `wanted` represent the same phone number where
+    an input mask added or stripped standard phone punctuation (e.g. '(555) 123-4567' vs '5551234567').
+    Never matches passwords, names, emails, decimals, or general text."""
+    if not shown or not wanted:
+        return False
+    if re.search(r"[a-zA-Z]", wanted) or re.search(r"[a-zA-Z]", shown):
+        return False
+    phone_allowed = re.compile(r"^[\s\d\+\-\(\)\.]+$")
+    if not phone_allowed.match(wanted) or not phone_allowed.match(shown):
+        return False
+    wd = re.sub(r"\D", "", wanted)
+    sd = re.sub(r"\D", "", shown)
+    return len(wd) in (10, 11) and wd == sd
+
+
+def _same_text(shown: str, wanted: str, is_password: bool = False) -> bool:
+    """The box holds what was typed. Exact comparison is required by default (including case,
+    punctuation, and decimals) so dropped characters in passwords or numbers trigger the fallback.
+    Only recognized masked phone number inputs allow punctuation formatting differences."""
     if shown == wanted:
         return True
-    letters = lambda s: re.sub(r"[^0-9a-z]", "", (s or "").lower())
-    return bool(letters(wanted)) and letters(shown) == letters(wanted)
+    if is_password:
+        return False
+    return _is_phone_formatting(shown, wanted)
 
 
 def type_like_a_person(locator: Any, value: str, timeout: Optional[float] = None) -> bool:
@@ -82,6 +100,11 @@ def type_like_a_person(locator: Any, value: str, timeout: Optional[float] = None
     delay = keystroke_delay_ms()
     # Enough time for every keystroke, never less than the caller allowed.
     type_timeout = max(float(timeout or 0), len(value) * delay * 1.5 + 5_000)
+    is_password = False
+    try:
+        is_password = (locator.get_attribute("type") or "").strip().lower() == "password"
+    except Exception:
+        pass
     try:
         try:
             locator.click(timeout=1_500)
@@ -99,7 +122,7 @@ def type_like_a_person(locator: Any, value: str, timeout: Optional[float] = None
     except Exception as exc:
         logger.debug("HUMAN_TYPING: could not type into the box (%s)", str(exc).splitlines()[0][:100])
         return False
-    return isinstance(shown, str) and _same_text(shown, value)
+    return isinstance(shown, str) and _same_text(shown, value, is_password=is_password)
 
 
 def type_text(locator: Any, value: str, timeout: Optional[float] = None) -> None:
