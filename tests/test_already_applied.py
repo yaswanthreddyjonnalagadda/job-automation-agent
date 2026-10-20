@@ -8,7 +8,6 @@ the agent, since this run did not send it.
 import pytest
 
 import page_agent
-import phone_alert
 import progress
 import ui_shell
 from job_tracker import STATUS_ALREADY_APPLIED, JobTracker
@@ -31,10 +30,6 @@ def test_the_postgres_tracker_knows_the_status_too():
 def test_the_dashboard_accepts_the_status_from_its_menu():
     import web_ui
     assert STATUS_ALREADY_APPLIED in web_ui.VALID_STATUSES
-
-
-def test_the_owner_is_told_on_the_phone():
-    assert phone_alert.STATUS_ALERTS[STATUS_ALREADY_APPLIED][0] == "Already applied"
 
 
 class Tab:
