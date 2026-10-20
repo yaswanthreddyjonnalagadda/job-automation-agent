@@ -40,7 +40,6 @@ import application_status
 from jd_analyzer import is_tracking_query_param, submission_identity_url
 
 import diagnostics
-import phone_alert
 logger = logging.getLogger(__name__)
 
 
@@ -480,8 +479,6 @@ class PostgresTracker:
                 (status, notes, dedup_key),
             )
         logger.info("Updated application %s -> status=%s", dedup_key[:12], status)
-        if current is not None and not by_owner and current.status != status:
-            phone_alert.status_changed(current.company, current.title, status)   # how it ended, on the owner's phone
 
     def get(self, dedup_key: str) -> Optional[ApplicationRecord]:
         with self._connect() as conn:
