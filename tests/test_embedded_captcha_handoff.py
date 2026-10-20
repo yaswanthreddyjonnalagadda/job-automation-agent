@@ -120,9 +120,29 @@ def test_stop_evidence_preserves_validity_and_guard_reason_without_private_text(
     assert item['fields'][0]['failures'] == ['typeMismatch']
     assert item['fields'][1]['password'] and item['fields'][1]['filled']
     assert item['fields'][2]['failures'] == ['valueMissing']
+    assert [f['kind'] for f in item['fields']] == ['email', 'password', 'text', 'other']
     assert item['disabled_submits'] == 1
     assert item['visible_alerts'] == 1
     assert item['guard_denials'] == {'javascript_form_submit': 1}
+
+
+def test_stop_evidence_tells_a_ticked_box_from_an_unticked_one(page, tmp_path):
+    import diagnostics
+    frame = page.frame(name="icims_content_iframe")
+    frame.set_content("""<form>
+      <input type=checkbox required>
+      <input type=checkbox checked>
+      <select><option value=''></option><option value='PRIVATE-OPTION'>x</option></select>
+    </form>""")
+    target = tmp_path / 'stopped_20261019_000002.state.json'
+    assert diagnostics.capture_form_state(page, target)
+    encoded = target.read_text()
+    assert 'PRIVATE' not in encoded
+    item = next(x for x in json.loads(encoded)['frames'] if x.get('fields'))
+    unticked, ticked, menu = item['fields']
+    assert (unticked['kind'], unticked['checked'], unticked['required']) == ('checkbox', False, True)
+    assert (ticked['kind'], ticked['checked']) == ('checkbox', True)
+    assert (menu['kind'], menu['filled']) == ('select', False)
 
 
 def test_stop_evidence_never_inspects_challenge_contents(page, tmp_path):

@@ -1188,6 +1188,8 @@ While a visible dialog is open, the page reader focuses on that dialog and exclu
 
 ## Diagnostic privacy (P0-B5)
 
+Owner-authorized local testing (20 October 2026): `LOCAL_DEBUG_CAPTURE=1` adds private copies under Git-ignored `local_debug/`. They retain personal application details, question/option labels, runtime log messages and exception details, plus readable screenshots paired with accessibility snapshots and HTML for each readable frame. Captures occur at page-loop reads, unreadable-menu diagnostics, and existing screenshot/stop boundaries. Password/code controls are masked in screenshots; known configured secrets, credential assignments, and token-bearing URLs are redacted from text, and scripts/hidden input values are omitted from HTML. This is sensitive local evidence, not a safe-to-share export. Failed frame inspection suppresses that screenshot and records a capture error. No existing safe viewer/export accepts these files. Existing sanitized logs and exports keep their default policy below; safety and submission gates do not change. The option defaults off; changing it requires restarting the dashboard/worker. Local debug files are retained until the owner deletes them and are not covered by DIAGNOSTIC_RETENTION_DAYS. Already-redacted historical evidence cannot be recovered.
+
 Persisted diagnostics use one privacy layer. HTML is a structural projection:
 field values, scripts, bootstrap state, arbitrary text, document content and
 active attributes are omitted. Saved accessibility text retains roles, known

@@ -494,6 +494,19 @@ class JobApplicationAssistant:
             except OSError as exc:
                 logger.debug("Could not clear %s: %s", name, exc)
 
+    @staticmethod
+    def _debug_port_args() -> list[str]:
+        """An opt-in, loopback-only DevTools port, for watching a run from outside.
+
+        Off unless JAA_DEBUG_PORT names a port (1024-65535). The agent's browser holds
+        the owner's Gmail and employer sign-ins, so a port is never opened by default:
+        any local program could drive it.
+        """
+        raw = os.getenv("JAA_DEBUG_PORT", "").strip()
+        if not raw.isdigit() or not 1024 <= int(raw) <= 65535:
+            return []
+        return [f"--remote-debugging-port={int(raw)}", "--remote-debugging-address=127.0.0.1"]
+
     def _launch(self, channel: str, profile_dir: Path):
         kwargs = {"channel": channel} if channel and channel != "chromium" else {}
         return self._playwright.chromium.launch_persistent_context(
@@ -516,7 +529,8 @@ class JobApplicationAssistant:
             args=["--start-maximized", "--disable-session-crashed-bubble", "--hide-crash-restore-bubble",
                   # Not announced as automated (f181): Google refuses to sign anyone in on a browser that says it
                   # is automated, and the owner signs in to Gmail here so the agent can read a verification email.
-                  "--disable-blink-features=AutomationControlled"],
+                  "--disable-blink-features=AutomationControlled",
+                  *self._debug_port_args()],
             ignore_default_args=["--enable-automation"],
             # Deny browser-level permission requests (push notifications, location, etc.)
             # so they don't block the application mid-form

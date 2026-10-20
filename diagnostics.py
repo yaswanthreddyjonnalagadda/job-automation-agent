@@ -145,6 +145,12 @@ def sanitize_snapshot(text: str, context: PrivacyContext | None = None) -> str:
     return '\n'.join(out)
 
 
+# Control types the stop report may name. A checkbox's value is always non-empty,
+# so "filled" alone cannot say whether it is ticked; "checked" and "kind" can.
+FIELD_KINDS = frozenset({'text', 'email', 'password', 'tel', 'number', 'url', 'search', 'date',
+                         'checkbox', 'radio', 'file', 'hidden', 'select', 'textarea'})
+
+
 def capture_form_state(page, path: Path) -> bool:
     """Save boolean/count evidence for a silent form stop, never labels or values.
 
@@ -171,6 +177,8 @@ def capture_form_state(page, path: Path) -> bool:
                 const denials = window.__jaaSubmissionGuardV0?.denials() || [];
                 return {
                     fields: fields.map(e => ({visible: shown(e), required: !!e.required,
+                        kind: e.tagName === 'SELECT' ? 'select' : e.tagName === 'TEXTAREA' ? 'textarea' : e.type,
+                        checked: !!e.checked,
                         disabled: !!e.disabled, filled: !!e.value, password: e.type === 'password',
                         valid: e.validity ? e.validity.valid : true,
                         failures: flags.filter(f => e.validity?.[f] === true)})),
@@ -185,7 +193,8 @@ def capture_form_state(page, path: Path) -> bool:
             item['readable'] = True
             item['fields'] = [
                 {**{key: field.get(key) is True for key in
-                    ('visible', 'required', 'disabled', 'filled', 'password', 'valid')},
+                    ('visible', 'required', 'disabled', 'filled', 'password', 'valid', 'checked')},
+                 'kind': field.get('kind') if field.get('kind') in FIELD_KINDS else 'other',
                  'failures': [flag for flag in flags if flag in field.get('failures', [])]}
                 for field in raw.get('fields', [])[:500] if type(field) is dict]
             for key in ('submit_count', 'disabled_submits', 'visible_alerts'):
@@ -414,6 +423,8 @@ audio, iframe, object, embed { visibility: hidden !important; }
 
 
 def capture_safe_screenshot(page, path: Path) -> bool:
+    import local_debug
+    local_debug.capture(page, str(path))
     path = Path(path)
     token = uuid.uuid4().hex
     installed = False
@@ -603,6 +614,8 @@ def install_log_privacy():
         return
     def factory(*args,**kwargs):
         record = previous(*args,**kwargs)
+        import local_debug
+        local_debug.record_log(record)
         try:
             original = record.msg
             if record.args and isinstance(original,str) and original in _static_log_templates(record.pathname):
@@ -713,6 +726,8 @@ class PrivateRunLog:
         write_safe_text(self.path,self.text)
 
     def append(self, line):
+        import local_debug
+        local_debug.record_log(logging.LogRecord('stdout', logging.INFO, __file__, 0, line, (), None))
         self.text += sanitize_log_line(line)
         if len(self.text.encode()) > TEXT_LIMIT:
             self.text = self.text[-TEXT_LIMIT//2:]

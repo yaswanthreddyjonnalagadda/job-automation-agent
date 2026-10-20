@@ -3282,6 +3282,8 @@ class PageAgent:
 
             controls = parse_snapshot(snapshot)
             self._save(snapshot)
+            import local_debug
+            local_debug.capture(self.tab(page), f'{self._run_stamp}/page_{self.pages_read:02d}')
             shape = tuple(sorted({c.question for c in controls if c.question}))
             self._shapes[hash(shape)] = self._shapes.get(hash(shape), 0) + 1
             if self._shapes[hash(shape)] > MAX_READS_PER_PAGE:
@@ -5510,6 +5512,8 @@ class PageAgent:
         """Diagnostic: capture the visible custom-widget DOM of an opened
         dropdown whose options could not be read, so its structure can be
         inspected and driven. Runs at most once per run."""
+        import local_debug
+        local_debug.capture(self.tab(page), f'open_menu/{control.ref}/{control.question}')
         if getattr(self, "_menu_dumped", False):
             return
         self._menu_dumped = True
