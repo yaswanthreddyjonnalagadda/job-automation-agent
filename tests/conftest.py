@@ -61,3 +61,10 @@ def _keep_state_files_out_of_the_owners_data(monkeypatch, tmp_path):
             # stays readable -- tests that need it read it, and none writes it without patching the path.
             elif value.is_absolute() and value.parent == DATA_DIR and name not in READ_ONLY_OWNER_FILES:
                 monkeypatch.setattr(module, name, tmp_path / value.name)
+
+
+@pytest.fixture(autouse=True)
+def _instant_typing_unless_a_test_asks(monkeypatch):
+    # The agent types at a person's pace (interaction.type_like_a_person). Across hundreds of tests that
+    # would only add waiting, so tests fill instantly; tests/test_human_typing.py turns typing back on.
+    monkeypatch.setenv("HUMAN_TYPING", "0")

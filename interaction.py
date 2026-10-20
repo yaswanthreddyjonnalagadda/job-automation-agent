@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import random
 import re
 import time
 from typing import Any, Callable, Optional
@@ -31,9 +33,89 @@ CARD_COMMIT_TEXT_PATTERN = re.compile(
 )
 
 
+# Human-paced typing (owner's request, 20 October 2026): an instant .fill() puts a whole answer in a box in
+# no time at all, which anti-bot scripts (hCaptcha, Turnstile, DataDome) score as automation. Boxes are typed
+# one key at a time at a person's speed, one field after another. Longer answers are inserted at once, as a
+# person pastes an essay. HUMAN_TYPING=0 turns this off; HUMAN_TYPING_DELAY_MS sets the average key delay.
+HUMAN_TYPING_MAX_CHARS = 200
+
+
+def human_typing_enabled() -> bool:
+    return os.getenv("HUMAN_TYPING", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def keystroke_delay_ms() -> int:
+    """One delay per field, varied around the configured average, so no two fields share a rhythm."""
+    try:
+        base = int(os.getenv("HUMAN_TYPING_DELAY_MS", "45"))
+    except ValueError:
+        base = 45
+    base = min(max(base, 10), 250)
+    return max(5, int(base * random.uniform(0.7, 1.4)))
+
+
+def _pause(seconds: float) -> None:
+    """A human pause between actions (patched out in tests)."""
+    time.sleep(seconds)
+
+
+def _same_text(shown: str, wanted: str) -> bool:
+    """The box holds what was typed. A masked box may add its own punctuation ('(555) 123-4567'),
+    so letters and digits are compared, in order."""
+    if shown == wanted:
+        return True
+    letters = lambda s: re.sub(r"[^0-9a-z]", "", (s or "").lower())
+    return bool(letters(wanted)) and letters(shown) == letters(wanted)
+
+
+def type_like_a_person(locator: Any, value: str, timeout: Optional[float] = None) -> bool:
+    """Click the box, clear it, and type `value` one key at a time at a person's speed.
+
+    True only when the box is then read back holding `value`. False means nothing reliable was
+    typed (typing off, a long answer, a box that cannot be typed into or read back, or a box that
+    changed what was typed) -- the caller then sets the value the old way, so a box is never left
+    worse off than an instant fill would leave it."""
+    if not human_typing_enabled() or not value or len(value) > HUMAN_TYPING_MAX_CHARS:
+        return False
+    if not callable(getattr(locator, "press_sequentially", None)):
+        return False
+    delay = keystroke_delay_ms()
+    # Enough time for every keystroke, never less than the caller allowed.
+    type_timeout = max(float(timeout or 0), len(value) * delay * 1.5 + 5_000)
+    try:
+        try:
+            locator.click(timeout=1_500)
+        except Exception:
+            locator.focus(timeout=1_500)      # covered by an overlay: focus it without the click
+        _pause(random.uniform(0.08, 0.2))
+        try:
+            current = locator.input_value(timeout=1_000)
+        except Exception:
+            current = None
+        if current:
+            locator.fill("", timeout=type_timeout)
+        locator.press_sequentially(value, delay=delay, timeout=type_timeout)
+        shown = locator.input_value(timeout=2_000)
+    except Exception as exc:
+        logger.debug("HUMAN_TYPING: could not type into the box (%s)", str(exc).splitlines()[0][:100])
+        return False
+    return isinstance(shown, str) and _same_text(shown, value)
+
+
+def type_text(locator: Any, value: str, timeout: Optional[float] = None) -> None:
+    """Puts `value` in a plain box: human-paced keystrokes, or an instant fill when typing is off,
+    the answer is long, or the box did not keep what was typed. Followed by a short pause so the
+    next field is started as a person would, after this one."""
+    if type_like_a_person(locator, value, timeout):
+        _pause(random.uniform(0.15, 0.35))
+        return
+    locator.fill(value, **({"timeout": timeout} if timeout is not None else {}))
+
+
 def fill_and_dispatch(locator: Any, value: str, timeout: Optional[float] = None, **kwargs: Any) -> None:
-    """Fills an input using Playwright's native .fill() and immediately dispatches
-    three bubbling synthetic events: 'input', 'change', and 'blur'.
+    """Puts `value` in an input -- human-paced keystrokes where possible (type_like_a_person),
+    otherwise Playwright's native .fill() -- and then dispatches three bubbling synthetic
+    events: 'input', 'change', and 'blur'.
 
     This ensures reactive/virtual DOM frameworks (React, Vue, Angular, Ant Design)
     register controlled component state and do not silently drop field values on form submission.
@@ -42,7 +124,10 @@ def fill_and_dispatch(locator: Any, value: str, timeout: Optional[float] = None,
     if timeout is not None:
         fill_kwargs["timeout"] = timeout
 
-    locator.fill(value, **fill_kwargs)
+    # Clearing a box, or a call with extra Playwright options, keeps the plain fill.
+    typed = bool(value) and not kwargs and type_like_a_person(locator, value, timeout)
+    if not typed:
+        locator.fill(value, **fill_kwargs)
     try:
         locator.evaluate("""el => {
             el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
@@ -51,6 +136,8 @@ def fill_and_dispatch(locator: Any, value: str, timeout: Optional[float] = None,
         }""")
     except Exception as exc:
         logger.debug("Synthetic event dispatch on locator failed: %s", exc)
+    if typed:
+        _pause(random.uniform(0.15, 0.35))   # one field, then the next -- not all at once
 
 
 def click_resiliently(locator: Any, timeout_ms: int = 4_000) -> bool:

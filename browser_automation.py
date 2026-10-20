@@ -50,6 +50,7 @@ from interaction import (
     fill_and_dispatch,
     resolve_ant_dropdown,
     sweep_modals_and_policies,
+    type_text,
     wipe_and_enforce_location_sweep,
 )
 from perception import (
@@ -5561,9 +5562,9 @@ class JobApplicationAssistant:
                 "input[type='email'], input[name*='email' i], input[id*='email' i]"
             ).first
             if email_input.count() > 0 and not (email_input.input_value() or "").strip():
-                email_input.fill(email)
-            pw_fields.nth(0).fill(password)
-            pw_fields.nth(1).fill(password)
+                type_text(email_input, email)
+            type_text(pw_fields.nth(0), password)
+            type_text(pw_fields.nth(1), password)
 
             # Acknowledgment checkbox (required on some tenants). Only privacy
             # consent -- an attestation or a marketing opt-in is never ticked.
@@ -5667,13 +5668,13 @@ class JobApplicationAssistant:
                         domain)
         else:
             # The email first, and checked: a password is never sent without it.
-            email_locator.fill(email)
+            type_text(email_locator, email)
             if not self._email_kept([email_locator], email):
                 self._type_email(page, email_locator, email)
             if not self._email_kept([email_locator], email):
                 logger.warning("LOGIN_HELD: the email box on %s did not keep the address -- not signing in", domain)
                 return False
-        pw_locator.fill(password)
+        type_text(pw_locator, password)
 
         # Ignore hidden duplicates. With containment armed, only the dedicated
         # credential gateway may dispatch the sign-in; a failed dispatch must
@@ -7421,7 +7422,7 @@ class JobApplicationAssistant:
         page.wait_for_timeout(1_500)
         box = self._find_login_email_input(page)
         if box is not None and not (box.input_value() or "").strip():
-            box.fill(email)
+            type_text(box, email)
         send = self._first_visible(page, ("button",), self._SEND_STEP)
         login_guard.record_reset_request(domain, email)
         if send is not None:

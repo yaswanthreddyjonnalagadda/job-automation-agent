@@ -123,7 +123,8 @@ class IcimsAdapter(SiteAdapter):
             if email:
                 login_box = scope.locator("input#login, input[name='login'], input[id*='login' i], input[name*='login' i]").first
                 if login_box.count() and login_box.is_visible() and not (login_box.input_value() or "").strip():
-                    login_box.fill(email)
+                    from interaction import type_text
+                    type_text(login_box, email)
         except Exception:
             pass
 
