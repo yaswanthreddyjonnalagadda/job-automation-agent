@@ -29,7 +29,6 @@ diagnostics.install_log_privacy()
 
 from config import DATA_DIR, get_app_config, get_user_profile
 from job_sources import resolve_job
-import phone_alert
 import run_outcomes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -208,7 +207,6 @@ def main() -> int:
     outcomes = []
     for url in urls:
         outcomes.append(run_one(unquote(url) if "%" not in url else url, auto=auto or True, open_url=open_url, run_id=run_id))
-        phone_alert.run_ended(url, outcomes[-1])        # a run that failed is told to the owner's phone
     if len(outcomes) == 1:
         return outcomes[0]
     return 1 if any(code != 0 and code not in run_outcomes.EXPECTED_STOPS for code in outcomes) else 0

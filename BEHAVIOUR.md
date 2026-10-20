@@ -789,48 +789,6 @@ stops it. Your decision of 25 September 2026, decided in `safety.py`.
 6. **Prints a clear message** asking the user to review and click Submit; the
    web UI shows the same as a banner.
 
-## Your phone when the agent needs you (optional)
-
-Off unless you set it up. When a run stops for something only you can do -- a
-CAPTCHA, a question the agent cannot answer, a form that will not go on -- it can
-tell your phone and let you act from it, with the laptop's browser as the one that
-carries on.
-
-* **The alert** (`phone_alert.py`): set `NTFY_TOPIC` in `.env` to a long private
-  name, install the ntfy app and subscribe to it. Each stop sends one short message:
-  the company, the job and which kind of help is needed (CAPTCHA, a question it
-  cannot answer, or something else). It goes through ntfy.sh (or `NTFY_SERVER`, if you
-  host your own), so it never carries an answer you typed, a password, a code or
-  an email address -- values in quotes are cut and the text goes through the
-  same secret scrubbing as the logs. A missing network never stops an application.
-* **What it tells you.** A stop that needs you (CAPTCHA, a question it cannot answer, or
-  anything else that stops the form), at high priority and with the console link when there is one;
-  and how an application ended: **Submitted**, **Ready to submit** (press Submit at the laptop),
-  **Job doesn't exist**, and **Run failed** (the site's name only). Each is sent once, when the
-  status changes, never for something you changed by hand, and never with the tracker's notes.
-* **The console** (`phone_console.py`): set `PHONE_CONSOLE=on` and install Tailscale on
-  the laptop and the phone. The alert then links to a private page on the laptop's
-  Tailscale address (never any other address, and it is only open while a run is waiting
-  for you; each stop has its own random secret in its link, which stops working when
-  the stop ends, so the link passing through the alert server is not a standing key) that shows the
-  agent's browser and lets you tap, type, scroll and press Tab/Backspace/Escape/
-  arrow keys, and press "Done - carry on". The agent carries on by itself
-  as soon as the CAPTCHA is gone or the required blanks are filled, as before.
-* **What a phone can never do**: press a Submit button (a tap on a control that sends a
-  form, or on one labelled Submit/Apply/Finish, is refused -- sending the application
-  stays a decision made at the laptop) or press Enter. Anything else on the page can be
-  tapped, so keep the link private: anyone who has it, on your Tailscale network,
-  sees and can operate that browser while it is open.
-* The picture of the browser is taken only while the page is open on your phone,
-  is kept in memory (never written to disk) and goes only to your own device.
-
-A durable manual handoff parks automation for the entire browser context. Existing
-application and questionnaire tabs, and tabs opened during that handoff, remain
-under manual control. Before automation resumes, the submission guard is re-armed
-in every open tab; newly opened tabs are then guarded as usual. A failed handoff
-record leaves containment armed. Reloading code preserves the live guard capability
-and context callbacks rather than installing a second guard.
-
 ## After the user submits
 
 The run keeps watching and records **submitted** only on evidence:
