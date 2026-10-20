@@ -7,11 +7,6 @@
   "root_cause": "Account helpers scope into iCIMS, but apply_flow unwraps the page for handoff. The wait checks only the outer URL, password controls and CAPTCHA. Account helper CAPTCHA stops also use owner_needed, losing the explicit CAPTCHA wait mode.",
   "why_tests_missed": "f196 and f200 use top-level forms; they do not exercise the outer-tab handoff with an embedded or replaced application frame.",
   "fix": "Use the adapter-selected application frame for CAPTCHA observation, track frame replacement, preserve explicit account CAPTCHA stop reasons, and do not treat temporary frame detachment as progress.",
-  "evidence": [
-    "output/Mutual_of_Enumclaw_Insurance_Company_Network_Engineer/pages/20261019_003946/page_01.txt",
-    "logs/run_20261019_043910.jsonl"
-  ],
-  "validation": "Two embedded transition tests timed out before the fix. Synthetic navigation, replacement, same-URL transition and continued challenge tests cover the patch. This does not establish that the live profile was accepted.",
   "tests": [
     "tests/test_embedded_captcha_handoff.py",
     "tests/test_review_handoff_resume.py"
