@@ -36,20 +36,44 @@ class IcimsAdapter(SiteAdapter):
         lower = (url or "").lower()
         return any(h in lower for h in cls.hosts) or "icims_content_iframe" in lower
 
+    def _main_document_is_form(self, page) -> bool:
+        """True when the top document itself holds the application form.
+
+        open_embedded_form() treats a document with more than three visible
+        inputs as the form and stays on it; this mirrors that rule so a
+        stray same-host frame (a reloaded login frame, a tracking iframe)
+        cannot pull work out of a form that is already the page.
+        """
+        try:
+            count = page.locator(
+                "input:not([type=hidden]):not([type=search]):visible, "
+                "select:visible, textarea:visible").count()
+            return count > 3
+        except Exception:
+            return False
+
     def find_application_frame(self, page):
         """Locates and returns the iCIMS content iframe to prevent outer corporate
-        header/search inputs from hijacking application automation."""
+        header/search inputs from hijacking application automation.
+
+        The named content iframe is always authoritative. A same-host frame
+        matched by URL alone is not returned when the main document already
+        holds the application form -- in that case the page itself is the form
+        and descending into the frame is a regression (test_finding_the_way:
+        a page that is already the form stays put).
+        """
         try:
             frames = getattr(page, "frames", ()) or ()
             # 1. Exact name match
             for frame in frames:
                 if frame.name == "icims_content_iframe":
                     return frame
-            # 2. Frame URL match
-            for frame in frames:
-                frame_url = (getattr(frame, "url", "") or "").lower()
-                if "icims.com" in frame_url and frame != getattr(page, "main_frame", None):
-                    return frame
+            # 2. Frame URL match -- but not when the main document is the form
+            if not self._main_document_is_form(page):
+                for frame in frames:
+                    frame_url = (getattr(frame, "url", "") or "").lower()
+                    if "icims.com" in frame_url and frame != getattr(page, "main_frame", None):
+                        return frame
             # 3. Element locator handle check
             handle = page.query_selector("iframe#icims_content_iframe, iframe[name='icims_content_iframe']")
             if handle:
