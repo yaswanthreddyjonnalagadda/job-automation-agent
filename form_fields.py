@@ -611,8 +611,8 @@ def choose(page, f: Field, answer: str, timeout_ms: int = 5_000) -> bool:
     if chosen is None:
         try:
             frame.keyboard.press("Escape")
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("choose: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return False
     frame.wait_for_timeout(300)
     return _kept(f, chosen)
@@ -634,8 +634,8 @@ def pick_open_row(scope, answer: str, timeout_ms: int = 3_000) -> Optional[str]:
     if index is None:
         try:
             scope.keyboard.press("Escape")
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("pick_open_row: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return None
     try:
         rows.nth(index).click(timeout=timeout_ms)
@@ -660,8 +660,8 @@ def read_choices(f: Field, timeout_ms: int = 4_000) -> list[str]:
         rows = []
     try:
         f.frame.keyboard.press("Escape")
-    except Exception:
-        pass
+    except Exception as _swallowed:
+        logger.debug("read_choices: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
     return [r for r in rows if r and not is_placeholder(r)]
 
 
@@ -787,8 +787,8 @@ def fill_date(page, f: Field, value: str) -> bool:
     placeholder = ""
     try:
         placeholder = (f.locator().get_attribute("placeholder") or "").lower()
-    except Exception:
-        pass
+    except Exception as _swallowed:
+        logger.debug("fill_date: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
     text = date_text(value, f.type, placeholder)
     if text is None:
         logger.info("Not a date the agent can read: %r for %r", value, f.question)

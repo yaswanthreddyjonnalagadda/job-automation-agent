@@ -273,8 +273,8 @@ def _answer_from(raw: str) -> str:
     if match:
         try:
             return str(json.loads(match.group(0)).get("answer") or "").strip()
-        except (ValueError, AttributeError):
-            pass
+        except (ValueError, AttributeError) as _swallowed:
+            logger.debug("_answer_from: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
     return raw
 
 

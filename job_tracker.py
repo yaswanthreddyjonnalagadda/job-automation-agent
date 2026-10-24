@@ -655,8 +655,8 @@ class JobTracker:
             if item.get("payload"):
                 try:
                     item["payload"] = json.loads(item["payload"])
-                except (TypeError, ValueError):
-                    pass
+                except (TypeError, ValueError) as _swallowed:
+                    logger.debug("events: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
             found.append(diagnostics.sanitize_event(item))
         return found
 

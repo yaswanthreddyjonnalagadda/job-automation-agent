@@ -15,6 +15,9 @@ answer bank rebuilt from the smaller one). Set TRACKER=sqlite to use SQLite on p
 from __future__ import annotations
 
 import os
+import logging
+
+logger = logging.getLogger('tracking')
 
 
 def chosen() -> str:
@@ -22,8 +25,8 @@ def chosen() -> str:
     try:
         from dotenv import load_dotenv
         load_dotenv()
-    except Exception:
-        pass
+    except Exception as _swallowed:
+        logger.debug("chosen: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
     wanted = (os.getenv("TRACKER") or "").strip().lower()
     if wanted in ("postgres", "sqlite"):
         return wanted

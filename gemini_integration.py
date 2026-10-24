@@ -152,8 +152,8 @@ def _retry_delay(reply) -> float:
             found = re.fullmatch(r"\s*([\d.]+)s\s*", str(detail.get("retryDelay") or ""))
             if found:
                 return min(float(found.group(1)), MAX_RATE_LIMIT_WAIT)
-    except (ValueError, AttributeError):
-        pass
+    except (ValueError, AttributeError) as _swallowed:
+        logger.debug("_retry_delay: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
     return 2.0
 
 

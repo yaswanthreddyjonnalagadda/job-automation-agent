@@ -96,8 +96,8 @@ class IcimsAdapter(SiteAdapter):
             uploaded = scope.locator(".iCIMS_Job_Attachment_Name, .iCIMS_attachment_name, a:has-text('Remove')")
             if uploaded.count() > 0:
                 return False
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("attachment_is_empty: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return None
 
     def candidate_account_state(self, page) -> str:
@@ -125,7 +125,7 @@ class IcimsAdapter(SiteAdapter):
                 if login_box.count() and login_box.is_visible() and not (login_box.input_value() or "").strip():
                     from interaction import type_text
                     type_text(login_box, email)
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("create_account_extras: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
 

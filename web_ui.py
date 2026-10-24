@@ -99,8 +99,8 @@ def _save_runs() -> None:
                   "started": r["started"].isoformat() if hasattr(r["started"], "isoformat") else r["started"]}
             for url, r in _RUNS.items()
         }, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+    except Exception as _swallowed:
+        logger.debug("_save_runs: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
 
 def _process_alive(pid) -> bool:
@@ -130,8 +130,8 @@ def _load_runs() -> None:
             _RUNS[url] = {"state": state, "log": r.get("log", ""), "pid": r.get("pid"),
                           "started": datetime.fromisoformat(r["started"]) if r.get("started") else None,
                           "proc": None, "stopping": False}
-    except Exception:
-        pass
+    except Exception as _swallowed:
+        logger.debug("_load_runs: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
 
 _load_runs()
@@ -218,8 +218,8 @@ def _kill_pid_tree(pid: int) -> None:
     else:
         try:
             os.killpg(int(pid), signal.SIGTERM)
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("_kill_pid_tree: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
@@ -232,8 +232,8 @@ def _kill_tree(proc: subprocess.Popen) -> None:
     else:
         try:
             os.killpg(proc.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        except ProcessLookupError as _swallowed:
+            logger.debug("_kill_tree: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
 
 @app.post("/api/discovered/scan")
@@ -1435,8 +1435,8 @@ def waiting_runs(data_dir: Path) -> list[dict]:
         try:
             job = json.loads((Path(data_dir) / f"_job_{name[:-4]}.json").read_text(encoding="utf-8-sig"))
             label = f"{job.get('title', '')} at {job.get('company', '')}".strip() or label
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as _swallowed:
+            logger.debug("waiting_runs: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         found.append({"signal": f"_signal_{name}", "label": label})
     return found
 

@@ -6,6 +6,9 @@ import re
 from typing import Any
 from urllib.parse import urlsplit, parse_qs
 from .base import SiteAdapter
+import logging
+
+logger = logging.getLogger('browser_automation')
 
 # Evaluated at click time, not cached from a page-plan label. ADP's posting
 # opener is outside a form and opens the account/application workflow.
@@ -119,8 +122,8 @@ class AdpAdapter(SiteAdapter):
                 loc.scroll_into_view_if_needed(timeout=2000)
                 loc.click(timeout=2000)
                 return True
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("open_picker: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return False
 
     def select_option(self, page, selector: str, value: str) -> bool:
@@ -133,8 +136,8 @@ class AdpAdapter(SiteAdapter):
                 if text.lower() == value.strip().lower() or value.strip().lower() in text.lower():
                     opt.click(timeout=2000)
                     return True
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("select_option: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return False
 
     def commit_card(self, page, card_loc) -> bool:
@@ -146,7 +149,7 @@ class AdpAdapter(SiteAdapter):
             if btn.count():
                 btn.click(timeout=3000)
                 return True
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("commit_card: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return False
 

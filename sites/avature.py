@@ -17,6 +17,9 @@ from typing import Optional
 from urllib.parse import parse_qs, urlsplit
 
 from .base import SiteAdapter
+import logging
+
+logger = logging.getLogger('browser_automation')
 
 
 class AvatureAdapter(SiteAdapter):
@@ -59,8 +62,8 @@ class AvatureAdapter(SiteAdapter):
             path = parsed.path.lower()
             if "/careers/applicationmethods" in path or "/careers/jobdetail" in path:
                 return True
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("matches: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return False
 
     @classmethod

@@ -591,8 +591,8 @@ class SubmissionGuardV0:
             for frame in page.frames:
                 try:
                     frame.evaluate(f"token => window.{_GUARD_NAME}?.clearAuthorization(token)", self._capability)
-                except PlaywrightError:
-                    pass
+                except PlaywrightError as _swallowed:
+                    logger.debug("_click_credentials: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
     @staticmethod
     def _valid_authorization(decision: Any) -> bool:
@@ -725,8 +725,8 @@ class SubmissionGuardV0:
                     f"(element, token) => window.{_GUARD_NAME}.clearAuthorization(token)",
                     self._capability,
                 )
-            except PlaywrightError:
-                pass
+            except PlaywrightError as _swallowed:
+                logger.debug("submit_verified: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
 
 class SubmissionProbe:

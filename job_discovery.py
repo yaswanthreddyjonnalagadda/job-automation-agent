@@ -385,8 +385,8 @@ class JobDiscoveryEngine:
                                 "matched_skills": matched_skills,
                             })
                             notifications.notify_discovered_job(job_payload)
-                        except Exception:
-                            pass
+                        except Exception as _swallowed:
+                            logger.debug("scan_all: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
             conn.commit()
         finally:
             conn.close()
@@ -490,8 +490,8 @@ class JobDiscoveryEngine:
                     row["dedup_key"], row["job_title"], row["company_name"],
                     row["location"], row["ats_type"], row["url"], now_iso, now_iso
                 ))
-            except Exception:
-                pass
+            except Exception as _swallowed:
+                logger.debug("queue_for_application: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
             conn.commit()
             item = dict(row)
             try:
