@@ -46,6 +46,7 @@ _WRONG_PASSWORD = re.compile(
     r"(wrong|incorrect|invalid) (email|e-mail|user ?name|password|credentials|sign.?in)|"
     r"(email|user ?name|password) (is|was|are) (incorrect|invalid|wrong)|does not match (our|any) (records|account)|"
     r"(could ?n.?t|unable to|failed to) (sign|log) (you )?in|sign.?in failed|login failed", re.IGNORECASE)
+_RULE_WORDING = re.compile(r"\bpassword (?:is|was|are) invalid\b|\binvalid password\b", re.IGNORECASE)
 _EXISTS = re.compile(
     r"(account|user|email|e-mail)( address)? (already )?(exists|is already (registered|in use|taken))|"
     r"already (have|has) an account (with|for) (this|that)|already registered", re.IGNORECASE)
@@ -184,11 +185,15 @@ def read_state(snapshot: str, password_boxes: Optional[int] = None) -> AccountSt
             and re.search(r"choose any option to apply", " ".join(texts), re.I) \
             and len(resume_choices & offered_entries) >= 2:
         return state(NONE, "existing-account login beside explicit alternative application entries")
+    # On a form that makes an account, "Password is invalid" is the site's rule for the password being chosen, not
+    # a refusal of one the owner gave: it is a form error to correct, never a reason to reset a password (23 Oct).
+    creating = passwords >= 2 or says_create(re.findall(r'- heading "((?:[^"\\]|\\.)*)"', snapshot or ""))
     for kind, pattern in ((LOCKED, _LOCKED), (VERIFY_EMAIL, _UNVERIFIED), (WRONG_PASSWORD, _WRONG_PASSWORD),
                           (ACCOUNT_EXISTS, _EXISTS)):
         if kind == VERIFY_EMAIL and wants_code:
             continue
-        said = _first(pattern, texts)
+        said = _first(pattern, [_RULE_WORDING.sub("", t) for t in texts] if creating and kind == WRONG_PASSWORD
+                      else texts)
         if said and (passwords or on_account_step or _first(_SIGN_IN, texts) or _first(_CREATE, texts)):
             return state(kind, said)
     # The page's own channel wording (an authenticator app, SMS/text, a security key) outranks a

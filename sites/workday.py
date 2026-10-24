@@ -788,6 +788,15 @@ class WorkdayAdapter(SiteAdapter):
                     field.type(cand, delay=40)
                     page.wait_for_timeout(1_200)
 
+                    # Some school catalogues fetch only after an explicit
+                    # search submission. Enter here requests results; the
+                    # matching row must still be clicked and verified below.
+                    education = page.get_by_role("group", name="Education", exact=True)
+                    if id_suffix.endswith("--school") and education.count() == 1 and re.search(
+                            r"press\s+Enter\s+to\s+search", education.inner_text(), re.I):
+                        field.press("Enter")
+                        page.wait_for_timeout(700)
+
                     if strategy == "matched_row":
                         import option_match
                         prompt = page.locator(
@@ -877,23 +886,42 @@ class WorkdayAdapter(SiteAdapter):
         listing = listing.first
         listing.evaluate('e => { e.scrollTop = 0; }')
         page.wait_for_timeout(200)
+        # Match against the whole virtual list, including aliases and competing
+        # labels beyond the first viewport; never pick a partial page's first hit.
+        offered = []
         for _ in range(80):
             rows = prompt.locator('[data-automation-id="promptOption"]')
             for i in range(rows.count()):
                 row = rows.nth(i)
                 label = row.get_attribute('data-automation-label') or row.inner_text()
-                if option_match.plain(label) != option_match.plain(wanted):
-                    continue
                 category = row.evaluate("e => e.closest('[data-uxi-multiselectlistitem-type]')?.getAttribute('data-uxi-multiselectlistitem-type') === '2'")
-                if not category and assistant._click_resiliently(row):
+                if not category and label not in offered:
+                    offered.append(label)
+            moved = listing.evaluate("""e => { const before = e.scrollTop; e.scrollTop += Math.max(1, e.clientHeight * .8); return e.scrollTop > before; }""")
+            if not moved:
+                break
+            page.wait_for_timeout(200)
+        else:
+            # A scan limit is not proof that the rest has no ambiguous match.
+            listing.evaluate('e => { e.scrollTop = 0; }')
+            return None
+        listing.evaluate('e => { e.scrollTop = 0; }')
+        page.wait_for_timeout(200)
+        match = option_match.best_option(offered, wanted)
+        if match is None:
+            return None
+        chosen = offered[match]
+        for _ in range(80):
+            rows = prompt.locator('[data-automation-id="promptOption"]')
+            for row in rows.all():
+                label = row.get_attribute('data-automation-label') or row.inner_text()
+                if label == chosen and assistant._click_resiliently(row):
                     page.wait_for_timeout(800)
                     return label
             moved = listing.evaluate("""e => { const before = e.scrollTop; e.scrollTop += Math.max(1, e.clientHeight * .8); return e.scrollTop > before; }""")
             if not moved:
                 break
             page.wait_for_timeout(200)
-        listing.evaluate('e => { e.scrollTop = 0; }')
-        page.wait_for_timeout(200)
         return None
 
     @staticmethod
@@ -909,6 +937,11 @@ class WorkdayAdapter(SiteAdapter):
         def visit(depth):
             if depth > 4 or budget[0] <= 0:
                 return None
+            # Each category has its own virtual list; matching only the rows
+            # mounted immediately after opening it misses later leaf options.
+            chosen = WorkdayAdapter._choose_scrolled_prompt(assistant, page, multiselect_id, wanted)
+            if chosen:
+                return chosen
             rows = prompt.locator('[data-automation-id="promptOption"]')
             leaves, branches = [], []
             for i in range(min(rows.count(), 80)):
@@ -918,7 +951,10 @@ class WorkdayAdapter(SiteAdapter):
                 label = row.get_attribute('data-automation-label') or row.inner_text()
                 kind = row.evaluate("e => e.closest('[data-uxi-multiselectlistitem-type]')?.getAttribute('data-uxi-multiselectlistitem-type')")
                 (branches if kind == '2' else leaves).append(label)
-            hit = option_match.best_option(leaves, wanted)
+            # A completed virtual scan may have rejected an ambiguous match.
+            # Do not override that decision using only its first viewport.
+            hit = (None if prompt.locator('[data-automation-id="activeListContainer"]').count()
+                   else option_match.best_option(leaves, wanted))
             if hit is not None:
                 label = leaves[hit]
                 row = prompt.locator(f'[data-automation-id="promptOption"][data-automation-label={json.dumps(label)}]')

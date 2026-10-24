@@ -38,8 +38,11 @@ def plain(text: str) -> str:
     return " ".join(text.split())
 
 
+_INSTRUCTION = re.compile(r"\s*(?:click|tap) here\b", re.IGNORECASE)     # Lever: "Click Here (If you encounter an issue ...)"
+
+
 def is_placeholder(option: str) -> bool:
-    return bool(_PLACEHOLDER.fullmatch(option or ""))
+    return bool(_PLACEHOLDER.fullmatch(option or "") or _INSTRUCTION.match(option or ""))
 
 
 @functools.lru_cache(maxsize=1)
@@ -118,6 +121,11 @@ def sponsorship_choice(options: list[str], answer: str, needs_sponsorship: Optio
     return True, (rows[0] if rows else None)
 
 
+def broader_term(answer: str) -> Optional[str]:
+    """The broader term a list that does not offer `answer` may offer instead ("South Asian" -> "Asian"), or None."""
+    return _broader().get(plain(answer)) or None
+
+
 def best_option(options: list[str], answer: str) -> Optional[int]:
     """The index of the option that is the answer, or None when none is -- or when two are equally good. An answer the
     list does not offer is looked for once more as its broader term ("South Asian" as "Asian"), never narrower."""
@@ -133,6 +141,20 @@ def best_option(options: list[str], answer: str) -> Optional[int]:
         if broader:
             hit = _best_option(options, broader)
     return hit
+
+
+def matching_choices(options: list[str], answer: str) -> Optional[list[int]]:
+    """Resolve a complete checkbox answer without splitting commas in labels."""
+    whole = best_option(options, answer)
+    if whole is not None:
+        return [whole]
+    separator = r"\s*[;\n|]\s*" if re.search(r"[;\n|]", answer) else r"\s*,\s+"
+    parts = [part.strip() for part in re.split(separator, answer) if part.strip()]
+    if len(parts) < 2:
+        return None
+    matches = [best_option(options, part) for part in parts]
+    return (list(dict.fromkeys(match for match in matches if match is not None))
+            if all(match is not None for match in matches) else None)
 
 
 def _best_option(options: list[str], answer: str) -> Optional[int]:
@@ -274,3 +296,48 @@ def _numeric_range_match(real: list[tuple[int, str]], answer: str) -> Optional[i
         return matching[0]
     return None
 
+
+_SPAN = re.compile(r"^\s*(?:(?:within|in|about|around|up to|after)\s+)?(\d+)\s*(day|week)s?\s*$", re.IGNORECASE)
+_DAYS = {"day": 1, "week": 7}
+
+
+def _span_days(text: str) -> Optional[int]:
+    found = _SPAN.match(text or "")
+    return int(found.group(1)) * _DAYS[found.group(2).lower()] if found else None
+
+
+def availability_option(options: list[str], answer: str) -> Optional[int]:
+    """The one option that states the same wait as the answer ('2 weeks' is 'Within 2 weeks'), or None.
+
+    Only a span of days or weeks, with at most 'within/in/about' before it; '14 days' and '2 weeks' are the same wait,
+    so a list offering both has no one answer. Months, dates and anything else are left alone. Used only when the
+    question asks when the applicant can start (concept NOTICE_PERIOD): the same words answer other questions
+    ('Years of experience?') differently."""
+    wanted = _span_days(answer)
+    if wanted is None:
+        return None
+    hits = [i for i, option in enumerate(options) if _span_days(option) == wanted]
+    return hits[0] if len(hits) == 1 else None
+
+
+def resolve_offered(options: list[str], answer: str, *, needs_sponsorship: Optional[bool] = None,
+                    availability: bool = False) -> str:
+    """The exact offered label that a model's answer means, or "" when none is -- the one reading of an answer given
+    for a list, shared by the AI path and the browser's choosers.
+
+    The same words win; a bare Yes among rows that speak of sponsorship follows the profile and is otherwise left (an
+    answer the profile cannot back is never chosen); then the bounded matches of best_option, and for a start-date
+    question the same wait in other words. No substring, near-spelling or 'only one option' guess (f226)."""
+    answer = (answer or "").strip()
+    if not options or not answer:
+        return ""
+    for option in options:
+        if option.strip().lower() == answer.lower():
+            return option
+    decided, index = sponsorship_choice(list(options), answer, needs_sponsorship)
+    if decided:
+        return options[index] if index is not None else ""
+    index = best_option(list(options), answer)
+    if index is None and availability:
+        index = availability_option(list(options), answer)
+    return options[index] if index is not None else ""

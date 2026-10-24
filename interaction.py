@@ -875,24 +875,15 @@ def sweep_modals_and_policies(page_or_tab: Any, profile: Any = None) -> bool:
 
                 # 3. Locate and click primary confirmation button ('Save', 'Agree', 'Accept', etc.)
                 confirm_clicked = False
-                confirm_selectors = (
-                    "button:has-text('I Accept')",
-                    "button:has-text('Accept All')",
-                    "button:has-text('Accept')",
-                    "button:has-text('I Agree')",
-                    "button:has-text('Agree')",
-                    "button:has-text('Save')",
-                    "button:has-text('Continue')",
-                    "button:has-text('Confirm')",
-                    "button:has-text('Done')",
-                    "button:has-text('OK')",
-                    "button:has-text('Close')",
-                    "[role='button']:has-text('Agree')",
-                    "[role='button']:has-text('Accept')",
+                confirm_labels = (
+                    "I Accept", "Accept All", "Accept", "I Agree", "Agree",
+                    "Save", "Continue", "Confirm", "Done", "OK", "Close",
                 )
 
-                for c_sel in confirm_selectors:
-                    c_btn = modal.locator(c_sel).first
+                for confirmation in confirm_labels:
+                    c_btn = modal.get_by_role(
+                        "button", name=re.compile(r"^\s*" + re.escape(confirmation) + r"\s*$", re.I)
+                    ).first
                     try:
                         if c_btn.count() and c_btn.is_visible():
                             label = (c_btn.inner_text(timeout=500) or "").strip()

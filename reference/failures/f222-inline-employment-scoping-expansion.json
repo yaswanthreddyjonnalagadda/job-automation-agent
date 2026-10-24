@@ -1,0 +1,18 @@
+{
+  "id": "f222",
+  "date": "2026-10-22",
+  "class": "Inline repeated-entry scoping and expansion failure on paragraph-titled sections",
+  "site": "Coinbase (Greenhouse) and any employer form using paragraph/generic headers for repeated work and education",
+  "symptom": "Coinbase application run 20261022_201348 filled only the first of three work history records, filled December 2022 into the current role's End date year, and failed to add the remaining jobs.",
+  "root_cause": "repeated_entries._SECTION_WORK did not match bare 'Employment', and entry_map ignored text values on paragraph roles when discovering section titles, leaving repeated controls unmapped. Generic concept resolution then assigned EDUCATION_END_DATE to the job's End date year before Current role was evaluated. Furthermore, PageAgent lacked an inline entry expansion handler for forms without dedicated site adapters.",
+  "why_tests_missed": "Existing repeated-entry tests used heading elements ('Work Experience 1') and Workday-style adapter fillers, never paragraph headers with inline 'Add another' DOM expansion.",
+  "fix": "Extend _SECTION_WORK to match bare 'Employment', read section titles from paragraph and text roles, reset repeated section scope on separator elements, and implement PageAgent.add_missing_inline_entries to iteratively click inline Add buttons up to the candidate's history count with fail-safe blocker detection.",
+  "tests": [
+    "tests/test_inline_employment.py::test_saved_coinbase_page_has_scoped_employment_and_education",
+    "tests/test_inline_employment.py::test_paragraph_sections_and_separator_boundaries",
+    "tests/test_inline_employment.py::test_add_and_fill_all_jobs_without_ai_or_duplicate_entries",
+    "tests/test_inline_employment.py::test_failed_add_is_not_repeated_and_reports_incomplete_history"
+  ],
+  "prevention": "Map section boundaries from all structural roles including paragraph and separator before answering fields. Resolve current-job blank end dates within the scoped entry rather than falling through to global concept matching."
+}
+

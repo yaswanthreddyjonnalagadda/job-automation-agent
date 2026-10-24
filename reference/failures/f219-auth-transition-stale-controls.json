@@ -1,0 +1,16 @@
+{
+  "id": "f219",
+  "date": "2026-10-22",
+  "class": "Failed authentication mistaken for no page transition",
+  "site": "Rocket Software Workday; any registration/sign-in helper that changes account state before returning failure",
+  "symptom": "Rocket run 20261022_101222 navigated from registration to refused Sign In, but the reader continued using page_02 registration refs on page_03. Runtime reported Invalid frame in aria-ref selector for email and consent and unnecessarily invoked AI before verification recovery.",
+  "root_cause": "sign_in_step returned False when handle_auth_gate failed, even if its nested sign-in replaced the page. The outer loop interpreted False with no blocker as permission to answer the old controls.",
+  "why_tests_missed": "Authentication tests covered success, unchanged failure, and recovery decisions separately. They did not exercise a helper returning False after replacing the live page.",
+  "fix": "After an unsuccessful account action with no explicit blocker, inspect the current URL and account state. A transition returns progress so the outer loop rereads controls; unreadable state produces a precise handoff. This does not treat authentication as successful, retry credentials, or change reset/verification policy.",
+  "tests": [
+    "tests/test_auth_transition_invalidates_controls.py",
+    "tests/test_account_step.py",
+    "tests/test_new_account_refused_is_verified_first.py"
+  ],
+  "prevention": "Represent interaction outcome and page transition separately. Test failed actions that navigate or render a new step, and invalidate old element references before planning further actions."
+}

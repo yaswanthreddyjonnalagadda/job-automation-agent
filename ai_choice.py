@@ -15,7 +15,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-ANSWERS = frozenset({"plan_page", "read_page", "choose_option", "answer_screening_questions", "answer_single_question"})
+ANSWERS = frozenset({"plan_page", "read_page", "choose_option", "answer_screening_questions",
+                     "answer_single_question", "review_open_answer"})
 DOCUMENTS = frozenset({"tailor_resume", "generate_cover_letter"})
 
 PROVIDERS = {"claude": "Anthropic Claude", "gemini": "Google Gemini", "openai": "OpenAI"}

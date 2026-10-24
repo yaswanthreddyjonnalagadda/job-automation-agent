@@ -18,6 +18,10 @@ _GUARD_NAME = "__jaaSubmissionGuardV0"
 
 
 def _guard_script(capability: str) -> str:
+    from sites.adp import POSTING_ENTRY_JS as ADP_POSTING_ENTRY_JS
+    from sites.greenhouse import POSTING_ENTRY_JS as GREENHOUSE_POSTING_ENTRY_JS
+    from sites.bankofamerica import POSTING_ENTRY_JS as BANKOFAMERICA_POSTING_ENTRY_JS
+
     return r"""(() => {
       // A document.open()-class replacement (what Playwright's page.set_content() uses, and
       // what some legacy document.write()-based popup population does) removes every listener
@@ -36,6 +40,10 @@ def _guard_script(capability: str) -> str:
       const capability = CAPABILITY;
       const submitLabel = new RegExp(SUBMIT_PATTERN, "i");
       const safeUtilityLabel = new RegExp(SAFE_UTILITY_PATTERN, "i");
+      const adpPostingEntry = ADP_POSTING_ENTRY;
+      const greenhousePostingEntry = GREENHOUSE_POSTING_ENTRY;
+      const bankofamericaPostingEntry = BANKOFAMERICA_POSTING_ENTRY;
+      const postingEntry = candidate => adpPostingEntry(candidate) || greenhousePostingEntry(candidate) || bankofamericaPostingEntry(candidate);
       const state = {active: false, authorization: null, denials: [], sequence: 0};
       const selector = 'button, input[type="submit"], input[type="image"], [role="button"], a';
       const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
@@ -91,6 +99,7 @@ def _guard_script(capability: str) -> str:
         if (!(element instanceof Element)) return null;
         const candidate = element.closest(selector);
         if (!candidate) return null;
+        if (postingEntry(candidate)) return null;
         if (labels(candidate).some(label => submitLabel.test(label))) return candidate;
         if (structuralSubmitter(candidate) && !ordinaryNavigation(candidate)) return candidate;
         return soleRemainingAction(candidate) ? candidate : null;
@@ -338,7 +347,9 @@ def _guard_script(capability: str) -> str:
       Object.defineProperty(window, "__jaaSubmissionGuardV0", {
         value: api, configurable: false, writable: false
       });
-    })()""".replace("CAPABILITY", json.dumps(capability)).replace(
+    })()""".replace("ADP_POSTING_ENTRY", ADP_POSTING_ENTRY_JS).replace(
+        "GREENHOUSE_POSTING_ENTRY", GREENHOUSE_POSTING_ENTRY_JS
+    ).replace("BANKOFAMERICA_POSTING_ENTRY", BANKOFAMERICA_POSTING_ENTRY_JS).replace("CAPABILITY", json.dumps(capability)).replace(
         "SUBMIT_PATTERN", json.dumps(safety.SUBMIT_LABEL_RE.pattern)
     ).replace(
         "SAFE_UTILITY_PATTERN", json.dumps(safety.SAFE_UTILITY_LABEL_RE.pattern)
@@ -348,7 +359,17 @@ def _guard_script(capability: str) -> str:
 class SubmissionGuardV0:
     """Browser-side deny-by-default guard with a one-use verified submit gateway."""
 
+    _INSTANCES: weakref.WeakSet[SubmissionGuardV0] = weakref.WeakSet()
+
+    @classmethod
+    def for_context(cls, context: Any):
+        for inst in list(cls._INSTANCES):
+            if inst.context == context:
+                return inst
+        return None
+
     def __init__(self, context: Any):
+        self._INSTANCES.add(self)
         self.context = context
         self._capability = secrets.token_urlsafe(32)
         self.last_credential_click = ""   # "performed" | "not_performed" | "unknown" -- see _click_credentials

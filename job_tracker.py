@@ -698,7 +698,8 @@ class JobTracker:
                 """INSERT INTO ats_accounts (employer, email, login_host, method, created_at, last_login_at)
                    VALUES (?, ?, ?, ?, ?, ?)
                    ON CONFLICT (employer) DO UPDATE SET last_login_at = excluded.last_login_at,
-                                                        login_host = excluded.login_host""",
+                                                        login_host = excluded.login_host,
+                                                        email = excluded.email, method = excluded.method""",
                 (employer.strip().lower(), email, login_host, method, now, now))
         logger.info("Recorded %s account for %s (%s)", method, employer, email)
 

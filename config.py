@@ -135,6 +135,20 @@ class UserProfile:
     transgender: str = ""
     pronouns: str = ""
     gpa: str = ""
+    # The owner's standing decisions on consent, given once and applied on every form that asks, in any wording
+    # (reference/concepts.json: AI_NOTETAKER_CONSENT, SHARE_DATA_WITH_PARTNERS, MARKETING_OPT_IN). "Yes" or "No";
+    # empty = the question comes to the owner, never guessed.
+    ai_notetaker_consent: str = ""
+    share_data_with_partners: str = ""
+    marketing_opt_in: str = ""
+    # Places the owner is available to work, as they gave them (answers "In what cities are you available to work?").
+    available_work_locations: str = ""
+    # What the answer engine says to "do you have N years of X?" when the resume does not show X: "No" (the default;
+    # the resume does not support a Yes) or "ask" (leave it for the owner). It never says Yes without evidence.
+    unproven_experience_answer: str = ""
+    # An optional question the profile cannot answer is left blank when the page says which questions are required:
+    # no model call and no stop (answer_engine.py and page_agent's OPTIONAL_LEFT_BLANK).
+    skip_optional_questions: bool = True
     certifications: tuple[str, ...] = ()
     languages: tuple[str, ...] = ()
     # "Skill: level" on a 1-5 scale, for "rate your skill with ..." questions: ("Cisco: 5", "Palo Alto: 4").

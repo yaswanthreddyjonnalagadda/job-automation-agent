@@ -17,6 +17,7 @@ from perception import hide_secrets
 ROOT = Path(__file__).resolve().parent / 'local_debug'
 _LOCK = threading.Lock()
 _SECRET = re.compile(r'password|passcode|otp|totp|one.?time|verification.?code|security.?code|api.?key|token|secret|cookie|authorization|session', re.I)
+_MIN_SECRET_LENGTH = 8
 _MASK = 'input[type=password],input[autocomplete=one-time-code],input[type=hidden]'
 
 
@@ -26,7 +27,9 @@ def enabled() -> bool:
 
 def redact_secrets(text: str) -> str:
     for key, value in os.environ.items():
-        if value and _SECRET.search(key):
+        # A flag or short setting named like a secret ("1", "true") is not one: replacing it would mangle every
+        # digit in the log. Credentials are longer than this.
+        if len(value or '') >= _MIN_SECRET_LENGTH and _SECRET.search(key):
             text = text.replace(value, '<redacted-secret>')
     # Keep personal answers and numbers; redact credential assignments and URLs.
     text = re.sub(r'https?://[^\s<>"\']+', _redact_url, text)

@@ -10,8 +10,10 @@ to one platform's markup lives in these adapters.
 
 from __future__ import annotations
 
+from .adp import AdpAdapter
 from .amazon import AmazonAdapter
 from .ashby import AshbyAdapter
+from .avature import AvatureAdapter
 from .base import SiteAdapter, merge_placeholders
 from .eightfold import EightfoldAdapter
 from .greenhouse import GreenhouseAdapter
@@ -22,7 +24,9 @@ from .workday import WorkdayAdapter
 
 # Most specific first; the generic adapter is the fallback.
 ADAPTERS: tuple[type[SiteAdapter], ...] = (
+    AdpAdapter,
     AmazonAdapter,
+    AvatureAdapter,
     SuccessFactorsAdapter,
     WorkdayAdapter,
     GreenhouseAdapter,
@@ -42,4 +46,4 @@ def adapter_for(url: str) -> SiteAdapter:
     return _CACHE.setdefault("generic", SiteAdapter())
 
 
-__all__ = ["adapter_for", "SiteAdapter", "merge_placeholders", "ADAPTERS"]
+__all__ = ["adapter_for", "SiteAdapter", "merge_placeholders", "ADAPTERS", "AdpAdapter", "AvatureAdapter"]

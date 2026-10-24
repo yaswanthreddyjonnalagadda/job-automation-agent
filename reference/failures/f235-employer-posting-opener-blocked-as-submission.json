@@ -1,0 +1,14 @@
+{
+  "id": "f235",
+  "date": "2026-10-23",
+  "site": "Bank of America Network Security Engineer - Web Proxy, job 26038771, application 140",
+  "class": "Employer posting entry blocked by final-submission containment",
+  "symptom": "Runtime stopped at the public employer job description with final submission is only available through the verified gateway or human handoff. No application form had been reached.",
+  "root_cause": "The public Apply button opens an apply-popup with a same-job Workday link, but the browser guard recognized its label as submission and had no employer-posting predicate. Live DOM showed zero visible inputs/forms/dialogs and a data-bactmln target matching an existing anchor and the current job ID.",
+  "why_tests_missed": "Posting-navigation guard tests covered ADP and Greenhouse but not an employer disclosure-popup opener pointing to a separate ATS tenant.",
+  "fix": "Add a click-time predicate under sites/bankofamerica.py and include it in the existing submission guard. Require the exact career host and job-detail path, Apply label, documented popup marker, matching same-job HTTPS Workday tenant target and anchor, and no visible form/dialog/input/iframe. Keep submission and ambiguous controls guarded. During supervision followed the existing public Workday link and resumed runtime; Workday sign-in subsequently rejected the configured login, so application completion is not established.",
+  "tests": [
+    "tests/test_bankofamerica_posting_entry.py::test_bankofamerica_apply_only_opens_the_same_job"
+  ],
+  "prevention": "Distinguish proven public posting navigation from application submission at click time using portal-owned structure and destination identity. A navigation fix does not establish authenticated access or successful application completion."
+}

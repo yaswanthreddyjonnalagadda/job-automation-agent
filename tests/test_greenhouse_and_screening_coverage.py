@@ -44,11 +44,13 @@ def test_complete_account_code_accepts_8_char_alphanumeric_greenhouse_code(monke
     ag.assistant = SimpleNamespace(passcode_from_gmail=lambda tab, previous="", length=0: "EvPGU6Qy" if length == 8 else "")
 
     typed = []
+    pressed = []
     fake_loc = SimpleNamespace(
         click=lambda **k: None,
         fill=lambda val, **k: typed.append(val),
         evaluate=lambda *a, **k: None,
         dispatch_event=lambda *a, **k: None,
+        press=lambda key, **kw: pressed.append(key),
     )
     monkeypatch.setattr(page_agent, "fill_and_dispatch", lambda loc, val, **k: typed.append(val))
     ag.locate = lambda page, ref: fake_loc
@@ -65,6 +67,7 @@ def test_complete_account_code_accepts_8_char_alphanumeric_greenhouse_code(monke
     controls = [page_agent.Control(ref="e1", role="textbox", name="Security code")]
     assert ag.complete_account_code(fake_page, controls, snapshot) is True
     assert typed == ["EvPGU6Qy"]
+    assert pressed == ["Enter"]
 
 
 def test_which_country_are_you_located_in_matches_country_and_not_resides_in():

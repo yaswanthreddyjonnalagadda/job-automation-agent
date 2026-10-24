@@ -623,7 +623,7 @@ def pick_open_row(scope, answer: str, timeout_ms: int = 3_000) -> Optional[str]:
     returns its text -- or None, closing the list, when no row is. Never ArrowDown + Enter: that takes whichever row
     is first ("United States" became "Afghanistan"), and in a box with no list open it sends the whole form -- Lucid,
     30 September: Greenhouse took it as Submit, showed its errors and mailed its security code."""
-    rows = scope.locator(", ".join(f"{s}:visible" for s in _OPTION_SELECTOR.split(", ")) + ", [role=listbox] li:visible")
+    rows = scope.locator(", ".join(f"{s}:visible" for s in _OPTION_SELECTOR.split(", ")) + ", [role=listbox] li:visible, [class*=dropdown-location]:visible")
     texts = []
     try:
         for i in range(min(rows.count(), 80)):

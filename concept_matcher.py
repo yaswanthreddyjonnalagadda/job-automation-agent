@@ -445,6 +445,10 @@ def match_concept(
     clean_c = clean_text(container)
     clean_ctx = clean_text(context)
     clean_n = clean_text(name)
+    if clean_q and clean_n.startswith(clean_q + " "):
+        # A dropdown's accessible name may append its current selection to
+        # the actual question. Do not reintroduce that answer as label context.
+        clean_n = clean_q
     combined = f"{clean_q} {clean_c} {clean_ctx} {clean_n}".strip()
 
     if not combined:
@@ -550,7 +554,9 @@ def confirm_concept(concept: Optional[str], options: Optional[list[str]]) -> Opt
     Citizenship" is a citizenship question, and it is left as the label said.
     """
     real = [o for o in (options or []) if o and not re.match(r"^\s*(choose|select|--)", o, re.IGNORECASE)]
-    if concept == "ETHNICITY_RACE" and real and all(re.search(r"hispanic|latin", o, re.IGNORECASE) for o in real):
+    if concept == "ETHNICITY_RACE" and real and all(re.search(
+            r"^(?:(?:yes|no)[,\s:;-]+)?(?:not\s+(?:of\s+)?|non[-\s]*)?(?:hispanic|latin[oax]?)\b",
+            re.sub(r"\([^)]*\)", "", o).strip(), re.IGNORECASE) for o in real):
         # "Ethnic Origin" offering only Hispanic/Latino and Not Hispanic/Latino (UKG, 30 September).
         return "HISPANIC_OR_LATINO"
     if concept not in RESIDENCE_CONCEPTS or not options:

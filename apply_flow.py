@@ -41,7 +41,7 @@ from datetime import datetime, timezone
 from typing import Optional
 import logging
 import sys
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse, urlsplit
 from pathlib import Path
 
 import re
@@ -314,10 +314,8 @@ def _tailor_with(client, resume, job, profile, job_dir: Path, resume_txt: Path, 
     """Attempt to tailor the resume using *client*.
 
     Returns the PDF path on success.
-    Returns None on transient / unknown failure so the caller tries the next provider.
-    Raises _OutOfCreditsError when the account has hit a hard usage limit, so the
-    caller can warn the user and still try the next provider rather than silently
-    falling through."""
+    Returns None on provider failure or remaining unsupported claims so the caller
+    tries the next provider. Account credit errors are logged explicitly."""
     try:
         logger.info("Tailoring resume for %s via %s...", job.company, label)
         raw = client.tailor_resume(resume, job, profile)
@@ -345,7 +343,11 @@ def _tailor_with(client, resume, job, profile, job_dir: Path, resume_txt: Path, 
                 if len(still) < len(unsupported):
                     tailored, unsupported = retried, still
             except Exception as retry_exc:
-                logger.warning("TAILORING_RETRY failed (%s) -- keeping the first draft", retry_exc)
+                logger.warning("TAILORING_RETRY failed (%s) -- rejecting the unsupported draft", retry_exc)
+        if unsupported:
+            logger.error("TAILORING_REJECTED (%s): %d unsupported claim(s) remain -- trying the next provider",
+                         label, len(unsupported))
+            return None
         resume_txt.write_text(tailored, encoding="utf-8")
         build_resume_pdf(resume_txt, resume_pdf)
         logger.info("Tailored resume written to %s via %s", resume_pdf.name, label)
@@ -373,6 +375,20 @@ def document_name(profile, kind: str, company: str) -> str:
     return "_".join(part for part in (person, kind, safe_company) if part)
 
 
+def _resume_with_current_email(path: Path, profile, job, job_dir: Path) -> Path:
+    """Keep source PDFs intact; refresh a stale generic attachment locally."""
+    text = parse_resume(path).raw_text
+    emails = re.findall(r"[\w.+-]+@[\w-]+\.[\w.]+", text)
+    if not profile.email or not any(email.casefold() != profile.email.casefold() for email in emails):
+        return path
+    updated = re.sub(r"[\w.+-]+@[\w-]+\.[\w.]+", profile.email, text)
+    target = job_dir / "current_contact_resume.pdf"
+    text_path = target.with_suffix(".txt")
+    text_path.write_text(ensure_resume_header(updated, profile, job), encoding="utf-8")
+    build_resume_pdf(text_path, target)
+    return target
+
+
 def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None, key: str = "") -> Path:
     """Returns the resume PDF to attach for THIS job.
 
@@ -396,6 +412,21 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
         # rather than locking the posting to the generic resume.
         reused = None
     if reused is not None:
+        try:
+            cached_text = parse_resume(reused).raw_text
+            cached_emails = re.findall(r"[\w.+-]+@[\w-]+\.[\w.]+", cached_text)
+            stale_email = profile.email and cached_emails and any(
+                email.casefold() != profile.email.casefold() for email in cached_emails)
+            if stale_email:
+                logger.info("REUSED_RESUME_STALE_CONTACT: profile email changed; preparing a current resume")
+                reused = None
+            elif not cached_text.strip() or safety.unsupported_claims(resume.raw_text, cached_text):
+                logger.warning("REUSED_RESUME_REJECTED: stored resume is empty or contains unsupported claims")
+                reused = None
+        except Exception:
+            logger.warning("REUSED_RESUME_REJECTED: stored resume could not be validated")
+            reused = None
+    if reused is not None:
         logger.info("REUSED_RESUME: %s was already tailored for this posting -- not generating another", reused.name)
         return reused
 
@@ -412,7 +443,7 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
             "TAILORING_SKIPPED: no AI API keys configured -- attaching the local resume. "
             "Add a Claude, Gemini, or OpenAI key in Settings to enable tailoring."
         )
-        return generic
+        return _resume_with_current_email(generic, profile, job, job_dir)
 
     for label, client in found:
         result = _tailor_with(client, resume, job, profile, job_dir, resume_txt, resume_pdf, label)
@@ -428,7 +459,7 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
         "TAILORING_FAILED: every writer (%s) failed -- attaching the local generic resume.",
         ", ".join(label for label, _ in found),
     )
-    return generic
+    return _resume_with_current_email(generic, profile, job, job_dir)
 
 
 def prepare_cover_letter(claude, resume, job, profile, job_dir: Path, tracker=None, key: str = "") -> tuple[Path, Path] | None:
@@ -439,6 +470,11 @@ def prepare_cover_letter(claude, resume, job, profile, job_dir: Path, tracker=No
     reused = reuse_stored_document(tracker, key, "cover_letter", job_dir)
     if reused is not None:
         try:
+            cached_text = (parse_resume(reused).raw_text if reused.suffix.lower() == ".pdf"
+                           else reused.read_text(encoding="utf-8"))
+            emails = re.findall(r"[\w.+-]+@[\w-]+\.[\w.]+", cached_text)
+            if profile.email and any(email.casefold() != profile.email.casefold() for email in emails):
+                raise ValueError("stored cover letter has a previous contact email")
             if reused.suffix.lower() == ".pdf":
                 twin = reused.with_suffix(".txt")
                 if not twin.is_file():
@@ -576,6 +612,9 @@ def on_form_resume(assistant, prepared):
     return getattr(assistant, "attached_resume", None) or prepared
 
 
+_SEARCH_QUERY_KEYS = frozenset({"q", "query", "search", "searchtext", "keyword", "keywords"})
+
+
 def worth_returning_to(url: str) -> bool:
     """Whether a page is one to reopen later.
 
@@ -585,6 +624,8 @@ def worth_returning_to(url: str) -> bool:
     """
     if not url or not url.startswith("http"):
         return False
+    if any(key.lower() in _SEARCH_QUERY_KEYS for key in parse_qs(urlsplit(url).query)):
+        return False        # a page of search results is never where an application got to (f220)
     lowered = url.lower()
     return not any(mark in lowered for mark in (
         "/api/", "auth/error", "error=", "/error", "signin", "sign-in", "/login",
@@ -2309,11 +2350,11 @@ def main() -> None:
                     diagnostics.capture_safe_screenshot(page, job_dir / "submitted_confirmation.png")
                 except Exception as exc:
                     logger.warning("Could not capture confirmation screenshot: %s", exc)
-                if status == STATUS_SUBMITTED:
-                    delete_screenshots(job_dir)
                 evidence = getattr(assistant, "_confirmation_evidence", "") or \
                     "the page confirmed it (see submitted_confirmation.png)"
                 status, note = safety.verification_status(evidence)
+                if status == STATUS_SUBMITTED:
+                    delete_screenshots(job_dir)
                 tracker.update_status(key, status, notes=note)
                 remember_progress(tracker, key, page, "submitted by the user", assistant=assistant)
                 logger.info("SUBMITTED_BY_USER: confirmation seen on %s", page.url)
@@ -2369,7 +2410,7 @@ def main() -> None:
 
             if decision == "continue":
                 if hasattr(tracker, "read_checkpoint") and hasattr(tracker, "write_checkpoint"):
-                    for k in dict.fromkeys([key, getattr(assistant, "submission_key", ""), getattr(agent, "_application_key", lambda: "")()]):
+                    for k in dict.fromkeys([key, getattr(assistant, "submission_key", "")]):
                         if not k:
                             continue
                         try:

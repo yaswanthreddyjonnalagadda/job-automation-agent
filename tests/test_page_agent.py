@@ -151,6 +151,10 @@ def handed_over(outcome) -> bool:
 
 def owner_submits(page):
     """What the owner does after the hand-over: sends the form as it stands."""
+    from submission_guard import SubmissionGuardV0
+    guard = SubmissionGuardV0.for_context(page.context)
+    if guard is not None:
+        guard.park_for_handoff()
     page.evaluate("document.querySelector('form').requestSubmit()")
     page.wait_for_url("**/done", timeout=5_000)
 
@@ -709,14 +713,21 @@ def test_an_answer_that_does_not_stay_is_never_submitted_blank(page, resume_file
     assert page.url.endswith("/apply/2")
 
 
-def test_a_submit_button_on_a_step_before_the_last_just_moves_on(page, resume_file):
-    """Schwab's step 2 of 5 says "Submit" and only saves that step: it was
-    held as if it sent the application, for want of a resume attached earlier."""
+def test_a_submit_button_on_a_step_before_the_last_is_left_to_the_owner(page, resume_file):
+    """Schwab's step 2 of 5 says "Submit" and only saves that step. The agent cannot tell that from a real send, and
+    nothing labelled Submit is pressed outside the hand-over (submission_guard, CLAUDE.md section 6): it stops at the
+    step, filled, and the owner's press saves the step and moves on -- it does not send the application."""
     serve(page, step1=STEP_1.replace('<button type="submit">Next</button>', '<button type="submit">Submit</button>'))
     outcome = make_agent(Planner(next_label="Submit"), resume_file).run(page)
-    assert handed_over(outcome), outcome.reasons          # it moved past step 1's "Submit" to the last step
-    owner_submits(page)
-    assert stored(page, "sponsor") == "Yes"
+    assert handed_over(outcome), outcome.reasons
+    assert page.url.endswith("/apply/1")                   # it did not press step 1's "Submit" itself
+    assert stored(page, "sponsor") == ""
+    from submission_guard import SubmissionGuardV0
+    guard = SubmissionGuardV0.for_context(page.context)
+    if guard is not None:
+        guard.park_for_handoff()
+    page.evaluate("document.querySelector('form').requestSubmit()")
+    page.wait_for_url("**/apply/2", timeout=5_000)         # the owner's press saved step 1 and moved to step 2
 
 
 # --- radio buttons whose label is the text after them (Schwab's veteran form) -----

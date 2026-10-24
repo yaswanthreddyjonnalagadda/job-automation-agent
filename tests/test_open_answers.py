@@ -159,6 +159,9 @@ class Model:
         self.replies, self.calls = list(replies), []
 
     def __call__(self, system, user, tokens):
+        if system == open_answers._REVIEW_SYSTEM:
+            # These are style/length tests; semantic rejection has its own regression suite.
+            return json.dumps({"supported": True, "complete": True, "issues": []})
         self.calls.append((system, user))
         return json.dumps({"answer": self.replies.pop(0)}) if self.replies else "{}"
 

@@ -1,0 +1,11 @@
+{
+  "_about": "Skill terms matching_engine looks for in a posting. A term the posting names and the owner's resume or profile lacks is reported as missing. Add terms here, never in code.",
+  "skills": [
+    "BGP", "OSPF", "MPLS", "EVPN", "VXLAN", "IS-IS", "SD-WAN", "VPN", "IPsec", "TCP/IP", "DNS", "DHCP",
+    "Load Balancing", "Firewall", "Palo Alto", "Fortinet", "Cisco", "Juniper", "Arista", "F5", "Zscaler",
+    "AWS", "Azure", "GCP", "Direct Connect", "ExpressRoute", "VPC", "Transit Gateway",
+    "Kubernetes", "Docker", "Terraform", "Ansible", "Python", "Go", "Golang", "Bash", "Java", "C++",
+    "Linux", "Prometheus", "Grafana", "Splunk", "Datadog", "CI/CD", "Jenkins", "GitHub Actions", "Git",
+    "Wireshark", "NetFlow", "SNMP", "Automation", "Network Security", "Zero Trust", "SRE", "Observability"
+  ]
+}

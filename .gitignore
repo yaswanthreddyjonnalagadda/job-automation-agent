@@ -55,3 +55,6 @@ sandbox/
 # Local working files: scratch output, backups of the owner's data (never pushed).
 scratch/
 data/*.bak
+
+# Local assistant state.
+.claude/

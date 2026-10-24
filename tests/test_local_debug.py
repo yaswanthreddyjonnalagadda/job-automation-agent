@@ -83,3 +83,10 @@ def test_browser_capture_keeps_form_readable_without_changing_values(tmp_path, m
 def json_load(path):
     import json
     return json.loads(path.read_text())
+
+
+def test_a_short_setting_named_like_a_secret_does_not_mangle_the_log(monkeypatch):
+    monkeypatch.setenv('SESSION_FLAG', '1')
+    monkeypatch.setenv('API_KEY_FOR_TEST', 'abcd1234efgh')
+    text = local_debug.redact_secrets('salary 125000 key abcd1234efgh')
+    assert '125000' in text and 'abcd1234efgh' not in text

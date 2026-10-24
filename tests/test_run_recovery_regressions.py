@@ -306,7 +306,7 @@ def test_reload_creates_a_signal_for_a_waiting_worker(monkeypatch, tmp_path):
     assert (tmp_path / "_signal_synthetic.txt").read_text() == "reload_code"
 
 
-def test_pause_never_sends_a_signal_that_resumes_automation(monkeypatch, tmp_path):
+def test_a_stray_pause_request_never_sends_a_signal_that_resumes_automation(monkeypatch, tmp_path):
     data = tmp_path / "data"
     data.mkdir()
     signal = data / "_signal_synthetic.txt"
@@ -315,18 +315,8 @@ def test_pause_never_sends_a_signal_that_resumes_automation(monkeypatch, tmp_pat
     monkeypatch.setattr(web_ui, "_running_url", lambda: "https://employer.example/job")
     monkeypatch.setitem(web_ui.app.config, "TESTING", True)
     response = web_ui.app.test_client().post("/api/cockpit/pause")
-    assert response.status_code == 409
-    assert response.get_json()["ok"] is False
+    assert response.status_code in (404, 405)          # there is no pause: nothing to acknowledge
     assert signal.read_text() == "hold"
-
-
-def test_the_unavailable_pause_control_is_disabled(page):
-    from flask import render_template
-    from playwright.sync_api import expect
-    with web_ui.app.test_request_context("/"):
-        markup = render_template("cockpit_card.html", is_running=True)
-    page.set_content(markup)
-    expect(page.get_by_role("button", name="Pause")).to_be_disabled()
 
 
 @pytest.mark.parametrize("code, label", [

@@ -1,0 +1,16 @@
+{
+  "id": "f220",
+  "date": "2026-10-22",
+  "site": "Workday (rocket.wd5.myworkdayjobs.com) and any employer site whose pages carry their own job search",
+  "class": "A control that is page furniture (the site's own search) was read as an application question",
+  "symptom": "Application 105 (Rocket) ended on the tenant's job listing with a 120-word resume summary typed into its 'Search for jobs or keywords' box and '0 JOBS FOUND'; the run then stopped as a validation loop (BLOCKED_VALIDATION_LOOP) with nothing wrong on any form.",
+  "root_cause": "parse_snapshot treated every textbox as a question, including one inside a `search` landmark. Once the Apply link led to a listing page instead of a form, the AI single-question path wrote an open answer into the search box, which searched the employer's jobs, emptied the listing and left the page unchanged.",
+  "why_tests_missed": "Tests fed parse_snapshot application forms; none had a page whose only textbox is the site's search, and the replay corpus holds pages from forms the agent was already on.",
+  "fix": "parse_snapshot tracks `search` landmarks and drops text boxes inside one, the same way it drops honeypots: not a question, never answered, never 'still blank'. Buttons stay pressable. Why the Apply link reached the listing at all is not established from the private run log. The resume point had the same blind spot: the listing's ?q= address was saved as the application's last page, so Resume would have reopened the search results; apply_flow.worth_returning_to now refuses any address carrying a search query.",
+  "tests": [
+    "tests/test_site_search_box.py::test_textbox_inside_a_search_landmark_is_not_a_question",
+    "tests/test_site_search_box.py::test_boxes_not_called_search_stay_questions_and_order_is_kept",
+    "tests/test_site_search_box.py::test_a_page_of_search_results_is_not_a_page_to_resume_at"
+  ],
+  "prevention": "Classify controls by landmark before answering: only controls inside the application's form region are questions. Navigation, search and header controls are never answered, whatever model is asked."
+}

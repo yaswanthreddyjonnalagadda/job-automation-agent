@@ -1,0 +1,18 @@
+{
+  "id": "f223",
+  "date": "2026-10-22",
+  "class": "Repeated section separator index reset and disabled control required completeness check failure",
+  "site": "Coinbase (Greenhouse) and any multi-entry form with separator elements or dynamic disabled fields",
+  "symptom": "On Greenhouse form with 3 candidate jobs, after clicking 'Add another', the second job was also filled with Capital One (job 0) and checked 'Current role', the 3rd job was never added, and the runner stopped at needs_user_review reporting 'required fields still blank: End date month*; End date year*'.",
+  "root_cause": "1. In repeated_entries.entry_map, encountering a separator immediately before another repeated section title (e.g. <hr><p>Employment</p>) reset section = None, causing the next title to evaluate kind != section and reset index = -1. The subsequent entry was then assigned index 0, duplicate-filling Capital One and causing add_missing_inline_entries to see no index increase (new_shown == shown_work) and trigger _inline_entry_blocker. 2. In browser_automation.find_required_blanks, input/select controls were not checked for el.disabled, so required fields disabled by checking 'Current role' (End date month*, End date year*) were included in required_still_blank.",
+  "why_tests_missed": "Test fixtures in test_inline_employment.py added repeated job rows without intervening separators or headings, and find_required_blanks was only tested on static forms without dynamically disabled controls.",
+  "fix": "In repeated_entries.py, track pending_separator and preserve last_section across separators followed by repeated section titles of the same kind or matching first_label. In browser_automation.py, exclude disabled form controls (el.disabled) from find_required_blanks. In page_agent.py, guard open_answers.read_box against None page objects.",
+  "tests": [
+    "tests/test_inline_employment.py::test_greenhouse_repeated_paragraphs_with_separators",
+    "tests/test_inline_employment.py::test_disabled_end_date_not_counted_in_find_required_blanks",
+    "tests/test_inline_employment.py::test_add_and_fill_all_jobs_without_ai_or_duplicate_entries",
+    "tests/test_repeated_entries.py::test_the_page_plan_cannot_put_another_entrys_value_in_an_entry_box"
+  ],
+  "prevention": "Always test repeated entry expansion against real DOM structures where separators and headings recur per card. Exclude disabled controls from required completeness audits at review and submit borders."
+}
+
