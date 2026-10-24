@@ -564,8 +564,9 @@ def decide_next_step(assistant, page, step: int, experience_data: dict, filled_e
     try:
         from interaction import commit_draft_cards
         commit_draft_cards(page)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Could not save the draft experience/education cards before moving on: %s: %s",
+                       type(exc).__name__, str(exc).splitlines()[0][:120] if str(exc) else "")
 
     if assistant.has_next_step(page):
         return "continue"
@@ -1173,8 +1174,8 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
         if outcome.kind == "submitted":
             try:
                 diagnostics.capture_safe_screenshot(page, job_dir / "submitted_confirmation.png")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("No confirmation screenshot: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
             delete_screenshots(job_dir)
             message = "Submitted by the agent -- the site confirmed it" + (f". Worth checking: {notes}" if notes else "")
             tracker.update_status(key, STATUS_SUBMITTED, notes=message[:1000])
@@ -1592,8 +1593,8 @@ def submit_verified(assistant, page, tracker, key, job, job_dir: Path, decision)
     tracker.update_status(key, status, notes=note)
     try:
         diagnostics.capture_safe_screenshot(page, job_dir / "submitted_confirmation.png")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("No confirmation screenshot: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
     if status == STATUS_SUBMITTED:
         delete_screenshots(job_dir)
     logger.info("AUTO_SUBMIT result: %s -- %s", status, note)
@@ -1929,8 +1930,8 @@ def main() -> None:
         if diag_consumer is not None:
             try:
                 diag_consumer.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Could not close the diagnostics consumer: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
             diag_consumer = None
         if RuntimeEvent is not None:
             RuntimeEvent.clear_current_run()
@@ -2308,8 +2309,9 @@ def main() -> None:
                                 page = page.context.pages[-1]  # it opened in a new tab
                                 try:
                                     page.wait_for_load_state("domcontentloaded", timeout=30_000)
-                                except Exception:
-                                    pass
+                                except Exception as exc:
+                                    logger.debug("The new tab did not finish loading: %s",
+                                                 str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
                             page = assistant.dismiss_apply_chooser(page)
                             continue
                 if decision == "stop":
