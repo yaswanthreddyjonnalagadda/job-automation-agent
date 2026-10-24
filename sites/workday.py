@@ -326,8 +326,8 @@ class WorkdayAdapter(SiteAdapter):
         finally:
             try:
                 page.keyboard.press("Escape")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("WORKDAY: Escape after the dropdown attempt failed: %s", str(exc).splitlines()[0][:100])
 
     def fill_education_section(self, assistant, page: Page, education: list[dict]) -> None:
         self.delete_all_entries(assistant, page, "Education", "Certifications")
@@ -693,8 +693,9 @@ class WorkdayAdapter(SiteAdapter):
         for extra in set(page.context.pages) - known_pages:
             try:
                 extra.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("WORKDAY: could not close the extra tab %s: %s", getattr(extra, "url", "?")[:80],
+                             str(exc).splitlines()[0][:100])
 
     def select_skills(self, assistant, page, field, values: list[str]) -> tuple[list[str], list[str]]:
         """Search each supported skill separately and verify its committed tag."""
@@ -1217,8 +1218,9 @@ class WorkdayAdapter(SiteAdapter):
                         field.fill("")
                         field.type(cand.split(",")[0].strip(), delay=40)
                         page.wait_for_timeout(1_000)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("WORKDAY: typing %r into the search box failed: %s", cand.split(",")[0].strip()[:40],
+                                     str(exc).splitlines()[0][:100])
 
                 options = assistant._open_option_texts(page)
                 if not options:
