@@ -7,7 +7,8 @@ a Workday form was a new question on Greenhouse, and each new wording needed a c
 What is kept, from the tracker:
   * every answer the owner gave, on any application ("you");
   * every answer the agent gave -- the AI's, or a choice it made and read back -- on an application the owner then
-    sent ("confirmed": the owner saw it on the form before sending it).
+    sent ("confirmed": the owner saw it on the form before sending it);
+  * the same on an application held for the owner's review but not sent ("reviewed": weaker, so any other answer wins).
 What never is: a declaration or signature, a legal-status or sponsorship question (the profile answers those afresh
 each time), an essay (written for one employer), a question that names the employer, a date (a start date goes
 stale), and nothing the profile answers (it answers them itself, so a change to the profile is never hidden behind an
@@ -21,7 +22,7 @@ been an employee"; dates never come from here.
 
 When one question has several answers, the owner's wins over the agent's, and the newest over older ones; the others
 are listed beside it. A learned answer the owner does not want is listed under "forgotten" and never learned again.
-data/_answer_bank.json (git-ignored) is rebuilt from the tracker when a run starts and after each wait for the owner.
+data/_answer_bank.json (git-ignored) is added to from the tracker when a run starts and after each wait for the owner; it never shrinks.
 """
 from __future__ import annotations
 
@@ -40,6 +41,10 @@ logger = logging.getLogger(__name__)
 
 BANK_FILE = config.DATA_DIR / "_answer_bank.json"
 SENT = "submitted"
+# Sent to the employer, or put in front of the owner who may still send it: the agent's answers on the second are
+# kept too, but below those on a sent application ("reviewed" < "confirmed" < "you").
+REVIEWED = ("needs_user_review", "ready_to_submit")
+SOURCE_RANK = {"you": 3, "confirmed": 2, "reviewed": 1}
 AGENT_SOURCES = ("verified_agent", "agent", "claude", "gemini", "openai", "ai")
 
 # Words that change nothing about what is asked.
@@ -60,6 +65,12 @@ _MAX_WORDS = 12          # longer than this is writing for one form, not a reusa
 _MIN_WORDS = 3           # "Month", "Year", "Location", "Spoken Level": parts of something larger, not a question
 # What older runs recorded that is not an answer: a press ("open it", "focus it"), a form's internal field name.
 _UI_ACTION = re.compile(r"^(?:open|focus|click|press|expand|close|toggle|scroll)(?:\s+it)?$", re.IGNORECASE)
+# Page copy read as a question ("for more details.", "If you answer yes to this question, you will be required ..."),
+# and the model's way of saying it had nothing to say ("Not specified in the candidate's profile or resume.").
+_PAGE_COPY = re.compile(r"\bif you (?:answer|select|choose)\b|\byou will be required\b|\bfor more (?:details|information)\b",
+                       re.IGNORECASE)
+_NOTHING_TO_SAY = re.compile(r"^(?:not (?:specified|provided|available|applicable|mentioned|stated)|n/?a|unknown|none provided)\b",
+                             re.IGNORECASE)
 _MACHINE_KEY = re.compile(r"^[\w.\-]+(?:,[\w.\-]+)+$")
 
 _cache: dict[str, Any] = {"mtime": None, "bank": None}
@@ -94,7 +105,9 @@ def portable(question: str, answer: str, company: str = "") -> bool:
     question, answer = (question or "").strip(), (answer or "").strip()
     if not question or not answer or len(key(question).split()) < _MIN_WORDS or _MACHINE_KEY.match(question):
         return False
-    if _UI_ACTION.match(answer) or is_non_answer(answer):
+    if _UI_ACTION.match(answer) or is_non_answer(answer) or _NOTHING_TO_SAY.match(answer):
+        return False
+    if question[0].islower() or _PAGE_COPY.search(question):
         return False
     if safety.is_attestation(question) or safety.is_attestation(answer) or safety.is_legal_status_question(question) \
             or safety.is_privacy_consent(question):
@@ -122,14 +135,48 @@ def _stamp(app) -> str:
     return when.isoformat() if hasattr(when, "isoformat") else str(when or "")
 
 
+def _merge(entries: dict[str, dict], k: str, candidate: dict) -> None:
+    """Files `candidate` under `k`: the stronger source wins, then the newer; the loser's value is listed beside it."""
+    current = entries.get(k)
+    if current is None:
+        entries[k] = candidate
+        return
+    for field in ("companies", "sites"):
+        current[field] = sorted(set(current[field]) | set(candidate[field]) - {""})
+    rank = lambda e: (SOURCE_RANK.get(e["source"], 0), e["when"])       # noqa: E731
+    if rank(candidate) > rank(current):
+        candidate["companies"], candidate["sites"] = current["companies"], current["sites"]
+        candidate["others"] = sorted(set(candidate.get("others") or []) | set(current["others"]) | {current["value"]}
+                                     - {candidate["value"]})
+        entries[k] = candidate
+    elif candidate["value"] != current["value"]:
+        current["others"] = sorted(set(current["others"]) | {candidate["value"]})
+
+
 def rebuild(tracker, path: Path = BANK_FILE) -> int:
-    """Reads every application's answers from the tracker and writes the bank. Returns how many questions it holds."""
+    """Reads every application's answers from the tracker and writes the bank. Returns how many questions it holds.
+
+    The bank is added to, never replaced: what it already holds stays (still passing the same refusals) unless the
+    owner put its key under "forgotten" or a stronger or newer answer replaces it, so a tracker that holds less than
+    the one the bank was built from (a database that was down, a fresh one) cannot shrink it."""
     import concept_matcher
     old = _read(path)
     forgotten = set(old.get("forgotten") or [])
     entries: dict[str, dict] = {}
+    for k, kept in (old.get("entries") or {}).items():
+        try:
+            question, value = kept["question"], kept["value"]
+            keep = (k not in forgotten and portable(question, value)
+                    and (kept.get("source") == "you" or not concept_matcher.is_self_identification(question)))
+        except (KeyError, TypeError, AttributeError):
+            keep = False
+        if keep:
+            entries[k] = {"question": kept["question"], "value": kept["value"], "source": kept.get("source") or "confirmed",
+                          "when": str(kept.get("when") or ""), "companies": list(kept.get("companies") or []),
+                          "sites": list(kept.get("sites") or []), "others": list(kept.get("others") or [])}
     for app in tracker.list_all():
-        sent = str(getattr(app, "status", "")) == SENT
+        status = str(getattr(app, "status", ""))
+        agent_source = "confirmed" if status == SENT else "reviewed" if status in REVIEWED else ""
         try:
             rows = tracker.answers_for(app.id)
         except Exception as exc:
@@ -137,7 +184,7 @@ def rebuild(tracker, path: Path = BANK_FILE) -> int:
             continue
         for row in rows:
             by = str(row.get("answered_by") or "").lower()
-            source = "you" if by == "user" else "confirmed" if (sent and by in AGENT_SOURCES) else ""
+            source = "you" if by == "user" else agent_source if by in AGENT_SOURCES else ""
             question, answer = row.get("question") or "", row.get("answer") or ""
             if not source or not portable(question, answer, getattr(app, "company", "") or ""):
                 continue
@@ -146,22 +193,10 @@ def rebuild(tracker, path: Path = BANK_FILE) -> int:
             k = key(question)
             if not k or k in forgotten:
                 continue
-            candidate = {"question": " ".join(question.split())[:300], "value": meaning(answer), "source": source,
-                         "when": _stamp(app), "companies": [getattr(app, "company", "") or ""],
-                         "sites": [row.get("host") or ""], "others": []}
-            current = entries.get(k)
-            if current is None:
-                entries[k] = candidate
-                continue
-            for field in ("companies", "sites"):
-                current[field] = sorted(set(current[field]) | set(candidate[field]) - {""})
-            better = (candidate["source"] == "you", candidate["when"]) > (current["source"] == "you", current["when"])
-            if better:
-                candidate["companies"], candidate["sites"] = current["companies"], current["sites"]
-                candidate["others"] = sorted(set(current["others"]) | {current["value"]} - {candidate["value"]})
-                entries[k] = candidate
-            elif candidate["value"] != current["value"]:
-                current["others"] = sorted(set(current["others"]) | {candidate["value"]})
+            _merge(entries, k, {"question": " ".join(question.split())[:300], "value": meaning(answer),
+                                "source": source, "when": _stamp(app),
+                                "companies": [getattr(app, "company", "") or ""],
+                                "sites": [row.get("host") or ""], "others": []})
     bank = {"_about": "Answers reused on every portal; rebuilt from the tracker (answer_bank.py). Put a question's "
                       "key under 'forgotten' to stop an answer being reused.",
             "forgotten": sorted(forgotten), "entries": dict(sorted(entries.items()))}

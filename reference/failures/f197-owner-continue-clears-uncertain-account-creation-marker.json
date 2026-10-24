@@ -1,0 +1,17 @@
+{
+  "id": "f197",
+  "date": "2026-10-18",
+  "site": "Any portal where an account creation attempt was interrupted (Mutual of Enumclaw iCIMS, Workday)",
+  "class": "A durable 'account_creation_dispatched' marker written before an interrupted run was never cleared when the owner responded to the handoff with Continue, causing an infinite blocker loop on the create form",
+  "symptom": "On Mutual of Enumclaw (iCIMS), after an earlier interrupted run left account_creation_dispatched in the checkpoint, every resume stopped with 'an earlier attempt may already have pressed Create Account ... check whether the account now exists before trying again, then press Continue'. Pressing Continue immediately repeated the exact same stop without attempting account creation.",
+  "root_cause": "apply_flow.py did not clear pending_action in the checkpoint when receiving an owner 'continue' signal. Additionally, iCIMS Candidate Profile forms inside #icims_content_iframe were not classified as 'registration' and its 'Submit Profile' button was not matched by account submit button locators.",
+  "why_tests_missed": "Existing tests verified that a fresh agent blocked retrying Create Account after an interruption, but never simulated the owner review handoff and 'continue' signal resuming the wizard pass.",
+  "fix": "1. In apply_flow.py, when receiving decision == 'continue', clear pending_action if it begins with 'account_creation_dispatched@'. 2. In sites/icims.py, implement candidate_account_state to recognize registration and sign-in inside the iframe, and create_account_extras to populate the login username. 3. In browser_automation.py and account_state.py, recognize 'create profile' and 'submit profile' in button locators and _CREATE regex.",
+  "tests": [
+    "tests/test_owner_continue_clears_uncertain_account_creation.py::test_checkpoint_cleared_on_owner_continue",
+    "tests/test_owner_continue_clears_uncertain_account_creation.py::test_icims_candidate_account_state_registration",
+    "tests/test_owner_continue_clears_uncertain_account_creation.py::test_account_state_says_create_profile",
+    "tests/test_owner_continue_clears_uncertain_account_creation.py::test_create_account_control_matches_submit_profile"
+  ],
+  "prevention": "Every blocker that instructs the owner to 'do X, then press Continue' must clear the blocking condition when the owner actually signals Continue."
+}

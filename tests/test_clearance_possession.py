@@ -8,6 +8,9 @@ from browser_automation import JobApplicationAssistant
     ("Do you have a current/active security clearance? *", "No"),
     ("The position requires current/active TS/SCI clearance. Do you currently possess the required clearance for this opportunity? *", "No"),
     ("Have you ever held a security clearance?", ""),
+    ("Have you held a security clearance?", ""),
+    ("Did you have a security clearance?", ""),
+    ("Have you previously possessed a security clearance?", ""),
     ("Do you have any objection to obtaining a security clearance?", ""),
     ("Are you willing to obtain a security clearance?", ""),
 ])

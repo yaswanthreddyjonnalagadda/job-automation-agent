@@ -1,0 +1,21 @@
+{
+  "id": "f243",
+  "date": "2026-10-24",
+  "site": "every portal (the agent's own history and answer bank)",
+  "class": "A store that silently falls back to a second, smaller store, and a derived cache that is rebuilt from whichever store is open",
+  "symptom": "Questions the agent had answered correctly before were asked again. Logs showed about 1,800 'Postgres unavailable -- using SQLite' lines (20-23 Oct). Postgres held 57 applications and 172 answers, SQLite 22 and 61, with only 4 applications in both; the answer bank held 9 entries where 35 were learnable.",
+  "root_cause": "tracking.open_tracker fell back to SQLite whenever a configured Postgres was unreachable, so history was recorded in two databases; answer_bank.rebuild deleted and rebuilt the bank from whichever one was open, so a smaller store shrank it. It also learned the agent's answers only from sent applications, so answers on held applications were never reused.",
+  "why_tests_missed": "The fall-back was a documented, intended behaviour with no test, and the bank was only ever built from one complete tracker in tests; nothing built it twice from trackers of different sizes.",
+  "fix": "A configured Postgres that is down now raises an error naming 'docker compose up -d' (TRACKER=sqlite stays the explicit opt-out). answer_bank.rebuild merges into the existing bank (ranking you > confirmed > reviewed, then newest; forgotten keys stay out; kept entries must still pass portable()). Agent answers on needs_user_review and ready_to_submit applications are learned as 'reviewed'. Page copy and 'Not specified ...' answers are refused. The 18 SQLite-only applications and their rows were copied into Postgres once, additively, after a pg_dump.",
+  "tests": [
+    "tests/test_tracker_without_a_server.py::test_a_configured_postgres_that_is_down_is_an_error_not_a_quiet_sqlite",
+    "tests/test_tracker_without_a_server.py::test_tracker_sqlite_set_on_purpose_still_works_with_postgres_configured",
+    "tests/test_answer_bank_merge.py::test_a_smaller_tracker_does_not_shrink_the_bank",
+    "tests/test_answer_bank_merge.py::test_an_answer_for_review_is_learned_but_ranks_below_a_confirmed_one",
+    "tests/test_answer_bank_merge.py::test_the_owners_answer_beats_the_agents_and_a_newer_one_replaces_an_older",
+    "tests/test_answer_bank_merge.py::test_forgotten_keys_stay_forgotten",
+    "tests/test_answer_bank_merge.py::test_the_refusals_still_apply_to_reviewed_answers_and_to_what_was_kept",
+    "tests/test_answer_bank_merge.py::test_page_copy_and_the_models_nothing_to_say_are_never_learned"
+  ],
+  "prevention": "Never let a store silently change under a run: fail loudly, and make any opt-out explicit. A cache derived from a store must be added to, not rebuilt from scratch, so a smaller source cannot destroy it; test it by building twice from sources of different sizes."
+}

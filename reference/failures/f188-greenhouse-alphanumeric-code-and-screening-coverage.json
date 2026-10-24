@@ -1,0 +1,18 @@
+{
+  "id": "f188",
+  "date": "2026-10-17",
+  "site": "Greenhouse (Praxis Precision Medicines, embedded gh_jid), Paradox/Olivia (Cargill), ADP (Mascsr), EY WOTC (Chipotle), Diagnostics & Tracker",
+  "class": "Greenhouse 8-character alphanumeric codes were rejected as non-digits in complete_account_code, 'Which country are you located in?' matched RESIDES_IN instead of COUNTRY, recurring WOTC/verification-channel questions lacked deterministic rules, and diagnostics/Postgres fallback had avoidable blind spots",
+  "symptom": "On Greenhouse, complete_account_code stripped letters from 8-character security codes ('EvPGU6Qy') via re.sub(r'\\\\D', '', code) whenever expected > 0 and refused to fill them; on Cargill (Paradox), 'Which country are you located in?' tied between RESIDES_IN and COUNTRY and picked RESIDES_IN (returning ''); on ADP, 'Where would you like to receive a verification code?' was not matched by preferred contact channel; on Chipotle WOTC, TANF/AFDC government-assistance questions had no profile concept; and EDUCATION_SKIPPED / OPTIONAL_LEFT_BLANK were collapsed to RUNTIME in diagnostics.",
+  "root_cause": "_extract_code was updated to return 8-character alphanumeric codes for Greenhouse, but PageAgent.complete_account_code still ran re.sub(r'\\\\D', '', code) whenever expected was set. RESIDES_IN matched 'are you located in' without excluding Which/What/Where questions and preceded COUNTRY in CONCEPTS. Diagnostics SAFE_LABELS and LOG_OPERATIONS omitted recent f183/f185 operations and wizard step names, and db.get_tracker waited for psycopg's multi-second Windows TCP timeout when Docker was stopped.",
+  "why_tests_missed": "Greenhouse code tests in test_emailed_code_rule.py used a single input with a 6-digit numeric code rather than an 8-character alphanumeric code with length validation, and residence tests did not test 'Which country are you located in?'.",
+  "fix": "Preserve alphanumeric characters in PageAgent.complete_account_code unless the prompt specifies digits, infer expected code length from 'N-character code' context, and match '?gh_jid=' in GreenhouseAdapter; exclude Which/What/Where questions from RESIDES_IN; add GOVERNMENT_ASSISTANCE ('profile.received_government_assistance') and match 'receive a verification code' for preferred contact channel; add EDUCATION_SKIPPED/OPTIONAL_LEFT_BLANK and wizard labels to diagnostics.py; and probe the Postgres TCP port with a 200ms timeout in db.get_tracker.",
+  "tests": [
+    "tests/test_greenhouse_and_screening_coverage.py::test_greenhouse_adapter_matches_embedded_gh_jid_urls",
+    "tests/test_greenhouse_and_screening_coverage.py::test_complete_account_code_accepts_8_char_alphanumeric_greenhouse_code",
+    "tests/test_greenhouse_and_screening_coverage.py::test_which_country_are_you_located_in_matches_country_and_not_resides_in",
+    "tests/test_greenhouse_and_screening_coverage.py::test_wotc_government_assistance_and_verification_channel_questions",
+    "tests/test_greenhouse_and_screening_coverage.py::test_diagnostics_preserves_education_skipped_and_optional_left_blank_and_fast_tcp_probe"
+  ],
+  "prevention": "When updating code extraction for alphanumeric passcodes, verify the caller does not strip letters; guard Yes/No residence patterns against Wh-questions; and register new runtime log categories in diagnostics.LOG_OPERATIONS."
+}

@@ -253,8 +253,8 @@ class PhoneConsole:
                 jpeg = page.screenshot(type="jpeg", quality=55, scale="css")
                 with self._lock:
                     self._jpeg, self._shot_at, self._size = jpeg, time.time(), [width, height]
-            except Exception:
-                pass
+            except Exception as _swallowed:
+                logger.debug("service: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
     def _do(self, page, command: tuple) -> None:
         kind = command[0]

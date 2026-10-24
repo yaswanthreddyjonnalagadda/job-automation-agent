@@ -1,0 +1,21 @@
+{
+  "id": "f230",
+  "date": "2026-10-23",
+  "site": "Every form (Palantir/Lever, Greenhouse boards, and any portal asking fact questions in new wordings)",
+  "class": "Each new wording of a question the profile already answers was a gap: it stopped the run or went to a model, because answering was one regex per wording and not one resolver per kind of question that reads the owner's facts",
+  "symptom": "Runs stopped or called Gemini/Claude for questions the profile and resume settle: fluency in a named language, authorization in a named country, 'name of your current employer', 'how did you hear', years of a named skill, ties to the company, optional boxes the owner has no answer for.",
+  "root_cause": "Answering was keyed to wordings. A question of a known kind in an unseen wording fell through to a model call or a stop, and a missing optional fact stopped the run exactly like a missing required one.",
+  "why_tests_missed": "Tests covered wordings already seen on saved pages; no test measured how much of an unseen set of real questions the profile could answer, and no corpus of unseen questions existed.",
+  "fix": "answer_engine.py: typed families (languages, country eligibility, employer name, ties to the company, degree level, how heard, communication, work arrangement, marketing alerts, clearance, programming language, years bins, resume-evidenced experience, privacy acknowledgements) that read the profile, resume and work history; evidence-gated, so a claim of experience needs the resume to show it (unproven = the owner's unproven_experience_answer stance, default No), and a free-text box is never answered Yes/No. Self-identification and attestations are never answered here. Optional questions with no known answer are left blank (no model call, no stop) only on a page that marks what is required (skip_optional_questions). reference/knowledge.json holds the word lists. A corpus of 340 real questions from public Greenhouse boards (scripts/question_coverage.py) measures it: questions needing a model fell from 125 to 30 (-76%); replay of 721 saved pages differs on 5 pages, all corrections.",
+  "tests": [
+    "tests/test_answer_engine.py::test_language_questions_follow_the_languages_the_owner_has",
+    "tests/test_answer_engine.py::test_eligibility_in_a_named_country_follows_where_the_owner_is_authorized",
+    "tests/test_answer_engine.py::test_experience_is_claimed_only_where_the_resume_shows_it",
+    "tests/test_answer_engine.py::test_a_free_text_box_is_never_answered_yes_or_no",
+    "tests/test_answer_engine.py::test_with_no_evidence_the_engine_says_nothing",
+    "tests/test_answer_engine.py::test_optional_unknowns_are_left_blank_only_on_a_page_that_marks_what_is_required",
+    "tests/test_question_corpus.py::test_the_engine_answers_at_least_a_quarter_of_the_corpus_and_the_floor_only_rises",
+    "tests/test_question_corpus.py::test_no_free_text_box_is_ever_answered_yes_or_no"
+  ],
+  "prevention": "Answer by kind of question from the owner's facts, with evidence gates, and keep a corpus of real questions read ahead of time from public question lists so coverage is measured, not guessed; leave optional unknowns blank instead of stopping or paying a model."
+}

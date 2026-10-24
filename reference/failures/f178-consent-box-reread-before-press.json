@@ -1,0 +1,15 @@
+{
+  "id": "f178",
+  "date": "2026-10-17",
+  "site": "Workday (Marathon Petroleum Create Account)",
+  "class": "State set early in a form was assumed to still hold at the end: the agent re-checked the fields it had typed before pressing the button, but not the boxes it had ticked",
+  "symptom": "Create Account was pressed and Workday answered 'Please check the box to continue': the consent box was clear at the press, though the agent had ticked it.",
+  "root_cause": "Workday redraws the form as it is filled. fill_create_account_form re-typed the email and passwords right before the press but never read the ticked boxes back, so a box a redraw had cleared went unnoticed.",
+  "why_tests_missed": "Fixtures were static: a box ticked stayed ticked. None cleared state between the tick and the press.",
+  "fix": "The ids of the boxes the agent ticks are remembered; just before the press each is read back and ticked again if clear; one that will not stay ticked stops the run with that reason.",
+  "tests": [
+    "tests/test_consent_box_stays_ticked.py::test_a_box_cleared_by_a_redraw_is_ticked_again_before_the_press",
+    "tests/test_consent_box_stays_ticked.py::test_a_box_that_will_not_stay_ticked_stops_the_run_with_a_reason"
+  ],
+  "prevention": "Before a non-idempotent press, read back every piece of state the agent set (fields and boxes), not just the ones known to be fragile; and test with a page that changes state between the set and the press."
+}

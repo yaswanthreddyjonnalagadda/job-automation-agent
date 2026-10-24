@@ -151,6 +151,10 @@ def handed_over(outcome) -> bool:
 
 def owner_submits(page):
     """What the owner does after the hand-over: sends the form as it stands."""
+    from submission_guard import SubmissionGuardV0
+    guard = SubmissionGuardV0.for_context(page.context)
+    if guard is not None:
+        guard.park_for_handoff()
     page.evaluate("document.querySelector('form').requestSubmit()")
     page.wait_for_url("**/done", timeout=5_000)
 
@@ -695,7 +699,7 @@ def test_already_applied_page_is_detected_and_reported(page, resume_file):
     page.set_content('<h3>Principal Engineer</h3><p>You\'ve already applied for this job.</p><a href="#">View My Applications</a>')
     planner = SimpleNamespace(plan_page=lambda s, f, fb="": {"page_kind": "application_form", "next": {"kind": "none"}})
     outcome = make_agent(planner, resume_file).run(page)
-    assert outcome.kind == "owner_needed" and "already sent" in outcome.summary
+    assert outcome.kind == "already_applied" and "already applied" in outcome.summary
 
 
 def test_an_answer_that_does_not_stay_is_never_submitted_blank(page, resume_file):
@@ -709,14 +713,21 @@ def test_an_answer_that_does_not_stay_is_never_submitted_blank(page, resume_file
     assert page.url.endswith("/apply/2")
 
 
-def test_a_submit_button_on_a_step_before_the_last_just_moves_on(page, resume_file):
-    """Schwab's step 2 of 5 says "Submit" and only saves that step: it was
-    held as if it sent the application, for want of a resume attached earlier."""
+def test_a_submit_button_on_a_step_before_the_last_is_left_to_the_owner(page, resume_file):
+    """Schwab's step 2 of 5 says "Submit" and only saves that step. The agent cannot tell that from a real send, and
+    nothing labelled Submit is pressed outside the hand-over (submission_guard, CLAUDE.md section 6): it stops at the
+    step, filled, and the owner's press saves the step and moves on -- it does not send the application."""
     serve(page, step1=STEP_1.replace('<button type="submit">Next</button>', '<button type="submit">Submit</button>'))
     outcome = make_agent(Planner(next_label="Submit"), resume_file).run(page)
-    assert handed_over(outcome), outcome.reasons          # it moved past step 1's "Submit" to the last step
-    owner_submits(page)
-    assert stored(page, "sponsor") == "Yes"
+    assert handed_over(outcome), outcome.reasons
+    assert page.url.endswith("/apply/1")                   # it did not press step 1's "Submit" itself
+    assert stored(page, "sponsor") == ""
+    from submission_guard import SubmissionGuardV0
+    guard = SubmissionGuardV0.for_context(page.context)
+    if guard is not None:
+        guard.park_for_handoff()
+    page.evaluate("document.querySelector('form').requestSubmit()")
+    page.wait_for_url("**/apply/2", timeout=5_000)         # the owner's press saved step 1 and moved to step 2
 
 
 # --- radio buttons whose label is the text after them (Schwab's veteran form) -----
@@ -1212,10 +1223,12 @@ def test_a_code_the_site_says_confirms_a_human_is_entered_when_no_captcha_is_sho
     owner's own application, and the owner decided (25 September 2026) that the agent enters it itself: it
     once stopped a Praxis application one step short of done. What stays the owner's is a CAPTCHA."""
     page.set_content(HUMAN_CHECK_PAGE)
-    agent = _code_agent(page, resume_file)
+    # The page asks for an 8-character code, and since f188 the length is read from it: a 6-digit stand-in was
+    # rightly refused. Greenhouse's real codes hold letters and digits.
+    agent = _code_agent(page, resume_file, code="EvPGU6Qy")
     controls = page_agent.parse_snapshot(agent.snapshot(page))
     assert agent.complete_account_code(page, controls, agent.snapshot(page)) is True
-    assert page.locator("#c").input_value() == "482913"
+    assert page.locator("#c").input_value() == "EvPGU6Qy"
 
 
 def test_a_code_beside_a_real_captcha_is_never_entered(page, resume_file):

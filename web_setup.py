@@ -258,7 +258,7 @@ ANSWERS_HTML = ui_shell.page("Your saved answers", """
       <tr class="waiting"><td>{{ q.question }}<p class="hint">Asked {{ q.times }} time(s){% if q.companies %} by
           {{ q.companies|join(", ") }}{% endif %}{% if q.options %}. Choices: {{ q.options|join(" / ") }}{% endif %}</p></td>
         <td><input type="hidden" name="key" value="{{ q.key }}">
-            <input type="text" name="answer::{{ q.key }}" placeholder="Leave blank to be asked again"></td></tr>
+            <input type="text" name="answer::{{ q.key }}" aria-label="Your answer to: {{ q.question }}" placeholder="Leave blank to be asked again"></td></tr>
       {% endfor %}
     </table>
     </div>
@@ -271,8 +271,8 @@ ANSWERS_HTML = ui_shell.page("Your saved answers", """
     {% for row in saved_rows %}
     <tr><td>{{ row.question }}</td>
         <td><input type="hidden" name="key" value="{{ row.key }}">
-            <input type="text" name="answer::{{ row.key }}" value="{{ row.answer }}"></td>
-        <td class="num"><input type="checkbox" name="remove::{{ row.key }}" aria-label="Remove"></td></tr>
+            <input type="text" name="answer::{{ row.key }}" aria-label="Your answer to: {{ row.question }}" value="{{ row.answer }}"></td>
+        <td class="num"><input type="checkbox" name="remove::{{ row.key }}" aria-label="Remove: {{ row.question }}"></td></tr>
     {% endfor %}
   </table>
   {% else %}<div class="empty"><b>None yet</b>Questions you answer during a run are saved here.</div>{% endif %}

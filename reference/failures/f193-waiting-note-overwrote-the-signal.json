@@ -1,0 +1,15 @@
+{
+  "id": "f193",
+  "date": "2026-10-18",
+  "site": "Any run started with a signal path that lacks '_signal_' (Datadog audit run)",
+  "class": "A derived file name could equal its source name, so the run wrote over its own input",
+  "symptom": "The review stop kept resuming by itself: wait_for_signal wrote its 'waiting' timestamp into the signal file and read it back as an instruction.",
+  "root_cause": "waiting_note_for replaced '_signal_' with '_waiting_'; with no '_signal_' in the name the path came back unchanged.",
+  "why_tests_missed": "Only dashboard-made names (which always contain '_signal_') were ever used.",
+  "fix": "When the replacement leaves the name unchanged, the note is '_waiting_' + the name, in the same folder.",
+  "tests": [
+    "tests/test_signal_and_waiting_paths_differ.py::test_the_note_is_a_different_file_beside_the_signal",
+    "tests/test_signal_and_waiting_paths_differ.py::test_the_usual_name_keeps_its_usual_note"
+  ],
+  "prevention": "A path derived from another is checked to differ from it before anything is written."
+}

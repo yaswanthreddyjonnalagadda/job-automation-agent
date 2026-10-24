@@ -1,0 +1,16 @@
+{
+  "id": "f183",
+  "date": "2026-10-17",
+  "site": "Workday (Invesco; any tenant whose school list is empty)",
+  "class": "A required field whose choices do not exist was created anyway, so the form could never be completed",
+  "symptom": "The run reached My Experience, could not set 'School or University' for either school, and stopped for the owner on every attempt.",
+  "root_cause": "Invesco's Workday answers its schools call (HTTP 200) with an empty list: every search, even an empty one, shows 'No Items.'. The agent added an Education entry anyway, which makes School, Degree and Field of Study required, then could not choose a school. Education is optional on Workday.",
+  "why_tests_missed": "Every school fixture offered schools; none was an empty list, and a school missing from a non-empty list was the only case the rule ('left for you') covered.",
+  "fix": "Before filling the first Education entry the agent opens its School list and reads it three times over a few seconds; if it only ever says 'No Items.' the section is left empty, the entry removed, and EDUCATION_SKIPPED logged. A list that offers schools (even slowly) is filled as before.",
+  "tests": [
+    "tests/test_education_left_out_when_the_school_list_is_empty.py::test_an_empty_school_list_leaves_education_out_and_says_why",
+    "tests/test_education_left_out_when_the_school_list_is_empty.py::test_a_list_that_offers_schools_is_filled_as_before",
+    "tests/test_education_left_out_when_the_school_list_is_empty.py::test_a_list_that_is_slow_to_load_is_not_taken_for_an_empty_one"
+  ],
+  "prevention": "Before creating an entry with required fields, check that the choices those fields need exist; do not create what cannot be finished."
+}

@@ -1,0 +1,12 @@
+{
+  "id": "f239",
+  "date": "2026-10-23",
+  "site": "Bank of America application 140, My Experience",
+  "class": "Structured education omitted without extracted history and school search not submitted",
+  "symptom": "Runtime reached My Experience with only one degree, an uncommitted university search, Computer Science instead of profile Computer Technology, and an empty completion year.",
+  "root_cause": "with_profile only enriched already-extracted degrees, so an empty or partial history omitted explicit profile records. The repeated-entry parser did not recognize qualified To (Actual or Expected) groups and treated peer date groups as section boundaries. The Workday strict school-selection path typed the name but did not submit the search explicitly requested by the portal.",
+  "why_tests_missed": "Education tests supplied extracted records and plain date groups; searchable fixtures populated choices on typing, rather than requiring search submission.",
+  "fix": "Seed missing structured profile degrees without collapsing separate degrees at one university, retain profile fields and dates, recognize qualified date groups without ending the entry, and submit a Workday school search only when the Education instructions explicitly request Enter to search. Still select and verify the actual matching result, never the first row. Supervised correction selected both real schools and fields and filled dates; Review showed three employment records and both profile degrees. Submission was stopped after separate race and relocation errors were observed.",
+  "tests": ["tests/test_profile_education_without_extraction.py", "tests/test_workday_prompt_textbox.py::test_school_search_enter_fetches_results_but_does_not_choose_first_row"],
+  "prevention": "Test empty and partial extraction against structured profile facts, qualified date groups, and catalogues that fetch only on explicit search. Successful progression does not establish that every review answer is correct."
+}

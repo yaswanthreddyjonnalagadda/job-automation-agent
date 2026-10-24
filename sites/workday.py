@@ -302,6 +302,33 @@ class WorkdayAdapter(SiteAdapter):
                 candidates.extend(str(value) for value in values if str(value).strip())
         return list(dict.fromkeys(candidates))
 
+    def _school_list_is_empty(self, assistant, page: Page, index: int) -> bool:
+        """True when the School search-and-pick list of entry `index` holds nothing at all (f183).
+
+        Invesco's tenant answers its schools call with 200 and shows 'No Items.' for every search, even an empty one: no
+        school can be chosen, whoever applies. The server answers a moment after the list opens, so it is read three
+        times over a few seconds, and any real option ends the wait."""
+        field = page.locator("input[id$='--school']").nth(index)
+        try:
+            if field.count() == 0:
+                return False
+            field.click(timeout=3_000)
+            for _ in range(3):
+                page.wait_for_timeout(1_500)
+                options = [t.strip() for t in page.locator("[data-automation-id='promptOption']").all_inner_texts()
+                           if t.strip()] or [t.strip() for t in page.get_by_role("option").all_inner_texts() if t.strip()]
+                if options and not all(re.fullmatch(r"no items\.?", o, re.IGNORECASE) for o in options):
+                    return False
+            return True
+        except Exception as exc:
+            logger.debug("Could not read the school list: %s", str(exc).splitlines()[0][:100])
+            return False
+        finally:
+            try:
+                page.keyboard.press("Escape")
+            except Exception as exc:
+                logger.debug("WORKDAY: Escape after the dropdown attempt failed: %s", str(exc).splitlines()[0][:100])
+
     def fill_education_section(self, assistant, page: Page, education: list[dict]) -> None:
         self.delete_all_entries(assistant, page, "Education", "Certifications")
         # Some Workday tenants collect only school, degree and field of study.
@@ -317,6 +344,13 @@ class WorkdayAdapter(SiteAdapter):
         school_probe = "input[id$='--schoolName'], [data-automation-id='formField-school']"
         for i, edu in enumerate(education):
             self._ensure_entry_slot(assistant, page, "Education", school_probe, i)
+            if i == 0 and self._school_list_is_empty(assistant, page, 0):
+                # Education is optional on Workday, and an entry whose required School can never be chosen only
+                # blocks the form: the section is left empty (f183).
+                logger.warning("EDUCATION_SKIPPED: this employer's school list is empty (Workday shows 'No Items.' for "
+                               "every search) -- Education is optional, so the section is left empty")
+                self.delete_all_entries(assistant, page, "Education", "Certifications")
+                return
             school = edu.get("school", "")
             if page.locator("input[id$='--schoolName']").count() > i:
                 self.fill_by_id_suffix(assistant, page, "--schoolName", i, school)
@@ -659,8 +693,9 @@ class WorkdayAdapter(SiteAdapter):
         for extra in set(page.context.pages) - known_pages:
             try:
                 extra.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("WORKDAY: could not close the extra tab %s: %s", getattr(extra, "url", "?")[:80],
+                             str(exc).splitlines()[0][:100])
 
     def select_skills(self, assistant, page, field, values: list[str]) -> tuple[list[str], list[str]]:
         """Search each supported skill separately and verify its committed tag."""
@@ -754,6 +789,15 @@ class WorkdayAdapter(SiteAdapter):
                     field.type(cand, delay=40)
                     page.wait_for_timeout(1_200)
 
+                    # Some school catalogues fetch only after an explicit
+                    # search submission. Enter here requests results; the
+                    # matching row must still be clicked and verified below.
+                    education = page.get_by_role("group", name="Education", exact=True)
+                    if id_suffix.endswith("--school") and education.count() == 1 and re.search(
+                            r"press\s+Enter\s+to\s+search", education.inner_text(), re.I):
+                        field.press("Enter")
+                        page.wait_for_timeout(700)
+
                     if strategy == "matched_row":
                         import option_match
                         prompt = page.locator(
@@ -843,23 +887,42 @@ class WorkdayAdapter(SiteAdapter):
         listing = listing.first
         listing.evaluate('e => { e.scrollTop = 0; }')
         page.wait_for_timeout(200)
+        # Match against the whole virtual list, including aliases and competing
+        # labels beyond the first viewport; never pick a partial page's first hit.
+        offered = []
         for _ in range(80):
             rows = prompt.locator('[data-automation-id="promptOption"]')
             for i in range(rows.count()):
                 row = rows.nth(i)
                 label = row.get_attribute('data-automation-label') or row.inner_text()
-                if option_match.plain(label) != option_match.plain(wanted):
-                    continue
                 category = row.evaluate("e => e.closest('[data-uxi-multiselectlistitem-type]')?.getAttribute('data-uxi-multiselectlistitem-type') === '2'")
-                if not category and assistant._click_resiliently(row):
+                if not category and label not in offered:
+                    offered.append(label)
+            moved = listing.evaluate("""e => { const before = e.scrollTop; e.scrollTop += Math.max(1, e.clientHeight * .8); return e.scrollTop > before; }""")
+            if not moved:
+                break
+            page.wait_for_timeout(200)
+        else:
+            # A scan limit is not proof that the rest has no ambiguous match.
+            listing.evaluate('e => { e.scrollTop = 0; }')
+            return None
+        listing.evaluate('e => { e.scrollTop = 0; }')
+        page.wait_for_timeout(200)
+        match = option_match.best_option(offered, wanted)
+        if match is None:
+            return None
+        chosen = offered[match]
+        for _ in range(80):
+            rows = prompt.locator('[data-automation-id="promptOption"]')
+            for row in rows.all():
+                label = row.get_attribute('data-automation-label') or row.inner_text()
+                if label == chosen and assistant._click_resiliently(row):
                     page.wait_for_timeout(800)
                     return label
             moved = listing.evaluate("""e => { const before = e.scrollTop; e.scrollTop += Math.max(1, e.clientHeight * .8); return e.scrollTop > before; }""")
             if not moved:
                 break
             page.wait_for_timeout(200)
-        listing.evaluate('e => { e.scrollTop = 0; }')
-        page.wait_for_timeout(200)
         return None
 
     @staticmethod
@@ -875,6 +938,11 @@ class WorkdayAdapter(SiteAdapter):
         def visit(depth):
             if depth > 4 or budget[0] <= 0:
                 return None
+            # Each category has its own virtual list; matching only the rows
+            # mounted immediately after opening it misses later leaf options.
+            chosen = WorkdayAdapter._choose_scrolled_prompt(assistant, page, multiselect_id, wanted)
+            if chosen:
+                return chosen
             rows = prompt.locator('[data-automation-id="promptOption"]')
             leaves, branches = [], []
             for i in range(min(rows.count(), 80)):
@@ -884,7 +952,10 @@ class WorkdayAdapter(SiteAdapter):
                 label = row.get_attribute('data-automation-label') or row.inner_text()
                 kind = row.evaluate("e => e.closest('[data-uxi-multiselectlistitem-type]')?.getAttribute('data-uxi-multiselectlistitem-type')")
                 (branches if kind == '2' else leaves).append(label)
-            hit = option_match.best_option(leaves, wanted)
+            # A completed virtual scan may have rejected an ambiguous match.
+            # Do not override that decision using only its first viewport.
+            hit = (None if prompt.locator('[data-automation-id="activeListContainer"]').count()
+                   else option_match.best_option(leaves, wanted))
             if hit is not None:
                 label = leaves[hit]
                 row = prompt.locator(f'[data-automation-id="promptOption"][data-automation-label={json.dumps(label)}]')
@@ -1147,8 +1218,9 @@ class WorkdayAdapter(SiteAdapter):
                         field.fill("")
                         field.type(cand.split(",")[0].strip(), delay=40)
                         page.wait_for_timeout(1_000)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("WORKDAY: typing %r into the search box failed: %s", cand.split(",")[0].strip()[:40],
+                                     str(exc).splitlines()[0][:100])
 
                 options = assistant._open_option_texts(page)
                 if not options:

@@ -1,0 +1,12 @@
+{
+  "id": "f211",
+  "date": "2026-10-21",
+  "site": "Fal AI application 106; narrative experience questions across portals",
+  "class": "Review demands undocumented direct experience despite related-experience policy",
+  "symptom": "The restarted worker left the Linux/SDN narrative blank. A live Gemini reproduction rejected CNI/SDN experience and requested sysctl or eBPF examples, causing the rewrite to imply undocumented kernel configuration.",
+  "root_cause": "The reviewer instruction to cover every requested part overrode its weaker allowance for related experience. Feedback demanded direct projects rather than an explicit relevance explanation.",
+  "why_tests_missed": "Mock verdict tests verified acceptance plumbing but did not establish live-model compliance with competing prompt instructions.",
+  "fix": "Give the related-experience rule explicit precedence for narratives, require a relevance explanation, and forbid converting platform implementation details into personal hands-on claims. Exact factual questions still require evidence.",
+  "tests": ["tests/test_open_answer_evidence.py::test_related_experience_is_requested_and_accepted_without_exact_technology"],
+  "prevention": "Validate prompt changes with live model output as well as deterministic contract tests. Review feedback must not pressure the writer to fabricate direct experience."
+}

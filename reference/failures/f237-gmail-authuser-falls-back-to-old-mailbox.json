@@ -1,0 +1,12 @@
+{
+  "id": "f237",
+  "date": "2026-10-23",
+  "site": "Gmail browser verification for Bank of America application 140",
+  "class": "Mailbox navigation hint mistaken for authenticated account identity",
+  "symptom": "Opening Gmail with authuser set to the newly selected application email loaded the old signed-in mailbox. The agent previously deferred opening Gmail solely because no mail tab existed.",
+  "root_cause": "Mail readers checked only that the loaded URL contained mail.google.com. Gmail can silently fall back to its default account when the requested account is not signed in; the URL does not prove which mailbox loaded.",
+  "why_tests_missed": "Existing tests asserted the requested URL and supplied a synthetic inbox without its account identity; they did not simulate silent account fallback.",
+  "fix": "Verify the exact visible Google Account button email before reading any passcode, verification link or confirmation snippet. On mismatched or unknown identity, open and retain the add-account sign-in tab with a precise handoff. Google passwords remain a human step. Opened the browser and confirmed only the old mailbox is signed in; new-address Google sign-in is awaiting the owner. The separate Workday registration timing/state-reporting defect is not established as fixed.",
+  "tests": ["tests/test_gmail_mailbox_identity.py", "tests/test_emailed_code_rule.py::test_the_mail_reader_reads_the_code_when_the_rule_allows_it_and_counts_the_read"],
+  "prevention": "Use observed mailbox identity before reading messages. An absent Gmail tab does not imply an absent browser session, and a requested account URL does not imply that account loaded."
+}

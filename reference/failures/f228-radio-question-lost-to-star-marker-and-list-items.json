@@ -1,0 +1,15 @@
+{
+  "id": "f228",
+  "date": "2026-10-23",
+  "site": "Lever (jobs.lever.co) and any form that marks a required question with a star glyph and puts each choice in a list item",
+  "class": "A radio question lost its own words to a separate required marker and to the layout around its choices",
+  "symptom": "On Palantir's Lever form 'Are you legally authorized to work...?' and 'Will you now or in the future require sponsorship...?' were never filled although the profile answers both: the first button's question was read as '✱' and the second's as 'Yes'. The 33-box language list was read as 33 unrelated questions. Lever's Progress row showed 2 started, 0 reached review.",
+  "root_cause": "parse_snapshot dropped '(required)' and '*' as required markers but not the other asterisk glyphs ('✱' U+2731 and its relatives), so the marker replaced the question text as the nearest text; and the run-of-choices check for radio buttons looked at the raw previous control, so the list item Lever puts around each choice made every button after the first start a new run and take the first button's label as its question. The same list-item fix had been made for tick boxes on 30 September and not for radio buttons.",
+  "why_tests_missed": "Radio tests used pages where the buttons followed one another directly and the marker was '*'; no saved or synthetic page had a star glyph and list items together, and the replay corpus held no earlier Lever form read this far.",
+  "fix": "Any asterisk glyph counts as a required marker (the question text stays the nearest text), and the radio run check skips list items exactly as the tick-box check does. Replayed over 715 saved pages with and without the change: one page differs (Palantir) and every difference is a correction: the questions now match their profile answers (languages English and Telugu, authorized to work Yes, sponsorship Yes, California resident No).",
+  "tests": [
+    "tests/test_radio_question_with_star_and_list_items.py::test_both_buttons_of_a_star_marked_question_belong_to_the_question",
+    "tests/test_radio_question_with_star_and_list_items.py::test_a_star_alone_is_never_a_question"
+  ],
+  "prevention": "Read a question from its container, not from whichever text came last: drop every decoration (required markers in any glyph, hints, error text) before choosing the label, and treat layout wrappers (lists, list items, groups) as transparent when grouping choices."
+}

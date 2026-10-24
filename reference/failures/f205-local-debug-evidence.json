@@ -1,0 +1,17 @@
+{
+  "id": "f205",
+  "date": "2026-10-20",
+  "site": "Cross-portal diagnostics; SmartRecruiters evidence audit",
+  "class": "Sanitized diagnostic exports hide locally needed failure evidence",
+  "symptom": "SmartRecruiters stop PNGs contain a full-document mask and all 150 runtime messages omit details; dropdown structure dump is empty. Saved page snapshots show invalid compensation and Gender fields but do not establish the selection failure cause.",
+  "root_cause": "The conservative export privacy policy was also the only screenshot/log capture policy for owner-authorized local diagnosis.",
+  "why_tests_missed": "Tests verified exclusion of private data but had no explicit opt-in local evidence path.",
+  "fix": "Add independent LOCAL_DEBUG_CAPTURE copies with secret filtering under Git-ignored local_debug; preserve the existing sanitized export pipeline and do not change safety.py.",
+  "tests": [
+    "tests/test_local_debug.py::test_local_logging_is_opt_in_and_preserves_answers_not_secrets",
+    "tests/test_local_debug.py::test_private_capture_is_not_exportable_and_keeps_field_evidence",
+    "tests/test_local_debug.py::test_secret_redaction_preserves_salary_and_phone",
+    "tests/test_local_debug.py::test_browser_capture_keeps_form_readable_without_changing_values"
+  ],
+  "prevention": "Keep owner-authorized local debugging and safe-to-share exports separate; test both evidence usefulness and secret filtering. This fixes evidence capture, not the unverified original dropdown incident."
+}

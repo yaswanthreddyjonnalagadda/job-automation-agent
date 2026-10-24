@@ -79,6 +79,10 @@ class SiteAdapter:
         """Extra selectors for this platform's modal/overlay containers."""
         return ""
 
+    def submission_confirmed(self, page) -> bool:
+        """Platform-specific confirmation detection (e.g. ADP Applied status button)."""
+        return False
+
 
 def merge_placeholders(adapter: SiteAdapter) -> re.Pattern:
     """A regex matching any 'nothing chosen yet' value for this platform."""

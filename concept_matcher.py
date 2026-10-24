@@ -110,7 +110,7 @@ CONCEPTS: dict[str, dict[str, Any]] = {
             r"\b(?:mobile|cell|cellphone|primary\s*phone|contact\s*number|phone\s*number|telephone)\b",
             r"^\W*phone\W*$",
         ],
-        "negative": r"home\s*phone|work\s*phone|employer\s*phone|office\s*phone|supervisor|emergency|fax|\bconsent\b|\bsms\b|text\s+(?:message|communication)",
+        "negative": r"home\s*phone|work\s*phone|employer\s*phone|office\s*phone|supervisor|emergency|fax|\bconsent\b|\bsms\b|text\s+(?:message|communication)|verify.*identity|identity.*verif|receive.*(?:verification|security|one[- ]?time)\s+code",
     },
     "PHONE_COUNTRY_CODE": {
         "patterns": [
@@ -143,7 +143,7 @@ CONCEPTS: dict[str, dict[str, Any]] = {
             r"\b(?:do|are)\s+you\s+(?:currently\s+)?(?:reside|residing|live|living|located|based)\s+(?:in|within)\b",
             r"\bare\s+you\s+(?:currently\s+)?(?:a\s+)?(?:legal\s+)?resident\s+of\b",
         ],
-        "negative": r"willing|relocat|commut|miles|distance|near",
+        "negative": r"^\W*(?:which|what|where)\b|willing|relocat|commut|miles|distance|near",
     },
     "CITY": {
         "patterns": [
@@ -445,6 +445,10 @@ def match_concept(
     clean_c = clean_text(container)
     clean_ctx = clean_text(context)
     clean_n = clean_text(name)
+    if clean_q and clean_n.startswith(clean_q + " "):
+        # A dropdown's accessible name may append its current selection to
+        # the actual question. Do not reintroduce that answer as label context.
+        clean_n = clean_q
     combined = f"{clean_q} {clean_c} {clean_ctx} {clean_n}".strip()
 
     if not combined:
@@ -550,7 +554,9 @@ def confirm_concept(concept: Optional[str], options: Optional[list[str]]) -> Opt
     Citizenship" is a citizenship question, and it is left as the label said.
     """
     real = [o for o in (options or []) if o and not re.match(r"^\s*(choose|select|--)", o, re.IGNORECASE)]
-    if concept == "ETHNICITY_RACE" and real and all(re.search(r"hispanic|latin", o, re.IGNORECASE) for o in real):
+    if concept == "ETHNICITY_RACE" and real and all(re.search(
+            r"^(?:(?:yes|no)[,\s:;-]+)?(?:not\s+(?:of\s+)?|non[-\s]*)?(?:hispanic|latin[oax]?)\b",
+            re.sub(r"\([^)]*\)", "", o).strip(), re.IGNORECASE) for o in real):
         # "Ethnic Origin" offering only Hispanic/Latino and Not Hispanic/Latino (UKG, 30 September).
         return "HISPANIC_OR_LATINO"
     if concept not in RESIDENCE_CONCEPTS or not options:
@@ -767,6 +773,13 @@ def resolve_profile_value(
     elif concept == "WORK_AUTHORIZATION":
         val = str(getattr(profile, "authorized_for_any_employer", "") or getattr(profile, "legally_eligible_to_work", "Yes")).strip()
         src = "profile.authorized_for_any_employer"
+        if options:
+            import option_match
+            needs = getattr(profile, "requires_visa_sponsorship", None)
+            decided, index = option_match.sponsorship_choice(
+                list(options), val, None if needs is None else _is_yes(needs))
+            if decided:
+                return (options[index] if index is not None else ""), src
     elif concept == "VISA_SPONSORSHIP":
         sponsorship = getattr(profile, "requires_visa_sponsorship", False)
         val = "Yes" if sponsorship else "No"
@@ -829,7 +842,13 @@ def resolve_profile_value(
     elif concept == "DESIRED_SALARY":
         minimum = str(getattr(profile, "salary_min", "") or "").strip()
         maximum = str(getattr(profile, "salary_max", "") or "").strip()
-        if minimum and maximum:
+        if minimum and re.search(
+            r"\b(?:numerical\s+value|numbers?\s+only|numeric\s+value|in\s+numbers|whole\s+number|single\s+number)\b",
+            question or "",
+            re.IGNORECASE,
+        ):
+            val = str(int(float(minimum)))
+        elif minimum and maximum:
             val = f"${int(float(minimum)):,} - ${int(float(maximum)):,}"
         elif minimum:
             val = str(minimum)

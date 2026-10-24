@@ -11,6 +11,19 @@ def test_retention_config(value, expected):
     assert d.retention_days(value) == expected
 
 
+@pytest.mark.parametrize('relative', [
+    'output/job/stopped_20261019_000000.state.json',
+    'logs/account_failures/20261019_000000_ACCOUNT.state.json',
+])
+def test_structural_form_reports_follow_retention(tmp_path, relative):
+    report = tmp_path / relative
+    assert d.write_safe_text(report, '{"schema_version": 1, "frames": []}')
+    old = time.time() - 10 * 86400
+    os.utime(report, (old, old))
+    d.cleanup_expired_diagnostics(tmp_path, days=7)
+    assert not report.exists()
+
+
 def test_cleanup_removes_only_old_diagnostics(tmp_path):
     output = tmp_path / 'output'
     job = output / 'job'
