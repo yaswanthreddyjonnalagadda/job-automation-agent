@@ -40,7 +40,9 @@ def test_an_address_that_is_not_a_plain_mailbox_is_never_put_in_the_address(odd)
 
 def test_every_mail_reader_goes_through_that_one_function():
     import inspect
-    source = inspect.getsource(JobApplicationAssistant)
+    from email_verification import EmailVerificationMixin
+    # The readers live in the mixin the assistant inherits (email_verification.py); the rule covers both.
+    source = inspect.getsource(JobApplicationAssistant) + inspect.getsource(EmailVerificationMixin)
     assert source.count("mail/u/0/#search/") == 1           # only the fallback inside _gmail_search_url
     assert source.count("self._gmail_search_url(") >= 3      # the three readers: confirmation, passcode, verification link
 
