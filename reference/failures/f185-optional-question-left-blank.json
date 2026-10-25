@@ -1,0 +1,17 @@
+{
+  "id": "f185",
+  "date": "2026-10-17",
+  "site": "Workday (Invesco Voluntary Disclosures: Veteran Status); any optional list that lacks the owner's answer",
+  "class": "A question the form does not require stopped the whole run because its answer could not be placed",
+  "symptom": "The run reached the last disclosures page, filled Gender, Race and the terms box, and stopped for the owner on Veteran Status: 'I am not a veteran' is not one of the list's rows (Active Duty Wartime or Campaign Badge Veteran ... Not Applicable ... I Am a Protected Veteran).",
+  "root_cause": "Every answer that does not stay on the page after the retries became a 'could not set' stop, whether or not the question was required. The Veteran Status list is optional and has no row for the owner's answer.",
+  "why_tests_missed": "The stop was tested for answers that fail to stick, not for the difference between a required and an optional question.",
+  "fix": "_drop_optional: an answer that did not stay, for a question that is not marked required and is still blank, is left blank with a note (OPTIONAL_LEFT_BLANK) and the run goes on. A required question, an optional one holding another value, or one not on the page keeps its stop.",
+  "tests": [
+    "tests/test_optional_question_left_blank.py::test_an_optional_blank_question_is_left_blank_with_a_note",
+    "tests/test_optional_question_left_blank.py::test_a_required_question_still_stops_the_run",
+    "tests/test_optional_question_left_blank.py::test_an_optional_question_that_holds_another_value_is_not_dropped",
+    "tests/test_optional_question_left_blank.py::test_a_question_that_is_not_on_the_page_keeps_its_stop"
+  ],
+  "prevention": "Stop the run only for what the form requires; for everything else, leave it blank, say so, and carry on."
+}

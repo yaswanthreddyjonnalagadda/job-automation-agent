@@ -1,0 +1,18 @@
+{
+  "id": "f180",
+  "date": "2026-10-17",
+  "site": "Workday (Marathon Petroleum) and any site that says the account already applied",
+  "class": "A finished situation was reported as 'needs the owner', so the run waited with a browser open for a decision nobody had to make",
+  "symptom": "Workday said \"You've already applied for this job.\" The row read 'Needs you', the agent held the Chromium window open waiting for Continue, and there was nothing for the owner to do.",
+  "root_cause": "A confirmation page that this run did not cause was always returned as owner_needed (it cannot tell the owner's own earlier submission from a stale page). There was no outcome or status for the site saying, in its own words, that the account already applied.",
+  "why_tests_missed": "The existing test asserted the owner_needed outcome for this page, so the behaviour was pinned as intended rather than questioned.",
+  "fix": "A new outcome and status, already_applied ('Already applied'), set only when the site's own notice says the account already applied and this run did not submit. The run records the site's words, ends, and closes the browser; the status is grouped with skipped and is never counted as a submission by the agent. A generic confirmation page still asks the owner.",
+  "tests": [
+    "tests/test_already_applied.py::test_the_status_reads_as_already_applied_and_is_not_counted_as_a_submission",
+    "tests/test_already_applied.py::test_only_the_sites_own_already_applied_notice_counts",
+    "tests/test_already_applied.py::test_the_run_records_it_with_the_sites_words_and_no_submission",
+    "tests/test_already_applied.py::test_the_dashboard_accepts_the_status_from_its_menu",
+    "tests/test_page_agent.py::test_already_applied_page_is_detected_and_reported"
+  ],
+  "prevention": "Give every terminal situation the site can state in its own words its own status; reserve 'needs the owner' for decisions only the owner can make."
+}

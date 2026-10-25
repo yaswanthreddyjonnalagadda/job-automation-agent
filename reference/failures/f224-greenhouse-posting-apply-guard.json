@@ -1,0 +1,15 @@
+{
+  "id": "f224",
+  "date": "2026-10-22",
+  "site": "Roblox Greenhouse career site, application 129",
+  "class": "Posting navigation classified as final submission by label alone",
+  "symptom": "The page agent identified a job description and chose Apply Now, but the browser guard denied the click and handed off before the application opened.",
+  "root_cause": "The browser guard treated Apply Now as a final-submission synonym without the posting context already recognized by the page agent. Live Roblox DOM showed an Apply Now button on the posting page outside any form with zero visible form input controls.",
+  "why_tests_missed": "Submission tests covered ADP posting entry (f212) but lacked Greenhouse employer-hosted job-board posting entry checks.",
+  "fix": "Add a Greenhouse-specific click-time posting-entry predicate under sites/greenhouse.py and wire into submission_guard.py. Require Greenhouse host or query parameter gh_jid/gh_src, button outside a form, Apply/Apply Now label, and zero visible form, dialog, or input controls.",
+  "tests": [
+    "tests/test_submission_firewall.py::test_greenhouse_posting_apply_is_navigation_only"
+  ],
+  "prevention": "Distinguish proven application entry from final submission across supported job boards using portal structure and live state, keeping ambiguous Apply controls denied."
+}
+

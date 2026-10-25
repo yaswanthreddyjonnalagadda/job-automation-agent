@@ -1,0 +1,14 @@
+{
+  "id": "f199",
+  "date": "2026-10-18",
+  "site": "iCIMS and ATS portals using HTMLInputElement submit controls (Mutual of Enumclaw)",
+  "class": "SubmissionGuardV0 credentialControl and candidateProfileControl checked element.matches('button,[role=button]') which rejected <input type='submit'> elements, preventing profile and account creation",
+  "symptom": "On Mutual of Enumclaw (iCIMS), 'Submit Profile' rendered as <input type='submit' value='Submit Profile'> instead of a <button> tag. Although valid credentials and emails were populated, SubmissionGuardV0.click_candidate_profile returned False with ACCOUNT_CREATE_BLOCKED: account-control click was not confirmed.",
+  "root_cause": "1. submission_guard.py's candidateProfileControl and credentialControl used `element.matches('button,[role=button]')`. In DOM CSS selector rules, `button` matches only HTMLButtonElement, so HTMLInputElement (such as <input type='submit'> or <input type='button'>) evaluated to false and failed authorization. 2. Companion and click event listeners only checked `element instanceof HTMLButtonElement`.",
+  "why_tests_missed": "f198 tests used `<button type='submit'>Submit Profile</button>`, which passed `button,[role=button]`, whereas iCIMS production pages use `<input type='submit' value='Submit Profile'>`.",
+  "fix": "In submission_guard.py, expand control tag matching to `element.matches('button, input[type=submit], input[type=button], [role=button]')`, and allow HTMLInputElement in authorized companion clicks.",
+  "tests": [
+    "tests/test_candidate_profile_gateway_and_step_finality.py::test_candidate_profile_gateway_authorizes_input_submit_control"
+  ],
+  "prevention": "Whenever matching action controls by tag/role in DOM guards, include both HTMLButtonElement and HTMLInputElement submit controls."
+}

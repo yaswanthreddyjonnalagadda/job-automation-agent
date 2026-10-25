@@ -1,0 +1,15 @@
+{
+  "id": "f207",
+  "date": "2026-10-20",
+  "site": "Gemini document preparation; Fal application 106",
+  "class": "Nested model attempts multiply request timeouts without useful progress evidence",
+  "symptom": "The Fal correction took about 166 seconds, then produced a PDF and reached resume upload. It was mistakenly reported as stalled before the complete log was inspected.",
+  "root_cause": "A document call traverses the page model ladder with a full socket timeout per model and can sleep on rate limits. Failed model attempts lacked start/end timing. The historical log cannot distinguish individual model attempts from a long active request.",
+  "why_tests_missed": "Transport tests checked individual requests and quota fallback but not an elapsed budget shared across document model attempts.",
+  "fix": "Share the configured timeout budget across Gemini document model attempts, reject responses arriving after the budget, skip rate-limit sleeps for documents, and log attempt start/end timings. This cooperative budget does not forcibly cancel an active Requests call.",
+  "tests": [
+    "tests/test_document_attempt_budget.py",
+    "tests/test_gemini_model_ladder.py"
+  ],
+  "prevention": "Measure nested retries as one operation, report each attempt, and distinguish a socket inactivity timeout from a hard wall-clock deadline."
+}

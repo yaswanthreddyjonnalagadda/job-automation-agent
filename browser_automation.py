@@ -26,7 +26,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional
 from urllib.parse import quote, urlparse
 
 from playwright.sync_api import BrowserContext, Page, sync_playwright
@@ -50,6 +50,7 @@ from interaction import (
     fill_and_dispatch,
     resolve_ant_dropdown,
     sweep_modals_and_policies,
+    type_text,
     wipe_and_enforce_location_sweep,
 )
 from perception import (
@@ -217,8 +218,8 @@ class FramedPage:
         try:
             if frame is not None and not frame.is_detached():
                 return frame
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("frame: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         try:
             for candidate in self.top.frames[1:]:
                 if self._name and candidate.name == self._name:
@@ -230,8 +231,8 @@ class FramedPage:
                 if candidate is not None:
                     self._frame = candidate
                     return candidate
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("frame: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return self.top.main_frame  # the site has left the frame (a Google sign-in, say)
 
     @property
@@ -254,7 +255,28 @@ class FramedPage:
 def waiting_note_for(signal_path: Path) -> Path:
     """The note beside a signal file that says its run is waiting for the owner (_waiting_<name>.txt)."""
     signal_path = Path(signal_path)
-    return signal_path.with_name(signal_path.name.replace("_signal_", "_waiting_", 1))
+    note = signal_path.with_name(signal_path.name.replace("_signal_", "_waiting_", 1))
+    # A name without "_signal_" came back unchanged: the note overwrote the signal and was read as one (f193).
+    return note if note != signal_path else signal_path.with_name("_waiting_" + signal_path.name)
+
+
+POSTING_WORDS = re.compile(
+    r"responsibilities|qualifications|requirements|job description|about the (role|job|position)|"
+    r"what you('ll| will) do|who you are|job (id|number|requisition)|posted",
+    re.IGNORECASE)
+# The application's own review wording -- narrow on purpose: a posting's footer can say "review your request" (f170).
+APPLICATION_REVIEW_WORDS = re.compile(
+    r"review and submit\b|review your (application|answers|responses|submission|information|details)\b"
+    r"|submit (your|this) application", re.IGNORECASE)
+
+
+def looks_like_posting_text(text: str) -> bool:
+    """Whether the words of a page say it is a job posting rather than the application's own review step.
+
+    One function, used live by on_job_description() and by replay_guard on every saved page, so a change to these
+    words that flips any real page is shown before it is committed (f174)."""
+    text = text or ""
+    return bool(POSTING_WORDS.search(text)) and not APPLICATION_REVIEW_WORDS.search(text)
 
 
 class JobApplicationAssistant:
@@ -264,6 +286,7 @@ class JobApplicationAssistant:
     def __init__(self, config: AppConfig):
         self._config = config
         self._playwright = None
+        self._profile_lease = None
         self._context: Optional[BrowserContext] = None
         self._submission_guard: Optional[SubmissionGuardV0] = None
         self._submission_execution_lock = threading.RLock()
@@ -314,32 +337,41 @@ class JobApplicationAssistant:
     def __enter__(self) -> "JobApplicationAssistant":
         # A browser on a desktop the owner does not see is never started (visible_desktop.py).
         visible_desktop.refuse_if_invisible()
-        self._playwright = sync_playwright().start()
+        from browser_profile_lease import BrowserProfileLease
         profile_dir = Path(self._config.browser_profile_dir)
-        # A run whose process is killed leaves its browser running, and that
-        # browser keeps holding this profile: every later run then died at
-        # startup with "Opening in existing browser session". The leftover
-        # belongs to the agent -- it is identified by this profile directory,
-        # never by being a browser -- so it is closed here.
-        self._close_leftover_browsers(profile_dir)
-        channel = self._choose_channel()
+        lease = BrowserProfileLease(profile_dir)
+        lease.acquire()
+        self._profile_lease = lease
         try:
-            self._context = self._launch(channel, profile_dir)
-        except Exception as exc:
-            if not channel:
-                raise
-            # Chrome is not installed, or it declined to start a second
-            # instance after all. Its stub claims the profile on the way out,
-            # so the leftovers go before the bundled build tries.
-            logger.warning("Could not start %s (%s) -- falling back to the bundled browser",
-                           channel, str(exc).splitlines()[0][:120])
-            self._release_profile(profile_dir)
-            self._context = self._launch("", profile_dir)
-        # Record which form controls a person changes, so a value the site put
-        # there is never mistaken for the owner's answer (provenance.py).
-        provenance.install(self._context)
-        self._submission_guard = SubmissionGuardV0(self._context)
-        return self
+            self._playwright = sync_playwright().start()
+            # A run whose process is killed leaves its browser running, and that
+            # browser keeps holding this profile: every later run then died at
+            # startup with "Opening in existing browser session". The leftover
+            # belongs to the agent -- it is identified by this profile directory,
+            # never by being a browser -- so it is closed here.
+            self._close_leftover_browsers(profile_dir)
+            channel = self._choose_channel()
+            try:
+                self._context = self._launch(channel, profile_dir)
+            except Exception as exc:
+                if not channel:
+                    raise
+                # Chrome is not installed, or it declined to start a second
+                # instance after all. Its stub claims the profile on the way out,
+                # so the leftovers go before the bundled build tries.
+                logger.warning("Could not start %s (%s) -- falling back to the bundled browser",
+                               channel, str(exc).splitlines()[0][:120])
+                self._release_profile(profile_dir)
+                self._context = self._launch("", profile_dir)
+            # Record which form controls a person changes, so a value the site put
+            # there is never mistaken for the owner's answer (provenance.py).
+            provenance.install(self._context)
+            self._submission_guard = SubmissionGuardV0(self._context)
+            return self
+        except BaseException:
+            # __exit__ is not called when __enter__ fails.
+            self.__exit__(None, None, None)
+            raise
 
     def _ensure_submission_guard(self, page: Page) -> SubmissionGuardV0:
         guard = getattr(self, "_submission_guard", None)
@@ -473,6 +505,19 @@ class JobApplicationAssistant:
             except OSError as exc:
                 logger.debug("Could not clear %s: %s", name, exc)
 
+    @staticmethod
+    def _debug_port_args() -> list[str]:
+        """An opt-in, loopback-only DevTools port, for watching a run from outside.
+
+        Off unless JAA_DEBUG_PORT names a port (1024-65535). The agent's browser holds
+        the owner's Gmail and employer sign-ins, so a port is never opened by default:
+        any local program could drive it.
+        """
+        raw = os.getenv("JAA_DEBUG_PORT", "").strip()
+        if not raw.isdigit() or not 1024 <= int(raw) <= 65535:
+            return []
+        return [f"--remote-debugging-port={int(raw)}", "--remote-debugging-address=127.0.0.1"]
+
     def _launch(self, channel: str, profile_dir: Path):
         kwargs = {"channel": channel} if channel and channel != "chromium" else {}
         return self._playwright.chromium.launch_persistent_context(
@@ -492,7 +537,12 @@ class JobApplicationAssistant:
             no_viewport=True,
             # The agent's Chrome is stopped by force when a run is stopped, so the next start asked
             # "Restore pages?" in a bubble over the page: not shown.
-            args=["--start-maximized", "--disable-session-crashed-bubble", "--hide-crash-restore-bubble"],
+            args=["--start-maximized", "--disable-session-crashed-bubble", "--hide-crash-restore-bubble",
+                  # Not announced as automated (f181): Google refuses to sign anyone in on a browser that says it
+                  # is automated, and the owner signs in to Gmail here so the agent can read a verification email.
+                  "--disable-blink-features=AutomationControlled",
+                  *self._debug_port_args()],
+            ignore_default_args=["--enable-automation"],
             # Deny browser-level permission requests (push notifications, location, etc.)
             # so they don't block the application mid-form
             permissions=[],  # Empty list = deny all permissions
@@ -528,6 +578,11 @@ class JobApplicationAssistant:
                 self._playwright.stop()
             except Exception as exc:
                 logger.debug("Playwright already stopped: %s", exc)
+
+        lease = getattr(self, "_profile_lease", None)
+        if lease is not None:
+            lease.release()
+            self._profile_lease = None
 
     def with_retries(self, what: str, action, attempts: int = 0):
         """Runs a flaky page action again before giving up.
@@ -579,12 +634,12 @@ class JobApplicationAssistant:
                     "type": msg.type, "text": msg.text,
                 }]))
                 del page._console_logs[:-200]
-            except Exception:
-                pass
+            except Exception as _swallowed:
+                logger.debug("_attach_console_listener._on_console: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         try:
             page.on("console", _on_console)
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("_attach_console_listener: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
     def open_job_page(self, url: str) -> Page:
         assert self._context is not None, "Use within a `with` block"
@@ -596,8 +651,8 @@ class JobApplicationAssistant:
         self._attach_console_listener(page)
         try:
             page.bring_to_front()
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("open_job_page: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         self.with_retries(f"opening {url[:60]}", lambda: page.goto(url, wait_until="domcontentloaded"))
         # Workday/Greenhouse/etc. render via JS after domcontentloaded fires,
         # so the page is typically still blank at this point. Give it a
@@ -667,8 +722,8 @@ class JobApplicationAssistant:
         several 30-second actionability timeouts on other sites."""
         try:
             self.sweep_modals_and_policies(page)
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("dismiss_cookie_banner: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         for selector in (
             # Rejecting optional cookies clears a banner just as well and shares
             # less; take that choice whenever the banner offers it.
@@ -705,8 +760,8 @@ class JobApplicationAssistant:
                     page.wait_for_timeout(2_000)
                     logger.info("Expanded all form sections")
                     return
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("expand_all_sections: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
     def detect_form_fields(self, page: Page) -> list[DetectedField]:
         """Scans visible text/email/tel inputs and textareas, and tries to
@@ -823,8 +878,8 @@ class JobApplicationAssistant:
                     "el => el.closest('fieldset')?.querySelector('legend')?.innerText || ''"
                 )
                 text = (legend_text or "").strip()
-            except Exception:
-                pass
+            except Exception as _swallowed:
+                logger.debug("_label_for: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return text
 
 
@@ -896,8 +951,8 @@ class JobApplicationAssistant:
             try:
                 field.press("End")
                 field.press("Tab")
-            except Exception:
-                pass
+            except Exception as _swallowed:
+                logger.debug("set_value: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
             self.values.record(page, selector, value, source or "agent")
             self.note_page_changed()
             return True
@@ -948,8 +1003,8 @@ class JobApplicationAssistant:
                     page.wait_for_timeout(400)
                     try:
                         page.keyboard.press("Tab")
-                    except Exception:
-                        pass
+                    except Exception as _swallowed:
+                        logger.debug("set_phone_country: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
                     now = (button.get_attribute("title") or button.get_attribute("aria-label") or "")
                     if any(name.lower() in now.lower() for name in spellings):
                         logger.info('FIELD_ACTION: application field handled')
@@ -992,8 +1047,8 @@ class JobApplicationAssistant:
                 try:
                     field.press("Tab")
                     page.wait_for_timeout(400)
-                except Exception:
-                    pass
+                except Exception as _swallowed:
+                    logger.debug("set_phone_country: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
                 chosen = self.displayed_value(field)
                 # The phone block is checked as a whole when its number field is
                 # left: a chosen country went on showing "Select a country"
@@ -1006,8 +1061,8 @@ class JobApplicationAssistant:
                         number.press("End")
                         number.press("Tab")
                         page.wait_for_timeout(500)
-                except Exception:
-                    pass
+                except Exception as _swallowed:
+                    logger.debug("set_phone_country: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
                 if chosen:
                     self.note_page_changed()
                     logger.info('FIELD_ACTION: application field handled')
@@ -1216,8 +1271,8 @@ class JobApplicationAssistant:
                 page.wait_for_timeout(1_500)
                 try:
                     page.wait_for_load_state("networkidle", timeout=5_000)
-                except Exception:
-                    pass
+                except Exception as _swallowed:
+                    logger.debug("fill_detected_fields: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
                 blanks = [f for f in self.detect_form_fields(page)
                           if f.matched_profile_key and f.selector
                           and values.get(f.matched_profile_key)
@@ -1295,8 +1350,8 @@ class JobApplicationAssistant:
                     page.wait_for_timeout(4_000)
                     try:
                         page.wait_for_load_state("domcontentloaded", timeout=15_000)
-                    except Exception:
-                        pass
+                    except Exception as _swallowed:
+                        logger.debug("complete_profile_dialog: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
                     logger.info("PROFILE_CREATED: saved the site's candidate profile window")
                     return True
             logger.warning("PROFILE_DIALOG: no Submit/Save button found in the profile window")
@@ -1328,8 +1383,8 @@ class JobApplicationAssistant:
                         if "linkedin" in (info.get("url", "") or "").lower():
                             self._job_source = "LinkedIn"
                         break
-            except Exception:
-                pass
+            except Exception as _swallowed:
+                logger.debug("_job_source_name: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return self._job_source
 
     @staticmethod
@@ -1489,6 +1544,12 @@ class JobApplicationAssistant:
 
         # Expand known domain synonyms (e.g. veteran status, disability, race)
         expanded_candidates = list(candidates)
+        # A list that offers only the broader term ("Asian ... Origins in the Far East") for a narrower answer
+        # ("South Asian"): tried after the answer itself, never instead of it.
+        for cand in candidates:
+            broader = option_match.broader_term(cand)
+            if broader and broader not in expanded_candidates:
+                expanded_candidates.append(broader)
         for cand in candidates:
             c_low = cand.strip().lower()
             if re.search(r"\b(?:not|no|non)[-\s]+(?:a\s+)?veteran\b", c_low):
@@ -1712,8 +1773,8 @@ class JobApplicationAssistant:
                     logger.info("Correcting %r: %r belongs to a different degree", c["question"][:40], c["value"])
                     try:
                         page.locator(f"[id={json.dumps(c['id'])}]").fill("")
-                    except Exception:
-                        pass
+                    except Exception as _swallowed:
+                        logger.debug("answer_standard_questions: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
                     c["value"] = ""
 
             # A country or state the site put here that contradicts the profile
@@ -1731,8 +1792,8 @@ class JobApplicationAssistant:
                                 c["question"][:40], c["value"][:40], wanted[0][:40])
                     try:
                         page.locator(selector).fill("")
-                    except Exception:
-                        pass
+                    except Exception as _swallowed:
+                        logger.debug("answer_standard_questions: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
                     c["value"] = ""
 
             if c["value"]:
@@ -1844,8 +1905,8 @@ class JobApplicationAssistant:
                     .findIndex(e => e.id === id)""", control["id"])
                 if position is not None and position >= 0:
                     return [str(position + 1)]
-            except Exception:
-                pass
+            except Exception as _swallowed:
+                logger.debug("_experience_answer: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
             return None
         if re.search(r"number of people managed|direct reports|people (you )?manage", q, re.IGNORECASE):
             managed = str(getattr(getattr(self, "_profile", None), "people_managed", "") or "")
@@ -1978,10 +2039,7 @@ class JobApplicationAssistant:
         except Exception:
             return 0
 
-    _JOB_DESCRIPTION_WORDS = re.compile(
-        r"responsibilities|qualifications|requirements|job description|about the (role|job|position)|"
-        r"what you('ll| will) do|who you are|job (id|number|requisition)|posted",
-        re.IGNORECASE)
+    _JOB_DESCRIPTION_WORDS = POSTING_WORDS
 
     def on_job_description(self, page: Page) -> bool:
         """True when the page is a job posting rather than the application.
@@ -2031,24 +2089,23 @@ class JobApplicationAssistant:
                             label => join.test(label) || /^(?:add|remove) job alert$/i.test(label));
                         return !auxiliary;
                     }).length""")
-        except Exception:
-            pass  # An unreadable scope retains the conservative whole-page count.
+        except Exception as _swallowed:
+            logger.debug("on_job_description: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         if field_count > 3 or self.is_review_step(page):
             return False
         try:
             body = page.inner_text("body", timeout=5_000)
         except Exception:
             return False
-        if not self._JOB_DESCRIPTION_WORDS.search(body) or re.search(
-                r"review (your|and submit)|submit (your|this) application", body, re.IGNORECASE):
+        if not looks_like_posting_text(body):
             return False
         control = self.find_apply_control(page)
         if control is not None:
             try:
                 if (control.get_attribute("type") or "").lower() == "submit":
                     return False
-            except Exception:
-                pass
+            except Exception as _swallowed:
+                logger.debug("on_job_description: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
             return True
         return bool(self.apply_destination(page))
 
@@ -2067,6 +2124,15 @@ class JobApplicationAssistant:
                 return page
             page = page.top  # the site has left its frame
         try:
+            adapter = self.adapter(page)
+            if hasattr(adapter, "find_application_frame"):
+                app_frame = adapter.find_application_frame(page)
+                if app_frame is not None:
+                    logger.info("The application form is in a platform-targeted frame (%s); working inside it",
+                                getattr(adapter, "name", "adapter"))
+                    self.note_page_changed()
+                    return FramedPage(page, app_frame)
+
             if self.visible_input_count(page) > 3:
                 return page  # the outer page is the form
 
@@ -2211,13 +2277,13 @@ class JobApplicationAssistant:
                 }""")
                 if dispatched:
                     return True
-            except Exception:
-                pass
+            except Exception as _swallowed:
+                logger.debug("open_picker_control: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         try:
             field.click(timeout=4_000)
             return True
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("open_picker_control: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         for wrapper in ("xpath=ancestor::*[contains(@class,'ant-select-selector')][1]",
                         "xpath=ancestor::*[contains(@class,'select-selector')][1]",
                         "xpath=ancestor::*[contains(@class,'select')][1]",
@@ -2300,8 +2366,8 @@ class JobApplicationAssistant:
 
         try:
             field.evaluate("e => e.scrollIntoView({block: 'center'})")
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("_answer_combobox_from_profile: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         self.open_picker_control(page, field)
         page.wait_for_timeout(700)
         if self.adapter(page).open_picker(page, control) and control.get("listbox"):
@@ -2319,8 +2385,8 @@ class JobApplicationAssistant:
                     field.press_sequentially(candidates[0][:5], delay=80)
                     page.wait_for_timeout(3_000)
                     opts, texts = visible_options()
-            except Exception:
-                pass
+            except Exception as _swallowed:
+                logger.debug("_answer_combobox_from_profile: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         idx = self._best_option(texts, candidates)
         if idx is None and re.search(r"salary|compensation|pay range", control.get("question", ""), re.I):
             idx = self._salary_band(texts)
@@ -2338,8 +2404,8 @@ class JobApplicationAssistant:
             self.open_picker_control(page, field)
             try:
                 field.fill("", timeout=3_000)
-            except Exception:
-                pass  # not editable until it is open; typing still filters
+            except Exception as _swallowed:
+                logger.debug("_answer_combobox_from_profile: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
             try:
                 field.type(term, delay=30, timeout=5_000)
             except Exception:
@@ -2355,8 +2421,8 @@ class JobApplicationAssistant:
                 first_word = term.split()[0]
                 try:
                     field.fill("", timeout=2_000)
-                except Exception:
-                    pass
+                except Exception as _swallowed:
+                    logger.debug("_answer_combobox_from_profile: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
                 try:
                     field.type(first_word, delay=30, timeout=5_000)
                 except Exception:
@@ -2859,6 +2925,7 @@ class JobApplicationAssistant:
                 if not button.count():
                     button = dialog.locator("button, [role=button], sdf-button").filter(has_text=agree).first
                 if not button.count():
+                    logger.info("CONSENT: a privacy pop-up is showing but no Agree button was found in it")
                     continue
                 # Pressed until the pop-up is actually gone. ADP's Agree took
                 # a pointer click without closing, and the run reported the
@@ -3219,6 +3286,25 @@ class JobApplicationAssistant:
             }
         }
 
+        // iCIMS active step indicator: vetted against real recorded production pages
+        // (output/Mutual_of_Enumclaw_Insurance_Company_Network_Engineer/pages/*/page_*.txt).
+        // Accessible step text format: "Step N of M. <Step Name>(Current Step)"
+        const icimsStepRe = /\bstep\s+(\d+)\s+of\s+(\d+)\b.*\(current\s+step\)/i;
+        const icimsMarkers = Array.from(document.querySelectorAll("li, [role='listitem']")).filter(el => {
+            const txt = (el.textContent || '').trim();
+            return icimsStepRe.test(txt);
+        });
+        if (icimsMarkers.length === 1) {
+            const m = icimsStepRe.exec((icimsMarkers[0].textContent || '').trim());
+            if (m) {
+                const current = parseInt(m[1], 10), total = parseInt(m[2], 10);
+                if (total > 0) {
+                    if (current >= total) return "FINAL";
+                    if (visible(icimsMarkers[0])) return "NON_FINAL";
+                }
+            }
+        }
+
         // No generic, non-Workday signal is accepted as NON_FINAL authority. A second
         // closure review, 7 October 2026, found that role="progressbar" combined with
         // aria-posinset/aria-setsize (this file's own prior attempt at a stronger,
@@ -3503,8 +3589,8 @@ class JobApplicationAssistant:
                 for i in range(min(loc.count(), 5)):
                     if loc.nth(i).is_visible():
                         return True
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("_has_sign_in_affordance: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return False
 
     def _goto_login_page(self, page: Page) -> bool:
@@ -3640,8 +3726,8 @@ class JobApplicationAssistant:
         page.wait_for_timeout(5_000)
         try:
             page.wait_for_load_state("domcontentloaded", timeout=15_000)
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("sign_in_from_header: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
         if header_link() is None:
             logger.info("LOGIN_OK: signed in on %s as %s", host, email)
@@ -3651,8 +3737,8 @@ class JobApplicationAssistant:
             error = " / ".join(
                 t.strip() for t in page.locator("[role=alert], [class*=error i]").all_inner_texts() if t.strip()
             )[:200]
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("sign_in_from_header: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         logger.warning("LOGIN_FAILED: still signed out on %s%s", host, f" ({error})" if error else "")
         return False
 
@@ -3765,8 +3851,8 @@ class JobApplicationAssistant:
             return False
         try:
             google.wait_for_load_state("domcontentloaded", timeout=15_000)
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("_sign_in_with_google: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
         if not google.is_closed() and "accounts.google.com" in google.url:
             chooser = google.get_by_text(re.compile(re.escape(email), re.IGNORECASE))
@@ -3798,8 +3884,8 @@ class JobApplicationAssistant:
                 try:
                     page.wait_for_load_state("domcontentloaded", timeout=15_000)
                     page.wait_for_timeout(4_000)
-                except Exception:
-                    pass
+                except Exception as _swallowed:
+                    logger.debug("_sign_in_with_google: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
                 if header_link() is None:
                     logger.info("LOGIN_OK: signed in on %s with Google", host)
                     self.remember_account(page, email, "google")
@@ -3817,22 +3903,27 @@ class JobApplicationAssistant:
     def handle_auth_gate(self, page: Page, email: str) -> bool:
         """Handle an employer ATS account gate without guessing its state."""
         try:
+            page = self.open_embedded_form(page)
             candidate_state = self.adapter(page).candidate_account_state(page)
             if candidate_state == "verification":
                 logger.warning("ACCOUNT_HELD: Workday is asking for account verification")
                 return False
-            # A single-password Sign In form owns the interaction, even when
-            # registration controls remain visible behind its modal.
-            scope = self._sign_in_scope(page)
-            if scope is not None and self._read_ats_password():
-                # Sign In opens as a modal ON TOP of Create Account, and that
-                # stacked state is unreliable to drive (fields clear, clicks
-                # land on the form underneath). The dedicated login page has
-                # exactly one form and signs in cleanly, so go there instead.
-                if page.locator("button:has-text('Create Account')").count() and self._goto_login_page(page):
-                    scope = self._sign_in_scope(page)
-                logger.info("Sign In form present; signing in rather than creating an account")
-                return self.attempt_auto_login(page, email, "", scope=scope, create_if_missing=False)
+            # A single-password Sign In form owns the interaction when no registration
+            # is active, or when a sign-in modal is open on top of registration controls.
+            has_dialog = page.locator(
+                "[role='dialog']:visible, [aria-modal='true']:visible, [data-behavior-click-outside-close='topmost']:visible"
+            ).count() > 0
+            if candidate_state not in ("registration", "registration_error") or has_dialog:
+                scope = self._sign_in_scope(page)
+                if scope is not None and self._read_ats_password():
+                    # Sign In opens as a modal ON TOP of Create Account, and that
+                    # stacked state is unreliable to drive (fields clear, clicks
+                    # land on the form underneath). The dedicated login page has
+                    # exactly one form and signs in cleanly, so go there instead.
+                    if page.locator("button:has-text('Create Account')").count() and self._goto_login_page(page):
+                        scope = self._sign_in_scope(page)
+                    logger.info("Sign In form present; signing in rather than creating an account")
+                    return self.attempt_auto_login(page, email, "", scope=scope, create_if_missing=False)
 
             if self._read_ats_password() and self._account_exists_message(page):
                 return self.sign_in_to_existing_account(page, email)
@@ -3841,7 +3932,7 @@ class JobApplicationAssistant:
                 # An account already exists here and the page offers Sign In:
                 # sign in rather than registering again -- registration cannot
                 # succeed for an email that already has an account.
-                if self._read_ats_password() and self.account_on_record() and self._has_sign_in_affordance(page):
+                if self._read_ats_password() and self.account_expected() and self._has_sign_in_affordance(page):
                     logger.info("ACCOUNT: an account already exists here -- signing in instead of registering")
                     if self._goto_login_page(page):
                         return self.attempt_auto_login(page, email, "", scope=self._sign_in_scope(page))
@@ -4032,7 +4123,8 @@ class JobApplicationAssistant:
                 # A multiselect's input.value is ALWAYS '' -- the value lives
                 # in a pill -- so the old input_value() guard never fired and
                 # every pass re-drove an already-answered field.
-                if self._multiselect_selection(page, id_suffix):
+                selection = getattr(self.adapter(page), "_multiselect_selection", None)
+                if selection and selection(page, id_suffix):
                     continue
                 self.select_from_searchable_input(
                     page, id_suffix, candidates if isinstance(candidates, list) else [candidates]
@@ -4136,8 +4228,8 @@ class JobApplicationAssistant:
             manual = page.get_by_role("button", name=re.compile(r"^\s*apply manually\s*$", re.IGNORECASE)).first
             if manual.count() and manual.is_visible():
                 return False
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("autofill_from_resume: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         # SuccessFactors application: uploading the resume makes the site parse
         # it and rebuild the form, wiping anything answered before. So it goes
         # first, before a single field is touched.
@@ -4298,8 +4390,8 @@ class JobApplicationAssistant:
                 }""")
                 if is_req:
                     return True
-            except Exception:
-                pass
+            except Exception as _swallowed:
+                logger.debug("has_required_cover_letter_field: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
         try:
             tiles = page.locator("a, button, [role=button], div, span").filter(
@@ -4315,8 +4407,8 @@ class JobApplicationAssistant:
                     }""")
                     if is_req:
                         return True
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("has_required_cover_letter_field: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
         return False
 
@@ -4426,10 +4518,10 @@ class JobApplicationAssistant:
                             const l = container
                                 ? [...container.querySelectorAll('legend, label')].find(x => !group.some(r => x.htmlFor === r.id))
                                 : questionLabel(el.parentElement?.parentElement?.parentElement, el.parentElement);
-                            if (group.some(r => isRequired(r, l)) && !group.some(r => r.checked)) blanks.push(text(l, el));
+                            if (group.some(r => isRequired(r, l) && !r.disabled) && !group.some(r => r.checked)) blanks.push(text(l, el));
                             continue;
                         }
-                        if (!visible(el)) continue;
+                        if (!visible(el) || el.disabled) continue;
                         const l = labelOf(el);
                         let value = (el.value || '').trim();
                         if (!value) {
@@ -4507,7 +4599,7 @@ class JobApplicationAssistant:
                 except Exception:
                     # The tile opened an upload dialog instead of the picker
                     # (SuccessFactors: "Upload a Resume -- Opens a dialog").
-                    if not self._upload_in_dialog(page, file_path):
+                    if not self.upload_in_dialog(page, file_path):
                         continue
                 page.wait_for_timeout(4_000)
                 # Some sites confirm in a small dialog after picking the file.
@@ -4832,8 +4924,8 @@ class JobApplicationAssistant:
 
         try:
             target.wait_for_load_state("domcontentloaded", timeout=10_000)
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("click_apply_button: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         try:
             target.wait_for_load_state("networkidle", timeout=10_000)
         except Exception:
@@ -4894,8 +4986,8 @@ class JobApplicationAssistant:
         btn.click()
         try:
             page.wait_for_load_state("domcontentloaded", timeout=10_000)
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("dismiss_apply_chooser: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         try:
             page.wait_for_load_state("networkidle", timeout=10_000)
         except Exception:
@@ -4958,10 +5050,42 @@ class JobApplicationAssistant:
         if tracker is None or not employer or not hasattr(tracker, "get_ats_account"):
             return None
         try:
-            return tracker.get_ats_account(employer) is not None
+            account = tracker.get_ats_account(employer)
+            email = (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
+            if account and email and account.get("email"):
+                return account["email"].strip().casefold() == email.casefold()
+            return account is not None
         except Exception as exc:
             logger.warning("Could not check the account record: %s", exc)
             return None
+
+    def applied_before(self) -> bool:
+        """Whether an application to this employer was submitted before (an account exists there)."""
+        tracker, employer = getattr(self, "tracker", None), (getattr(self, "employer", "") or "").strip()
+        if tracker is None or not employer or not hasattr(tracker, "applied_before"):
+            return False
+        try:
+            return bool(tracker.applied_before(employer))
+        except Exception as exc:
+            logger.warning("Could not check earlier applications: %s", exc)
+            return False
+
+    def account_expected(self) -> bool:
+        """An account is expected here: one is on record, or we have applied to this employer before. Then the
+        agent signs in; only a client never dealt with gets a new account (owner's rule, 17 October 2026)."""
+        known = self.account_on_record()
+        if known is False:
+            # An explicit email change does not transfer an old account to the
+            # new identity. Keep historical application/duplicate checks intact.
+            tracker = getattr(self, "tracker", None)
+            try:
+                account = tracker.get_ats_account(self.employer) if tracker else None
+                email = (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
+                if account and email and account.get("email") and account["email"].strip().casefold() != email.casefold():
+                    return False
+            except Exception as exc:
+                logger.warning("Could not check account identity: %s", type(exc).__name__)
+        return known is True or self.applied_before()
 
     def remember_account(self, page: Page, email: str, method: str) -> None:
         tracker, employer = getattr(self, "tracker", None), (getattr(self, "employer", "") or "").strip()
@@ -4974,7 +5098,7 @@ class JobApplicationAssistant:
     @staticmethod
     def _create_account_control(root):
         pattern = re.compile(
-            r"^\s*(create (an |a new |your |my )?account|register( now)?|sign up|new user\??)\s*$", re.IGNORECASE
+            r"^\s*(create (an |a new |your |my )?account|create (your |a |my )?profile|register( now)?|sign up|submit profile|new user\??)\s*$", re.IGNORECASE
         )
         for role in ("link", "button"):
             loc = root.get_by_role(role, name=pattern)
@@ -5057,6 +5181,7 @@ class JobApplicationAssistant:
             folder = Path("logs") / "account_failures"
             folder.mkdir(parents=True, exist_ok=True)
             stem = f"{datetime.now():%Y%m%d_%H%M%S}_ACCOUNT"
+            diagnostics.capture_form_state(page, folder / f"{stem}.state.json")
             diagnostics.capture_safe_screenshot(page, folder / f"{stem}.png")
             diagnostics.write_safe_text(folder / f"{stem}.txt",
                 diagnostics.sanitize_snapshot(page.locator("body").aria_snapshot(mode="ai")))
@@ -5065,14 +5190,19 @@ class JobApplicationAssistant:
             logger.info("Could not save the account page: %s", str(exc).splitlines()[0][:100])
 
     def _visible_error_texts(self, page: Page) -> list[str]:
+        """What the page says went wrong. Workday's field errors are <p data-automation-id="inputAlert"> under the
+        field ("Please check the box to continue"), neither role=alert nor an error class (f177); their "Error :"
+        prefix is read by screen readers and dropped here."""
         try:
-            alerts = page.locator("[role=alert], [class*=error i]")
+            alerts = page.locator("[role=alert], [class*=error i], [data-automation-id=inputAlert]")
             texts = []
             for index in range(alerts.count()):
                 alert = alerts.nth(index)
                 if alert.is_visible():
                     text = alert.inner_text()
-                    if isinstance(text, str) and text.strip():
+                    if isinstance(text, str):
+                        text = re.sub(r"^\s*error\s*:\s*", "", text.strip(), flags=re.IGNORECASE)
+                    if isinstance(text, str) and text.strip() and text.strip() not in texts:
                         texts.append(text.strip())
             return texts
         except Exception:
@@ -5082,8 +5212,8 @@ class JobApplicationAssistant:
         error_texts = self._visible_error_texts(page)
         try:
             error_texts.append(page.locator("body").inner_text(timeout=3_000))
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("_account_form_has_validation_error: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return self._has_account_form_validation_error(error_texts)
 
     @staticmethod
@@ -5101,6 +5231,30 @@ class JobApplicationAssistant:
             return False
         return safety.is_privacy_consent(label) or safety.is_account_creation_consent(label)
 
+    # A box whose own words say only that it agrees -- the meaning is in the text above it.
+    _BARE_CONSENT = re.compile(r"^(yes,?\s*)?(i\s+)?(consent|agree|accept|acknowledge)\.?$", re.IGNORECASE)
+
+    def _consent_text_of(self, box, label: str) -> str:
+        """What a checkbox agrees to: its label, and for a bare "Yes, I consent" also the text it stands under --
+        the paragraphs before it in its section (including any folded behind "Read More"). (f179)"""
+        label = " ".join((label or "").split())
+        if not self._BARE_CONSENT.search(label):
+            return label
+        try:
+            above = box.evaluate("""e => {
+                let node = e, text = '';
+                while (node && node.tagName !== 'FORM' && text.length < 1500) {
+                    let sib = node.previousElementSibling;
+                    while (sib && text.length < 1500) { text = (sib.textContent || '') + ' ' + text; sib = sib.previousElementSibling; }
+                    if (text.trim().length > 40) break;
+                    node = node.parentElement;
+                }
+                return text;
+            }""") or ""
+        except Exception:
+            above = ""
+        return f"{' '.join(above.split())} {label}".strip()
+
     @staticmethod
     def _tick_checkbox(box) -> bool:
         """Ticks a checkbox and says whether it ended up ticked. Workday draws its
@@ -5111,8 +5265,8 @@ class JobApplicationAssistant:
                         lambda: box.evaluate("e => e.click()")):
             try:
                 attempt()
-            except Exception:
-                pass
+            except Exception as _swallowed:
+                logger.debug("_tick_checkbox: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
             try:
                 if box.is_checked():
                     return True
@@ -5140,22 +5294,28 @@ class JobApplicationAssistant:
         # account saved as existing on that evidence sent the next run to sign in to nothing.
         return adapter.candidate_account_state(page) in ("application", "candidate_home")
 
+    def _account_form_failed(self, reason: str) -> bool:
+        """Every way the Create Account form can fail says why, and the run stops on the reason (f176). Returns False."""
+        self._account_form_failure = reason
+        return False
+
     def fill_create_account_form(self, page: Page, email: str) -> bool:
         """Fills a careers-site Create Account form: email (and its retype),
         the .env password (and its retype), first/last name, country, and only
         the agreement checkboxes the owner has authorized. Marketing opt-ins
         ("hear more about career opportunities") are left unticked. Records
         the account when the site accepts it."""
+        self._account_form_failure = ""
         password = self._read_ats_password()
         if not password:
             logger.info("No ATS_PASSWORD set; leaving account creation to the user")
-            return False
+            return self._account_form_failed("no ATS_PASSWORD is set in Settings, so the agent has no password to give the site")
         if not safety.password_allowed(page.url):
             logger.warning("ACCOUNT_HELD: %s is not a site the agent creates accounts on", urlparse(page.url).netloc)
-            return False
+            return self._account_form_failed("the agent does not create accounts on this site")
         if safety.captcha_visible(page):
             logger.warning("ACCOUNT_HELD: a CAPTCHA is on the account form -- only you can complete it")
-            return False
+            return self._account_form_failed("a CAPTCHA is on the form: only you can complete it")
         visible = lambda loc: [loc.nth(i) for i in range(loc.count()) if loc.nth(i).is_visible()]
         pw_fields = visible(page.locator("input[type='password']"))
         if len(pw_fields) < 2 and not (len(pw_fields) == 1 and self._heading_says_create(page)):
@@ -5175,12 +5335,12 @@ class JobApplicationAssistant:
             if not email_fields:
                 logger.warning("ACCOUNT_CREATE_FAILED: found no email box on the Create Account form "
                                "-- not submitting the passwords alone")
-                return False
+                return self._account_form_failed("the form shows no email box the agent can recognise")
             for box in email_fields:
                 self._type_email(page, box, email)
             if not self._email_kept(self._email_boxes(page) or email_fields, email):
                 logger.warning("ACCOUNT_CREATE_FAILED: the email box did not keep the address -- not submitting")
-                return False
+                return self._account_form_failed("the email box did not keep the address typed into it")
             for box in pw_fields:
                 box.click()
                 box.press("Control+A")
@@ -5191,7 +5351,7 @@ class JobApplicationAssistant:
             password_values = [(box.input_value() or "") for box in pw_fields]
             if not self._password_pair_matches(password_values, password):
                 logger.warning("ACCOUNT_CREATE_FAILED: password confirmation did not retain both entries")
-                return False
+                return self._account_form_failed("the password boxes did not keep both entries")
 
             if full_name:
                 for field in self.detect_form_fields(page):
@@ -5241,7 +5401,7 @@ class JobApplicationAssistant:
                             break
                     logger.info("ACCOUNT: data privacy statement %s", "accepted" if accepted else "opened, but no Accept button found")
                     page.wait_for_timeout(1_500)
-            needs_candidate_acknowledgment = False
+            needs_candidate_acknowledgment, held_boxes, ticked_ids = False, [], []
             for box in visible(page.locator("input[type='checkbox']")):
                 label = ""
                 box_id = box.get_attribute("id")
@@ -5263,23 +5423,40 @@ class JobApplicationAssistant:
                         if self._account_acknowledgment_is_authorized(label, profile):
                             if self._tick_checkbox(box):
                                 logger.info("ACCOUNT: accepted owner-authorized account acknowledgment")
+                                ticked_ids.append(box.get_attribute("id") or "")
                             else:
                                 needs_candidate_acknowledgment = True
+                                held_boxes.append(label.strip()[:70])
                                 logger.info("LEFT_FOR_YOU: could not tick %r", label.strip()[:70])
                         else:
                             needs_candidate_acknowledgment = True
+                            held_boxes.append(label.strip()[:70])
                             logger.info("LEFT_FOR_YOU: account form requires %r", label.strip()[:70])
                     continue
-                if agree and self._is_account_consent(label, context) and not box.is_checked():
+                # A box labelled only "Yes, I consent" / "I agree" means the text it stands under: that text is
+                # what safety.py judges (Marathon Petroleum on Workday: the paragraph above the box agrees to
+                # creating the account and to recurring calls and texts about the application).
+                meaning = self._consent_text_of(box, label)
+                if agree and self._is_account_consent(meaning, context) and not box.is_checked():
                     if self._tick_checkbox(box):
                         logger.info("ACCOUNT: accepted required privacy acknowledgment")
+                        ticked_ids.append(box.get_attribute("id") or "")
                     else:
                         needs_candidate_acknowledgment = True
+                        held_boxes.append(label.strip()[:70])
                         logger.info("LEFT_FOR_YOU: could not tick %r", label.strip()[:70])
+                elif not box.is_checked() and self._BARE_CONSENT.search(label.strip()):
+                    # A consent the agent may not give: pressing Create Account without it only meets "Please check
+                    # the box to continue". The stop shows the words the box agrees to.
+                    needs_candidate_acknowledgment = True
+                    above = " ".join(meaning.split())
+                    above = above[:-len(label.strip())].strip() if above.lower().endswith(label.strip()) else above
+                    held_boxes.append(f"{label.strip()[:40]!r}, which agrees to: ...{above[-260:]}")
+                    logger.info("LEFT_FOR_YOU: account form requires a consent box only you may tick")
 
             if needs_candidate_acknowledgment:
                 logger.warning("ACCOUNT_HELD: a terms or attestation checkbox needs the candidate")
-                return False
+                return self._account_form_failed("a box only you may tick: " + "; ".join(dict.fromkeys(held_boxes)) + " -- tick it, then press Continue")
 
             # Workday re-renders as the name, country and terms are filled,
             # which clears the keyboard-set password fields: re-enter and
@@ -5301,7 +5478,7 @@ class JobApplicationAssistant:
                 password_values = [(box.input_value() or "") for box in pw_fields]
                 if not self._password_pair_matches(password_values, password):
                     logger.warning("ACCOUNT_CREATE_FAILED: password did not stay filled before submit")
-                    return False
+                    return self._account_form_failed("the password did not stay filled just before pressing Create Account")
             # The same re-render can clear the email: type it again where it is gone.
             email_fields = self._email_boxes(page)
             for box in email_fields:
@@ -5309,10 +5486,28 @@ class JobApplicationAssistant:
                     self._type_email(page, box, email)
             if not self._email_kept(self._email_boxes(page), email):
                 logger.warning("ACCOUNT_CREATE_FAILED: the email did not stay filled before submit")
-                return False
+                return self._account_form_failed("the email did not stay filled just before pressing Create Account")
+
+            # A redraw can clear a box ticked earlier (Workday, Marathon: "Please check the box to continue"): read
+            # each one back and tick it again; one that will not stay ticked stops the run with that reason (f178).
+            for box_id in ticked_ids:
+                if not box_id:
+                    continue
+                try:
+                    again = page.locator(f"input[id={json.dumps(box_id)}]").first
+                    if again.count() == 0:
+                        continue
+                    if not again.is_checked():
+                        self._tick_checkbox(again)
+                    if not again.is_checked():
+                        logger.warning("ACCOUNT_CREATE_FAILED: a consent box would not stay ticked")
+                        return self._account_form_failed(
+                            "the consent box would not stay ticked -- tick it yourself, then press Continue")
+                except Exception as exc:
+                    logger.debug("Could not read a consent box back: %s", str(exc).splitlines()[0][:100])
 
             submit = page.get_by_role(
-                "button", name=re.compile(r"^\s*(create (my )?account|register|sign up|submit)\s*$", re.IGNORECASE)
+                "button", name=re.compile(r"^\s*(create (my |your )?account|create (my |your )?profile|register|sign up|submit|submit profile)\s*$", re.IGNORECASE)
             )
             button = next((submit.nth(i) for i in range(submit.count()) if submit.nth(i).is_visible()), None)
             if button is None and self._heading_says_create(page):
@@ -5325,10 +5520,12 @@ class JobApplicationAssistant:
                 button = page.locator("input[type='submit'][value*='Create' i]").first
                 if not button.count():
                     logger.warning("ACCOUNT_CREATE_FAILED: no Create Account button found")
-                    return False
+                    return self._account_form_failed("no Create Account button was found on the form")
             guard = getattr(self, "_submission_guard", None)
             if guard is not None and button.evaluate("e => Boolean(e.form || e.closest('form'))"):
                 clicked = guard.click_account_creation(page, button)
+                if not clicked and hasattr(guard, "click_candidate_profile"):
+                    clicked = guard.click_candidate_profile(page, button)
             else:
                 clicked = self._click_resiliently(button, timeout_ms=8_000)
             if not clicked:
@@ -5339,8 +5536,8 @@ class JobApplicationAssistant:
             page.wait_for_timeout(5_000)
             try:
                 page.wait_for_load_state("domcontentloaded", timeout=15_000)
-            except Exception:
-                pass
+            except Exception as _swallowed:
+                logger.debug("fill_create_account_form: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
             still_on_form = len(visible(page.locator("input[type='password']"))) >= 2
             errors = self._visible_error_texts(page)
@@ -5351,12 +5548,15 @@ class JobApplicationAssistant:
                 errors = self._visible_error_texts(page)
                 has_validation_error = self._account_form_has_validation_error(page)
             if still_on_form or has_validation_error:
+                if safety.captcha_visible(page):
+                    logger.warning("ACCOUNT_HELD: a CAPTCHA appeared on the account form -- only you can complete it")
+                    return self._account_form_failed("a CAPTCHA is on the form: only you can complete it")
                 if self._account_exists_message(page, include_body=True):
                     return self.sign_in_to_existing_account(page, email)
                 logger.warning("ACCOUNT_CREATE_FAILED: the site kept the form open%s",
                                f" -- {' / '.join(errors)[:200]}" if errors else "")
                 self._save_account_failure(page, site)
-                return False
+                return self._account_form_failed("the site kept the form open" + (f" -- {' / '.join(errors)[:200]}" if errors else ""))
             if not self._account_creation_is_confirmed(page):
                 logger.warning(
                     "ACCOUNT_UNVERIFIED: Workday left registration without Candidate Home or application evidence"
@@ -5379,7 +5579,7 @@ class JobApplicationAssistant:
             return True
         except Exception as exc:
             logger.exception("ACCOUNT_CREATE_FAILED: %s", str(exc).splitlines()[0][:160])
-            return False
+            return self._account_form_failed("an error stopped the form: " + str(exc).splitlines()[0][:120])
 
     def create_ats_account(self, page: Page, email: str) -> bool:
         """Completes an employer ATS 'Create Account' form: fills both
@@ -5405,9 +5605,9 @@ class JobApplicationAssistant:
                 "input[type='email'], input[name*='email' i], input[id*='email' i]"
             ).first
             if email_input.count() > 0 and not (email_input.input_value() or "").strip():
-                email_input.fill(email)
-            pw_fields.nth(0).fill(password)
-            pw_fields.nth(1).fill(password)
+                type_text(email_input, email)
+            type_text(pw_fields.nth(0), password)
+            type_text(pw_fields.nth(1), password)
 
             # Acknowledgment checkbox (required on some tenants). Only privacy
             # consent -- an attestation or a marketing opt-in is never ticked.
@@ -5463,23 +5663,24 @@ class JobApplicationAssistant:
             scope = self._sign_in_scope(page)
         root = scope if scope is not None else page
 
-        pw_locator = root.locator("input[type='password']").first
+        pw_locator = root.locator("input[type='password']:visible").first
         try:
             pw_locator.wait_for(state="visible", timeout=4_000)
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("attempt_auto_login: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         if pw_locator.count() == 0 or not pw_locator.is_visible():
             # Not Google where the site has already refused that account.
             refused = domain in getattr(self, "google_refused_on", set())
             if not refused and self.sign_in_with_google_if_offered(page, email):
                 return True
-            logger.info("No visible password field on %s; assuming no login is required", domain)
-            return False
+            logger.info("LOGIN_CONTROLS_UNRESOLVED: checking guided sign-in fallback")
+            from gemini_auth import sign_in as guided_sign_in
+            return guided_sign_in(self, page, root, email, password, create_if_missing)
 
         # Don't try saved credentials on an employer we have no account with:
         # IGT rejected them twice before anyone checked. Create the account
         # instead when the page offers to.
-        if create_if_missing and self.account_on_record() is False \
+        if create_if_missing and self.account_on_record() is False and not self.applied_before() \
                 and self._create_account_control(page) is not None:
             return self.create_account_from_link(page, email)
 
@@ -5500,8 +5701,9 @@ class JobApplicationAssistant:
             # there is no email box here -- only the email shown as already
             # given. Without this the run stopped at a lone password box.
             if not self._email_already_given(page, email):
-                logger.warning("Password field present but no email/username field found on %s", domain)
-                return False
+                logger.info("LOGIN_CONTROLS_UNRESOLVED: checking guided sign-in fallback")
+                from gemini_auth import sign_in as guided_sign_in
+                return guided_sign_in(self, page, root, email, password, create_if_missing)
             tried = self.__dict__.setdefault("_password_steps_tried", set())
             if domain in tried:
                 logger.warning("LOGIN_HELD: the password was already tried once on %s -- not retrying", domain)
@@ -5511,13 +5713,13 @@ class JobApplicationAssistant:
                         domain)
         else:
             # The email first, and checked: a password is never sent without it.
-            email_locator.fill(email)
+            type_text(email_locator, email)
             if not self._email_kept([email_locator], email):
                 self._type_email(page, email_locator, email)
             if not self._email_kept([email_locator], email):
                 logger.warning("LOGIN_HELD: the email box on %s did not keep the address -- not signing in", domain)
                 return False
-        pw_locator.fill(password)
+        type_text(pw_locator, password)
 
         # Ignore hidden duplicates. With containment armed, only the dedicated
         # credential gateway may dispatch the sign-in; a failed dispatch must
@@ -5526,9 +5728,7 @@ class JobApplicationAssistant:
         candidates.extend(root.locator(selector) for selector in (
             "button[data-automation-id='signInSubmitButton']",
             "button:has-text('Sign In')",
-            "button:has-text('Sign in')",
             "button:has-text('Log In')",
-            "button:has-text('Log in')",
             "button[type='submit']",
         ))
         for buttons in candidates:
@@ -5550,8 +5750,9 @@ class JobApplicationAssistant:
         # An armed guard requires an explicit credential-form capability; Enter
         # cannot establish one and must not manufacture a rejected-login hold.
         if getattr(self, "_submission_guard", None) is not None:
-            logger.warning("LOGIN_NOT_DISPATCHED: no supported dedicated sign-in button")
-            return False
+            logger.info("LOGIN_CONTROLS_UNRESOLVED: checking guided sign-in fallback")
+            from gemini_auth import sign_in as guided_sign_in
+            return guided_sign_in(self, page, root, email, password, create_if_missing)
         # Some ATS login forms submit on Enter even when no button matches.
         pw_locator.press("Enter")
         page.wait_for_load_state("domcontentloaded", timeout=15000)
@@ -5586,11 +5787,11 @@ class JobApplicationAssistant:
         body = ""
         try:
             body = (page.locator("body").inner_text(timeout=5_000) or "").lower()
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("_after_login_attempt: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         rejected = re.search(r"invalid (email|user|login|password|credentials)|incorrect (email|password)|wrong (email|username|password)|"
                              r"don't recognize|not recognized|no account", body)
-        pw_visible = page.locator("input[type='password']").first
+        pw_visible = page.locator("input[type='password']:visible").first
         still_login = pw_visible.count() > 0 and pw_visible.is_visible()
         host = urlparse(page.url).netloc.lower()
         if not rejected and not still_login:
@@ -5615,7 +5816,7 @@ class JobApplicationAssistant:
     # and pressed Create Account with the passwords alone (28 September).
     _EMAIL_BOX_JS = r"""(scope) => {
         const root = scope || document;
-        const want = /e-?mail|user\s*-?name|user\s*id|login\s*id/i;
+        const want = /e-?mail|user\s*-?name|user\s*id|login(\s*id)?\b/i;
         const skip = new Set(['password', 'hidden', 'checkbox', 'radio', 'submit', 'button', 'file',
                               'image', 'reset', 'range', 'color']);
         document.querySelectorAll('[data-agent-email-box]').forEach(e => e.removeAttribute('data-agent-email-box'));
@@ -5893,8 +6094,8 @@ class JobApplicationAssistant:
                     try:
                         if el.input_value().strip():
                             continue
-                    except Exception:
-                        pass
+                    except Exception as _swallowed:
+                        logger.debug("_find_first_matching: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
             return el
         return None
 
@@ -5938,8 +6139,8 @@ class JobApplicationAssistant:
             element.check(timeout=2_000)
             if is_set():
                 return True
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("select_radio: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
         try:
             element_id = element.get_attribute("id") or ""
@@ -5949,8 +6150,8 @@ class JobApplicationAssistant:
                     label.click(timeout=3_000)
                     if is_set():
                         return True
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("select_radio: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
         # The wrapper that carries the styling is what a person clicks.
         try:
@@ -5962,8 +6163,8 @@ class JobApplicationAssistant:
             page.wait_for_timeout(300)
             if is_set():
                 return True
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("select_radio: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
         # Last resort: set it and tell the page, the way the widget would.
         try:
@@ -6447,8 +6648,8 @@ class JobApplicationAssistant:
                 page.wait_for_timeout(2_500)
                 try:
                     page.wait_for_load_state("networkidle", timeout=8_000)
-                except Exception:
-                    pass
+                except Exception as _swallowed:
+                    logger.debug("click_next_step: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
                 if self._page_fingerprint(page) != before:
                     logger.info("The form moved on when the button was pressed with the keyboard")
             except Exception as exc:
@@ -6521,6 +6722,11 @@ class JobApplicationAssistant:
         they jump straight to 'My applications'."""
         if self.find_submit_button(page) is not None:
             return False  # still on the form
+        try:
+            if adapter_for(page.url).submission_confirmed(page):
+                return True
+        except Exception as _swallowed:
+            logger.debug("submission_confirmed: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         try:
             # innerText alone is not reliable evidence of visibility here: a heading with
             # display:none measurably still returned its text in this runtime (verified, not
@@ -6616,16 +6822,17 @@ class JobApplicationAssistant:
         if not company:
             return None
         tab = page.context.new_page()
+        keep_mail_open = False
         try:
             query = quote(f"{company} newer_than:2d")
-            tab.goto(f"https://mail.google.com/mail/u/0/#search/{query}", wait_until="domcontentloaded", timeout=45_000)
+            tab.goto(self._gmail_search_url(query), wait_until="domcontentloaded", timeout=45_000)
             try:
                 tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)
-            except Exception:
-                pass
+            except Exception as _swallowed:
+                logger.debug("gmail_shows_confirmation: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
             tab.wait_for_timeout(2_000)
-            if "accounts.google.com" in tab.url or "mail.google.com" not in tab.url:
-                logger.warning("GMAIL: this browser isn't signed in to Gmail -- can't check for a confirmation email")
+            if not self._gmail_mailbox_matches(tab):
+                keep_mail_open = True
                 return None
 
             rows = tab.locator("tr.zA")
@@ -6652,10 +6859,11 @@ class JobApplicationAssistant:
             return None
         finally:
             try:
-                tab.close()
-                page.bring_to_front()
-            except Exception:
-                pass
+                if not keep_mail_open:
+                    tab.close()
+                    page.bring_to_front()
+            except Exception as _swallowed:
+                logger.debug("gmail_shows_confirmation: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
     # ------------------------------------------------------------------
     # Emailed one-time passcodes (account setup / sign-in only)
@@ -6679,8 +6887,8 @@ class JobApplicationAssistant:
                 ) or ""
                 if self._PASSCODE_FIELD.search(label) and not (el.input_value() or "").strip():
                     return el
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("_passcode_field: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return None
 
     @staticmethod
@@ -6724,12 +6932,50 @@ class JobApplicationAssistant:
         except Exception:
             return None
 
+    _PLAIN_MAILBOX = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+
+    def _gmail_search_url(self, query: str) -> str:
+        """The Gmail search for `query` in the account the job accounts use (f182), not whichever Google account
+        comes first in this browser: the owner has more than one. This URL is a navigation hint:
+        Gmail may silently fall back to another account. Readers must verify the visible account
+        identity before accessing messages. An address that is not a plain mailbox is never put into the URL."""
+        email = (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
+        if not email:
+            email = (getattr(self._owner_profile(), "email", "") or "").strip()
+        if self._PLAIN_MAILBOX.match(email):
+            # /mail/u/<address>/ is unsupported. authuser is a hint, never proof of identity.
+            return f"https://mail.google.com/mail/?authuser={quote(email)}#search/{query}"
+        return f"https://mail.google.com/mail/u/0/#search/{query}"
+
     def why_not_read_a_code(self, page: Page, email: str = "") -> Optional[str]:
         """emailed_codes.why_not for the page in front of the agent: None when it may read a code from the
         owner's mail, else why not."""
         profile = self._owner_profile()
         email = email or (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
         return emailed_codes.why_not(profile, page.url, captcha=safety.captcha_visible(page), email=email)
+
+    def _gmail_mailbox_matches(self, tab: Page) -> bool:
+        """The account button, not a navigation hint, establishes mailbox identity."""
+        email = (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
+        email = email or (getattr(self._owner_profile(), "email", "") or "").strip()
+        if self._PLAIN_MAILBOX.fullmatch(email) and urlparse(tab.url).hostname == "mail.google.com":
+            button = tab.get_by_role("button", name=re.compile(r"^Google Account:", re.I))
+            try:
+                button.first.wait_for(state="visible", timeout=5_000)
+                label = button.first.get_attribute("aria-label") or button.first.inner_text()
+                addresses = re.findall(r"[\w.+-]+@[\w-]+\.[\w.]+", label)
+                if len(addresses) == 1 and addresses[0].casefold() == email.casefold():
+                    return True
+            except Exception as _swallowed:
+                logger.debug("_gmail_mailbox_matches: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+        self._login_paused = (
+            "The applying Gmail account is not confirmed in this browser. "
+            "Sign in to the application email in the open Google tab, then press Continue.")
+        if self._PLAIN_MAILBOX.fullmatch(email):
+            tab.goto("https://accounts.google.com/AddSession?service=mail&continue="
+                     "https%3A%2F%2Fmail.google.com%2Fmail%2F&login_hint=" + quote(email),
+                     wait_until="domcontentloaded", timeout=45_000)
+        return False
 
     def passcode_from_gmail(self, page: Page, previous: str = "", wait_seconds: int = 150,
                             length: int = 0) -> str:
@@ -6746,6 +6992,7 @@ class JobApplicationAssistant:
         employer = (getattr(self, "employer", "") or "").strip()
         app_key = getattr(self, "application_key", "")
         tab = page.context.new_page()
+        keep_mail_open = False
         try:
             deadline = time.time() + wait_seconds
             while time.time() < deadline:
@@ -6759,14 +7006,14 @@ class JobApplicationAssistant:
                         safe_metadata={"employer": employer},
                     )
                 query = quote("newer_than:1h (passcode OR \"one-time\" OR verification OR code)")
-                tab.goto(f"https://mail.google.com/mail/u/0/#search/{query}", wait_until="domcontentloaded", timeout=45_000)
+                tab.goto(self._gmail_search_url(query), wait_until="domcontentloaded", timeout=45_000)
                 try:
                     tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)
-                except Exception:
-                    pass
+                except Exception as _swallowed:
+                    logger.debug("passcode_from_gmail: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
                 tab.wait_for_timeout(2_000)
-                if "mail.google.com" not in tab.url:
-                    logger.warning("PASSCODE: this browser isn't signed in to Gmail")
+                if not self._gmail_mailbox_matches(tab):
+                    keep_mail_open = True
                     return ""
                 rows = tab.locator("tr.zA")
                 for i in range(min(rows.count(), 10)):  # newest first
@@ -6817,10 +7064,11 @@ class JobApplicationAssistant:
             return ""
         finally:
             try:
-                tab.close()
-                page.bring_to_front()
-            except Exception:
-                pass
+                if not keep_mail_open:
+                    tab.close()
+                    page.bring_to_front()
+            except Exception as _swallowed:
+                logger.debug("passcode_from_gmail: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
     def verification_link_from_gmail(self, page: Page, wait_seconds: int = 150) -> str:
         """The newest account-verification link (last hour) the site at `page` emailed the owner, read from the Gmail
@@ -6836,6 +7084,7 @@ class JobApplicationAssistant:
         site_url = page.url
         app_key = getattr(self, "application_key", "")
         tab = page.context.new_page()
+        keep_mail_open = False
         try:
             deadline = time.time() + wait_seconds
             while time.time() < deadline:
@@ -6849,15 +7098,15 @@ class JobApplicationAssistant:
                         safe_metadata={"site_url": site_url},
                     )
                 query = quote("newer_than:1h (verify OR verification OR activate OR confirm)")
-                tab.goto(f"https://mail.google.com/mail/u/0/#search/{query}", wait_until="domcontentloaded",
+                tab.goto(self._gmail_search_url(query), wait_until="domcontentloaded",
                          timeout=45_000)
                 try:
                     tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)
-                except Exception:
-                    pass
+                except Exception as _swallowed:
+                    logger.debug("verification_link_from_gmail: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
                 tab.wait_for_timeout(2_000)
-                if "mail.google.com" not in tab.url:
-                    logger.warning("VERIFY_LINK: this browser isn't signed in to Gmail")
+                if not self._gmail_mailbox_matches(tab):
+                    keep_mail_open = True
                     return ""
                 rows = tab.locator("tr.zA")
                 for i in range(min(rows.count(), 5)):          # newest first
@@ -6907,10 +7156,11 @@ class JobApplicationAssistant:
             return ""
         finally:
             try:
-                tab.close()
-                page.bring_to_front()
-            except Exception:
-                pass
+                if not keep_mail_open:
+                    tab.close()
+                    page.bring_to_front()
+            except Exception as _swallowed:
+                logger.debug("verification_link_from_gmail: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
     _VERIFIED = re.compile(
         r"(?:account|email|e-mail)(?: address)? (?:has been |is |was |successfully )*"
@@ -6918,18 +7168,21 @@ class JobApplicationAssistant:
     _LINK_FAILED = re.compile(r"expired|invalid|no longer valid|already been used|could not (be )?verif|error",
                               re.IGNORECASE)
 
-    def verify_account_by_email_link(self, page: Page) -> bool:
+    def verify_account_by_email_link(self, page: Page, just_created: bool = False) -> bool:
         """Recover a live account-verification requirement using authorized mail.
 
         A link that lands on Sign In permits authentication to continue; only
         an explicit confirmation establishes that verification itself succeeded.
+        `just_created`: the agent made this account here in this run and the sign-in was refused -- Workday words an
+        unverified new account as "wrong email or password", never "verify" (f195).
         """
         self._email_verification_outcome = "unconfirmed"
         if self.why_not_read_a_code(page):
             return False
         state = account_state.read_state(page.locator("body").aria_snapshot(),
                                          password_boxes=page.locator("input[type=password]:visible").count())
-        if state.kind != account_state.VERIFY_EMAIL:
+        refused_new = just_created and state.kind in (account_state.WRONG_PASSWORD, account_state.SIGN_IN_FORM)
+        if state.kind != account_state.VERIFY_EMAIL and not refused_new:
             return False
         said = page.locator("body").inner_text()
         if not re.search(r"an email has been sent|we(?:'ve| have)? sent", said, re.I):
@@ -6988,8 +7241,8 @@ class JobApplicationAssistant:
             try:
                 tab.close()
                 page.bring_to_front()
-            except Exception:
-                pass
+            except Exception as _swallowed:
+                logger.debug("verify_account_by_email_link: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
     def complete_emailed_passcode(self, page: Page) -> bool:
         """On a 'we've sent a one-time password to your email' step of account
@@ -7078,8 +7331,8 @@ class JobApplicationAssistant:
         if include_body:
             try:
                 texts.append(page.locator("body").inner_text(timeout=3_000) or "")
-            except Exception:
-                pass
+            except Exception as _swallowed:
+                logger.debug("_account_exists_message: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return any(self._ACCOUNT_EXISTS.search(" ".join((text or "").split())) for text in texts)
 
     @staticmethod
@@ -7143,8 +7396,8 @@ class JobApplicationAssistant:
         try:
             if self.adapter(page).name == "workday" and self._goto_login_page(page):
                 return on_sign_in()
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("_open_sign_in: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return False
 
     def sign_in_to_existing_account(self, page: Page, email: str) -> bool:
@@ -7246,7 +7499,7 @@ class JobApplicationAssistant:
         page.wait_for_timeout(1_500)
         box = self._find_login_email_input(page)
         if box is not None and not (box.input_value() or "").strip():
-            box.fill(email)
+            type_text(box, email)
         send = self._first_visible(page, ("button",), self._SEND_STEP)
         login_guard.record_reset_request(domain, email)
         if send is not None:
@@ -7410,8 +7663,8 @@ class JobApplicationAssistant:
         page.wait_for_timeout(5_000)
         try:
             page.wait_for_load_state("networkidle", timeout=20_000)
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("_click_verified_submit_locked: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return True
 
     def wait_for_submission_evidence(self, page: Page, job_title: str = "",
@@ -7433,8 +7686,8 @@ class JobApplicationAssistant:
                 if self.submission_confirmed(page, job_title):
                     return f"the page confirmed it ({page.url[:80]})"
                 on_form = self.find_submit_button(page) is not None
-            except Exception:
-                pass
+            except Exception as _swallowed:
+                logger.debug("wait_for_submission_evidence: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
             if not on_form and check_mail and company and self._confirmation_email_due(waited, last_mail_check, mail_attempts):
                 mail_attempts += 1
                 last_mail_check = waited
@@ -7701,8 +7954,8 @@ class JobApplicationAssistant:
         diagnostics.capture_safe_screenshot(page, screenshot_path)
         try:  # the page's markup beside the screenshot, for diagnosing unfamiliar forms
             diagnostics.capture_safe_dom(page, job_dir / "review_page.html")
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("save_review_package: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         leftovers = self.find_required_blanks(page)
         for label in leftovers["required_still_blank"]:
             logger.warning("REQUIRED_BLANK: %s", " ".join(label.split()))
@@ -7725,8 +7978,8 @@ class JobApplicationAssistant:
             }"""):
                 if item["q"]:
                     logger.info("UNANSWERED_SELECT: %s | options: %s", " ".join(item["q"].split())[:110], item["options"])
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("save_review_package: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         for message in leftovers["errors_shown"]:
             logger.warning("FORM_ERROR: %s", message)
         summary = {
@@ -7827,8 +8080,8 @@ class JobApplicationAssistant:
         waiting = waiting_note_for(signal_path)
         try:
             waiting.write_text(datetime.now().isoformat(timespec="seconds"), encoding="utf-8")
-        except OSError:
-            pass
+        except OSError as _swallowed:
+            logger.debug("wait_for_signal: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         # A stop that needs the owner: tell their phone, and serve the console while waiting (both optional).
         needs = getattr(self, "_owner_needs", None)
         self._phone = None
@@ -7845,18 +8098,18 @@ class JobApplicationAssistant:
             if self._phone is not None:
                 try:
                     self._phone.close()
-                except Exception:
-                    pass
+                except Exception as _swallowed:
+                    logger.debug("wait_for_signal: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
                 self._phone = None
             try:
                 waiting.unlink(missing_ok=True)
-            except OSError:
-                pass
+            except OSError as _swallowed:
+                logger.debug("wait_for_signal: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
             if page is not None:
                 try:
                     provenance.set_agent_busy(page, True)
-                except Exception:
-                    pass
+                except Exception as _swallowed:
+                    logger.debug("wait_for_signal: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
     def _sleep_for_phone(self, seconds: float, page) -> None:
         """The wait's pause between looks. With the phone console open it is cut into short beats, each serving
@@ -7871,12 +8124,30 @@ class JobApplicationAssistant:
             if tab is not None:
                 try:
                     console.service(tab)
-                except Exception:
-                    pass
+                except Exception as _swallowed:
+                    logger.debug("_sleep_for_phone: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
             remaining = end - time.time()
             if remaining <= 0:
                 return
             time.sleep(min(0.3, remaining))
+
+    def _captcha_observation_page(self, page):
+        """Observe an embedded ATS without opening/navigating it during handoff.
+
+        apply_flow hands the wait the outer tab, while account creation works in
+        the application frame. Reuse the adapter's frame selection and FramedPage's
+        replacement tracking so the wait sees the same challenge and form.
+        """
+        if page is None or getattr(page, "top", None) is not None:
+            return page
+        try:
+            find_frame = getattr(self.adapter(page), "find_application_frame", None)
+            frame = find_frame(page) if callable(find_frame) else None
+            if frame is not None:
+                return FramedPage(page, frame)
+        except Exception as _swallowed:
+            logger.debug("_captcha_observation_page: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+        return page
 
     def _wait_for_signal(
         self, signal_path: Path, poll_seconds: float = 2.0, timeout_seconds: float = 1800.0,
@@ -7900,8 +8171,8 @@ class JobApplicationAssistant:
             job_file = signal_path.with_name(signal_path.name.replace("_signal_", "_job_", 1)).with_suffix(".json")
             job_info = json.loads(job_file.read_text(encoding="utf-8-sig"))
             job_title, company = job_info.get("title", ""), job_info.get("company", "")
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("_wait_for_signal: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         profile = getattr(self, "_profile", None)
         check_mail = bool(getattr(profile, "check_gmail_for_confirmation", True))
         if page is not None:
@@ -7928,9 +8199,20 @@ class JobApplicationAssistant:
         # has stayed the same for a while (the owner has stopped typing), it carries on by itself -- the owner asked
         # why they had to press Continue as well (30 September). Continue still works at any time.
         blanks_checked_at, filled_since, last_look = 0.0, None, None
+        captcha_start_path = ""
+        captcha_start_passwords = 0
+        captcha_page = self._captcha_observation_page(page)
+        captcha_top = getattr(captcha_page, "top", None)
+        captcha_top_url = getattr(captcha_top, "url", "")
         if page is not None:
             try:
-                captcha_seen = bool(safety.captcha_visible(page))
+                cur_url = getattr(captcha_page, "url", "") or ""
+                captcha_start_path = urlparse(cur_url).path
+                captcha_start_passwords = captcha_page.locator("input[type=password]").count()
+            except Exception as _swallowed:
+                logger.debug("_wait_for_signal: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            try:
+                captcha_seen = bool(safety.captcha_visible(captcha_page))
             except Exception:
                 captcha_seen = False
             waiting_on_captcha = waiting_on_captcha or captcha_seen
@@ -7974,8 +8256,33 @@ class JobApplicationAssistant:
                         return "refresh"
                     continue
                 if waiting_on_captcha:
+                    # A detached/replaced frame temporarily falls back to the outer
+                    # document. Its lack of password boxes is not progress evidence.
+                    if captcha_top is not None and captcha_top.url == captcha_top_url:
+                        try:
+                            if captcha_page.frame() == captcha_top.main_frame:
+                                captcha_gone_polls = 0
+                                continue
+                        except Exception:
+                            continue
                     try:
-                        visible = bool(safety.captcha_visible(page))
+                        cur_url = getattr(captcha_page, "url", "") or ""
+                        cur_path = urlparse(cur_url).path
+                        cur_passwords = captcha_page.locator("input[type=password]").count()
+                        page_moved_on = bool(
+                            (captcha_start_path and cur_path and cur_path != captcha_start_path)
+                            or (captcha_start_passwords > 0 and cur_passwords == 0)
+                        )
+                    except Exception:
+                        page_moved_on = False
+
+                    if page_moved_on:
+                        logger.info("The page moved on (%s) -- carrying on with the application", cur_url)
+                        page.wait_for_timeout(2_000)
+                        return "refresh"
+
+                    try:
+                        visible = bool(safety.captcha_visible(captcha_page))
                     except Exception:
                         visible = None      # mid-navigation: look again next poll
                     if visible:

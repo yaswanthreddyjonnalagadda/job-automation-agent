@@ -17,7 +17,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-_SECTION_WORK = re.compile(r"^(?:work|employment|professional|job)\s+(?:experience|history)(?:\s+(\d+))?$|"
+_SECTION_WORK = re.compile(r"^(?:work|employment|professional|job)(?:\s+(?:experience|history))?(?:\s+(\d+))?$|"
                            r"^experience(?:\s+(\d+))?$|^work history(?:\s+(\d+))?$", re.IGNORECASE)
 _SECTION_EDU = re.compile(r"^education(?:al)?(?:\s+(?:history|background|details))?(?:\s+(\d+))?$", re.IGNORECASE)
 _LINE = re.compile(r'^(\s*)- (\w+)(?: "((?:[^"\\]|\\.)*)")?([^:]*?)(?::\s*(.*))?$')
@@ -51,11 +51,13 @@ def entry_map(snapshot: str) -> dict[str, Entry]:
     """{ref: Entry} for every box inside a repeated work or education entry on the page."""
     found: dict[str, Entry] = {}
     section, index, first_label = None, -1, None
+    last_section = None
     section_indent = -1                              # where the entry's own title is drawn
     current: dict = {}
     peers: dict[str, list] = {"work": [], "education": []}
     date_groups: list[tuple[int, str]] = []
     last_box: Optional[tuple[int, str]] = None      # (indent, label) of the last box, whose value may follow
+    pending_separator = False
     for raw in (snapshot or "").splitlines():
         m = _LINE.match(raw)
         if not m:
@@ -65,8 +67,11 @@ def entry_map(snapshot: str) -> dict[str, Entry]:
         indent = len(m.group(1))
         while date_groups and indent <= date_groups[-1][0]:
             date_groups.pop()
-        if role == "group" and re.fullmatch(r"From|To|Start(?: date)?|End(?: date)?", name, re.IGNORECASE):
-            date_groups.append((indent, name))
+        date_group = (re.fullmatch(
+            r"(From|To|Start(?: date)?|End(?: date)?)(?:\s*\((?:actual(?:\s*(?:or|/)\s*expected)?|expected)\))?",
+            name, re.IGNORECASE) if role == "group" else None)
+        if date_group:
+            date_groups.append((indent, date_group.group(1)))
         # A text box with a placeholder shows what it holds as a child line ("- text: Capital One").
         if last_box is not None and indent > last_box[0] and role == "text" and value and section:
             if not current.get(last_box[1].lower()):
@@ -74,25 +79,40 @@ def entry_map(snapshot: str) -> dict[str, Entry]:
             continue
         if last_box is not None and indent <= last_box[0]:
             last_box = None
-        if role in _TITLE_ROLES and role not in _FIELD_ROLES:
-            title = name or (value if role in ("heading", "legend") else "")
+        if role == "separator":
+            if section is not None and indent <= section_indent:
+                pending_separator = True
+            continue
+        if role in _TITLE_ROLES and role not in _FIELD_ROLES and not date_group:
+            title = name or (value if role in ("heading", "legend", "paragraph", "text") else "")
             if title and len(title.split()) <= 5:
                 kind, numbered = _section_of(title)
                 if kind:
-                    if kind != section or numbered is not None:
+                    pending_separator = False
+                    if (kind != section and kind != last_section) or numbered is not None:
                         index = numbered if numbered is not None else -1
                         first_label, current = None, {}
-                    section, section_indent = kind, indent
+                    section = kind
+                    last_section = kind
+                    section_indent = indent
                     if numbered is not None:
                         first_label, current = "", {}
                     continue
                 # A heading or named group drawn inside the entry (UKG's "From" / "To" date groups) is part of
                 # it; only one at the entry's own level or above starts another section (Languages ...).
                 inside = section is not None and indent > section_indent
-                if not inside and role in ("heading", "legend") or (not inside and name and role in ("group", "region") and section
-                                                     and not re.search(r"remove|add", title, re.IGNORECASE)):
+                if not inside and (role in ("heading", "legend", "paragraph") or (name and role in ("group", "region") and section
+                                                     and not re.search(r"remove|add", title, re.IGNORECASE))):
                     section = None                     # another section starts: Languages, Attachments ...
+                    last_section = None
+                    pending_separator = False
                     continue
+        if pending_separator:
+            label_candidate = " ".join(name.split()) if name else ""
+            if label_candidate != first_label:
+                section = None
+                last_section = None
+            pending_separator = False
         if section is None or role not in _FIELD_ROLES or not ref or not name:
             continue
         if role == "button" and re.search(r"\b(remove|delete|add|save|cancel)\b", name, re.IGNORECASE):
@@ -165,7 +185,26 @@ def with_profile(history: dict, profile, resume_text: str = "") -> dict:
     dated = [tuple(d) for d in (getattr(profile, "education_dates", ()) or ()) if d and len(d) >= 3]
     profile_degrees = [tuple(row) for row in (getattr(profile, "education", ()) or ()) if row and len(row) >= 3]
     degrees = []
-    for record in history.get("education") or []:
+    records = list(history.get("education") or [])
+    claimed = set()
+    for degree in profile_degrees:
+        if not str(degree[2] or "").strip():
+            continue
+        matches = [i for i, record in enumerate(records) if i not in claimed
+                   and _identifies(str(degree[2]), str(record.get("school") or ""))
+                   and (not record.get("degree") or _identifies(str(degree[0]), str(record["degree"])))]
+        if matches:
+            claimed.add(matches[0])
+            continue
+        record = {"degree": degree[0], "field": degree[1], "school": degree[2]}
+        matching_dates = next((row for row in dated if _identifies(str(row[0]), str(degree[2]))), None)
+        if matching_dates:
+            record.update(start=matching_dates[1], end=matching_dates[2])
+        elif len(degree) > 3:
+            record["end"] = degree[3]
+        records.append(record)
+        claimed.add(len(records) - 1)
+    for record in records:
         record = dict(record)
         candidates = [row for row in profile_degrees if _identifies(str(row[2]), str(record.get("school") or ""))]
         if len(candidates) > 1:

@@ -7,6 +7,7 @@ browser_profile/
 # Generated per-application materials and scratch state.
 output/
 logs/
+local_debug/
 data/*.db
 data/_*.json
 data/_*.txt
@@ -54,3 +55,6 @@ sandbox/
 # Local working files: scratch output, backups of the owner's data (never pushed).
 scratch/
 data/*.bak
+
+# Local assistant state.
+.claude/

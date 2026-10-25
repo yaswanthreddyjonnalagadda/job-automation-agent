@@ -1,0 +1,14 @@
+{
+  "id": "f210",
+  "date": "2026-10-21",
+  "site": "Fal AI application 106; personal web-address fields across portals",
+  "class": "Syntactically valid personal URLs accepted without evidence",
+  "symptom": "After the f209 restart, the worker filled required Github Profile with https://github.com although the profile and original resume supply no personal GitHub URL. The unsupported value was removed from the live form after checking it was agent-entered.",
+  "root_cause": "The shared fill guard checked URL syntax only. Targeted and full-page AI answers could supply generic homepages or invented personal URLs without a profile, approved-answer, or resume match.",
+  "why_tests_missed": "Prior coverage rejected prose in URL fields but did not test valid-looking URLs without personal evidence.",
+  "fix": "Require an exact known answer or matching URL in the original resume at the shared browser fill boundary. Ignore email-address fragments when collecting URL evidence; keep existing optional/required and provenance rules.",
+  "tests": [
+    "tests/test_personal_url_evidence.py"
+  ],
+  "prevention": "A valid URL is not proof of a user identity. Validate personal identifiers against supplied evidence at the action boundary, independent of model source labels."
+}

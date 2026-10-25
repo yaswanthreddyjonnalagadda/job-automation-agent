@@ -1,0 +1,15 @@
+{
+  "id": "f196",
+  "date": "2026-10-18",
+  "site": "iCIMS (Mutual of Enumclaw, hCaptcha); any portal whose layout retains CAPTCHA frames after page transition",
+  "class": "A CAPTCHA wait continued polling after the form had already been submitted and the page navigated to the next step",
+  "symptom": "On Mutual of Enumclaw (iCIMS), the applicant solved hCaptcha on the profile creation page and the site navigated to the candidate application form (/candidate?from=profilebuilder), but the agent sat waiting for an instruction because captcha_visible remained True due to persistent CAPTCHA assets in the layout.",
+  "root_cause": "_wait_for_signal(for_captcha=True) only terminated when safety.captcha_visible(page) became False for 2 consecutive polls, without checking whether the page path had changed or password fields had disappeared.",
+  "why_tests_missed": "CAPTCHA stop tests tested single pages where the widget vanished rather than multi-page navigation across form steps.",
+  "fix": "In browser_automation._wait_for_signal, record the initial URL path and password field count; during the CAPTCHA wait, if the URL path changes or password inputs disappear, treat the page as moved on and return 'refresh' immediately.",
+  "tests": [
+    "tests/test_captcha_stop_ends_when_the_page_moves_on.py::test_the_stop_ends_once_the_account_form_is_gone",
+    "tests/test_captcha_stop_ends_when_the_page_moves_on.py::test_the_stop_waits_while_the_same_page_holds_the_captcha"
+  ],
+  "prevention": "A wait for a security gate must track page progression (URL and DOM form state), not only isolated third-party widget visibility."
+}

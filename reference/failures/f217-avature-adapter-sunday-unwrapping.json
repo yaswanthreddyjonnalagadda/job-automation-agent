@@ -1,0 +1,20 @@
+{
+  "id": "f217",
+  "date": "2026-10-22",
+  "site": "Avature (*.avature.net) and Sunday referral wrappers",
+  "class": "Missing dedicated Avature portal adapter and referral aggregator unwrapping",
+  "symptom": "Avature portal rules (optional registration when From Device is present, 10-digit plain phone formatting, and explicit closed-posting detection) were scattered across generic modules without an adapter, and aggregator referrals (Sundayy) lacked outbound ATS unwrapping to the employer's official posting.",
+  "root_cause": "No dedicated AvatureAdapter existed in sites/ to encapsulate Avature host routing, Sunday referral destination unwrapping, resume alternative detection, closed-posting guards, and XXXXXXXXXX phone placeholder formatting.",
+  "why_tests_missed": "Previous fixes (f161, f163, f165) addressed isolated symptoms in account_state.py, form_fields.py, and page_agent.py without consolidating portal-specific behavior into sites/avature.py.",
+  "fix": "Implemented dedicated AvatureAdapter in sites/avature.py registered in sites/__init__.py. Encapsulates host matching (*.avature.net, *.avature.cn, /careers/ApplicationMethods), Sunday referral unwrapping to official employer ATS URLs, optional login detection with direct resume alternatives (From Device / Without Resume), explicit closed requisition detection (f163), and identity-preserving 10-digit phone formatting (f165).",
+  "tests": [
+    "tests/test_avature_adapter.py::test_avature_url_matching",
+    "tests/test_avature_adapter.py::test_referral_wrapper_detection",
+    "tests/test_avature_adapter.py::test_unwrap_referral_destination",
+    "tests/test_avature_adapter.py::test_has_resume_entry_alternatives_f161",
+    "tests/test_avature_adapter.py::test_is_closed_posting_f163",
+    "tests/test_avature_adapter.py::test_format_phone_number_f165"
+  ],
+  "prevention": "Consolidate portal-specific DOM rules, resume entry choices, referral wrappers, and placeholder formatting into dedicated adapters in sites/ rather than spreading them across generic interaction modules."
+}
+

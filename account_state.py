@@ -46,6 +46,7 @@ _WRONG_PASSWORD = re.compile(
     r"(wrong|incorrect|invalid) (email|e-mail|user ?name|password|credentials|sign.?in)|"
     r"(email|user ?name|password) (is|was|are) (incorrect|invalid|wrong)|does not match (our|any) (records|account)|"
     r"(could ?n.?t|unable to|failed to) (sign|log) (you )?in|sign.?in failed|login failed", re.IGNORECASE)
+_RULE_WORDING = re.compile(r"\bpassword (?:is|was|are) invalid\b|\binvalid password\b", re.IGNORECASE)
 _EXISTS = re.compile(
     r"(account|user|email|e-mail)( address)? (already )?(exists|is already (registered|in use|taken))|"
     r"already (have|has) an account (with|for) (this|that)|already registered", re.IGNORECASE)
@@ -92,9 +93,11 @@ _VERIFY = re.compile(
 _UNVERIFIED = re.compile(
     r"verify your (account|email|e-mail)( address)? (before|to) (you )?(sign|log) ?in|request a (new )?verification "
     r"(email|e-mail|link)|(account|email|e-mail)( address)? (is |has )?(not|n't) (been |yet )*(verified|activated|"
-    r"confirmed)|unverified (account|email)|account (may |might )?needs? (to be )?(verified|verification|activated)",
+    r"confirmed)|unverified (account|email)|account (may |might )?needs? (to be )?(verified|verification|activated)|"
+    r"we('ve| have)? sent (you )?(an? )?(?:verification |activation )?(?:email|e-mail|link|message)|"
+    r"(?:verification|activation) (?:email|e-mail|link) (?:has been |was )?sent",
     re.IGNORECASE)
-_CREATE = re.compile(r"\bcreate (an |your )?account\b|\bregister\b|\bsign ?up\b", re.IGNORECASE)
+_CREATE = re.compile(r"\bcreate (an |your )?account\b|\bregister\b|\bsign ?up\b|\bcreate (your |a )?profile\b", re.IGNORECASE)
 _SIGN_IN = re.compile(r"\bsign ?in\b|\blog ?in\b", re.IGNORECASE)
 _WAYS_IN = re.compile(r"(?:sign|log)[\s-]?(?:in|on|up) (?:with|using|via) (google|email|linkedin|apple|microsoft|"
                       r"facebook)|continue with (google|email)|"
@@ -182,11 +185,15 @@ def read_state(snapshot: str, password_boxes: Optional[int] = None) -> AccountSt
             and re.search(r"choose any option to apply", " ".join(texts), re.I) \
             and len(resume_choices & offered_entries) >= 2:
         return state(NONE, "existing-account login beside explicit alternative application entries")
+    # On a form that makes an account, "Password is invalid" is the site's rule for the password being chosen, not
+    # a refusal of one the owner gave: it is a form error to correct, never a reason to reset a password (23 Oct).
+    creating = passwords >= 2 or says_create(re.findall(r'- heading "((?:[^"\\]|\\.)*)"', snapshot or ""))
     for kind, pattern in ((LOCKED, _LOCKED), (VERIFY_EMAIL, _UNVERIFIED), (WRONG_PASSWORD, _WRONG_PASSWORD),
                           (ACCOUNT_EXISTS, _EXISTS)):
         if kind == VERIFY_EMAIL and wants_code:
             continue
-        said = _first(pattern, texts)
+        said = _first(pattern, [_RULE_WORDING.sub("", t) for t in texts] if creating and kind == WRONG_PASSWORD
+                      else texts)
         if said and (passwords or on_account_step or _first(_SIGN_IN, texts) or _first(_CREATE, texts)):
             return state(kind, said)
     # The page's own channel wording (an authenticator app, SMS/text, a security key) outranks a
@@ -199,7 +206,7 @@ def read_state(snapshot: str, password_boxes: Optional[int] = None) -> AccountSt
     if wants_code:
         return state(CODE_ENTRY, _first(_CODE, texts))
     said = _first(_VERIFY, texts)
-    if said and not passwords:
+    if said and not passwords and not _application_fields(snapshot):
         return state(VERIFY_EMAIL, said)
     if step and int(step.group(1)) >= 1 and not passwords and not on_account_step_is_current(snapshot):
         return state(SIGNED_IN, step.group(0))
@@ -252,8 +259,8 @@ def says_create(headings) -> bool:
 
 def _application_fields(snapshot: str) -> bool:
     # 'Email address' is a sign-in box, not a street address.
-    return bool(re.search(r'- (textbox|combobox) "[^"]*(first name|last name|phone|street address|address line|'
-                          r'home address|resume)', snapshot or "", re.IGNORECASE))
+    return bool(re.search(r'- (textbox|combobox|button) "[^"]*(first name|last name|phone|street address|address line|'
+                          r'home address|resume|cv)', snapshot or "", re.IGNORECASE))
 
 
 # ---------------------------------------------------------------------------
@@ -294,8 +301,9 @@ class Step:
 
 
 def _knows_account(memory: Memory) -> bool:
-    """The site knows this account: it is on record, or the site took the email and asked for its password."""
-    return memory.account_exists or memory.email_given
+    """The site knows this account: it is on record, the site took the email and asked for its password, or the agent
+    created it here in this run (f195)."""
+    return memory.account_exists or memory.email_given or memory.created
 
 
 def next_step(state: AccountState, memory: Memory) -> Step:
@@ -329,6 +337,11 @@ def next_step(state: AccountState, memory: Memory) -> Step:
         # asked for its password -- whose password it refused is reset to the same ATS password with the code
         # emailed to the owner, once per site per run. 'Wrong email or password' alone does not say the account
         # exists, so an unknown one stays the owner's. (Mutual of Enumclaw, iCIMS, 29 September.)
+        # An account made here moments ago and then refused is, on Workday, one whose email is not verified yet -- the
+        # site says only "wrong email or password" (R. L. Polk, 18 October; f195): its emailed link comes first.
+        if memory.created and not memory.verify_tried:
+            return Step(VERIFY_BY_LINK, "the account just made here was refused: a new account is usually refused "
+                                        "until its email is verified -- opening the link the site emailed")
         if _knows_account(memory) and not memory.reset_tried:
             return Step(RESET_PASSWORD, "the site knows this account and refused its password: resetting it to the "
                                         "ATS password with the code emailed to you")

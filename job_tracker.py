@@ -210,6 +210,7 @@ STATUS_NEEDS_USER_REVIEW = "needs_user_review"  # something needs a person: blan
 STATUS_SUBMITTED = "submitted"                  # confirmed by the site or a confirmation email
 STATUS_SKIPPED = "skipped"
 STATUS_JOB_NOT_FOUND = "job_not_found"          # the employer's page says the posting is gone: nothing to apply to
+STATUS_ALREADY_APPLIED = "already_applied"      # the site says this account already applied: nothing left to send
 STATUS_DISQUALIFIED_POLICY_MISMATCH = "DISQUALIFIED_POLICY_MISMATCH"
 STATUS_BLOCKED_VALIDATION_LOOP = "BLOCKED_VALIDATION_LOOP"
 
@@ -654,8 +655,8 @@ class JobTracker:
             if item.get("payload"):
                 try:
                     item["payload"] = json.loads(item["payload"])
-                except (TypeError, ValueError):
-                    pass
+                except (TypeError, ValueError) as _swallowed:
+                    logger.debug("events: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
             found.append(diagnostics.sanitize_event(item))
         return found
 
@@ -680,6 +681,16 @@ class JobTracker:
                                (employer.strip().lower(),)).fetchone()
         return dict(row) if row else None
 
+    def applied_before(self, employer: str) -> bool:
+        """True when an application to this employer was submitted before: an account exists there, whether or not
+        this agent made it (owner's rule, 17 October 2026: sign in, never make a second account)."""
+        import employer_names
+        if not employer_names.employer_key(employer):
+            return False
+        with self._connect() as conn:
+            rows = conn.execute("SELECT company FROM applications WHERE status = ?", (STATUS_SUBMITTED,)).fetchall()
+        return any(employer_names.same_employer(employer, row["company"] or "") for row in rows)
+
     def record_ats_account(self, employer: str, email: str, login_host: str, method: str) -> None:
         now = _now()
         with self._connect() as conn:
@@ -687,7 +698,8 @@ class JobTracker:
                 """INSERT INTO ats_accounts (employer, email, login_host, method, created_at, last_login_at)
                    VALUES (?, ?, ?, ?, ?, ?)
                    ON CONFLICT (employer) DO UPDATE SET last_login_at = excluded.last_login_at,
-                                                        login_host = excluded.login_host""",
+                                                        login_host = excluded.login_host,
+                                                        email = excluded.email, method = excluded.method""",
                 (employer.strip().lower(), email, login_host, method, now, now))
         logger.info("Recorded %s account for %s (%s)", method, employer, email)
 

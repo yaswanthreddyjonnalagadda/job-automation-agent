@@ -1,0 +1,15 @@
+{
+  "id": "f201",
+  "date": "2026-10-19",
+  "site": "Universal (seen on Mutual of Enumclaw iCIMS)",
+  "class": "Checkpoint pending_action marker cleared under slug key instead of submission_key alias causing infinite ACCOUNT_CREATION_UNCERTAIN handoff loop on resume",
+  "symptom": "When resuming an application after owner handoff or restart, the runner stopped repeatedly with: 'an earlier attempt may already have pressed Create Account on ... and the run stopped before the result was confirmed -- check whether the account now exists before trying again, then press Continue', even after the owner signaled Continue.",
+  "root_cause": "apply_flow.py cleared the pending_action checkpoint marker under the slug key (e.g. Mutual_of_Enumclaw_Insurance_Company_Net), whereas checkpoints written by JobApplicationAssistant and PageAgent are filed under assistant.submission_key (a SHA-256 hash). Furthermore, PageAgent.forget_sign_in_attempts(owner_acted=True) only notified login_guard without clearing the pending account creation marker, leaving the marker un-cleared in SQLite.",
+  "why_tests_missed": "Tests in test_owner_continue_clears_uncertain_account_creation.py used a single synthetic key for both the tracker and the continue handler, missing the divergence between the slug key and submission_key hash in real runs.",
+  "fix": "In page_agent.py, update forget_sign_in_attempts(owner_acted=True) to call _resolve_pending_account_creation(host), and update _resolve_pending_account_creation and _pending_account_creation to inspect and resolve across all key aliases (self._application_key(), self.key, and assistant.submission_key). In apply_flow.py, iterate over all key aliases when clearing pending account creation markers upon receiving 'continue' in both hand_over and wizard loops.",
+  "tests": [
+    "tests/test_owner_continue_clears_checkpoint_key_aliases.py"
+  ],
+  "prevention": "Whenever reading or clearing durable application checkpoints, always check both the human-readable slug key and assistant.submission_key hash aliases."
+}
+

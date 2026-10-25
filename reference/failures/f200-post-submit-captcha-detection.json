@@ -1,0 +1,14 @@
+{
+  "id": "f200",
+  "date": "2026-10-18",
+  "site": "Any portal with responsive CAPTCHA challenges on account/profile creation (Mutual of Enumclaw iCIMS, Workday)",
+  "class": "When a CAPTCHA challenge appeared after clicking the creation button, the filler checked only for validation errors or open password fields and reported a generic form failure instead of identifying the CAPTCHA",
+  "symptom": "On Mutual of Enumclaw (iCIMS), submitting the candidate profile form triggered an interactive hCaptcha challenge. Because the form was held open by the CAPTCHA, the agent logged ACCOUNT_CREATE_FAILED: the site kept the form open and stopped with a generic form error rather than classifying it as a CAPTCHA handoff.",
+  "root_cause": "browser_automation.py checked safety.captcha_visible(page) before clicking the button, but not after clicking when the site kept the form open due to a newly spawned CAPTCHA modal.",
+  "why_tests_missed": "Tests verified initial CAPTCHA detection when a challenge is present on load, but did not test CAPTCHAs triggered dynamically as a response to the form submit event.",
+  "fix": "In browser_automation.py fill_create_account_form, check safety.captcha_visible(page) when the form remains open after clicking, reporting 'a CAPTCHA is on the form: only you can complete it' so the run enters the dedicated CAPTCHA handoff loop.",
+  "tests": [
+    "tests/test_captcha_detection_after_submit.py::test_captcha_appearing_after_submit_is_detected"
+  ],
+  "prevention": "Always check safety.captcha_visible whenever an action button leaves the form open before assuming validation failure."
+}
