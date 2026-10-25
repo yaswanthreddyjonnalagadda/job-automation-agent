@@ -44,6 +44,13 @@ def client(monkeypatch, tmp_path):
 
     import job_discovery
     monkeypatch.setattr(job_discovery, "DB_PATH", test_db)
+    # The page for someone already set up, on an empty tracker of its own: the result must not depend on whether the
+    # machine running the tests holds a real profile (CI has none: "/" redirected to the setup page) or a database.
+    import profile_setup
+    from job_tracker import JobTracker
+    monkeypatch.setattr(profile_setup, "needs_setup", lambda: False)
+    tracker = JobTracker(tmp_path / "tracker.db")
+    monkeypatch.setattr(web_ui, "get_tracker", lambda: tracker)
 
     web_ui.app.config["TESTING"] = True
     with web_ui.app.test_client() as c:

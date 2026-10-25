@@ -75,7 +75,23 @@ def test_launch_failure_releases_profile_and_stops_playwright(tmp_path, monkeypa
     lease.release()
 
 
+def _skip_where_chromium_cannot_sandbox(tmp_path):
+    """The agent always runs Chromium with its sandbox on (chromium_sandbox=True). A host that forbids one (a CI
+    runner without unprivileged user namespaces: "No usable sandbox!") cannot start the agent's browser at all, so
+    a test of what happens to a live browser has nothing to test there."""
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as playwright:
+        try:
+            playwright.chromium.launch_persistent_context(str(tmp_path / "sandbox_probe"), headless=True,
+                                                          chromium_sandbox=True).close()
+        except Exception as exc:
+            if "sandbox" in str(exc).lower():
+                pytest.skip("this host cannot run Chromium's sandbox")
+            raise
+
+
 def test_second_worker_leaves_live_browser_and_unsaved_input_intact(tmp_path, monkeypatch):
+    _skip_where_chromium_cannot_sandbox(tmp_path)
     import browser_automation as module
     monkeypatch.setattr(module.visible_desktop, "refuse_if_invisible", lambda: None)
     monkeypatch.setattr(module.JobApplicationAssistant, "_choose_channel", lambda _: "")
