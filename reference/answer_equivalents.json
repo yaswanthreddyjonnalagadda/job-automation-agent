@@ -7,6 +7,9 @@
     ["Doctorate", "Ph.D.", "PhD", "Doctoral Degree", "Doctor of Philosophy"],
     ["High School", "High School Diploma", "GED", "Secondary School"]
   ],
+  "phone_type": [
+    ["Mobile", "Cell", "Cellular", "Cell phone", "Mobile phone"]
+  ],
   "language_level": [
     ["Native", "Native Speaker", "Native or Bilingual", "Mother Tongue", "Bilingual"],
     ["Fluent", "Advanced", "Full Professional Proficiency", "Professional Working Proficiency", "Proficient"],

@@ -219,6 +219,9 @@ def ties_to_the_company(ask: Ask, q: str):
     profile = ask.profile
     if "government official" in q or "public official" in q:
         return None                                   # relatives who hold public office: a different fact from employment ties
+    current = employment_history.current_answer(ask.question, ask.company, _say(profile, 'current_employer'))
+    if current is not None:
+        return yes_no(ask, current == 'Yes', 'profile.current_employer') if current else None
     facts = []
     if _RELATIVES.search(q):
         facts.append(_yes(_say(profile, "relatives_employed_here")))

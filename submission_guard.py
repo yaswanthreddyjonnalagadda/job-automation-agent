@@ -61,6 +61,13 @@ def _guard_script(capability: str) -> str:
             && ["submit", "image"].includes(element.type.toLowerCase());
       const ordinaryNavigation = element =>
         labels(element).some(label => /^(next|continue)(?:\b|$)/i.test(label));
+      const adpFinalReviewNext = element => {
+        if (location.hostname !== 'myjobs.adp.com'
+            || !element.matches('sdf-button.wizard-next-step-btn[role="button"]')
+            || !labels(element).some(label => /^next$/i.test(label))) return false;
+        return Array.from(document.querySelectorAll('button, [role="button"]'))
+          .some(step => labels(step).some(label => /^Step Status current Review$/i.test(label)));
+      };
       // Default-deny for a labelled, form-associated control whose own label is neither a known
       // submit synonym nor a known non-final (add/remove/edit/cancel/back/save-for-later/...)
       // word, when it is the only such candidate left in its form: a button[type=button] with a
@@ -100,6 +107,7 @@ def _guard_script(capability: str) -> str:
         const candidate = element.closest(selector);
         if (!candidate) return null;
         if (postingEntry(candidate)) return null;
+        if (adpFinalReviewNext(candidate)) return candidate;
         if (labels(candidate).some(label => submitLabel.test(label))) return candidate;
         if (structuralSubmitter(candidate) && !ordinaryNavigation(candidate)) return candidate;
         return soleRemainingAction(candidate) ? candidate : null;
@@ -463,7 +471,12 @@ class SubmissionGuardV0:
             page.on("framenavigated", lambda frame: self._activate_navigated(page, frame))
             page._jaa_submission_guard_listeners = True
         for frame in page.frames:
-            self._activate_frame(frame)
+            try:
+                self._activate_frame(frame)
+            except PlaywrightError:
+                if not getattr(frame, 'is_detached', lambda: False)():
+                    raise
+                logger.debug('Submission guard skipped a confirmed detached frame during activation')
 
     def _activate_attached(self, page: Any, frame: Any) -> None:
         if not getattr(self, "_handoff_parked", False) and page in self._active_pages:

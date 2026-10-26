@@ -30,7 +30,7 @@ def test_upload_tile_can_finish_in_dialog():
     tile = SimpleNamespace(is_visible=lambda: True, inner_text=lambda: "Resume")
     tiles = SimpleNamespace(count=lambda: 1, nth=lambda i: tile)
     tiles.filter = lambda **kw: tiles
-    a.adapter = lambda page: SimpleNamespace(upload_attachment=lambda *args: False)
+    a.adapter = lambda page: SimpleNamespace(upload_attachment=lambda *args: None)
     a._click_resiliently = Mock()
     a.upload_in_dialog = Mock(return_value=True)
     page = SimpleNamespace(

@@ -44,6 +44,19 @@ def guarded(page):
     return guard
 
 
+@pytest.mark.parametrize('step,blocked',[('Review',True),('Education History',False)])
+def test_adp_review_next_is_a_final_action(page,step,blocked):
+    markup=f'''<button role="button" aria-label="Step Status current {step}"></button>
+      <sdf-button role="button" class="wizard-next-step-btn" type="button"
+        aria-label=" Next " onclick="window.advanced=true">Next</sdf-button>'''
+    page.route('**/*',lambda route:route.fulfill(body=markup,content_type='text/html'))
+    page.goto('https://myjobs.adp.com/churchmutual/cx/apply')
+    guard=guarded(page)
+    page.get_by_role('button',name='Next',exact=True).click()
+    assert bool(page.evaluate('window.advanced')) is (not blocked)
+    assert bool(guard.denials(page)) is blocked
+
+
 @pytest.mark.parametrize("variant,allowed", [
     ("posting", True),
     ("form", False),

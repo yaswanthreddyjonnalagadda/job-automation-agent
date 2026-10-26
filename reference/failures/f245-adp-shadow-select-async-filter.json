@@ -1,0 +1,17 @@
+{
+  "id": "f245",
+  "date": "2026-10-25",
+  "class": "An asynchronous shadow dropdown requires its own filter input and scoped offered options",
+  "symptom": "After custom-button recognition was corrected, ADP still left State blank and repeatedly reported no matching option. Source selection uses the same async widget.",
+  "site": "ADP Church Mutual application 548, requisition 5001218033006; supervised continuation on 25 October 2026",
+  "root_cause": "Generic keyboard typing targets the trigger rather than sdf-select-simple's internal filter input. The async option list remains empty or unfiltered. Filtering a known synonym literally can also remove the offered equivalent (Mobile versus Cell).",
+  "why_tests_missed": "Previous ADP tests mocked open_picker/select_option methods that the PageAgent choice path never called, and ordinary dropdown tests supplied their choices synchronously.",
+  "fix": "Add an optional portal choice hook supplied with the shared matcher and guarded click function. ADP scopes to the trigger's sdf-select-simple host, matches currently visible options first, fills that host's filter when needed, waits within a fixed budget, clicks a matching offered option and verifies the committed trigger text. Unhandled widgets continue through generic logic; recognized unsuccessful selections do not guess.",
+  "tests": [
+    "tests/test_adp_dropdown_selection.py::test_async_select_uses_its_filter_and_only_commits_a_matching_option",
+    "tests/test_adp_dropdown_selection.py::test_adp_select_click_denial_does_not_fill_or_choose",
+    "tests/test_adp_dropdown_selection.py::test_an_offered_phone_alias_is_matched_before_filtering",
+    "tests/test_adp_dropdown_selection.py::test_adp_hook_leaves_unrelated_buttons_to_generic_logic"
+  ],
+  "prevention": "Test the actual caller-to-adapter contract against an async shadow-DOM widget. Scope both filtering and option selection to the current widget; share answer equivalence rules and verify the committed answer."
+}

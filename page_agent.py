@@ -309,6 +309,7 @@ def parse_snapshot(snapshot: str) -> list[Control]:
     stack: list[tuple[int, str, Optional[Control]]] = []   # (indent, role/name, control)
     last_text = ""
     last_text_indent = -1
+    field_questions: list[tuple[int, str]] = []
     radio_context = ""   # the question above a run of radio buttons with no group of their own
     # Radio buttons and tick boxes with no group of their own belong to the question written above them. A run of
     # them used to end only where something other than a choice came next, so questions drawn one straight after
@@ -330,6 +331,7 @@ def parse_snapshot(snapshot: str) -> list[Control]:
     textbox_wrappers: set[str] = set()
     search_landmarks: list[int] = []   # indents of the `search` landmarks the current line sits inside
     sections: list[tuple[int, int, str]] = []  # heading indent, level and title
+    signature_scopes: list[tuple[int, str]] = []
     for raw in (snapshot or "").splitlines():
         # A line whose text holds a colon comes wrapped in quotes:
         #   - 'heading "Apply: Network Engineer" [level=1] [ref=e2]'
@@ -341,13 +343,27 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         if not m:
             continue
         indent, role = len(m.group("indent")), m.group("role")
+        while signature_scopes and indent <= signature_scopes[-1][0]:
+            signature_scopes.pop()
+        while field_questions and indent <= field_questions[-1][0]:
+            field_questions.pop()
         while paragraph_scopes and paragraph_scopes[-1] >= indent:
             paragraph_questions.pop(paragraph_scopes.pop(), None)
         if role == 'paragraph':
             paragraph_scopes.append(indent)
         name = _unquote(m.group("name") or "")
+        if role in ('generic', 'region', 'group') and safety.is_attestation(name) \
+                and re.search(r'signature', name, re.I):
+            signature_scopes.append((indent, name))
         attrs = m.group("attrs") or ""
         value = _unquote(m.group("value") or "")
+        if role == 'radiogroup' and field_questions and last_text \
+                and not _same_question(last_text, field_questions[-1][1]) \
+                and (not name or _same_question(name, last_text)) and '?' not in name:
+            # Some widgets name their radio group with the explanatory prose
+            # below a marked field question. The enclosing question owns the
+            # choices; a peer field ends that scope.
+            name = field_questions[-1][1]
         ref_m = re.search(r"\[ref=([\w-]+)\]", attrs)
         # HTML headings describe subsequent siblings, not just their children.
         # Keep the hierarchy across explanatory subheadings, bounded by the
@@ -420,6 +436,19 @@ def parse_snapshot(snapshot: str) -> list[Control]:
 
         if role in ("text", "paragraph", "heading", "strong", "emphasis", "generic") and (value or name):
             candidate_text = (value or name).strip()[:200]
+            if stack and re.search(r'\?\s*\*?$', candidate_text) \
+                    and (owner is None or owner.role not in ('radio', 'checkbox', 'switch')):
+                field_questions.append((stack[-1][0], candidate_text.rstrip('*').strip()))
+            # A custom select may expose its placeholder as a child of a
+            # labelled button ("State Select..." -> "Select..."). Keep that
+            # value separate so the question remains answerable. A matching
+            # suffix is required; arbitrary button prose is not a choice.
+            if owner is not None and owner.role == "button" and not owner.value \
+                    and owner.name.endswith(" " + candidate_text) \
+                    and (PLACEHOLDER.fullmatch(candidate_text) or (
+                        owner.context and _same_question(
+                            owner.name[:-(len(candidate_text) + 1)], owner.context))):
+                owner.value = candidate_text
             if paragraph_scopes:
                 scope_indent = paragraph_scopes[-1]
                 if re.match(r'^(?:do|does|are|is|have|has|will|would|can|did)\b', candidate_text, re.I):
@@ -570,8 +599,12 @@ def parse_snapshot(snapshot: str) -> list[Control]:
                 section=" / ".join(title for _indent, _level, title in sections),
                 context=(preceding_text if clickable_generic else last_text) if (
                     clickable_generic or not name or Control.GENERIC_NAMES.match(name.strip())
+                    or (role == "button" and last_text and name.startswith(last_text.rstrip('*').strip() + ' '))
                     or re.fullmatch(r"(?:yes|no|select one) required", name.strip(), re.IGNORECASE))
                 else "")
+            if control.role in ('textbox', 'searchbox') and signature_scopes and re.fullmatch(
+                    r'(?:type|enter)\s+(?:in\s+)?your\s+(?:full\s+|legal\s+)*name', control.name, re.I):
+                control.context = signature_scopes[-1][1]
             if role in ('textbox', 'searchbox') and owner is not None and owner.role == 'textbox' \
                     and (not owner.name or _same_question(owner.name, name)):
                 textbox_wrappers.add(owner.ref)
@@ -2203,16 +2236,18 @@ class PageAgent:
 
         entries = getattr(self, "_entries", None)
         if entries is None:
-            entries = repeated_entries.entry_map(snapshot)
+            entries = self._entry_map(page, snapshot)
             self._entries = entries
 
         history = getattr(self, "history", {}) or {}
-        work_records = [r for r in (history.get("experience") or []) if isinstance(r, dict)]
-        if not work_records:
-            return False
-
-        shown_work = len({e.index for e in entries.values() if e.section == "work"})
-        if shown_work == 0 or shown_work >= len(work_records):
+        target = None
+        for kind, key in (("work", "experience"), ("education", "education")):
+            records = [r for r in (history.get(key) or []) if isinstance(r, dict)]
+            shown_work = len({e.index for e in entries.values() if e.section == kind})
+            if 0 < shown_work < len(records):
+                target = kind
+                break
+        if target is None:
             return False
 
         # Find the Add button for the work section in snapshot
@@ -2234,7 +2269,7 @@ class PageAgent:
                 title = name or (value if role in ("heading", "legend", "paragraph", "text") else "")
                 if title:
                     kind, _ = repeated_entries._section_of(title)
-                    if kind == "work":
+                    if kind == target:
                         in_work = True
                         work_indent = indent
                         continue
@@ -2258,8 +2293,18 @@ class PageAgent:
             return False
 
         new_snap = self.read_when_loaded(page)
-        new_entries = repeated_entries.entry_map(new_snap)
-        new_shown = len({e.index for e in new_entries.values() if e.section == "work"})
+        # Some portals collapse every card after Add. Open those existing
+        # cards before counting fields; otherwise a successful Add looks like
+        # no growth and the caller continues with the previous page's controls.
+        from sites import adapter_for
+        adapter = adapter_for(getattr(self.tab(page), 'url', ''))
+        for _ in range(len(records)):
+            if not adapter.expand_form_sections(self.assistant, page):
+                break
+            self.settle(page, 300)
+        new_snap = self.read_when_loaded(page)
+        new_entries = self._entry_map(page, new_snap)
+        new_shown = len({e.index for e in new_entries.values() if e.section == target})
         if new_shown > shown_work:
             return True
         else:
@@ -2684,6 +2729,9 @@ class PageAgent:
         if control.role in ("textbox", "searchbox"):
             name = str(getattr(self.profile, "full_name", "") or "").strip()
             return (name, "profile.full_name") if name else ("", "")
+        if control.role == 'radio' and not re.fullmatch(
+                r'(?:i\s+)?(?:accept|agree|consent|yes)(?:\s+.*)?', control.name.strip(), re.I):
+            return "", ""
         return "checked", "profile.sign_attestations"
 
     def profile_plan(self, controls: list[Control], required: set[str], still_open: list[str],
@@ -3296,7 +3344,7 @@ class PageAgent:
         # Rebuild entry ownership from the new page, never transfer an old
         # row's record to an element merely sharing its label.
         if control.ref in getattr(self, "_entries", {}):
-            entries = repeated_entries.entry_map(snapshot)
+            entries = self._entry_map(page, snapshot)
             if entries.get(current.ref) != self._entries[control.ref]:
                 return None
             self._entries.update(entries)
@@ -3523,6 +3571,10 @@ class PageAgent:
                     logger.warning("VISA SPONSORSHIP SHIELD: Employer non-sponsorship declaration found: %s", clause)
                     return Outcome("disqualified_policy_mismatch", page, [clause])
 
+            from sites import adapter_for
+            if adapter_for(getattr(tab, 'url', '')).expand_form_sections(self.assistant, tab):
+                self.settle(page, 300)
+                continue
             snapshot = self.read_when_loaded(page)
             fingerprint = re.sub(r"\[ref=[\w-]+\]|\[active\]", "", snapshot)
             if fingerprint == last_fingerprint:
@@ -4406,6 +4458,8 @@ class PageAgent:
                 digits = re.sub(r"\D", "", want)
                 ok = bool(shown) and (want in shown or shown in want or _same_answer(shown, want)
                                       or (len(digits) >= 7 and digits[-10:] in re.sub(r"\D", "", shown)))
+                if not ok and re.search(r'\b(date|start|end|from|to|month|year)\b', before.question, re.I):
+                    ok = form_fields.date_matches(shown, answer.value)
             if not ok:
                 missing.append(f"{before.question[:60]} = {answer.value[:40]!r}")
         return missing
@@ -4551,6 +4605,8 @@ class PageAgent:
         for control in controls:
             if control.role not in ("textbox", "searchbox") or control.disabled or _holds_dial_code(control):
                 continue
+            if control.ref in getattr(self, '_entries', {}):
+                continue
             field = _name_field(control.question) or _detail_field(control.question)
             if not field:
                 continue
@@ -4654,6 +4710,8 @@ class PageAgent:
             control = self._control_for(question, value, controls)
             if control is None:
                 continue
+            if control.ref in getattr(self, '_entries', {}):
+                continue  # personal facts cannot correct a job or a degree
             was = self._shown_answer(control, controls)
             if was and (_plain(was) == _plain(value) if exact else _same_answer(was, value)):
                 continue
@@ -4755,6 +4813,8 @@ class PageAgent:
                 continue
             written = str((self.written or {}).get(control.question) or "").strip()
             if value:
+                if repeated_entries.is_date(value) and form_fields.date_matches(shown, value):
+                    continue
                 if _same_answer(shown, value) or option_match.best_option([shown], value) is not None:
                     continue
             elif not (blank or (written and written == shown and self._optional_entry_box(control, ())
@@ -5171,6 +5231,17 @@ class PageAgent:
                 path = self._letter_file()
             if not path or not Path(path).is_file():
                 return False
+            from sites import adapter_for
+            kind = 'resume' if answer.action == 'upload_resume' else 'cover_letter'
+            uploaded = adapter_for(getattr(tab, 'url', '')).upload_attachment(
+                self.assistant, tab, kind, Path(path))
+            if uploaded is not None:
+                if not uploaded:
+                    return False
+                self.settle(page, 1_500)
+                if answer.action == 'upload_resume':
+                    return self._confirm_resume_attached(page, path)
+                return self._confirm_cover_letter_attached(page, path, control)
             # Workday's "Select files" button is only a visual trigger; its
             # real file input is hidden inside the upload widget and does not
             # reliably emit Playwright's filechooser event. The same for a cover letter's.
@@ -5521,6 +5592,14 @@ class PageAgent:
         tab = self.tab(page)
         loc = self.locate(page, control.ref)
         self._choice_methods.pop(control.ref, None)
+        from sites import adapter_for
+        handled = adapter_for(getattr(tab, 'url', '')).choose_dropdown(
+            tab, loc, value, pick=lambda labels: self._pick_label(labels, value),
+            click=self.assistant._click_resiliently)
+        if handled is not None:
+            if handled:
+                self._choice_methods[control.ref] = 'portal_dropdown'
+            return handled
         # Some widgets only open from a button of their own ("Open the drop-down
         # list for Employer State or Province."), and typing into the box alone
         # leaves the form saying the field is empty.
@@ -5613,6 +5692,13 @@ class PageAgent:
 
         before = {ref for ref, _text in choices_in(self.snapshot(page), under=control.question, any_list=True)}
         opened = False
+        if control.role == "button":
+            # A button owns its click handler. Dispatching on its parent does
+            # not invoke it, even though no exception is raised (ADP selects).
+            # Use the guarded click primitive, including its denial handling.
+            if not self.assistant._click_resiliently(loc, timeout_ms=4_000):
+                return False
+            opened = True
         try:
             loc.evaluate("e => e.scrollIntoView({block: 'center'})")
         except Exception as _swallowed:
@@ -5620,17 +5706,18 @@ class PageAgent:
 
         # In Ant Design and custom UI widgets, dispatch mousedown on the selector wrapper.
         # Ant Design's rc-select opens specifically on mousedown, not click.
-        try:
-            loc.evaluate("""e => {
-                const box = e.closest('.ant-select-selector, [class*=select-selector], .ant-select, [role=combobox]') || e.parentElement;
-                for (const type of ['mousedown', 'mouseup', 'click']) {
-                    box.dispatchEvent(new MouseEvent(type, {bubbles: true, cancelable: true}));
-                }
-                e.focus();
-            }""")
-            opened = True
-        except Exception:
-            opened = False
+        if not opened:
+            try:
+                loc.evaluate("""e => {
+                    const box = e.closest('.ant-select-selector, [class*=select-selector], .ant-select, [role=combobox]') || e.parentElement;
+                    for (const type of ['mousedown', 'mouseup', 'click']) {
+                        box.dispatchEvent(new MouseEvent(type, {bubbles: true, cancelable: true}));
+                    }
+                    e.focus();
+                }""")
+                opened = True
+            except Exception:
+                opened = False
 
         if not opened:
             try:
@@ -7041,6 +7128,11 @@ class PageAgent:
         except Exception:
             return False
 
+    def _entry_map(self, page, snapshot: str):
+        from sites import adapter_for
+        entries = adapter_for(getattr(self.tab(page), 'url', '')).entry_map(snapshot)
+        return repeated_entries.entry_map(snapshot) if entries is None else entries
+
     def read_when_loaded(self, page, wait_seconds: float = 15.0) -> str:
         """The page's snapshot once the frames on it have content.
 
@@ -7050,12 +7142,15 @@ class PageAgent:
         """
         deadline = time.time() + wait_seconds
         snapshot = self.snapshot(page)
-        while (frames_loading(snapshot) or still_loading(snapshot) or workday_form_loading(snapshot)) \
+        from sites import adapter_for
+        adapter = adapter_for(getattr(self.tab(page), 'url', ''))
+        while (frames_loading(snapshot) or still_loading(snapshot) or workday_form_loading(snapshot)
+               or adapter.form_loading(snapshot)) \
             and time.time() < deadline:
             self.tab(page).wait_for_timeout(1_000)
             snapshot = self.snapshot(page)
         try:
-            self._entries = repeated_entries.entry_map(snapshot)
+            self._entries = self._entry_map(page, snapshot)
         except Exception as exc:
             logger.debug("Could not read the page's repeated entries: %s", exc)
             self._entries = {}

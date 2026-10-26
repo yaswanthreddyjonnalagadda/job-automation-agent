@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import time
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, parse_qs
 from .base import SiteAdapter
@@ -107,9 +109,101 @@ class AdpAdapter(SiteAdapter):
     def submission_confirmed(self, page) -> bool:
         return is_adp_applied_posting(page)
 
+    def form_loading(self, snapshot: str) -> bool:
+        current = re.search(r'- button "Step Status current ([^"\n]+)"', snapshot or '')
+        if not current or not re.search(r'- button "Next"[^\n]*\[disabled\]', snapshot):
+            return False
+        # ADP renders an empty current-step region and disabled Next before
+        # fetching the actual fields. Its surrounding navigation is ready.
+        return bool(re.search(r'^\s*- generic "' + re.escape(current.group(1))
+                              + r'"(?: \[[^\]]*\])*\s*$', snapshot, re.MULTILINE))
+
+    def expand_form_sections(self, assistant, page) -> bool:
+        headers = page.get_by_role('button', name=re.compile(
+            r'^(?:Employer|Education)\s+[1-9]\d*\s+Show content$', re.I))
+        return bool(headers.count() and assistant._click_resiliently(headers.first, timeout_ms=3_000))
+
+    def entry_map(self, snapshot: str):
+        import repeated_entries
+        pattern = r'(?m)^(\s*)- (?:button "(Employer|Education) ([1-9]\d*) (?:Show|Hide) content"|region "(Employer|Education) ([1-9]\d*)")([^\n]*)$'
+        if not re.search(pattern, snapshot):
+            return None
+        def heading(match):
+            kind = 'Work Experience' if (match[2] or match[4]) == 'Employer' else 'Education'
+            return f'{match[1]}- group "{kind} {match[3] or match[5]}"{match[6]}'
+        return repeated_entries.entry_map(re.sub(pattern, heading, snapshot))
+
     def overlay_selector(self) -> str:
         """ADP floating modal panes and privacy dialogs."""
         return "sdf-focus-pane:visible, cx-privacy-policy:visible"
+
+    def upload_attachment(self, assistant, page, kind: str, file_path: Path):
+        label = 'Resume' if kind == 'resume' else 'Cover Letter' if kind == 'cover_letter' else None
+        if label is None:
+            return None
+        trigger = page.get_by_role('button', name=re.compile(r'^upload\s+' + re.escape(label) + r'$', re.I))
+        if trigger.count() != 1 or not trigger.evaluate("el => el.matches('sdf-button')"):
+            return None
+        try:
+            if not assistant._click_resiliently(trigger, timeout_ms=4_000):
+                return False
+            uploader = page.locator('sdf-file-uploader')
+            uploader.first.wait_for(state='attached', timeout=5_000)
+            if uploader.count() != 1:
+                return False
+            inputs = uploader.locator('input[type="file"]')
+            if inputs.count() != 1:
+                return False
+            inputs.set_input_files(str(file_path), timeout=5_000)
+            save = page.get_by_role('button', name='Save', exact=True)
+            save.wait_for(state='visible', timeout=5_000)
+            if not assistant._click_resiliently(save, timeout_ms=4_000):
+                return False
+            save.wait_for(state='hidden', timeout=8_000)
+            return True  # The caller must still verify the attachment receipt.
+        except Exception as exc:
+            logger.debug('ADP document dialog upload failed: %s', type(exc).__name__)
+            return False
+
+    def choose_dropdown(self, page, control, value: str, *, pick, click):
+        """ADP's shadow select searches through its own async filter input."""
+        handle = None
+        try:
+            handle = control.evaluate_handle("""el => {
+                const host = el.getRootNode().host;
+                return host && host.matches('sdf-select-simple') ? host : null;
+            }""")
+            host = handle.as_element()
+            if host is None:
+                return None
+            if control.get_attribute('aria-expanded') != 'true' and not click(control, timeout_ms=4_000):
+                return False
+            search = host.query_selector('input[part="filter-input"]')
+            filtered = False
+            deadline = time.monotonic() + 6.0
+            while time.monotonic() < deadline:
+                rows = [row for row in host.query_selector_all('[role="option"]') if row.is_visible()]
+                labels = [' '.join(row.inner_text().split()) for row in rows]
+                index = pick(labels) if labels else None
+                if index is not None:
+                    if not click(rows[index], timeout_ms=4_000):
+                        return False
+                    page.wait_for_timeout(250)
+                    return pick([' '.join(control.inner_text(timeout=1_500).split())]) == 0
+                # Match already offered aliases (Mobile -> Cell) before a
+                # literal text filter could remove them. Async lists with no
+                # rows need their own input to fetch the offered choices.
+                if not filtered and search is not None and search.is_visible():
+                    search.fill(value, timeout=2_000)
+                    filtered = True
+                page.wait_for_timeout(250)
+            return False
+        except Exception as exc:
+            logger.debug('ADP dropdown could not commit: %s', type(exc).__name__)
+            return False if handle is not None and handle.as_element() is not None else None
+        finally:
+            if handle is not None:
+                handle.dispose()
 
     def open_picker(self, page, control: dict) -> bool:
         """Opens an ADP <sdf-select-simple> or custom dropdown."""

@@ -881,6 +881,8 @@ def resolve_profile_value(
         val = "Yes"
         src = "profile.current_job"
     elif concept == "WORK_START_DATE":
+        if question and re.fullmatch(r'\s*from\s+date\s*', question, re.I):
+            return "", ""
         dates = str(getattr(profile, "current_employment_dates", "") or "").strip()
         val = dates.split("-")[0].strip() if "-" in dates else dates
         src = "profile.current_employment_dates"
@@ -906,7 +908,19 @@ def resolve_profile_value(
                 and re.fullmatch(r"(?:do you have|have you obtained|do you hold) (?:any )?(?:professional )?certifications?[?*\s]*", question.strip(), re.I) \
                 and {clean_text(option) for option in options or []} >= {"yes", "no"}:
             return "Yes", "profile.certifications"
-        if spec.get("resolver") == "skill_level":
+        if spec.get("resolver") == "phone_type":
+            # A number alone says nothing about its device type. Only an
+            # explicitly typed profile number matching the primary phone
+            # establishes it; conflicting/missing evidence stays unanswered.
+            number = re.sub(r"\D", "", str(raw or ""))
+            matches = [(field, label) for field, label in (
+                ("phone_mobile", "Mobile"), ("phone_home", "Home"), ("phone_work", "Work")
+            ) if number and re.sub(r"\D", "", str(getattr(profile, field, "") or "")) == number]
+            if len(matches) == 1:
+                field_name, val = matches[0]
+            else:
+                val = ""
+        elif spec.get("resolver") == "skill_level":
             val = _skill_level(raw, question)
         elif spec.get("resolver") == "text_if_true":
             # A statement the owner has made once ("I require sponsorship before I am able to work"), given only

@@ -4559,8 +4559,9 @@ class JobApplicationAssistant(EmailVerificationMixin):
         input. The picker is answered programmatically with the file."""
         # Platform-specific upload first (SuccessFactors' "+" icon, say).
         kind = "cover_letter" if "cover" in label_pattern.lower() else "resume"
-        if self.adapter(page).upload_attachment(self, page, kind, Path(file_path)):
-            return True
+        uploaded = self.adapter(page).upload_attachment(self, page, kind, Path(file_path))
+        if uploaded is not None:
+            return uploaded
 
         tile = page.locator("a, button, [role=button], div, span").filter(
             has_text=re.compile(label_pattern, re.IGNORECASE)

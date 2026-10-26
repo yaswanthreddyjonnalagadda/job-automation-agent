@@ -1,0 +1,19 @@
+{
+  "id": "f244",
+  "date": "2026-10-25",
+  "class": "Labelled custom dropdown buttons lose placeholder semantics and receive clicks on the wrong node",
+  "symptom": "The ADP contact page reports Phone Type is required and State is required, while the runtime declares PAGE_FULLY_KNOWN and repeats Next. Recognizing the controls alone then leaves selections uncommitted.",
+  "site": "ADP Church Mutual; output/Churchmutual_Looking_to_join_a_vibrant_organization_that_makes_a_difference/pages/20261025_122616/page_05.txt and page_06.txt; reproduced by supervised runtime on 25 October 2026",
+  "root_cause": "The snapshot parser treats State Select... as an ordinary button because the child placeholder never becomes the control value. The generic dropdown opener then dispatches mouse events to the parent rather than the button owning the handler and assumes success without opening a list. Phone Type also lacks deterministic resolution from an explicitly typed primary profile number.",
+  "why_tests_missed": "Previous dropdown tests supplied an explicit combobox/value or used parent-owned click handlers. They did not drive a labelled button with a nested placeholder and its own click handler through known-answer resolution, or require matching typed phone evidence.",
+  "fix": "Recover only nested placeholder text that exactly matches a labelled button suffix; retain the separate question and unanswered value. Open button-shaped dropdowns through the existing guarded click primitive and stop immediately on denial. Resolve Phone Type only when the primary number uniquely matches an explicitly typed profile phone. Keep unrelated action buttons and unsupported personal facts unchanged.",
+  "tests": [
+    "tests/test_labeled_dropdown_placeholders.py::test_nested_placeholder_button_is_an_unanswered_question",
+    "tests/test_labeled_dropdown_placeholders.py::test_button_prose_is_not_treated_as_a_dropdown_value",
+    "tests/test_labeled_dropdown_placeholders.py::test_phone_type_comes_from_the_matching_typed_profile_number",
+    "tests/test_labeled_dropdown_placeholders.py::test_phone_type_does_not_replace_phone_number_or_contact_preference",
+    "tests/test_labeled_dropdown_placeholders.py::test_known_profile_fills_labelled_custom_dropdowns",
+    "tests/test_labeled_dropdown_placeholders.py::test_denied_dropdown_click_never_dispatches_on_its_parent"
+  ],
+  "prevention": "Test perception and interaction together for custom controls: a labelled button, its placeholder, the node owning the click handler, live offered choices and verified committed values. Derive personal answers only from uniquely matching structured evidence and preserve centralized action-denial checks."
+}
