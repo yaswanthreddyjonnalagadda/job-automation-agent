@@ -1,0 +1,16 @@
+{
+  "id": "f254",
+  "date": "2026-10-26",
+  "site": "every application whose resume PDF has a hyphenated term (Roblox)",
+  "class": "A comparison against text extracted from a PDF that treats extraction artifacts as differences",
+  "symptom": "Resume tailoring failed for Roblox with all three writers configured; the generic resume went out under an internal file name. The saved text of the resume read 'Palo Alto PA -5200'.",
+  "root_cause": "safety.unsupported_claims compares the writer's tailored text with the resume's extracted text. PDF extraction spaces hyphens ('PA -5200', 'multi -cloud', 'EVPN -' / 'VXLAN'), so the writer's correct 'PA-5200' was not found and was reported as an invented claim. Every writer keeps the model number, so each draft was rejected (TAILORING_REJECTED) and the agent fell back to the generic resume. Probable, not confirmed: the run log is deleted after each run.",
+  "why_tests_missed": "The tests fed the checker clean strings; none had the spacing a real PDF extraction produces, and the one test of 'all writers rejected' used PA-5200 as its invented example without asking whether the resume had it.",
+  "fix": "unsupported_claims ignores whitespace around a hyphen in the source text (haystack), and nothing else. A term the resume never had (another model, a certification, a different figure) is still reported. Changed with the owner's explicit approval, as safety.py requires.",
+  "tests": [
+    "tests/test_claims_survive_pdf_hyphen_spacing.py::test_a_hyphenated_term_is_found_however_the_extraction_spaced_its_hyphen",
+    "tests/test_claims_survive_pdf_hyphen_spacing.py::test_a_term_the_resume_never_had_is_still_caught",
+    "tests/test_claims_survive_pdf_hyphen_spacing.py::test_a_date_range_in_the_source_does_not_make_up_a_hyphenated_term"
+  ],
+  "prevention": "Normalise both sides of a comparison against extracted document text for the artifacts of extraction (spacing around hyphens, line breaks, kerning) and test with text as a real extraction gives it, not a clean string. When a gate rejects every candidate the same way, log which claim rejected it where the owner can see it."
+}

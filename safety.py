@@ -387,6 +387,10 @@ def unsupported_claims(source_text: str, generated_text: str, extra_allowed: Ite
     employer without the user's say-so.
     """
     haystack = " ".join((source_text or "").split()).lower()
+    # A PDF's extracted text spaces hyphens ("PA -5200", "multi -cloud", "EVPN -" / "VXLAN"): the same term, so the
+    # writer's correct "PA-5200" was called invented and every tailored resume was rejected (Roblox, 26 October 2026).
+    # Only whitespace around a hyphen is ignored; a term the resume never had is still missing.
+    haystack = re.sub(r"\s*-\s*", "-", haystack)
     allowed = {a.lower() for a in extra_allowed}
     # Common words that read as acronyms but assert nothing about the candidate.
     ignore = {
