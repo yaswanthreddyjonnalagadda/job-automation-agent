@@ -1,0 +1,21 @@
+{
+  "id": "f252",
+  "date": "2026-10-26",
+  "site": "the Suggested jobs feed (job_discovery.py), every board",
+  "class": "A ranking that saturates at one value, over a source list too small to change, with no way for old rows to leave",
+  "symptom": "Refreshing Suggested jobs showed the same twelve roles every time, all at 70%, from four companies, including 'Security Sales Engineer' and 'Sr Manager, Infrastructure Sales'.",
+  "root_cause": "Twelve boards were configured, so a scan found the same ~75 matches. Thirty-one jobs scored exactly 70 (a generic tech word + remote + senior) and the dashboard shows the top twelve by score then first-seen date, a fixed order. Sales and management titles were not excluded. Postings in other countries ('Remote - India', 'Bengaluru, India') scored as if they were open to an owner in the United States. Rows from earlier scans were only re-scored while they still qualified, so closed or newly excluded postings kept their old score and stayed in the feed.",
+  "why_tests_missed": "The scoring tests checked one good title and one excluded title; nothing checked that scores separate real matches from generic ones, that the feed can change between scans, or what a scan does to rows it no longer sees.",
+  "fix": "Sales/management/design/customer-success titles are excluded; a technical word counts only inside an engineering-type title and only for 20 points, so a targeted title always outranks it; a posting that names only countries other than the owner's is not suggested (country from the profile through geo_reference; none known = no filter); 23 more boards that respond were added (35 in all); each scan expires 'discovered' suggestions the board no longer lists or the rules no longer pass (queued, submitted and dismissed ones are untouched, and a board that returned nothing expires nothing). On a copy of the real data the top twelve went from twelve 70s at four companies to 100/90 matches across 17 companies.",
+  "tests": [
+    "tests/test_discovery_ranking.py::test_sales_and_management_roles_are_not_suggested",
+    "tests/test_discovery_ranking.py::test_a_title_the_owner_targets_outranks_a_generic_tech_word",
+    "tests/test_discovery_ranking.py::test_a_tech_word_in_a_title_that_is_not_an_engineering_role_scores_nothing",
+    "tests/test_discovery_ranking.py::test_the_target_boards_are_broad_and_each_names_a_supported_ats",
+    "tests/test_discovery_ranking.py::test_a_scan_expires_jobs_the_board_no_longer_lists_or_that_no_longer_qualify",
+    "tests/test_discovery_ranking.py::test_a_board_that_failed_to_load_expires_nothing",
+    "tests/test_discovery_ranking.py::test_a_posting_in_another_country_is_not_suggested",
+    "tests/test_discovery_ranking.py::test_the_profile_gives_the_discovery_its_home_country"
+  ],
+  "prevention": "A score that many candidates share is not a ranking: give weaker evidence fewer points than stronger so ties are rare, and test that the top of the list is not one repeated value. Anything a recurring job stores must also be able to leave: every ingest needs an expiry path for rows the source no longer returns, guarded so a failed fetch cannot wipe them."
+}
