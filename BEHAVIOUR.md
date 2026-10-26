@@ -351,6 +351,11 @@ the next attempt.
 The run's log says who wrote the resume ("Tailored resume written ... via Gemini
 (gemini-3.8-flash)"). Only when every writer you chose fails is your generic
 resume attached. Whichever writes it, what your resume does not show is taken out
+
+The check that a tailored resume claims nothing your resume does not show (figures, dates, certifications,
+model numbers) reads your resume's text as a PDF gives it, which spaces hyphens ("PA -5200", "multi -cloud"). A term
+is the same term however its hyphen is spaced, so a correct "PA-5200" is no longer rejected as invented; a term your
+resume never had is still rejected (26 October 2026: every writer was rejected on "PA-5200" and the generic resume went out).
 before it is sent. Only the providers you chose, and have a key for, are sent your
 resume and the job posting. OpenAI is reached over its web API directly, so no
 extra package is needed.
