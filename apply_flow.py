@@ -364,13 +364,18 @@ def _tailor_with(client, resume, job, profile, job_dir: Path, resume_txt: Path, 
         return None
 
 
+def applicant_slug(profile) -> str:
+    """The applicant's name as a file-name stem: 'Jane_Doe'. From the profile, never written into the code."""
+    name = " ".join(filter(None, (getattr(profile, "first_name", ""), getattr(profile, "last_name", ""))))         or getattr(profile, "full_name", "")
+    return re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")
+
+
 def document_name(profile, kind: str, company: str) -> str:
     """The file name an employer sees: the applicant's own name, the document, the company.
 
     'Jane_Doe_Resume_Acme'. The name comes from the profile -- it was the owner's, written into the code, so every
     applicant's resume would have gone out under his name."""
-    name = " ".join(filter(None, (getattr(profile, "first_name", ""), getattr(profile, "last_name", ""))))         or getattr(profile, "full_name", "")
-    person = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")
+    person = applicant_slug(profile)
     safe_company = re.sub(r"[^A-Za-z0-9]+", "", company or "")[:24] or "Job"
     return "_".join(part for part in (person, kind, safe_company) if part)
 
@@ -382,7 +387,11 @@ def _resume_with_current_email(path: Path, profile, job, job_dir: Path) -> Path:
     if not profile.email or not any(email.casefold() != profile.email.casefold() for email in emails):
         return path
     updated = re.sub(r"[\w.+-]+@[\w-]+\.[\w.]+", profile.email, text)
-    target = job_dir / "current_contact_resume.pdf"
+    # What the employer sees: the applicant's name ("current_contact_resume.pdf" went out on Roblox's form, 26 October
+    # 2026). No company in it: a tailored resume ends "Resume_<Company>.pdf", and prepare_materials reuses those, so
+    # this one must not look like one -- the next run should try to tailor again.
+    person = applicant_slug(profile)
+    target = job_dir / (f"{person}_Resume.pdf" if person else "current_contact_resume.pdf")
     text_path = target.with_suffix(".txt")
     text_path.write_text(ensure_resume_header(updated, profile, job), encoding="utf-8")
     build_resume_pdf(text_path, target)
