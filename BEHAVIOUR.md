@@ -505,6 +505,12 @@ submission still requires its own verified gateway. A blocked click is not
 counted as an account-creation attempt, and a form that remains open is reported
 as an unconfirmed creation attempt rather than a created account.
 
+For two-step sign-in, the password form may carry the previously accepted
+username in a hidden read-only control. The sign-in gateway accepts that
+credential form when it has one filled password and a Log In action. If the
+gateway blocks the click, the agent records that no password attempt occurred
+instead of treating the unchanged form as a rejected sign-in.
+
 An account section the application page itself calls optional ("Create a Career Profile
 account (optional)" at the foot of Meta's form) is part of the application, not an account
 step: the agent does not make that account, leaves its password boxes empty, and goes on

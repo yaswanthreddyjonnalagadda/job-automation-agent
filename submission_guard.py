@@ -135,13 +135,22 @@ def _guard_script(capability: str) -> str:
         const inputs = controls.filter(e => e instanceof HTMLInputElement
           && !e.disabled && e.type !== 'hidden' && e.getClientRects().length);
         const passwords = inputs.filter(e => e.type === 'password');
-        const emails = inputs.filter(e => e.type !== 'password' && e.type !== 'checkbox'
+        const visibleEmails = inputs.filter(e => e.type !== 'password' && e.type !== 'checkbox'
           && (e.type === 'email' || /e-?mail|user ?name/i.test([
             e.getAttribute('aria-label'), e.name, e.id, e.getAttribute('data-automation-id'),
             e.placeholder, ...Array.from(e.labels || []).map(l => l.innerText),
             ...(e.getAttribute('aria-labelledby') || '').split(/\s+/)
               .map(id => document.getElementById(id)?.innerText || '')
           ].join(' '))));
+        // Auth0/iCIMS carries the already accepted username as a hidden, read-only
+        // text control on the password step. It is still part of this credential form.
+        const priorEmails = action === 'sign_in' && !visibleEmails.length
+          ? controls.filter(e => e instanceof HTMLInputElement && e.type === 'text'
+              && e.readOnly && !e.getClientRects().length && e.value.trim()
+              && e.autocomplete === 'username'
+              && /^(?:user ?name|e-?mail(?: address)?)$/i.test(e.name || ''))
+          : [];
+        const emails = [...visibleEmails, ...priorEmails];
         if (passwords.length !== (action === 'creation' ? 2 : 1)
             || emails.length !== 1 || !emails[0].value.trim() || !passwords[0].value
             || (action === 'creation' && passwords[0].value !== passwords[1].value)) return false;

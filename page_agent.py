@@ -2011,9 +2011,18 @@ class PageAgent:
             try:
                 self.assistant._last_login_rejected = False     # only a refusal of this attempt counts below
                 if self.assistant.handle_auth_gate(tab, email):
+                    if not making_account and guard is not None and getattr(
+                            guard, "last_credential_click", None) in ("", "not_performed"):
+                        self._signed_in_at.discard(host)
                     return True
             except Exception as exc:
                 logger.warning("LOGIN: %s", str(exc).splitlines()[0][:120])
+            if not making_account and guard is not None and getattr(
+                    guard, "last_credential_click", None) in ("", "not_performed"):
+                self._signed_in_at.discard(host)
+                self.account_blocker = (
+                    "the agent could not dispatch the sign-in click; no password attempt was made")
+                return False
             # The guard refused the press, or the form gave up before any press was tried: no account was made, and
             # the "about to press" marker would only block every later run (f175). A press that may have happened
             # ("unknown", "performed") keeps its marker.

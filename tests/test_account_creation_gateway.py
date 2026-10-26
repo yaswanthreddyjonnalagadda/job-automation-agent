@@ -82,6 +82,33 @@ def test_account_gateway_requires_filled_matching_credentials(page):
     assert page.evaluate("window.created") is None
 
 
+def test_sign_in_gateway_accepts_prior_read_only_username_on_password_step(page):
+    serve(page, '<form onsubmit="window.signedIn=true;return false">'
+          '<input type="text" name="username" autocomplete="username" '
+          'value="owner@example.com" readonly style="display:none">'
+          '<input type="password" name="password" autocomplete="current-password" '
+          'value="Synthetic-Password1!">'
+          '<button type="submit">LOG IN</button></form>')
+    guard = SubmissionGuardV0(page.context)
+    assert guard.click_account_sign_in(page, page.get_by_role("button", name="LOG IN"))
+    assert page.evaluate("window.signedIn") is True
+
+
+@pytest.mark.parametrize("username", [
+    '<input type="text" name="username" autocomplete="username" '
+    'value="owner@example.com" style="display:none">',
+    '<input type="text" name="username" autocomplete="username" '
+    'readonly style="display:none">',
+])
+def test_sign_in_gateway_rejects_unaccepted_prior_username(page, username):
+    serve(page, '<form onsubmit="window.signedIn=true;return false">' + username
+          + '<input type="password" value="Synthetic-Password1!">'
+          '<button type="submit">LOG IN</button></form>')
+    guard = SubmissionGuardV0(page.context)
+    assert not guard.click_account_sign_in(page, page.get_by_role("button", name="LOG IN"))
+    assert page.evaluate("window.signedIn") is None
+
+
 def test_account_gateway_rejects_file_fields_associated_from_outside_form(page):
     serve(page, FORM.replace('<form ', '<form id="registration" ') +
           '<input type="file" form="registration" style="display:none">')
