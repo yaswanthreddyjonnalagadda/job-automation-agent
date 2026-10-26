@@ -347,6 +347,10 @@ afterwards does not lose it: Resume, a retry and a restart all attach that same
 resume without asking any AI again ("REUSED_RESUME" in the log). Only when
 tailoring failed and your generic resume went out is tailoring tried again on
 the next attempt.
+When your generic resume is attached because no writer could tailor one, and it still carries an old
+email address, the agent attaches a copy with your current email. That copy is named after you
+("Jane_Doe_Resume.pdf" -- never "current_contact_resume.pdf", which Roblox's form showed on 26
+October 2026), with no company in the name, so the next attempt still tries to tailor.
 
 The run's log says who wrote the resume ("Tailored resume written ... via Gemini
 (gemini-3.8-flash)"). Only when every writer you chose fails is your generic

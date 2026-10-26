@@ -1,0 +1,15 @@
+{
+  "id": "f253",
+  "date": "2026-10-26",
+  "site": "every employer form (the resume file name)",
+  "class": "A file name chosen for the agent's own bookkeeping reached the employer's form",
+  "symptom": "The Roblox application showed the attached resume as 'current_contact_resume.pdf'. No tailored resume was attached: every writer had failed and the generic resume went out with its email refreshed.",
+  "root_cause": "_resume_with_current_email wrote the refreshed generic resume under a fixed internal name. The name doubled as the marker that this file is not a tailored resume (tailored ones end 'Resume_<Company>.pdf', and prepare_materials reuses those), so it could not simply be given the tailored name.",
+  "why_tests_missed": "Tests checked that a tailored resume is named after the applicant and that a fallback resume is not reused as tailored, but nothing looked at what an employer sees when the fallback is attached.",
+  "fix": "The fallback is named from the profile ('Jane_Doe_Resume.pdf', via applicant_slug, shared with document_name) with no company in it, so it reads as a person's resume and still cannot be mistaken for a tailored one. A profile with no name keeps the old internal name.",
+  "tests": [
+    "tests/test_fallback_resume_name.py::test_the_refreshed_generic_resume_is_named_after_the_applicant",
+    "tests/test_fallback_resume_name.py::test_that_name_is_not_taken_for_a_tailored_resume"
+  ],
+  "prevention": "Anything uploaded to an employer is named for the employer's eyes; keep internal markers (what kind of file this is) out of the name, in the data or in a rule that does not show. When a name must double as a marker, pick one that is both presentable and distinct, and test both."
+}
