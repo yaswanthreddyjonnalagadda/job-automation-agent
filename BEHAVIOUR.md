@@ -1806,3 +1806,5 @@ there for owner review unless final submission is separately authorized.
 Known answers to individual text questions stay scoped to that question. Answering Address does not supply Address 2, and answering Employer does not supply Previous Employer.
 
 A guarded employer sign-in can accept one same-button click that the site triggers synchronously while handling the authorized Log In action. A prevented first sign-in form submit can be followed once by the site on that same form; an accepted submit consumes authorization, and additional clicks remain blocked.
+
+On iCIMS, the application-frame step marker controls whether a Submit-labelled button advances an intermediate step. Update Profile uses the guarded candidate-profile action. A signed voluntary portal packet marked 1/2 may advance using approved profile facts and the owner's signature preference. The portal's explicit submitted-job status confirms the application even when an optional follow-up form remains open (f266).

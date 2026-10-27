@@ -173,7 +173,7 @@ def _guard_script(capability: str) -> str:
             || !element.matches('button, input[type=submit], input[type=button], [role=button]')
             || !credentialForm(element) || element.disabled
             || element.getAttribute('aria-disabled') === 'true') return false;
-        const profileLabel = /^(submit profile|create (?:your |a |my )?profile|register|create (?:my |your |an )?account)$/i;
+        const profileLabel = /^(submit profile|update profile|create (?:your |a |my )?profile|register|create (?:my |your |an )?account)$/i;
         if (!credentialLabels(element).length || !credentialLabels(element).some(label => profileLabel.test(label))) return false;
         const form = credentialForm(element);
         const controls = [...new Set([...form.elements, ...form.querySelectorAll('[role=button]')])];

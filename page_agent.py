@@ -1886,6 +1886,13 @@ class PageAgent:
         email = getattr(self.config, "ats_email", "") or getattr(self.profile, "email", "")
         host = urlparse(tab.url).netloc
         self.account_blocker = ""
+        if "icims.com" in host:
+            try:
+                form_scope = self.assistant.adapter(tab)._scope(tab)
+                if form_scope.get_by_role("link", name="Log Out").count() == 1:
+                    return False
+            except Exception:
+                pass
         if "login.icims.com" == host:
             from sites.icims import IcimsAdapter
             if IcimsAdapter().dismiss_optional_passkey_enrollment(tab):
@@ -3614,7 +3621,16 @@ class PageAgent:
                     return Outcome("disqualified_policy_mismatch", page, [clause])
 
             from sites import adapter_for
-            if adapter_for(getattr(tab, 'url', '')).expand_form_sections(self.assistant, tab):
+            adapter = adapter_for(getattr(tab, 'url', ''))
+            packet_result = getattr(adapter, "advance_signed_veteran_packet", lambda *_: "none")(
+                tab, self.profile, getattr(self.assistant, "_submission_guard", None))
+            if packet_result == "advanced":
+                logger.info("ICIMS_PACKET: submitted signed veteran form 1 of 2")
+                self.settle(page, 2_000)
+                continue
+            if packet_result == "blocked":
+                return Outcome("owner_needed", page, ["the signed iCIMS veteran packet could not advance"])
+            if adapter.expand_form_sections(self.assistant, tab):
                 self.settle(page, 300)
                 continue
             snapshot = self.read_when_loaded(page)
@@ -6834,6 +6850,9 @@ class PageAgent:
                 logger.info("FILE DIALOG: %r asked for a file, so the agent gave it the resume", label[:40])
             except Exception as _swallowed:
                 logger.debug("_press_next_locked: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+        elif re.fullmatch(r"update profile", label, re.I) and "icims.com" in tab.url:
+            if guard is None or not guard.click_candidate_profile(tab, locator):
+                return "stop", page, "iCIMS candidate profile update could not be safely authorized"
         elif submit_word and not final:
             if guard is None or not guard.click_intermediate_icims_submit(tab, locator):
                 return "stop", page, "intermediate iCIMS step could not be safely authorized"

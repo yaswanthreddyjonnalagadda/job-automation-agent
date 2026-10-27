@@ -45,6 +45,32 @@ class IcimsAdapter(SiteAdapter):
         except Exception:
             return False
 
+    def advance_signed_veteran_packet(self, page, profile, guard) -> str:
+        """Advance iCIMS portal packet 1/2 using the approved veteran answer and signature policy."""
+        try:
+            packet = next((frame for frame in page.frames if frame.name == "icims_formFrame"), None)
+            if packet is None or not packet.locator("input[name=icims_f_Veteran]").count():
+                return "none"
+            if not re.search(r"\bnot\s+(?:a\s+)?veteran\b", str(getattr(profile, "veteran_status", "")), re.I):
+                return "blocked"
+            if not getattr(profile, "sign_attestations", False) or guard is None:
+                return "blocked"
+            packet.locator("input[name=icims_f_Veteran][value=NotProtectedVeteran]").check()
+            packet.locator("input[name=icims_f_signature]").check()
+            return "advanced" if guard.click_intermediate_icims_packet(page) else "blocked"
+        except Exception:
+            return "blocked"
+
+    def submission_confirmed(self, page) -> bool:
+        """Recognize iCIMS's submitted-job status beside optional post-submit forms."""
+        try:
+            scope = self._scope(page)
+            body = scope.locator("body").inner_text(timeout=3_000).lower()
+            return ("your application was submitted successfully" in body
+                    and "you are currently submitted to this job" in body)
+        except Exception:
+            return False
+
     @classmethod
     def matches(cls, url: str) -> bool:
         lower = (url or "").lower()
