@@ -20,6 +20,7 @@ def test_handoff_resumes_only_nonterminal_actions(monkeypatch, tmp_path, review,
         assert kwargs.get('for_captcha', False) == (captcha and not review)
         return decision
     assistant = SimpleNamespace(save_progress=lambda *args: None, is_review_step=lambda p: review,
+        submission_step_finality=lambda p: "FINAL" if review else "NON_FINAL",
         human_handoff=park, raise_window=lambda *args: None, wait_for_signal=wait,
         resume_automation=resume)
     def run(p):
