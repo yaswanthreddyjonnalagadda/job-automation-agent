@@ -1850,6 +1850,28 @@ class PageAgent:
             except Exception:
                 logger.warning("Could not durably clear account-creation dispatch marker for %s", host)
 
+    def _prepare_candidate_profile(self, page) -> str:
+        """Complete ordinary fields on a mixed ATS profile/registration form first.
+
+        A profile Submit can create credentials and advance the application in
+        one action. Do not dispatch it while an unrelated required field is blank.
+        """
+        tab = self.tab(page)
+        if self.inventory_pass(page):
+            return "changed"
+        snapshot = self.snapshot(page)
+        filled, _ = self.answer_what_is_known(page, parse_snapshot(snapshot), required_questions(snapshot))
+        if filled:
+            return "changed"
+        blanks = [f for f in form_fields.blank_required(form_fields.inventory(tab))
+                  if f.type != "password" and not re.search(r"(?:e-?mail|login|username)",
+                                                              f.label or f.question or f.name, re.I)]
+        if blanks:
+            labels = [f.label or f.question or f.name for f in blanks]
+            self.account_blocker = "required candidate profile fields still blank: " + "; ".join(labels[:5])
+            return "blocked"
+        return "ready"
+
     def sign_in_step(self, page, controls: list[Control]) -> bool:
         """Signs in where the page asks for it. True when something was done.
 
@@ -1864,6 +1886,11 @@ class PageAgent:
         email = getattr(self.config, "ats_email", "") or getattr(self.profile, "email", "")
         host = urlparse(tab.url).netloc
         self.account_blocker = ""
+        if "login.icims.com" == host:
+            from sites.icims import IcimsAdapter
+            if IcimsAdapter().dismiss_optional_passkey_enrollment(tab):
+                logger.info("LOGIN: skipped optional iCIMS device enrollment")
+                return True
         try:
             snapshot = self.snapshot(page)
         except Exception:
@@ -1878,6 +1905,12 @@ class PageAgent:
         if candidate_state == "verification" and state.kind != account_state.CODE_ENTRY:
             state = account_state.AccountState(account_state.VERIFY_EMAIL, "the site's own account page says so",
                                                state.google_offered, state.password_boxes, state.form_error)
+        if candidate_state == "registration":
+            preparation = self._prepare_candidate_profile(page)
+            if preparation == "changed":
+                return True
+            if preparation == "blocked":
+                return False
         try:
             expected = getattr(self.assistant, "account_expected", None)
             exists = (expected() if callable(expected) else self.assistant.account_on_record()) is True
@@ -6681,6 +6714,8 @@ class PageAgent:
         )
         final = plan.next_kind == "final_submit" or (is_review and not steps_remain) \
             or (submit_word and step_finality != "NON_FINAL")
+        if submit_word and step_finality == "NON_FINAL":
+            final = False
         if plan.page_kind == "job_description" and plan.next_kind == "open_application":
             final = False
         # A posting's Apply is a link: its address opens the application with a plain GET, which submits nothing,
@@ -6799,6 +6834,9 @@ class PageAgent:
                 logger.info("FILE DIALOG: %r asked for a file, so the agent gave it the resume", label[:40])
             except Exception as _swallowed:
                 logger.debug("_press_next_locked: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+        elif submit_word and not final:
+            if guard is None or not guard.click_intermediate_icims_submit(tab, locator):
+                return "stop", page, "intermediate iCIMS step could not be safely authorized"
         else:
             self.locate(page, control.ref).click(timeout=10_000)
         if guard is not None and denials_before is not None and guard.denial_count(tab) > denials_before:

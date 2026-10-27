@@ -1271,10 +1271,11 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             return
 
         # Task 3.3: Enforce the Human-in-the-Loop Review Border
-        is_review = assistant.is_review_step(page) or any(
+        step_finality = assistant.submission_step_finality(page)
+        is_review = step_finality != "NON_FINAL" and (assistant.is_review_step(page) or any(
             "ready for you to submit" in r or "last step" in r or "review step" in r.lower()
             for r in outcome.reasons
-        )
+        ))
         if is_review:
             logger.info("REVIEW BORDER: Reached designated final review step. Halting for human review.")
             assistant.save_progress(page)

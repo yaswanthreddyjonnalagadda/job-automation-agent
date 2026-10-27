@@ -31,6 +31,20 @@ class IcimsAdapter(SiteAdapter):
     )
     portal_list_patterns = ("/jobs/my-profile", "/jobs/dashboard", "/dashboard")
 
+    def dismiss_optional_passkey_enrollment(self, page) -> bool:
+        """Skip Auth0's optional device enrollment after iCIMS sign-in."""
+        try:
+            if "mfa-webauthn-platform-enrollment" not in (page.url or ""):
+                return False
+            heading = page.get_by_role("heading", name="Log In Faster on This Device")
+            later = page.get_by_role("button", name="Remind me later")
+            if heading.count() != 1 or later.count() != 1 or not later.is_visible():
+                return False
+            later.click(timeout=5_000)
+            return True
+        except Exception:
+            return False
+
     @classmethod
     def matches(cls, url: str) -> bool:
         lower = (url or "").lower()

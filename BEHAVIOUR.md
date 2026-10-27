@@ -1802,3 +1802,7 @@ Date outside a mapped record no longer borrows the current job's dates (f261).
 On ADP, the wizard's Next control on its current Review step is treated as a
 final submission action (f262). The guarded agent and supervised actions stop
 there for owner review unless final submission is separately authorized.
+
+Known answers to individual text questions stay scoped to that question. Answering Address does not supply Address 2, and answering Employer does not supply Previous Employer.
+
+A guarded employer sign-in can accept one same-button click that the site triggers synchronously while handling the authorized Log In action. A prevented first sign-in form submit can be followed once by the site on that same form; an accepted submit consumes authorization, and additional clicks remain blocked.

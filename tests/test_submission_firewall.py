@@ -44,6 +44,29 @@ def guarded(page):
     return guard
 
 
+@pytest.mark.parametrize("step,total,allowed", [(2, 5, True), (5, 5, False)])
+def test_icims_submit_only_advances_with_remaining_steps(page, step, total, allowed):
+    markup = f'''<ol><li>Step {step} of {total}. Candidate Questions(Current Step)</li></ol>
+      <form onsubmit="window.submitted=true; return false"><button type="submit">Submit</button></form>'''
+    page.route('https://example.icims.com/**', lambda route: route.fulfill(body=markup, content_type='text/html'))
+    page.goto('https://example.icims.com/jobs/123/questions')
+    guard = guarded(page)
+    button = page.get_by_role('button', name='Submit')
+    probe = page.evaluate("""() => ({host: location.hostname, marker: document.querySelector('li')?.textContent,
+      visible: document.querySelector('li')?.getClientRects().length, guard: Boolean(window.__jaaSubmissionGuardV0)})""")
+    result = guard.click_intermediate_icims_submit(page, button)
+    assert result is allowed, (probe, guard.denials(page))
+    assert bool(page.evaluate('window.submitted')) is allowed
+
+
+def test_icims_step_finality_reads_named_application_frame(page):
+    markup = '''<iframe name="icims_content_iframe" srcdoc="<ol><li>Step 2 of 5. Candidate Questions(Current Step)</li></ol>"></iframe>'''
+    page.route('https://example.icims.com/**', lambda route: route.fulfill(body=markup, content_type='text/html'))
+    page.goto('https://example.icims.com/jobs/123/questions')
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assert assistant.submission_step_finality(page) == 'NON_FINAL'
+
+
 @pytest.mark.parametrize('step,blocked',[('Review',True),('Education History',False)])
 def test_adp_review_next_is_a_final_action(page,step,blocked):
     markup=f'''<button role="button" aria-label="Step Status current {step}"></button>
