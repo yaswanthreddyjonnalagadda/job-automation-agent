@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import create_autospec
 
 import pytest
+import answer_ledger
 import web_ui
 from job_tracker import JobTracker
 
@@ -25,7 +26,7 @@ def test_cockpit_stop_and_cancel_stop_the_active_run(monkeypatch, route, payload
 
 
 def test_override_reaches_real_tracker_signature(monkeypatch, tmp_path):
-    monkeypatch.setattr(web_ui, "_LEDGER_DB_PATH", tmp_path / "ledger.db")
+    monkeypatch.setattr(answer_ledger, "DB_PATH", tmp_path / "ledger.db")
     tracker = create_autospec(JobTracker, instance=True)
     tracker.get.return_value = SimpleNamespace(url="https://jobs.example.com/role")
     monkeypatch.setattr(web_ui, "get_tracker", lambda: tracker)
@@ -36,7 +37,7 @@ def test_override_reaches_real_tracker_signature(monkeypatch, tmp_path):
 
 
 def test_override_is_persisted_in_sqlite_tracker(monkeypatch, tmp_path):
-    monkeypatch.setattr(web_ui, "_LEDGER_DB_PATH", tmp_path / "ledger.db")
+    monkeypatch.setattr(answer_ledger, "DB_PATH", tmp_path / "ledger.db")
     tracker = JobTracker(tmp_path / "tracker.db")
     tracker.create(dedup_key="key", title="Engineer", company="Example", url="https://jobs.example.com/role")
     monkeypatch.setattr(web_ui, "get_tracker", lambda: tracker)

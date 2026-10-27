@@ -8,6 +8,7 @@ import sqlite3
 import pytest
 from flask import Flask
 
+import answer_ledger
 import web_ui
 import ui_shell
 import handoff
@@ -18,7 +19,7 @@ from runtime_events import RuntimeEvent, EventName, ReasonCode, AnswerSource
 def client(tmp_path, monkeypatch):
     """Test client with test DB and isolated environment."""
     test_db = tmp_path / "test_applications.db"
-    monkeypatch.setattr(web_ui, "_LEDGER_DB_PATH", test_db)
+    monkeypatch.setattr(answer_ledger, "DB_PATH", test_db)
     
     app = web_ui.app
     app.config["TESTING"] = True
@@ -28,7 +29,7 @@ def client(tmp_path, monkeypatch):
 
 def test_init_and_record_answer_ledger(tmp_path, monkeypatch):
     test_db = tmp_path / "test_answers.db"
-    monkeypatch.setattr(web_ui, "_LEDGER_DB_PATH", test_db)
+    monkeypatch.setattr(answer_ledger, "DB_PATH", test_db)
 
     # Record first answer
     row_id = web_ui.record_answer_ledger(
@@ -67,7 +68,7 @@ def test_init_and_record_answer_ledger(tmp_path, monkeypatch):
 
 def test_runtime_events_auto_record_into_ledger(tmp_path, monkeypatch):
     test_db = tmp_path / "test_events_ledger.db"
-    monkeypatch.setattr(web_ui, "_LEDGER_DB_PATH", test_db)
+    monkeypatch.setattr(answer_ledger, "DB_PATH", test_db)
 
     # Emit ANSWER_WRITTEN
     RuntimeEvent.emit(
@@ -184,7 +185,7 @@ def test_captcha_handoff_resolution_fail_closed(client):
 
 def test_api_answers_update(client, tmp_path, monkeypatch):
     test_db = tmp_path / "test_update_answers.db"
-    monkeypatch.setattr(web_ui, "_LEDGER_DB_PATH", test_db)
+    monkeypatch.setattr(answer_ledger, "DB_PATH", test_db)
 
     aid = web_ui.record_answer_ledger(
         application_key="app_update_test",

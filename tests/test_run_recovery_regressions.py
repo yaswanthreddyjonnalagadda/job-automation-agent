@@ -7,6 +7,7 @@ import pytest
 import apply
 import browser_automation
 import safety
+import answer_ledger
 import web_ui
 from browser_automation import JobApplicationAssistant
 from submission_guard import SubmissionGuardV0
@@ -240,7 +241,7 @@ def test_cockpit_reports_a_waiting_worker_instead_of_processing(monkeypatch, tmp
     tracker.update_status("synthetic", "needs_user_review", notes="Owner action is required")
     tracker.update_last_page("synthetic", url)
     monkeypatch.setattr(web_ui, "get_tracker", lambda: tracker)
-    monkeypatch.setattr(web_ui, "_LEDGER_DB_PATH", tmp_path / "ledger.db")
+    monkeypatch.setattr(answer_ledger, "DB_PATH", tmp_path / "ledger.db")
     monkeypatch.setattr(web_ui, "_running_url", lambda: url)
     monkeypatch.setattr(web_ui, "waiting_runs", lambda folder: [{"label": "Example", "signal": "synthetic"}])
     monkeypatch.setattr(web_ui.handoff, "get_active_handoff", lambda: None)
