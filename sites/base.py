@@ -65,6 +65,25 @@ class SiteAdapter:
         handled."""
         return False
 
+    def choose_dropdown(self, page, control, value: str, *, pick, click) -> Optional[bool]:
+        """Portal-specific choice interaction; None leaves it to generic logic.
+
+        The caller supplies its shared matcher and guarded click primitive.
+        """
+        return None
+
+    def form_loading(self, snapshot: str) -> bool:
+        """Whether a portal's current form step is still being populated."""
+        return False
+
+    def expand_form_sections(self, assistant, page) -> bool:
+        """Expose an existing collapsed form section; never add a record."""
+        return False
+
+    def entry_map(self, snapshot: str):
+        """Portal record boundaries, or None for the shared snapshot reader."""
+        return None
+
     # -- account creation --------------------------------------------------
     def candidate_account_state(self, page) -> str:
         """Returns a platform-specific external-candidate account state."""
@@ -78,6 +97,10 @@ class SiteAdapter:
     def overlay_selector(self) -> str:
         """Extra selectors for this platform's modal/overlay containers."""
         return ""
+
+    def submission_confirmed(self, page) -> bool:
+        """Platform-specific confirmation detection (e.g. ADP Applied status button)."""
+        return False
 
 
 def merge_placeholders(adapter: SiteAdapter) -> re.Pattern:

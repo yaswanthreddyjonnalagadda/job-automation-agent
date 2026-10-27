@@ -1,0 +1,15 @@
+{
+  "id": "f216",
+  "date": "2026-10-22",
+  "class": "Terminal status inferred from unscoped or stale receipt evidence",
+  "site": "ADP job-details pages; discovered in synthetic browser audit of f215",
+  "symptom": "Synthetic audit reproduced Applied filters, unrelated Applied buttons, hostname lookalikes and cached snapshots being accepted as submission confirmation. Open-shadow-root Applied controls were missed. No additional live application was claimed submitted during this audit.",
+  "root_cause": "f215 matched domain substrings and label prefixes, searched every button, and fell back to cached snapshots or body prose when live evaluation was unavailable. document.querySelectorAll did not traverse component shadow roots.",
+  "why_tests_missed": "Original tests mocked evaluate as a boolean and did not execute the receipt JavaScript or challenge its hostname, requisition, scope, freshness or shadow-root boundaries.",
+  "fix": "Match the parsed ADP hostname, require the requisition job-details route, traverse live open shadow roots, and require an exact Applied control within the posting action row with no visible form or answer controls. Missing live evidence fails closed. ADP adapter selection now uses the hostname only.",
+  "tests": [
+    "tests/test_adp_confirmation_boundaries.py",
+    "tests/test_adp_applied_button.py"
+  ],
+  "prevention": "Test terminal outcome detection against real synthetic DOM, including negative near-matches, stale evidence and web components. A click or generic word is not proof of submission."
+}

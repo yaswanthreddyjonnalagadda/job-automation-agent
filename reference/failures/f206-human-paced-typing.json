@@ -1,0 +1,25 @@
+{
+  "id": "f206",
+  "date": "2026-10-20",
+  "site": "Cross-portal form interaction (iCIMS, Workday, Greenhouse, SmartRecruiters)",
+  "class": "Instantaneous synthetic input fills trigger anti-bot telemetry and challenge blocks",
+  "symptom": "Form fields filled instantaneously (0ms) trigger telemetry detection from anti-bot mechanisms (hCaptcha, Cloudflare Turnstile, DataDome), and custom input controls with keydown listeners do not fire or register values properly.",
+  "root_cause": "Locator.fill() in Playwright sets the value property and dispatches input/change events instantly without keyboard event sequences or inter-field natural pauses.",
+  "why_tests_missed": "Mock-based DOM tests do not measure typing speed or keydown/keyup event stream intervals; initial typing tests did not test dropped password characters or decimal separators in numeric fields.",
+  "fix": "Implement human-cadence typing (press_sequentially with 30-65ms variable delay) for short form inputs (<200 chars), with direct fill fallback for long essays and keydown-prevented fields, controlled by HUMAN_TYPING environment variable (default 1 in runtime, 0 in test suite). Verification requires exact readback by default (including case, decimals, and symbols) so dropped password or numeric characters trigger immediate fallback fill; only recognized masked phone number inputs allow formatting differences.",
+  "tests": [
+    "tests/test_human_typing.py::test_a_short_answer_is_typed_one_key_at_a_time",
+    "tests/test_human_typing.py::test_typing_replaces_what_was_in_the_box",
+    "tests/test_human_typing.py::test_a_long_answer_is_inserted_at_once_like_a_paste",
+    "tests/test_human_typing.py::test_typing_can_be_turned_off",
+    "tests/test_human_typing.py::test_a_box_that_drops_keystrokes_falls_back_to_the_instant_fill",
+    "tests/test_human_typing.py::test_a_masked_box_that_adds_its_own_punctuation_counts_as_typed",
+    "tests/test_human_typing.py::test_clearing_a_box_keeps_the_plain_fill",
+    "tests/test_human_typing.py::test_a_locator_that_cannot_type_still_gets_its_value",
+    "tests/test_human_typing.py::test_type_text_types_a_sign_in_box",
+    "tests/test_human_typing.py::test_the_key_delay_varies_but_stays_in_a_human_range",
+    "tests/test_human_typing.py::test_same_text_rejects_dropped_password_characters_and_decimals",
+    "tests/test_human_typing.py::test_password_and_decimal_drop_triggers_fallback_fill"
+  ],
+  "prevention": "Default to realistic keystroke cadences and inter-field pauses on all user-facing ATS input fields while keeping the test suite fast via HUMAN_TYPING=0 in conftest."
+}

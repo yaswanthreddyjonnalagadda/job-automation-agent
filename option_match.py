@@ -38,8 +38,11 @@ def plain(text: str) -> str:
     return " ".join(text.split())
 
 
+_INSTRUCTION = re.compile(r"\s*(?:click|tap) here\b", re.IGNORECASE)     # Lever: "Click Here (If you encounter an issue ...)"
+
+
 def is_placeholder(option: str) -> bool:
-    return bool(_PLACEHOLDER.fullmatch(option or ""))
+    return bool(_PLACEHOLDER.fullmatch(option or "") or _INSTRUCTION.match(option or ""))
 
 
 @functools.lru_cache(maxsize=1)
@@ -80,6 +83,49 @@ def _only_one(hits: list[int]) -> Optional[int]:
     return unique[0] if len(unique) == 1 else None
 
 
+# Rows that differ only in what the applicant would be saying about sponsorship (f184).
+_SPONSORED = re.compile(
+    r"\bwith\s+(?:company\s+|employer\s+|visa\s+)?sponsorship\b|\b(?:require|need)\w*\s+(?:visa\s+)?sponsorship\b"
+    r"|\bsponsorship\s+(?:is\s+)?required\b", re.IGNORECASE)
+_UNRESTRICTED = re.compile(
+    r"\bwithout\s+(?:any\s+)?(?:restrictions?|sponsorship)\b|\bno\s+(?:visa\s+)?sponsorship\b"
+    r"|\b(?:(?:does|do|will)\s+not|don'?t|won'?t)\s+(?:now\s+or\s+in\s+the\s+future\s+)?(?:require|need)\s+"
+    r"(?:visa\s+)?sponsorship\b", re.IGNORECASE)
+
+
+def sponsorship_said(text: str) -> Optional[bool]:
+    """What an option says the applicant needs: True for sponsorship ("No, I need sponsorship now", "Yes, with company
+    sponsorship"), False for none ("Yes, without restrictions", "I do not need sponsorship"), None when it does not
+    speak of sponsorship. The one reading of such rows, for choosing one and for checking one (f184, f191)."""
+    if _UNRESTRICTED.search(text or ""):
+        return False
+    if _SPONSORED.search(text or ""):
+        return True
+    return None
+
+
+def sponsorship_choice(options: list[str], answer: str, needs_sponsorship: Optional[bool]) -> tuple[bool, Optional[int]]:
+    """(decided, index) for a bare Yes among rows that say what the applicant would need: 'Yes, without restrictions',
+    'Yes, with company sponsorship'. An applicant who needs sponsorship is the sponsored row; one who does not is the
+    unrestricted row; when the profile is silent (None), or only the row that would be a false statement is offered, nothing
+    is chosen -- the question stays the owner's. Lists that do not speak of sponsorship are not decided here."""
+    if not re.fullmatch(r"\s*yes\.?\s*", answer or "", re.IGNORECASE):
+        return False, None
+    sponsored = [i for i, o in enumerate(options) if sponsorship_said(o) is True]
+    unrestricted = [i for i, o in enumerate(options) if sponsorship_said(o) is False]
+    if not (sponsored or unrestricted):
+        return False, None
+    if needs_sponsorship is None:
+        return True, None
+    rows = sponsored if needs_sponsorship else unrestricted
+    return True, (rows[0] if rows else None)
+
+
+def broader_term(answer: str) -> Optional[str]:
+    """The broader term a list that does not offer `answer` may offer instead ("South Asian" -> "Asian"), or None."""
+    return _broader().get(plain(answer)) or None
+
+
 def best_option(options: list[str], answer: str) -> Optional[int]:
     """The index of the option that is the answer, or None when none is -- or when two are equally good. An answer the
     list does not offer is looked for once more as its broader term ("South Asian" as "Asian"), never narrower."""
@@ -95,6 +141,20 @@ def best_option(options: list[str], answer: str) -> Optional[int]:
         if broader:
             hit = _best_option(options, broader)
     return hit
+
+
+def matching_choices(options: list[str], answer: str) -> Optional[list[int]]:
+    """Resolve a complete checkbox answer without splitting commas in labels."""
+    whole = best_option(options, answer)
+    if whole is not None:
+        return [whole]
+    separator = r"\s*[;\n|]\s*" if re.search(r"[;\n|]", answer) else r"\s*,\s+"
+    parts = [part.strip() for part in re.split(separator, answer) if part.strip()]
+    if len(parts) < 2:
+        return None
+    matches = [best_option(options, part) for part in parts]
+    return (list(dict.fromkeys(match for match in matches if match is not None))
+            if all(match is not None for match in matches) else None)
 
 
 def _best_option(options: list[str], answer: str) -> Optional[int]:
@@ -144,7 +204,8 @@ def _best_option(options: list[str], answer: str) -> Optional[int]:
     #    choices, or none, and there is no answer. A Yes is never read this way: several choices can mean yes.
     if want in ("no", "none", "never"):
         return _only_one([i for i, o in real if _SAYS_NO.match(plain(o)) and not _DECLINES.search(plain(o))])
-    return None
+    # 6. numeric / salary / experience range buckets (e.g. '$111,000 - $120,000/yr' for '120000')
+    return _numeric_range_match(real, answer)
 
 
 # "I don't wish to answer" opens like a no, and is not one.
@@ -154,3 +215,129 @@ _DECLINES = re.compile(r"\b(?:wish|want|prefer|choose|like)\s+(?:not\s+)?to\s+(?
 
 _SAYS_NO = re.compile(r"^(?:no|not|never|none|neither|i\s+(?:have|had|do|did|am|was|will)\s+not|"
                       r"i\s+(?:havent|hadnt|dont|didnt|wasnt|wont|am\s+not))\b")
+
+
+def _parse_val(text: str) -> Optional[float]:
+    """Extract a single numeric value from a currency/number string like '$120,000', '120k', '125000'."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    clean_letters = re.sub(
+        r"[\s\$,€£¥kK+/\-–—.]|\b(?:yr|year|years|month|months|hr|hour|hours|per|annual|base|salary|exp|experience)\b",
+        "", text, flags=re.I)
+    if clean_letters and not clean_letters.isdigit():
+        return None
+    m = re.search(r"(\d+(?:,\d{3})*(?:\.\d+)?)\s*([kK])?", text)
+    if not m:
+        return None
+    num = float(m.group(1).replace(",", ""))
+    if m.group(2):
+        num *= 1000
+    return num
+
+
+def _parse_range_option(text: str) -> Optional[tuple[float, float]]:
+    """Parse range boundaries (low, high) from an option like '$111,000 - $120,000/yr', '< $20k', or '5+ years'."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    # 1. Range: A to B or A - B
+    m_range = re.search(
+        r"(\$?\s*\d+(?:,\d{3})*(?:\.\d+)?\s*[kK]?)\s*(?:-|–|—|\bto\b)\s*(\$?\s*\d+(?:,\d{3})*(?:\.\d+)?\s*[kK]?)",
+        text)
+    if m_range:
+        low = _parse_val(m_range.group(1))
+        high = _parse_val(m_range.group(2))
+        if low is not None and high is not None:
+            return (min(low, high), max(low, high))
+    # 2. Lower bound only: '300,000+', 'over $300k', '> 5'
+    m_lower = re.search(
+        r"(?:over|more than|greater than|>)\s*(\$?\s*\d+(?:,\d{3})*(?:\.\d+)?\s*[kK]?)|"
+        r"(\$?\s*\d+(?:,\d{3})*(?:\.\d+)?\s*[kK]?)\s*(?:\+|and (?:above|more)|or more)",
+        text, re.I)
+    if m_lower:
+        val_str = m_lower.group(1) or m_lower.group(2)
+        low = _parse_val(val_str)
+        if low is not None:
+            return (low, float("inf"))
+    # 3. Upper bound only: 'Below $20,000', '< 1 year', 'under 30k'
+    m_upper = re.search(
+        r"(?:below|under|less than|up to|<)\s*(\$?\s*\d+(?:,\d{3})*(?:\.\d+)?\s*[kK]?)",
+        text, re.I)
+    if m_upper:
+        high = _parse_val(m_upper.group(1))
+        if high is not None:
+            return (0.0, high)
+    return None
+
+
+def _numeric_range_match(real: list[tuple[int, str]], answer: str) -> Optional[int]:
+    target = _parse_val(answer)
+    if target is None:
+        return None
+    ranges = []
+    for i, o in real:
+        rng = _parse_range_option(o)
+        if rng:
+            ranges.append((i, rng[0], rng[1], o))
+    if len(ranges) < 2:
+        return None
+    matching = []
+    for i, low, high, o in ranges:
+        if low <= target <= high:
+            matching.append(i)
+    if len(matching) == 1:
+        return matching[0]
+    if len(matching) > 1:
+        for idx in matching:
+            entry = next((e for e in ranges if e[0] == idx), None)
+            if entry and entry[1] <= target < entry[2]:
+                return idx
+        return matching[0]
+    return None
+
+
+_SPAN = re.compile(r"^\s*(?:(?:within|in|about|around|up to|after)\s+)?(\d+)\s*(day|week)s?\s*$", re.IGNORECASE)
+_DAYS = {"day": 1, "week": 7}
+
+
+def _span_days(text: str) -> Optional[int]:
+    found = _SPAN.match(text or "")
+    return int(found.group(1)) * _DAYS[found.group(2).lower()] if found else None
+
+
+def availability_option(options: list[str], answer: str) -> Optional[int]:
+    """The one option that states the same wait as the answer ('2 weeks' is 'Within 2 weeks'), or None.
+
+    Only a span of days or weeks, with at most 'within/in/about' before it; '14 days' and '2 weeks' are the same wait,
+    so a list offering both has no one answer. Months, dates and anything else are left alone. Used only when the
+    question asks when the applicant can start (concept NOTICE_PERIOD): the same words answer other questions
+    ('Years of experience?') differently."""
+    wanted = _span_days(answer)
+    if wanted is None:
+        return None
+    hits = [i for i, option in enumerate(options) if _span_days(option) == wanted]
+    return hits[0] if len(hits) == 1 else None
+
+
+def resolve_offered(options: list[str], answer: str, *, needs_sponsorship: Optional[bool] = None,
+                    availability: bool = False) -> str:
+    """The exact offered label that a model's answer means, or "" when none is -- the one reading of an answer given
+    for a list, shared by the AI path and the browser's choosers.
+
+    The same words win; a bare Yes among rows that speak of sponsorship follows the profile and is otherwise left (an
+    answer the profile cannot back is never chosen); then the bounded matches of best_option, and for a start-date
+    question the same wait in other words. No substring, near-spelling or 'only one option' guess (f226)."""
+    answer = (answer or "").strip()
+    if not options or not answer:
+        return ""
+    for option in options:
+        if option.strip().lower() == answer.lower():
+            return option
+    decided, index = sponsorship_choice(list(options), answer, needs_sponsorship)
+    if decided:
+        return options[index] if index is not None else ""
+    index = best_option(list(options), answer)
+    if index is None and availability:
+        index = availability_option(list(options), answer)
+    return options[index] if index is not None else ""

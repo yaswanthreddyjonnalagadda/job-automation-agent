@@ -1,0 +1,15 @@
+{
+  "id": "f247",
+  "date": "2026-10-25",
+  "class": "Wizard navigation is rendered before the current step's fields",
+  "symptom": "After Select Source, the runtime saved an empty EEO step with disabled Next and sent the stale empty page to an LLM, delaying progress while the real fields were already visible.",
+  "site": "ADP Church Mutual; output/Churchmutual_Looking_to_join_a_vibrant_organization_that_makes_a_difference/pages/20261025_150255/page_02.txt",
+  "root_cause": "The readiness check recognizes generic spinners, frames and Workday loading shapes but not ADP's empty named current-step region plus disabled Next. Surrounding navigation makes the page look populated.",
+  "why_tests_missed": "Readiness tests did not include a portal stepper whose navigation is ready before its form content, and dropdown tests started with fields already present.",
+  "fix": "Add a portal readiness hook. ADP identifies an empty region matching the current step only while Next is disabled. The existing bounded read_when_loaded wait re-reads it before planning; disabled navigation alone or an already populated step does not match.",
+  "tests": [
+    "tests/test_adp_dropdown_selection.py::test_adp_transition_waits_for_current_step_content",
+    "tests/test_adp_dropdown_selection.py::test_disabled_navigation_alone_does_not_establish_a_loading_step"
+  ],
+  "prevention": "Model readiness around the current form region rather than global page text or network idle. Replay transient saved snapshots and require bounded waits before invoking interpretation on incomplete forms."
+}

@@ -1,0 +1,17 @@
+{
+  "id": "f233",
+  "date": "2026-10-23",
+  "site": "Palantir Lever run 20261023_145539; local_debug/20261023T190454_6902a8345f",
+  "class": "Sibling section headings are lost before contextual field resolution",
+  "symptom": "After disability status was answered, its required Date textbox remained blank and the run stopped for review. The field had MM/DD/YYYY placeholder and name eeo[disabilitySignatureDate].",
+  "root_cause": "The parser retained ancestor groups and nearby labels but not the heading scope of sibling controls. The existing self-identification date rule therefore received a bare Date with empty container/context. The original first-page snapshot preceded the conditional date field; the later local capture showed its complete section.",
+  "why_tests_missed": "Date tests exercised explicit date labels or directly supplied context, rather than headings followed by explanatory subheadings and sibling name/date fields.",
+  "fix": "Track heading hierarchy separately on Control.section without changing question/group identity. Bound it by containing indentation, peer headings and separators. Let the existing contextual self-identification date rule use this scope and the existing date formatter. Other bare Date fields remain unresolved.",
+  "tests": [
+    "tests/test_motivation_and_form_date.py::test_sibling_heading_supplies_date_context_without_changing_question",
+    "tests/test_motivation_and_form_date.py::test_date_context_ends_at_separator",
+    "tests/test_motivation_and_form_date.py::test_date_heading_does_not_escape_its_containing_structure",
+    "tests/test_motivation_and_form_date.py::test_self_identification_date_is_filled_in_requested_format"
+  ],
+  "prevention": "Retain semantic section context separately from field labels and radio grouping. Test conditional self-ID fields with realistic sibling heading structure and verify actual committed date text. Local browser validation does not establish live application acceptance."
+}

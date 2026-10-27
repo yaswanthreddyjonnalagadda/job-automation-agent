@@ -45,7 +45,7 @@ QUOTED = re.compile(r"""['"]([^'"\n]{4,60})['"]""")
 
 # Words that name a place somewhere and mean something else in this code:
 # Malé, the Maldives' capital region, is spelled like a gender answer.
-ORDINARY_WORDS = {"male"}
+ORDINARY_WORDS = {"male", "meta"}
 
 # "Badakhshan Province", "Punjab State", "Kabul District" name the same place.
 _ADMIN_SUFFIX = re.compile(r"\s+(province|state|region|district|county|governorate|prefecture|oblast|"

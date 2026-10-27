@@ -1,0 +1,14 @@
+{
+  "id": "f264",
+  "date": "2026-10-26",
+  "class": "Resolved text answer leaks into later substring-related questions",
+  "symptom": "Panasonic application 569 candidate profile received the street address in both Address and Address 2 before the resume was uploaded.",
+  "site": "Panasonic Automotive iCIMS candidate profile, 26 October 2026",
+  "root_cause": "_answer_text_questions appended a resolved question as an unanchored regex to the shared answers list, so subsequent questions containing that label reused its value.",
+  "why_tests_missed": "Tests covered individual question recognition but not multiple related labels in one text-answer pass.",
+  "fix": "Keep dynamically resolved answers local to the current question; retain the common base rules without accumulating question-specific values.",
+  "tests": [
+    "tests/test_text_question_rule_isolation.py::test_resolved_text_answer_does_not_leak_to_another_question"
+  ],
+  "prevention": "Test question sequences in both orders, including Address/Address 2 and Employer/Previous Employer; resolved values must not become generic rules."
+}

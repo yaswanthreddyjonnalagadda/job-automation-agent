@@ -1,0 +1,12 @@
+{
+  "id": "f241",
+  "date": "2026-10-23",
+  "site": "Bank of America application 140, race/ethnicity dropdown",
+  "class": "Selected answer and option qualifiers contaminate question classification",
+  "symptom": "Review showed American Indian or Alaska Native despite the saved South Asian ethnicity. Live known_answer returned profile.hispanic_or_latino No for the race control, even after the control was corrected to Asian.",
+  "root_cause": "The custom dropdown concatenates its selected label to the accessible button name. Control.question retained that value, whose Not Hispanic or Latino qualifier caused the race concept's negative guard to suppress ethnicity and select Hispanic/Latino instead. A separate options-only heuristic likewise treated any list containing Hispanic qualifiers in every row as Hispanic-only.",
+  "why_tests_missed": "Concept tests used clean labels or separate Hispanic-only lists, not selected race labels appended to accessible names and full race lists with repeated Hispanic qualifiers.",
+  "fix": "Strip the explicitly represented current value from dropdown question labels; prevent the decorated accessible name from reintroducing that value into classification. Require Hispanic wording to describe the primary offered category before redirecting a race concept to Hispanic-only. Preserve genuine Hispanic/Latino questions. Selected Asian through the existing matcher and observed corrected Review state.",
+  "tests": ["tests/test_race_choice_label_context.py"],
+  "prevention": "Replay selected-value metadata and test both clean and decorated controls with complete option lists. A user's ethnicity and Hispanic/Latino status are separate facts."
+}

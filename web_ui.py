@@ -16,7 +16,9 @@ launch a browser that is signed into their employer ATS accounts.
 from __future__ import annotations
 
 import io
+import logging
 import json
+from typing import Optional
 import re
 import os
 import signal
@@ -38,7 +40,6 @@ import run_outcomes
 from config import get_app_config
 from tracking import chosen, open_tracker as get_tracker
 import sqlite3
-import queue
 import handoff
 try:
     from runtime_events import RuntimeEvent, EventName, ReasonCode, AnswerSource
@@ -54,6 +55,9 @@ except ImportError:
 
 BASE_DIR = Path(__file__).resolve().parent
 app = Flask(__name__)
+logger = logging.getLogger(__name__)
+# the page script and styles are small and change with the code: never let a browser keep a stale copy
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
 from launch_dashboard import source_id
 RUNTIME_INFO = {'directory': str(BASE_DIR), 'source_id': source_id(BASE_DIR),
@@ -69,6 +73,12 @@ from web_setup import setup_pages  # noqa: E402  (the pages import web_ui back, 
 app.register_blueprint(setup_pages)
 from web_progress import progress_pages  # noqa: E402
 app.register_blueprint(progress_pages)
+import answer_ledger  # noqa: E402
+from answer_ledger import get_answers_for_application, init_answer_ledger, record_answer_ledger  # noqa: E402,F401
+from web_cockpit import cockpit_pages, raise_browser_window  # noqa: E402,F401
+app.register_blueprint(cockpit_pages)
+from web_templates import BASE_CSS, DETAIL_HTML, INDEX_HTML, SETTINGS_HTML  # noqa: E402,F401  (the pages' markup)
+
 
 @app.get('/runtime')
 def runtime_info():
@@ -95,8 +105,8 @@ def _save_runs() -> None:
                   "started": r["started"].isoformat() if hasattr(r["started"], "isoformat") else r["started"]}
             for url, r in _RUNS.items()
         }, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+    except Exception as _swallowed:
+        logger.debug("_save_runs: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
 
 def _process_alive(pid) -> bool:
@@ -126,8 +136,8 @@ def _load_runs() -> None:
             _RUNS[url] = {"state": state, "log": r.get("log", ""), "pid": r.get("pid"),
                           "started": datetime.fromisoformat(r["started"]) if r.get("started") else None,
                           "proc": None, "stopping": False}
-    except Exception:
-        pass
+    except Exception as _swallowed:
+        logger.debug("_load_runs: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
 
 _load_runs()
@@ -214,8 +224,8 @@ def _kill_pid_tree(pid: int) -> None:
     else:
         try:
             os.killpg(int(pid), signal.SIGTERM)
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("_kill_pid_tree: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
@@ -228,8 +238,83 @@ def _kill_tree(proc: subprocess.Popen) -> None:
     else:
         try:
             os.killpg(proc.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        except ProcessLookupError as _swallowed:
+            logger.debug("_kill_tree: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+
+
+@app.post("/api/discovered/scan")
+def scan_discovered():
+    from job_discovery import JobDiscoveryEngine
+    engine = JobDiscoveryEngine()
+    engine.scan_all(min_match_threshold=60)
+    return redirect(url_for("index"))
+
+
+@app.post("/api/discovered/<int:job_id>/apply")
+def apply_discovered(job_id: int):
+    from job_discovery import JobDiscoveryEngine
+    engine = JobDiscoveryEngine()
+    job = engine.queue_for_application(job_id)
+    if job and job.get("already_submitted"):
+        return redirect(url_for("index", error=f"You already submitted an application for {job.get('job_title')} at {job.get('company_name')}."))
+    if job and job.get("url"):
+        url = job["url"].strip()
+        busy = _running_url()
+        if busy:
+            return redirect(url_for("index", error=f"{busy[:80]} is still running. Stop it before starting another."))
+        threading.Thread(target=_run_apply, args=(url,), daemon=True).start()
+    return redirect(url_for("index"))
+
+
+@app.post("/api/discovered/<int:job_id>/dismiss")
+def dismiss_discovered(job_id: int):
+    from job_discovery import JobDiscoveryEngine
+    engine = JobDiscoveryEngine()
+    engine.dismiss_job(job_id)
+    return redirect(url_for("index"))
+
+
+@app.post("/api/webhook/command")
+def remote_webhook_command():
+    """Execute a remote command string (/apply <id>, /dismiss <id>, /status, /scan)."""
+    import notifications
+    cmd = request.form.get("command") or (request.get_json(silent=True) or {}).get("command") or ""
+    res = notifications.handle_remote_command(cmd)
+    if res.get("status") == "ok" and cmd.strip().startswith("/apply"):
+        job = res.get("job")
+        if job and job.get("url"):
+            url = job["url"].strip()
+            busy = _running_url()
+            if not busy:
+                threading.Thread(target=_run_apply, args=(url,), daemon=True).start()
+    return res, 200
+
+
+@app.post("/api/webhook/telegram")
+def telegram_webhook():
+    """Webhook receiver for Telegram bot messages."""
+    import notifications
+    data = request.get_json(silent=True) or {}
+    msg = data.get("message") or {}
+    text = msg.get("text", "")
+    chat_id = (msg.get("chat") or {}).get("id")
+
+    res = notifications.handle_remote_command(text)
+    if res.get("status") == "ok" and text.strip().startswith("/apply"):
+        job = res.get("job")
+        if job and job.get("url"):
+            url = job["url"].strip()
+            busy = _running_url()
+            if not busy:
+                threading.Thread(target=_run_apply, args=(url,), daemon=True).start()
+
+    reply_text = res.get("message", "Done.")
+    if chat_id:
+        cfg = notifications.get_notification_config()
+        if cfg["telegram_bot_token"]:
+            tg_url = f"https://api.telegram.org/bot{cfg['telegram_bot_token']}/sendMessage"
+            notifications.send_http_json(tg_url, {"chat_id": chat_id, "text": reply_text})
+    return res, 200
 
 
 @app.post("/apply")
@@ -493,6 +578,10 @@ def resume_application(app_id: int):
         return redirect(url_for("index", error="That application has no URL to resume."))
     if record.status == "submitted":
         return redirect(url_for("index", error=f"{record.title} was already submitted."))
+    if hasattr(tracker, "find_submitted"):
+        already = tracker.find_submitted(url=record.url, company=record.company, title=record.title)
+        if already and already.id != record.id:
+            return redirect(url_for("index", error=f"{record.title} at {record.company} was already submitted."))
     busy = _running_url()
     if busy:
         return redirect(url_for("index", error=(
@@ -528,13 +617,16 @@ def stop_application(app_id: int):
     return redirect(url_for("index"))
 
 
+# What the status menu accepts (after submitting: interviewing, rejected, offer, for the Progress page).
+VALID_STATUSES = {"prepared", "form_filled", "ready_to_submit", "needs_user_review", "submitted", "skipped",
+                  "job_not_found", "already_applied", "interviewing", "rejected", "offer"}
+
+
 @app.post("/application/<int:app_id>/status")
 def change_application_status(app_id: int):
     """Updates an application's status directly from the UI (e.g. submitted, needs_user_review, etc.)."""
     new_status = (request.form.get("status") or "").strip()
-    valid_statuses = {"prepared", "form_filled", "ready_to_submit", "needs_user_review", "submitted", "skipped",
-                      "job_not_found", "interviewing", "rejected", "offer"}   # what happened after submitting, for the Progress page
-    if new_status not in valid_statuses:
+    if new_status not in VALID_STATUSES:
         return redirect(url_for("application", app_id=app_id, error="Invalid status."))
     tracker = get_tracker()
     record = next((a for a in tracker.list_all() if a.id == app_id), None)
@@ -625,119 +717,9 @@ def local_time(value: datetime | None, fmt: str = "%d %b %I:%M %p") -> str:
 # ----------------------------------------------------------------------
 # Answer Transparency Ledger & Live Agent Cockpit Backend
 # ----------------------------------------------------------------------
-_LEDGER_DB_PATH = BASE_DIR / "data" / "applications.db"
-_LEDGER_LOCK = threading.RLock()
-
-
-def init_answer_ledger() -> None:
-    """Initializes the answer transparency ledger SQLite schema."""
-    _LEDGER_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with _LEDGER_LOCK, sqlite3.connect(_LEDGER_DB_PATH) as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS application_answers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                application_key TEXT NOT NULL,
-                question_text TEXT NOT NULL,
-                final_answer TEXT NOT NULL,
-                source TEXT NOT NULL,
-                fact_reference TEXT DEFAULT '',
-                timestamp TEXT NOT NULL,
-                verification_result TEXT DEFAULT '',
-                previous_value TEXT DEFAULT '',
-                correction_reason TEXT DEFAULT '',
-                status TEXT DEFAULT 'COMMITTED'
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_answers_app ON application_answers(application_key)")
-        conn.commit()
-
-
-def record_answer_ledger(
-    application_key: str,
-    question_text: str,
-    final_answer: str,
-    source: str = "PROFILE",
-    fact_reference: str = "",
-    verification_result: str = "ACCEPTED",
-    previous_value: str = "",
-    correction_reason: str = "",
-    status: str = "COMMITTED",
-) -> int:
-    """Records or updates an answer entry in the transparency ledger."""
-    init_answer_ledger()
-    now_iso = datetime.now(timezone.utc).isoformat()
-    with _LEDGER_LOCK, sqlite3.connect(_LEDGER_DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, final_answer FROM application_answers WHERE application_key = ? AND question_text = ? ORDER BY id DESC LIMIT 1",
-            (application_key, question_text)
-        )
-        row = cursor.fetchone()
-        if row:
-            row_id, old_val = row
-            if previous_value or (old_val != final_answer):
-                prev = previous_value or old_val
-                cursor.execute("""
-                    UPDATE application_answers
-                    SET final_answer = ?, source = ?, fact_reference = ?, timestamp = ?,
-                        verification_result = ?, previous_value = ?, correction_reason = ?, status = ?
-                    WHERE id = ?
-                """, (final_answer, source, fact_reference, now_iso, verification_result, prev, correction_reason, status, row_id))
-                conn.commit()
-                return row_id
-            return row_id
-
-        cursor.execute("""
-            INSERT INTO application_answers
-            (application_key, question_text, final_answer, source, fact_reference, timestamp, verification_result, previous_value, correction_reason, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (application_key, question_text, final_answer, source, fact_reference, now_iso, verification_result, previous_value, correction_reason, status))
-        conn.commit()
-        return cursor.lastrowid or 0
-
-
-def get_answers_for_application(application_key: str) -> list[dict]:
-    """Retrieves all transparency ledger answers for a given application key."""
-    init_answer_ledger()
-    with _LEDGER_LOCK, sqlite3.connect(_LEDGER_DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM application_answers WHERE application_key = ? ORDER BY id ASC",
-            (application_key,)
-        )
-        return [dict(r) for r in cursor.fetchall()]
-
-
 def update_answer_in_ledger(answer_id: int, new_value: str) -> bool:
-    """Updates an existing answer entry (user override) and updates the answer bank."""
-    init_answer_ledger()
-    now_iso = datetime.now(timezone.utc).isoformat()
-    with _LEDGER_LOCK, sqlite3.connect(_LEDGER_DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM application_answers WHERE id = ?", (answer_id,))
-        row = cursor.fetchone()
-        if not row:
-            return False
-        old_val = row["final_answer"]
-        q_text = row["question_text"]
-        app_key = row["application_key"]
-        cursor.execute("""
-            UPDATE application_answers
-            SET final_answer = ?, source = 'USER_OVERRIDE', previous_value = ?,
-                correction_reason = 'User manual override from Cockpit', timestamp = ?, status = 'OVERRIDDEN'
-            WHERE id = ?
-        """, (new_value, old_val, now_iso, answer_id))
-        conn.commit()
-
-    try:
-        tracker = get_tracker()
-        if hasattr(tracker, "record_answer"):
-            tracker.record_answer(app_key, q_text, new_value, answered_by="user")
-    except Exception:
-        pass
-    return True
+    """A cockpit override of one answer, mirrored into the tracker's answer bank."""
+    return answer_ledger.update_answer(answer_id, new_value, tracker_factory=lambda: get_tracker())
 
 
 def _runtime_event_listener(ev):
@@ -785,174 +767,15 @@ if RuntimeEvent is not None:
     RuntimeEvent.register_listener(_runtime_event_listener)
 
 
-# ----------------------------------------------------------------------
-# Live Agent Cockpit API Routes
-# ----------------------------------------------------------------------
-@app.get("/api/cockpit-state")
-def api_cockpit_state():
-    live_url = _running_url()
-    tracker = get_tracker()
-    active_handoff = handoff.get_active_handoff()
-    is_waiting = bool(live_url and waiting_runs(_RUNS_FILE.parent))
-    
-    app_record = None
-    app_key = ""
-    if live_url:
-        if hasattr(tracker, "find_by_url"):
-            app_record = tracker.find_by_url(live_url)
-        if not app_record and hasattr(tracker, "list_all"):
-            for r in tracker.list_all():
-                if r.url == live_url:
-                    app_record = r
-                    break
-    if not app_record and hasattr(tracker, "list_all"):
-        all_apps = tracker.list_all()
-        if all_apps:
-            app_record = all_apps[0]
-
-    if app_record:
-        app_key = getattr(app_record, "dedup_key", "") or getattr(app_record, "url", "")
-
-    recent_events = []
-    if RuntimeEvent is not None:
-        recent_events = [e.as_dict() for e in reversed(RuntimeEvent.get_recent(limit=40))]
-
-    stage = "Discovery"
-    stage_step = 1
-    loop_status = "normal"
-    last_verified = "None recorded"
-    current_action = "Agent idle"
-
-    for e in recent_events:
-        if e.get("is_verified"):
-            last_verified = e.get("display_message") or e.get("event")
-            break
-
-    for e in recent_events[:6]:
-        ev_name = e.get("event", "")
-        if "LOOP" in ev_name or "CIRCUIT_BREAKER" in ev_name:
-            loop_status = "stalled"
-            break
-        elif "STALL" in ev_name or "WARNING" in ev_name:
-            loop_status = "warning"
-
-    if live_url:
-        current_action = "Agent processing form"
-        if recent_events:
-            current_action = recent_events[0].get("display_message") or recent_events[0].get("event")
-
-        rec_status = getattr(app_record, "status", "") if app_record else ""
-        if rec_status == "submitted":
-            stage = "Submitted"
-            stage_step = 5
-        elif rec_status == "ready_to_submit":
-            stage = "Review"
-            stage_step = 4
-        elif active_handoff:
-            stage = f"Challenge ({active_handoff.get('category')})"
-            stage_step = 3
-        elif rec_status == "form_filled":
-            stage = "Form Fill"
-            stage_step = 3
-        else:
-            ev_stage = recent_events[0].get("stage") if recent_events else ""
-            if ev_stage == "account":
-                stage = "Auth"
-                stage_step = 2
-            elif ev_stage == "form_filling":
-                stage = "Form Fill"
-                stage_step = 3
-            elif ev_stage == "submit":
-                stage = "Review"
-                stage_step = 4
-            else:
-                stage = "Discovery"
-                stage_step = 1
-    elif active_handoff:
-        current_action = f"Waiting for human intervention: {active_handoff.get('reason')}"
-        stage = f"Challenge ({active_handoff.get('category')})"
-        stage_step = 3
-
-    if is_waiting:
-        stage = "Waiting for you"
-        stage_step = 4 if getattr(app_record, "status", "") == "ready_to_submit" else 3
-        current_action = (getattr(app_record, "notes", "") or
-                          "Waiting for your action in the browser or Continue on the dashboard")
-
-    elapsed_seconds = 0
-    if live_url:
-        with _RUNS_LOCK:
-            run_data = _RUNS.get(live_url, {})
-            started = run_data.get("started")
-            if started:
-                if isinstance(started, datetime):
-                    tz = started.tzinfo or timezone.utc
-                    started_utc = started if started.tzinfo else started.replace(tzinfo=timezone.utc)
-                    elapsed_seconds = int((datetime.now(timezone.utc) - started_utc).total_seconds())
-                elif isinstance(started, (int, float)):
-                    elapsed_seconds = int(time.time() - started)
-
-    recent_answers = get_answers_for_application(app_key) if app_key else []
-
-    portal_name = "Direct Portal"
-    if app_record and getattr(app_record, "url", ""):
-        from urllib.parse import urlparse
-        netloc = urlparse(app_record.url).netloc
-        portal_name = netloc.replace("www.", "").split(".")[0].capitalize()
-
-    return {
-        "is_running": bool(live_url),
-        "is_waiting": is_waiting,
-        "running_url": live_url,
-        "job_title": getattr(app_record, "title", "") if app_record else "No active job",
-        "employer": getattr(app_record, "company", "") if app_record else "No active employer",
-        "portal": portal_name,
-        "stage": stage,
-        "stage_step": stage_step,
-        "current_action": current_action,
-        "last_verified_action": last_verified,
-        "loop_status": loop_status,
-        "elapsed_seconds": max(0, elapsed_seconds),
-        "active_handoff": active_handoff,
-        "recent_events": recent_events,
-        "recent_answers": recent_answers,
-    }
-
-
-@app.get("/api/events/stream")
-def api_events_stream():
-    """SSE stream emitting RuntimeEvent objects as they occur."""
-    def event_stream():
-        q = queue.Queue(maxsize=100)
-        def listener(ev):
-            try:
-                q.put_nowait(ev)
-            except Exception:
-                pass
-        if RuntimeEvent is not None:
-            RuntimeEvent.register_listener(listener)
-        try:
-            while True:
-                try:
-                    ev = q.get(timeout=15.0)
-                    yield f"data: {json.dumps(ev.as_dict())}\n\n"
-                except queue.Empty:
-                    yield ": keep-alive\n\n"
-        finally:
-            if RuntimeEvent is not None:
-                RuntimeEvent.remove_listener(listener)
-    return Response(event_stream(), mimetype="text/event-stream")
-
-
-@app.post("/api/cockpit/pause")
-def api_cockpit_pause():
-    return {"ok": False, "error": "Pause is unavailable for this run. No action was sent."}, 409
-
-
-@app.post("/api/cockpit/resume")
-def api_cockpit_resume():
-    _continue_waiting_run()
-    return {"ok": True, "status": "resumed"}
+def _signal_waiting_run(decision):
+    """Waiting notes exist before an answer file; resume creates that file."""
+    if not _running_url():
+        return 0
+    written = 0
+    for waiting in waiting_runs(_RUNS_FILE.parent):
+        (_RUNS_FILE.parent / waiting["signal"]).write_text(decision, encoding="utf-8")
+        written += 1
+    return written
 
 
 def _continue_waiting_run():
@@ -968,119 +791,6 @@ def _signal_waiting_run(decision):
         (_RUNS_FILE.parent / waiting["signal"]).write_text(decision, encoding="utf-8")
         written += 1
     return written
-
-
-@app.post("/api/cockpit/stop")
-def api_cockpit_stop():
-    return stop()
-
-
-def raise_browser_window() -> bool:
-    """Brings any visible agent Chrome / browser window to the foreground on Windows."""
-    if os.name != "nt":
-        return False
-    try:
-        import ctypes
-        from ctypes import wintypes
-        user32 = ctypes.windll.user32
-        target_hwnds = []
-
-        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-        def visit(hwnd, _):
-            length = user32.GetWindowTextLengthW(hwnd)
-            if length and (user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd)):
-                buf = ctypes.create_unicode_buffer(length + 1)
-                user32.GetWindowTextW(hwnd, buf, length + 1)
-                title = buf.value.lower()
-                if any(w in title for w in ("chrome", "chromium", "job", "apply", "greenhouse", "workday", "lever")):
-                    target_hwnds.append(hwnd)
-            return True
-
-        user32.EnumWindows(visit, 0)
-        for hwnd in target_hwnds:
-            user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
-            user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0043)
-            user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, 0x0043)
-            user32.SetForegroundWindow(hwnd)
-        return bool(target_hwnds)
-    except Exception as exc:
-        logger.debug("Failed to raise browser window: %s", exc)
-        return False
-
-
-@app.post("/api/cockpit/raise-browser")
-def api_cockpit_raise_browser():
-    try:
-        raised = raise_browser_window()
-        return {"ok": True, "raised": raised}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
-
-
-@app.post("/api/cockpit/takeover")
-def api_cockpit_takeover():
-    try:
-        raise_browser_window()
-        active_h = handoff.Handoff(
-            category=handoff.OWNER_REVIEW,
-            reason="User initiated manual browser takeover",
-            required_action="Review application in open browser and continue when ready",
-            resume_condition="User presses Continue",
-        )
-        handoff.set_active_handoff(active_h)
-        return {"ok": True}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
-
-
-@app.post("/api/handoff/resolve")
-def api_handoff_resolve():
-    data = request.form if request.form else (request.get_json(silent=True) or {})
-    handoff_id = data.get("handoff_id")
-    action = data.get("action") or "check_and_resume"
-
-    active = handoff.get_active_handoff()
-    if not active:
-        return {"ok": True, "message": "No active handoff"}
-
-    if action == "more_time":
-        return {"ok": True, "message": "Timeout extended"}
-
-    if action == "cancel":
-        handoff.clear_active_handoff()
-        return stop()
-
-    ok, msg = handoff.resolve_active_handoff()
-    if ok:
-        _continue_waiting_run()
-        return {"ok": True, "message": msg}
-    return {"ok": False, "error": msg}
-
-
-@app.post("/api/answers/update")
-def api_answers_update():
-    data = request.form if request.form else (request.get_json(silent=True) or {})
-    answer_id = data.get("answer_id")
-    new_value = data.get("new_value")
-    if not answer_id or new_value is None:
-        return {"ok": False, "error": "Missing answer_id or new_value"}, 400
-    try:
-        aid = int(answer_id)
-        success = update_answer_in_ledger(aid, str(new_value))
-        return {"ok": success}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}, 500
-
-
-@app.get("/api/application/<int:app_id>/answers")
-def api_application_answers(app_id: int):
-    tracker = get_tracker()
-    record = tracker.get(app_id) if hasattr(tracker, "get") else None
-    if not record:
-        return {"ok": False, "error": "Application not found"}, 404
-    app_key = getattr(record, "dedup_key", "") or getattr(record, "url", "")
-    answers = get_answers_for_application(app_key)
-    return {"ok": True, "answers": answers}
 
 
 @app.get("/health")
@@ -1300,11 +1010,20 @@ def index():
         employer = active_h.get("employer", "")
         stage = "Handoff"
 
+    discovered_jobs = []
+    try:
+        from job_discovery import JobDiscoveryEngine
+        discovery_engine = JobDiscoveryEngine()
+        discovered_jobs = discovery_engine.get_discovered_jobs(min_score=60, limit=12)
+    except Exception:
+        discovered_jobs = []
+
     return render_template_string(
         INDEX_HTML, apps=apps[:show], total=len(apps), shown=min(show, len(apps)),
         more=min(show + PAGE_SIZE, MAX_SHOWN), can_show_more=show < min(len(apps), MAX_SHOWN),
         groups=ui_shell.group_counts(apps), runs=latest_run(runs), signals=signals, error=request.args.get("error"),
         working_url=working_url, is_running=bool(live), job_title=job_title, employer=employer, stage=stage,
+        discovered_jobs=discovered_jobs,
     )
 
 
@@ -1321,8 +1040,8 @@ def waiting_runs(data_dir: Path) -> list[dict]:
         try:
             job = json.loads((Path(data_dir) / f"_job_{name[:-4]}.json").read_text(encoding="utf-8-sig"))
             label = f"{job.get('title', '')} at {job.get('company', '')}".strip() or label
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as _swallowed:
+            logger.debug("waiting_runs: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         found.append({"signal": f"_signal_{name}", "label": label})
     return found
 
@@ -1526,656 +1245,6 @@ def log():
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Content-Security-Policy"] = "default-src 'none'; script-src 'none'; sandbox"
     return response
-
-
-# ----------------------------------------------------------------------
-# Templates
-# ----------------------------------------------------------------------
-BASE_CSS = ui_shell.BASE_CSS     # the blueprints' pages share it
-
-
-SETTINGS_HTML = ui_shell.page("Settings", """
-<style>
-.settings { max-width:720px; }
-.settings label { display:block; margin:16px 0 6px; font-weight:600; }
-.provider-row { display:flex; align-items:center; gap:10px; margin:18px 0 6px; }
-.provider-row label { margin:0; }
-</style>
-<main class="wrap settings">
-  <div class="page-head"><div>
-    <h1>Settings</h1>
-    <p class="sub">Keys and passwords are kept on this computer, in <code>.env</code>. A saved secret is never shown again.</p>
-  </div></div>
-  {% if saved %}<div class="ok">Settings saved. Restart the dashboard before starting another application.</div>{% endif %}
-  {% if error %}<div class="err">{{ error }}</div>{% endif %}
-  <div class="card">
-    <form method="post" action="/settings">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-
-      <p class="section-title" style="margin-top:0">AI providers</p>
-      <p class="hint">Tried in order: Claude &rarr; Gemini &rarr; OpenAI. With none set, your own resume is attached as it is.</p>
-
-      <div class="provider-row">
-        <label for="anthropic_api_key">Claude (Anthropic)</label>
-        <span class="badge {% if has_claude %}active{% else %}inactive{% endif %}">{% if has_claude %}Active{% else %}Not set{% endif %}</span>
-      </div>
-      <input id="anthropic_api_key" type="password" name="anthropic_api_key"
-             placeholder="{% if has_claude %}Saved &mdash; leave blank to keep{% else %}sk-ant-...{% endif %}"
-             autocomplete="new-password">
-      <p class="hint">Get a key at <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a></p>
-
-      <div class="provider-row">
-        <label for="gemini_api_key">Gemini (Google)</label>
-        <span class="badge {% if has_gemini %}active{% else %}inactive{% endif %}">{% if has_gemini %}Active{% else %}Not set{% endif %}</span>
-      </div>
-      <input id="gemini_api_key" type="password" name="gemini_api_key"
-             placeholder="{% if has_gemini %}Saved &mdash; leave blank to keep{% else %}AQ. ... or AIza ...{% endif %}"
-             autocomplete="new-password">
-      <p class="hint">Get a key at <a href="https://aistudio.google.com" target="_blank" rel="noopener">aistudio.google.com</a> (free tier available)</p>
-
-      <div class="provider-row">
-        <label for="openai_api_key">OpenAI (GPT-4o)</label>
-        <span class="badge {% if has_openai %}active{% else %}inactive{% endif %}">{% if has_openai %}Active{% else %}Not set{% endif %}</span>
-      </div>
-      <input id="openai_api_key" type="password" name="openai_api_key"
-             placeholder="{% if has_openai %}Saved &mdash; leave blank to keep{% else %}sk-...{% endif %}"
-             autocomplete="new-password">
-      <p class="hint">Get a key at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a></p>
-
-      <p class="section-title" style="margin-top:28px">Employer site sign-in</p>
-      <label for="ats_email">Employer ATS email</label>
-      <input id="ats_email" type="email" name="ats_email" value="{{ ats_email }}"
-             placeholder="you@example.com" autocomplete="username">
-      <label for="ats_password">Employer ATS password</label>
-      <input id="ats_password" type="password" name="ats_password"
-             placeholder="{% if has_password %}Saved &mdash; leave blank to keep{% else %}Enter password{% endif %}"
-             autocomplete="new-password">
-      <p class="hint">For Workday, Greenhouse, Lever or iCIMS. Never a LinkedIn, Indeed, Dice or Google password.</p>
-
-      <button type="submit" style="margin-top:20px">Save settings</button>
-    </form>
-  </div>
-
-  {% if ai %}
-  {% macro model_label(m) -%}
-    {%- set s = ai.state.get(m) -%}
-    {{ m }}{% if s and s.why == 'daily' %} — spent until {{ s.until }}{% elif s and s.why in ('no free tier', 'missing') %} — cannot be used with this key{% elif s and s.why == 'no credit' %} — account out of credit{% elif s and s.calls %} — {{ s.calls }} today{% endif %}
-  {%- endmacro %}
-  {% macro model_options(provider, current) -%}
-    <option value="">—</option>
-    {%- set listed = ai.offered[provider].models -%}
-    {%- if current and current not in listed %}<option value="{{ current }}" selected>{{ model_label(current) }} (not in the list)</option>{% endif -%}
-    {%- for m in listed %}<option value="{{ m }}" {% if m == current %}selected{% endif %}>{{ model_label(m) }}</option>{% endfor -%}
-  {%- endmacro %}
-  {% macro writer_options(current, empty_label) -%}
-    <option value="">{{ empty_label }}</option>
-    {%- for p, name in ai.providers.items() %}
-      <optgroup label="{{ name }}{% if not ai.offered[p].has_key %} (no key yet){% endif %}">
-        {%- set listed = ai.offered[p].models -%}
-        {%- if current and current.startswith(p ~ ':') and current[p|length + 1:] not in listed %}
-          <option value="{{ current }}" selected>{{ name.split()[-1] }} · {{ current[p|length + 1:] }}</option>{% endif -%}
-        {%- for m in listed %}<option value="{{ p }}:{{ m }}" {% if current == p ~ ':' ~ m %}selected{% endif %}>{{ name.split()[-1] }} · {{ model_label(m) }}</option>{% endfor -%}
-      </optgroup>
-    {%- endfor %}
-  {%- endmacro %}
-
-  <h2 id="ai">Which AI does what</h2>
-  <p class="hint" style="margin:-4px 0 10px">Two separate choices. Answering the forms takes many small requests on
-    every application; writing the resume takes a few large ones, once per job. Neither uses the other's models,
-    so one cannot use up the other's allowance. Only models that write text are listed, as your keys offer them.
-    <a href="/settings?refresh=1#ai">Ask the providers again</a></p>
-  <form method="post" action="/settings/ai" class="ai-form">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-
-    <div class="card">
-      <h3>1. Answering the forms</h3>
-      <p class="hint">Who reads each page and answers what your profile and saved answers do not.</p>
-      <div class="choice-row" role="radiogroup" aria-label="Who answers the forms">
-        {% for value, name in [('profile', 'Profile only (no AI)'), ('gemini', 'Google Gemini'), ('claude', 'Anthropic Claude'), ('openai', 'OpenAI')] %}
-          <label class="choice"><input type="radio" name="form_answer_mode" value="{{ value }}" {% if ai.mode == value or (value == 'claude' and ai.mode not in ('profile', 'gemini', 'openai')) %}checked{% endif %}>
-            {{ name }}{% if value != 'profile' and not ai.offered[value].has_key %} <span class="muted">(no key yet)</span>{% endif %}</label>
-        {% endfor %}
-      </div>
-      {% for p, name in ai.providers.items() %}
-      <fieldset class="ladders" data-provider="{{ p }}">
-        <legend>{{ name }} models, in order</legend>
-        {% if ai.offered[p].error %}<p class="err" style="margin:6px 0">{{ ai.offered[p].error }}</p>{% endif %}
-        {% if not ai.offered[p].has_key %}<p class="hint">Add a {{ name }} key above to choose its models.</p>{% endif %}
-        <div class="grid-2">
-          {% for tier in ai.tiers %}
-          <div>
-            <p class="section-title" style="margin-top:8px">{{ 'Whole pages and written answers' if tier == 'page' else 'Quick choices and short questions' }}</p>
-            <p class="hint" style="margin-bottom:6px">{{ 'Stronger models do these better.' if tier == 'page' else 'Lighter models with bigger allowances are enough.' }}
-              Tick the ones to use. The first answers; when it runs out, the next takes over.</p>
-            <input type="hidden" name="{{ p }}_{{ tier }}_sent" value="1">
-            <ol class="picklist" aria-label="{{ name }} models for {{ 'pages' if tier == 'page' else 'quick choices' }}">
-            {% for row in ai.ladders[p ~ '_' ~ tier] %}
-              {%- set st = ai.state.get(row.model) -%}
-              <li class="pick{% if not row.on %} off{% endif %}">
-                <label class="pick-main">
-                  <input type="checkbox" name="{{ p }}_{{ tier }}_{{ loop.index }}" value="{{ row.model }}" {% if row.on %}checked{% endif %}>
-                  <span class="rank"></span>
-                  <code>{{ row.model }}</code>
-                </label>
-                <span class="pick-state">
-                  {%- if st and st.why == 'daily' %}<span class="pill needs_user_review">Spent until {{ st.until }}</span>
-                  {%- elif st and st.why == 'no free tier' %}<span class="pill skipped">No free allowance</span>
-                  {%- elif st and st.why == 'missing' %}<span class="pill skipped">Not on your key</span>
-                  {%- elif st and st.why == 'no credit' %}<span class="pill rejected">Out of credit</span>
-                  {%- elif st and st.why == 'minute' %}<span class="pill form_filled">Paused a moment</span>
-                  {%- else %}<span class="pill submitted">Ready{% if st and st.calls %} · {{ st.calls }} today{% endif %}</span>{% endif -%}
-                </span>
-                <span class="pick-move">
-                  <button type="button" class="ghost small" data-move="-1" aria-label="Move {{ row.model }} up">&uarr;</button>
-                  <button type="button" class="ghost small" data-move="1" aria-label="Move {{ row.model }} down">&darr;</button>
-                </span>
-              </li>
-            {% else %}
-              <li class="hint" style="padding:8px 10px">No models listed yet.</li>
-            {% endfor %}
-            </ol>
-          </div>
-          {% endfor %}
-        </div>
-      </fieldset>
-      {% endfor %}
-    </div>
-
-    <div class="card">
-      <h3>2. Writing the resume and cover letter</h3>
-      <p class="hint">Written once per job and kept: a retry, Resume or a restart uses the same resume.</p>
-      <label class="stack">First choice
-        <select name="resume_writer">{{ writer_options(ai.writer, 'Automatic: Claude, then Gemini, then OpenAI (whichever has a key)') }}</select></label>
-      <label class="stack">If the first cannot write it
-        <select name="resume_writer_fallback">{{ writer_options(ai.writer_fallback, 'No second choice (attach your own resume)') }}</select></label>
-      <p class="hint">Whichever writes it, anything your resume does not show is taken out before it is sent.</p>
-    </div>
-
-    <button type="submit">Save AI choices</button>
-    <p class="hint">Saved choices apply to the next application; no restart needed.</p>
-  </form>
-  <style>
-    .choice-row { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 4px; }
-    .choice { display:flex !important; align-items:center; gap:8px; margin:0 !important; padding:8px 12px; font-weight:500 !important;
-              border:1px solid var(--line); border-radius:var(--radius-sm); cursor:pointer; background:var(--surface); }
-    .choice:has(input:checked) { border-color:var(--accent); background:var(--accent-soft); }
-    .ladders { border:0; padding:0; margin:14px 0 0; }
-    .ladders legend { font-weight:650; padding:0; }
-    .picklist { list-style:none; margin:4px 0 0; padding:0; border:1px solid var(--line); border-radius:var(--radius-sm);
-                counter-reset:rank; }
-    .pick { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; padding:7px 10px; border-top:1px solid var(--line-2); }
-    .pick:first-child { border-top:0; }
-    .pick.off { opacity:.55; }
-    .pick.off .pick-move { visibility:hidden; }
-    .pick-main { display:flex !important; align-items:center; gap:10px; margin:0 !important; flex:1 1 190px; min-width:0;
-                 font-weight:500 !important; cursor:pointer; }
-    .pick-main code { background:none; padding:0; font-size:13px; overflow-wrap:anywhere; }
-    .pick-state { margin-left:auto; }
-    .ai-form .grid-2 { grid-template-columns:repeat(auto-fit, minmax(min(100%, 340px), 1fr)); }
-    .pick:not(.off) { counter-increment:rank; }
-    .pick:not(.off) .rank::before { content:counter(rank); }
-    .rank { width:16px; color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; text-align:right; }
-    .pick-state .pill { font-size:11px; padding:2px 8px; }
-    .pick-move { display:flex; gap:4px; }
-    .pick-move button { padding:2px 8px; }
-    .stack { display:block; margin:14px 0 6px; }
-    .stack select { margin-top:6px; }
-    .settings { max-width:980px; }
-  </style>
-  <script>
-    (() => {
-      const radios = [...document.querySelectorAll('input[name=form_answer_mode]')];
-      const sets = [...document.querySelectorAll('fieldset.ladders')];
-      function show() {
-        const mode = (radios.find(r => r.checked) || {}).value;
-        // Only the chosen provider's lists are shown -- and only they are sent, so the others keep their saved order.
-        sets.forEach(f => { const on = f.dataset.provider === mode; f.hidden = !on; f.disabled = !on; });
-      }
-      radios.forEach(r => r.addEventListener('change', show));
-      show();
-      // A ticked model is tried in the order shown; the arrows move it, and unticked ones sit below.
-      function renumber(list) {
-        const prefix = list.previousElementSibling.name.replace(/_sent$/, '');
-        [...list.querySelectorAll('li.pick')].forEach((li, i) => {
-          const box = li.querySelector('input[type=checkbox]');
-          box.name = prefix + '_' + (i + 1);
-          li.classList.toggle('off', !box.checked);
-        });
-      }
-      document.querySelectorAll('.picklist').forEach(list => {
-        list.addEventListener('click', e => {
-          const button = e.target.closest('button[data-move]');
-          if (!button) return;
-          const li = button.closest('li');
-          const step = Number(button.dataset.move);
-          const other = step < 0 ? li.previousElementSibling : li.nextElementSibling;
-          if (other && other.matches('li.pick:not(.off)')) {
-            if (step < 0) list.insertBefore(li, other); else list.insertBefore(other, li);
-            renumber(list);
-            button.focus();
-          }
-        });
-        list.addEventListener('change', e => {
-          const li = e.target.closest('li.pick');
-          if (!li) return;
-          // Ticking puts a model at the end of the ticked ones; unticking moves it below them.
-          const ticked = [...list.querySelectorAll('li.pick')].filter(x => x !== li && x.querySelector('input').checked);
-          const last = ticked[ticked.length - 1];
-          if (last) last.after(li); else list.prepend(li);
-          renumber(list);
-        });
-      });
-    })();
-  </script>
-  {% endif %}
-</main>
-""")
-
-
-INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
-<main class="wrap">
-  <div class="page-head"><div>
-    <h1>Applications</h1>
-    <p class="sub">Paste a job link. The agent fills the form from your profile and saved answers, asks you only what
-      it can't know, and stops at Review for you to submit.</p>
-  </div></div>
-
-  <div class="stats">
-    <div class="stat tone-info"><b>{{ total }}</b><span>Tracked</span></div>
-    <div class="stat tone-ok"><b>{{ groups.done }}</b><span>Submitted</span></div>
-    <div class="stat tone-warn{% if groups.needs %} hot{% endif %}"><b>{{ groups.needs }}</b><span>Waiting for you</span></div>
-    <div class="stat tone-violet"><b>{{ groups.talking }}</b><span>Interviews &amp; offers</span></div>
-    <div class="stat tone-grey"><b>{{ groups.skipped }}</b><span>Skipped</span></div>
-  </div>
-
-  {% if error %}<div class="err" role="alert">{{ error }}</div>{% endif %}
-
-  <div class="card apply-card">
-    <form class="apply" method="post" action="/apply">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input type="url" name="url" required aria-label="Job posting link"
-             placeholder="Paste a job link: Workday, Greenhouse, Lever, Ashby, iCIMS...">
-      <button type="submit">Apply</button>
-    </form>
-    <p class="hint">Only employers' own sites. Job boards and staffing agencies are refused.</p>
-  </div>
-
-  <!-- Live Agent Cockpit Component -->
-  {% include 'cockpit_card.html' %}
-
-  {% set waiting = apps | selectattr('status', 'in', ['ready_to_submit', 'needs_user_review', 'BLOCKED_VALIDATION_LOOP']) | rejectattr('url', 'equalto', working_url or '-') | list %}
-  {% if working_url %}
-    <div class="card" style="margin-bottom:12px"><strong>The agent is working</strong>
-      <div class="hint">It is filling the form in its browser. When it stops for you, <em>Needs you</em> shows
-        <strong>Continue</strong>, <strong>Resume</strong>, <strong>Skip</strong>, <strong>Close browser</strong>
-        and <strong>Reload</strong>.</div></div>
-  {% endif %}
-  {% if signals or waiting %}
-    <h2>Needs you</h2>
-    <div class="card attention">
-      {% if signals %}
-        <p class="hint" style="margin:0 0 6px">The agent is waiting in its browser. Deal with what it stopped for,
-          then press <strong>Continue</strong> and it reads the page again. <strong>Resume</strong> does the same
-          with the agent's latest logic; <strong>Reload</strong> starts the application again from the posting.</p>
-        {% for s in signals %}
-          <div class="item">
-            <div><strong>{{ s.label }}</strong><div class="hint">Paused in the browser</div></div>
-            <div class="actions">
-              <form method="post" action="/signal/{{ s.signal }}" class="actions">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button name="decision" value="continue" title="You dealt with it: the agent reads the page again and carries on">Continue</button>
-                <button class="ghost" name="decision" value="reload_code" title="Carry on from this page with the agent's latest logic -- the form stays as it is">Resume</button>
-                <button class="ghost" name="decision" value="skip">Skip</button>
-                <button class="ghost" name="decision" value="close">Close browser</button>
-              </form>
-              <form method="post" action="/restart" class="actions"
-                    onsubmit="return confirm('Start this application again from the posting, with the latest logic? This browser closes; nothing is submitted, and what the site saved stays saved.')">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button class="ghost" title="Close this run and start the application again from its posting, with the agent's latest logic">Reload</button>
-              </form>
-            </div>
-          </div>
-        {% endfor %}
-      {% endif %}
-      {% for a in waiting[:5] %}
-        <div class="item">
-          <div style="min-width:0">
-            <a href="/application/{{ a.id }}"><strong>{{ a.title }}</strong></a>
-            <span class="muted">at {{ a.company }}</span>
-            <span class="pill {{ status_class(a.status) }}" style="margin-left:6px">{{ status_label(a.status) }}</span>
-            {% if a.notes %}<div class="hint clamp-2">{{ a.notes[:220] }}</div>{% endif %}
-          </div>
-          <div class="actions">
-            <a href="{{ a.last_page_url or a.url }}" target="_blank" rel="noopener"><button class="ghost" type="button">Open form &rarr;</button></a>
-          </div>
-        </div>
-      {% endfor %}
-      {% if waiting|length > 5 %}<p class="hint">and {{ waiting|length - 5 }} more in the list below</p>{% endif %}
-    </div>
-  {% endif %}
-
-  {% if runs %}
-    <h2>Current run</h2>
-    {% for url, r in runs.items() %}
-    <div class="card run">
-      <div class="where">
-        <div>
-          {% if r.state == 'running' %}<span class="live">{{ 'Waiting for you' if signals else 'Running' }}</span>{% else %}<span class="pill">{{ r.state }}</span>{% endif %}
-          {% if r.title %}<strong style="margin-left:8px">{{ r.title }}</strong>{% endif %}
-          {% if r.company %}<span class="muted"> at {{ r.company }}</span>{% endif %}
-        </div>
-        <a class="url truncate" href="{{ url }}" target="_blank" rel="noopener" title="{{ url }}">{{ url }}</a>
-        {% if r.last_page_url and r.last_page_url != url %}
-          <span class="url truncate" title="{{ r.last_page_url }}">Now at: {{ r.last_page_url }}</span>
-        {% endif %}
-        {% if r.started %}<div class="links"><span class="muted">Started {{ r.started|local }}</span></div>{% endif %}
-      </div>
-      <div class="row-actions">
-        {% if r.log %}<a href="/log?path={{ r.log }}" target="_blank"><button class="ghost" type="button" title="What the agent did, step by step">View log</button></a>{% endif %}
-        {% if r.screenshot %}<a href="/evidence?path={{ r.screenshot }}" target="_blank"><button class="ghost" type="button">View screen</button></a>{% endif %}
-        {% if r.app_id %}<a href="/application/{{ r.app_id }}"><button class="ghost" type="button">Details</button></a>{% endif %}
-        {% if r.state == 'running' %}
-        <form method="post" action="/reload-agent">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <button class="ghost" title="Load edited agent code into this run without restarting it">Reload agent code</button>
-        </form>
-        <form method="post" action="/stop"
-              onsubmit="return confirm('Stop this application and close its browser? Nothing will be submitted, and you can start it again.')">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <input type="hidden" name="url" value="{{ url }}">
-          <button class="ghost danger">Stop</button>
-        </form>
-        {% endif %}
-      </div>
-    </div>
-    {% endfor %}
-  {% endif %}
-
-  <h2>All applications <span class="count">{{ total }}</span></h2>
-  <div class="card flush">
-    {% if apps %}
-    <div class="toolbar">
-      <div class="chips" role="group" aria-label="Filter by status">
-        <button type="button" class="chip" data-filter="all" aria-pressed="true">All</button>
-        <button type="button" class="chip" data-filter="needs" aria-pressed="false">Needs you<span class="n">{{ groups.needs }}</span></button>
-        <button type="button" class="chip" data-filter="working" aria-pressed="false">In progress<span class="n">{{ groups.working }}</span></button>
-        <button type="button" class="chip" data-filter="done" aria-pressed="false">Submitted<span class="n">{{ groups.done }}</span></button>
-        <button type="button" class="chip" data-filter="skipped" aria-pressed="false">Skipped<span class="n">{{ groups.skipped }}</span></button>
-      </div>
-      <input type="search" id="app-search" placeholder="Search company or role" aria-label="Search applications">
-    </div>
-    {% endif %}
-    <table class="fixed cards" id="apps">
-      <colgroup><col style="width:27%"><col><col style="width:160px"><col style="width:132px"><col style="width:168px"></colgroup>
-      <thead><tr class="head"><th class="company">Company</th><th>Role</th><th>Status</th><th class="when">Updated</th><th class="actions">Actions</th></tr></thead>
-      <tbody>
-      {% for a in apps %}
-      <tr class="app" data-group="{{ status_group(a.status) }}" data-text="{{ (a.company ~ ' ' ~ a.title ~ ' ' ~ (a.location or ''))|lower }}">
-        <td class="company">
-          <strong class="truncate" title="{{ a.company }}">{{ a.company }}</strong>
-          <span class="loc truncate" title="{{ a.location or '' }}">{{ a.location or '—' }}</span>{# kept when empty: rows stay one height #}
-        </td>
-        <td class="role"><a href="/application/{{ a.id }}" class="clamp-2" title="{{ a.title }}" style="color:var(--ink)">{{ a.title }}</a></td>
-        <td class="status"><span class="pill {{ status_class(a.status) }}" title="{{ a.status }}">{{ status_label(a.status) }}</span></td>
-        <td class="when">{{ a.updated_at|local }}</td>
-        <td class="actions"><div class="row-actions">
-          {% if a.status != 'submitted' %}
-            <form method="post" action="/resume/{{ a.id }}">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <button class="ghost small" title="{{ 'Reopen the part-filled form at ' + a.last_page_url[:80] if a.last_page_url else 'Start this application again from the posting' }} -- the resume and answers already stored are reused">Resume</button>
-            </form>
-          {% else %}
-            <a href="/application/{{ a.id }}"><button class="ghost small" type="button">Details</button></a>
-          {% endif %}
-          <details class="menu">
-            <summary aria-label="More actions for {{ a.company }}" title="More actions">&#8943;</summary>
-            <div class="menu-items">
-              <a href="/application/{{ a.id }}"><button type="button">Details</button></a>
-              {% if a.status != 'submitted' %}
-                <form method="post" action="/application/{{ a.id }}/status">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                  <input type="hidden" name="status" value="submitted">
-                  <input type="hidden" name="next" value="/">
-                  <button title="Mark this application as submitted">Mark submitted</button>
-                </form>
-                <form method="post" action="/stop-application/{{ a.id }}">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                  <button title="Stop the run working on this application and close its browser. Nothing is submitted and the application is kept.">Stop its run</button>
-                </form>
-              {% endif %}
-              <hr>
-              <form method="post" action="/delete/{{ a.id }}"
-                    onsubmit="return confirm('Delete {{ a.company }} -- {{ a.title[:60] }}?\\n\\nThis removes the application, its documents, its answers and its history. It cannot be undone.');">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button class="danger" title="Remove this application and everything filed under it">Delete</button>
-              </form>
-            </div>
-          </details>
-        </div></td>
-      </tr>
-      {% else %}
-      <tr><td colspan="5"><div class="empty"><b>Nothing tracked yet</b>Paste a job link above to start your first application.</div></td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    <div class="empty" id="no-match" hidden><b>No matches</b>Nothing shown here fits that filter.</div>
-    <div class="more">
-      <span class="muted">Showing {{ shown }} of {{ total }}</span>
-      {% if can_show_more %}
-        <a href="/?show={{ more }}"><button class="ghost" type="button">Show {{ more - shown }} more</button></a>
-      {% elif total > 10 %}
-        <a href="/?show=10"><button class="ghost" type="button">Show fewer</button></a>
-      {% endif %}
-    </div>
-  </div>
-</main>
-<script>
-(() => {
-  const rows = [...document.querySelectorAll("#apps tr.app")];
-  const chips = [...document.querySelectorAll(".chip[data-filter]")];
-  const search = document.getElementById("app-search");
-  const none = document.getElementById("no-match");
-  let group = "all";
-  try { group = sessionStorage.getItem("apps-filter") || "all"; } catch (e) {}
-  function apply() {
-    const q = (search && search.value || "").trim().toLowerCase();
-    let shown = 0;
-    rows.forEach(r => {
-      const ok = (group === "all" || r.dataset.group === group) && (!q || r.dataset.text.includes(q));
-      r.hidden = !ok; if (ok) shown++;
-    });
-    chips.forEach(c => c.setAttribute("aria-pressed", String(c.dataset.filter === group)));
-    if (none) none.hidden = shown > 0 || !rows.length;
-  }
-  chips.forEach(c => c.addEventListener("click", () => {
-    group = c.dataset.filter;
-    try { sessionStorage.setItem("apps-filter", group); } catch (e) {}
-    apply();
-  }));
-  if (search) search.addEventListener("input", apply);
-  // One row menu open at a time; a click elsewhere closes it.
-  document.addEventListener("click", e => {
-    document.querySelectorAll("details.menu[open]").forEach(d => { if (!d.contains(e.target)) d.open = false; });
-  });
-  apply();
-})();
-</script>
-""")
-
-DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
-<main class="wrap">
-  <p class="crumbs"><a href="/">Applications</a> / {{ a.company }}</p>
-  <div class="page-head">
-    <div style="min-width:0">
-      <h1>{{ a.title }}</h1>
-      <div class="head-facts">
-        <strong style="color:var(--ink)">{{ a.company }}</strong>
-        {% if a.location %}<span>{{ a.location }}</span>{% endif %}
-        <span class="pill {{ status_class(a.status) }}">{{ status_label(a.status) }}</span>
-        <a href="{{ a.url }}" target="_blank" rel="noopener">Open posting &rarr;</a>
-        {% if run_log %}<a href="/log?path={{ run_log }}" target="_blank">View log</a>{% endif %}
-      </div>
-    </div>
-    <form method="post" action="/application/{{ a.id }}/status" style="display:flex; align-items:center; gap:8px; margin:0">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label for="status-select" class="muted" style="font-size:13px; white-space:nowrap">Change status</label>
-      <select id="status-select" name="status" style="width:auto; padding:7px 10px">
-        <option value="needs_user_review" {% if a.status == 'needs_user_review' %}selected{% endif %}>Needs you</option>
-        <option value="submitted" {% if a.status == 'submitted' %}selected{% endif %}>Submitted</option>
-        <option value="ready_to_submit" {% if a.status == 'ready_to_submit' %}selected{% endif %}>Ready to submit</option>
-        <option value="form_filled" {% if a.status == 'form_filled' %}selected{% endif %}>Filling in</option>
-        <option value="prepared" {% if a.status == 'prepared' %}selected{% endif %}>Prepared</option>
-        <option value="skipped" {% if a.status == 'skipped' %}selected{% endif %}>Skipped</option>
-        <option value="job_not_found" {% if a.status == 'job_not_found' %}selected{% endif %}>Job doesn't exist</option>
-        <option value="interviewing" {% if a.status == 'interviewing' %}selected{% endif %}>Interviewing</option>
-        <option value="rejected" {% if a.status == 'rejected' %}selected{% endif %}>Rejected</option>
-        <option value="offer" {% if a.status == 'offer' %}selected{% endif %}>Offer</option>
-      </select>
-      <button type="submit" class="small">Update</button>
-    </form>
-  </div>
-
-  <div class="card">
-    <ol class="stepper" aria-label="Progress">
-      {% for name in ['Prepared', 'Filling in', 'Ready to submit', 'Submitted'] %}
-        <li class="{{ 'done' if loop.index <= progress.step }}{{ ' blocked' if progress.blocked and loop.index == progress.step + 1 }}">{{ name }}</li>
-      {% endfor %}
-    </ol>
-    <p style="margin:0"><strong>Step {{ progress.step }} of {{ progress.of }}</strong>
-       {% if progress.blocked %}<span class="pill needs_user_review" style="margin-left:6px">Needs you</span>{% endif %}</p>
-    {% if a.notes %}<p class="muted" style="margin:6px 0 0">{{ a.notes }}</p>{% endif %}
-    {% if handoff and handoff.category %}
-      <p class="section-title">What to do ({{ handoff.category.replace('_', ' ').title() }})</p>
-      <ul class="plain">
-        {% if handoff.required_action %}<li>{{ handoff.required_action }}</li>{% endif %}
-        {% if handoff.resume_condition %}<li class="muted">The agent continues once: {{ handoff.resume_condition }}</li>{% endif %}
-      </ul>
-    {% endif %}
-    {% if progress.missing or progress.errors or progress.attestations or progress.captcha %}
-      <p class="section-title">Still to do</p>
-      <ul class="plain">
-        {% for m in progress.missing %}<li>Blank: {{ m }}</li>{% endfor %}
-        {% for e in progress.errors %}<li>Error: {{ e }}</li>{% endfor %}
-        {% for s in progress.attestations %}<li>Your signature or attestation: {{ s }}</li>{% endfor %}
-        {% if progress.captcha %}<li>A CAPTCHA is showing &mdash; only you can complete it</li>{% endif %}
-      </ul>
-    {% else %}
-      <p class="hint">Nothing outstanding on the last check.</p>
-    {% endif %}
-  </div>
-
-  <div class="grid-2">
-    <div>
-      {% if latest_screenshot %}
-      <h2 style="margin-top:8px">What the agent sees</h2>
-      <a class="shot" href="/evidence?path={{ latest_screenshot }}" target="_blank" title="Open the full image">
-        <img src="/evidence?path={{ latest_screenshot }}" alt="The latest page the agent captured">
-      </a>
-      {% endif %}
-      <h2{% if not latest_screenshot %} style="margin-top:8px"{% endif %}>About</h2>
-      <div class="card flush">
-        <table>
-          <tr><th class="label">Applied via</th><td><a class="truncate" style="display:block" href="{{ a.url }}" target="_blank" rel="noopener" title="{{ a.url }}">{{ a.url }}</a></td></tr>
-          <tr><th class="label">Created</th><td class="when">{{ a.created_at|local('%d %b %Y %I:%M %p') }}</td></tr>
-          <tr><th class="label">Updated</th><td class="when">{{ a.updated_at|local('%d %b %Y %I:%M %p') }}</td></tr>
-        </table>
-      </div>
-    </div>
-    <div>
-      <h2 style="margin-top:8px">Documents</h2>
-      <div class="card flush">
-        <table>
-          <thead><tr><th>File</th><th class="num">Size</th><th class="when">Stored</th></tr></thead>
-          {% for d in docs %}
-          <tr>
-            <td><a href="/document/{{ d.id }}" target="_blank">{{ d.filename }}</a>
-                <div class="hint">{{ d.kind.replace('_',' ') }} ·
-                  {% if d.current %}<span class="pill submitted">In use</span>{% else %}<span class="pill skipped">Earlier attempt</span>{% endif %}</div></td>
-            <td class="num muted">{{ '%.1f'|format(d.byte_size/1024) }} KB</td>
-            <td class="when">{{ d.created_at|local }}</td>
-          </tr>
-          {% else %}
-          <tr><td colspan="3" class="muted">No documents stored.</td></tr>
-          {% endfor %}
-        </table>
-      </div>
-
-      <h2>Verified auto-submit</h2>
-      <div class="card">
-        <p class="hint" style="margin-top:0">Setting: <strong>{{ 'on' if auto_submit_on else 'off' }}</strong>
-           (AUTO_SUBMIT_VERIFIED_ONLY). The agent submits once every mandatory field is filled and the form shows no error.</p>
-        {% if decision %}
-          <p><span class="pill {{ 'submitted' if decision.eligible else 'needs_user_review' }}">{{ 'Eligible' if decision.eligible else 'Not eligible' }}</span>
-             <span class="muted">decided {{ decision.decided_at }}</span></p>
-          {% if decision.reasons %}
-            <ul class="plain">{% for r in decision.reasons %}<li>{{ r }}</li>{% endfor %}</ul>
-          {% endif %}
-          {% if decision.evidence_paths %}
-            <p class="hint">Evidence:
-              {% for name, path in decision.evidence_paths.items() %}
-                <a href="/evidence?path={{ path }}" target="_blank">{{ name }}</a>{{ ", " if not loop.last }}
-              {% endfor %}
-            </p>
-          {% endif %}
-        {% else %}
-          <p class="muted" style="margin:0">No decision recorded for this application yet.</p>
-        {% endif %}
-      </div>
-    </div>
-  </div>
-
-  {% if decision and decision.field_comparisons %}
-  <h2>Fields checked</h2>
-  <div class="card flush">
-    <table>
-      <thead><tr><th>Field</th><th>On the form</th><th>Approved value</th><th class="label">Source</th><th>Match</th></tr></thead>
-      {% for c in decision.field_comparisons %}
-        <tr>
-          <td>{{ c.label }}</td><td>{{ c.on_form }}</td><td>{{ c.approved }}</td>
-          <td class="muted">{{ c.source }}</td>
-          <td>{% if c.matches %}<span class="pill submitted">match</span>
-              {% elif c.required %}<span class="pill needs_user_review">check</span>
-              {% else %}<span class="muted">optional</span>{% endif %}</td>
-        </tr>
-      {% endfor %}
-    </table>
-  </div>
-  {% endif %}
-
-  <h2>Answers given</h2>
-  <div class="card flush">
-    <table>
-      <thead><tr><th style="width:45%">Question</th><th>Answer</th><th class="label">By</th></tr></thead>
-      {% for q in answers %}
-      <tr><td>{{ q.question }}</td><td>{{ q.answer }}</td><td class="label">{{ q.answered_by }}</td></tr>
-      {% else %}
-      <tr><td colspan="3" class="muted">No answers recorded for this application.</td></tr>
-      {% endfor %}
-    </table>
-  </div>
-
-  <h2>History</h2>
-  <div class="card flush">
-    <table>
-      <thead><tr><th class="when">When</th><th class="label">Kind</th><th>What happened</th><th class="actions">Evidence</th></tr></thead>
-      {% for e in events %}
-        <tr>
-          <td class="when">{{ e.created_at|local }}</td>
-          <td class="muted">{{ e.kind }}</td>
-          <td>{{ (e.message or '')[:160] }}</td>
-          <td class="actions">
-            {%- if e.screenshot_path %}<a href="/evidence?path={{ e.screenshot_path }}" target="_blank">screenshot</a>{% endif -%}
-            {%- if e.screenshot_path and e.html_path %} &middot; {% endif -%}
-            {%- if e.html_path %}<a href="/evidence?path={{ e.html_path }}" target="_blank">html</a>{% endif -%}
-          </td>
-        </tr>
-      {% else %}
-        <tr><td colspan="4" class="muted">No events recorded yet.</td></tr>
-      {% endfor %}
-    </table>
-  </div>
-</main>
-""")
 
 
 def serve() -> None:

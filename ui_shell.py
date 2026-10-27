@@ -17,7 +17,7 @@ FAVICON = "data:image/svg+xml," + LOGO_SVG.replace("#", "%23").replace('"', "'")
 BASE_CSS = """
 :root {
   --bg:#f5f7fb; --surface:#ffffff; --surface-2:#f8fafd; --ink:#101828; --ink-2:#344054; --muted:#667085;
-  --line:#e4e7ec; --line-2:#eef1f6; --accent:#2f5bd3; --accent-ink:#ffffff; --accent-soft:#eaf0ff;
+  --line:#e4e7ec; --line-2:#eef1f6; --accent:#2f5bd3; --accent-ink:#ffffff; --ok-ink:#ffffff; --accent-soft:#eaf0ff;
   --ok:#067647; --ok-soft:#dcfae6; --warn:#b54708; --warn-soft:#fef0c7; --bad:#b42318; --bad-soft:#fee4e2;
   --info:#175cd3; --info-soft:#d1e9ff; --violet:#6941c6; --violet-soft:#f4ebff; --grey-soft:#f2f4f7;
   --radius:12px; --radius-sm:8px; --shadow:0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.06);
@@ -27,7 +27,7 @@ BASE_CSS = """
 @media (prefers-color-scheme: dark) {
   :root {
     --bg:#0c111d; --surface:#161b26; --surface-2:#1b2230; --ink:#f5f5f6; --ink-2:#cecfd2; --muted:#94969c;
-    --line:#2a3140; --line-2:#222938; --accent:#5b83f0; --accent-soft:#1d2a4d; --ok:#47cd89; --ok-soft:#0b2a1c;
+    --line:#2a3140; --line-2:#222938; --accent:#7b9af4; --accent-ink:#0b1020; --ok-ink:#04140c; --accent-soft:#1d2a4d; --ok:#47cd89; --ok-soft:#0b2a1c;
     --warn:#fdb022; --warn-soft:#3a2a0a; --bad:#f97066; --bad-soft:#3b1414; --info:#53b1fd; --info-soft:#0e2940;
     --violet:#b692f6; --violet-soft:#2a1d47; --grey-soft:#222938; --shadow:none; --shadow-lg:0 12px 24px rgba(0,0,0,.4);
     color-scheme: dark;
@@ -36,7 +36,7 @@ BASE_CSS = """
 * { box-sizing:border-box; }
 html { -webkit-text-size-adjust:100%; }
 body { margin:0; background:var(--bg); color:var(--ink);
-       font:14px/1.55 "Inter","Segoe UI Variable Text","Segoe UI",-apple-system,Roboto,Helvetica,Arial,sans-serif;
+       font:15px/1.6 "Inter","Segoe UI Variable Text","Segoe UI",-apple-system,Roboto,Helvetica,Arial,sans-serif;
        -webkit-font-smoothing:antialiased; }
 a { color:var(--accent); text-decoration:none; }
 a:hover { text-decoration:underline; }
@@ -100,21 +100,15 @@ button, .button { display:inline-flex; align-items:center; justify-content:cente
 button:hover { filter:brightness(1.07); }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible
   { outline:3px solid color-mix(in srgb, var(--accent) 40%, transparent); outline-offset:2px; }
-button.ghost { background:var(--surface); color:var(--ink-2); border-color:var(--line); font-weight:500; padding:6px 12px; }
-button.ghost:hover { background:var(--surface-2); filter:none; }
-button.small { padding:5px 10px; font-size:13px; }
+button.ghost, .button.ghost { background:var(--surface); color:var(--ink-2); border-color:var(--line); font-weight:500; padding:6px 12px; }
+button.ghost:hover, .button.ghost:hover { background:var(--surface-2); filter:none; }
+button.small, .button.small { padding:5px 12px; font-size:13.5px; }
 button.danger { color:var(--bad); }
-button.success { color:var(--ok); }
 input[type=text], input[type=url], input[type=email], input[type=number], input[type=password], input[type=search],
 select, textarea { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:var(--radius-sm);
   background:var(--surface); color:var(--ink); font:inherit; }
 input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent);
   box-shadow:0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent); }
-form.apply { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-form.apply input[type=url] { flex:1; min-width:260px; padding:12px 14px; font-size:15px; }
-form.apply button { padding:12px 22px; font-size:15px; }
-.apply-card { background:linear-gradient(135deg, var(--accent-soft), var(--surface) 60%); }
-.apply-card label { display:block; font-weight:600; margin-bottom:8px; }
 
 /* --- status pills ------------------------------------------------------------------------------- */
 .pill { display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:99px; font-size:12px;
@@ -123,10 +117,48 @@ form.apply button { padding:12px 22px; font-size:15px; }
 .pill.submitted { background:var(--ok-soft); color:var(--ok); }
 .pill.ready_to_submit { background:var(--info-soft); color:var(--info); }
 .pill.needs_user_review, .pill.blocked_validation_loop { background:var(--warn-soft); color:var(--warn); }
-.pill.form_filled, .pill.prepared { background:var(--accent-soft); color:var(--accent); }
+.pill.form_filled, .pill.prepared, .pill.ready_to_apply { background:var(--accent-soft); color:var(--accent); }
 .pill.interviewing, .pill.offer { background:var(--violet-soft); color:var(--violet); }
 .pill.rejected { background:var(--bad-soft); color:var(--bad); }
-.pill.skipped, .pill.disqualified_policy_mismatch, .pill.job_not_found { background:var(--grey-soft); color:var(--muted); }
+.pill.skipped, .pill.disqualified_policy_mismatch, .pill.job_not_found, .pill.already_applied { background:var(--grey-soft); color:var(--muted); }
+
+/* --- accessibility and shared components ------------------------------------------------------------ */
+[hidden] { display:none !important; }
+.sr-only { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip:rect(0 0 0 0);
+           white-space:nowrap; border:0; }
+.skip-link { position:absolute; left:12px; top:-60px; z-index:100; background:var(--ink); color:var(--surface);
+             padding:10px 16px; border-radius:var(--radius-sm); font-weight:600; }
+.skip-link:focus { top:12px; text-decoration:none; }
+main:focus { outline:none; }
+button:disabled { opacity:.5; cursor:not-allowed; filter:none; }
+.button:hover { text-decoration:none; }
+button, .button { min-height:38px; transition:background-color .15s, border-color .15s, box-shadow .15s, transform .15s; }
+button:active:not(:disabled) { transform:translateY(1px); }
+button.ghost.small, button.small, .button.small { min-height:32px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration:.001ms !important; animation-iteration-count:1 !important;
+                           transition-duration:.001ms !important; scroll-behavior:auto !important; }
+}
+@media (forced-colors: active) { .pill, .badge, button { border:1px solid ButtonText; } }
+dialog { border:1px solid var(--line); border-radius:var(--radius); padding:0; background:var(--surface); color:var(--ink);
+         box-shadow:var(--shadow-lg); width:min(440px, calc(100vw - 32px)); }
+dialog::backdrop { background:rgba(12,17,29,.55); backdrop-filter:blur(3px); }
+dialog form { margin:0; }
+dialog .dlg-body { padding:20px 22px 8px; }
+dialog .dlg-body h2 { margin:0 0 6px; font-size:17px; }
+dialog .dlg-body p { margin:0 0 10px; color:var(--ink-2); }
+dialog .dlg-foot { display:flex; justify-content:flex-end; gap:8px; padding:12px 22px 18px; }
+dialog textarea, dialog input[type=text] { margin-top:6px; }
+.toast { position:fixed; left:50%; bottom:22px; transform:translateX(-50%) translateY(20px); opacity:0; pointer-events:none;
+         background:var(--ink); color:var(--surface); padding:11px 18px; border-radius:99px; box-shadow:var(--shadow-lg);
+         font-weight:500; z-index:90; transition:opacity .2s, transform .2s; max-width:calc(100vw - 32px); }
+.toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+.toast.bad { background:var(--bad); color:#fff; }
+
+.pill.submitted::before { content:"\\2713"; width:auto; height:auto; background:none; font-size:11px; line-height:1; }
+.pill.needs_user_review::before, .pill.blocked_validation_loop::before { content:"!"; width:auto; height:auto; background:none;
+  font-size:12px; line-height:1; font-weight:800; }
+.pill.rejected::before { content:"\\00d7"; width:auto; height:auto; background:none; font-size:13px; line-height:1; }
 
 /* --- tables --------------------------------------------------------------------------------------- */
 table { width:100%; border-collapse:collapse; }
@@ -135,17 +167,13 @@ th { color:var(--muted); font-weight:600; font-size:12px; white-space:nowrap; ba
      border-bottom:1px solid var(--line); }
 tbody tr:hover td { background:var(--surface-2); }
 tr:last-child td { border-bottom:0; }
-table.fixed { table-layout:fixed; }
 .truncate { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.clamp-2 { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
 td.company strong { display:block; font-weight:600; }
 td.company .loc { display:block; color:var(--muted); font-size:12.5px; }
 td.when, th.when { white-space:nowrap; color:var(--muted); font-variant-numeric:tabular-nums; }
 td.actions, th.actions { text-align:right; white-space:nowrap; }
 td.num, th.num { text-align:right; white-space:nowrap; }
 td.label, th.label { width:150px; white-space:nowrap; color:var(--muted); font-size:12.5px; font-weight:600; }
-tr.note-row td { padding:0 16px 12px; color:var(--muted); font-size:13px; border-bottom:1px solid var(--line-2); }
-tr.note-row td::before { content:"↳ "; }
 .row-actions { display:inline-flex; gap:6px; align-items:center; justify-content:flex-end; }
 .row-actions form { margin:0; display:inline-flex; }
 
@@ -169,12 +197,6 @@ details.menu .menu-items hr { border:0; border-top:1px solid var(--line-2); marg
 /* --- toolbar: filters and search ------------------------------------------------------------------- */
 .toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:12px 16px;
            border-bottom:1px solid var(--line); background:var(--surface); }
-.chips { display:flex; gap:6px; flex-wrap:wrap; }
-.chip { border:1px solid var(--line); background:var(--surface); color:var(--ink-2); padding:5px 12px; border-radius:99px;
-        font-size:13px; font-weight:500; }
-.chip:hover { background:var(--surface-2); filter:none; }
-.chip[aria-pressed="true"] { background:var(--ink); color:var(--surface); border-color:var(--ink); }
-.chip .n { opacity:.65; margin-left:4px; font-variant-numeric:tabular-nums; }
 .toolbar input[type=search] { width:240px; padding:7px 12px; }
 .more { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 16px;
         border-top:1px solid var(--line); background:var(--surface-2); }
@@ -185,12 +207,6 @@ details.menu .menu-items hr { border:0; border-top:1px solid var(--line-2); marg
                    border-top:1px solid var(--line-2); }
 .attention .item:first-of-type { border-top:0; }
 .attention .actions { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
-.live { display:inline-flex; align-items:center; gap:8px; font-weight:600; color:var(--ok); }
-.live::before { content:""; width:8px; height:8px; border-radius:50%; background:var(--ok);
-                box-shadow:0 0 0 0 color-mix(in srgb, var(--ok) 50%, transparent); animation:pulse 1.8s infinite; }
-@keyframes pulse { 0% { box-shadow:0 0 0 0 color-mix(in srgb, var(--ok) 45%, transparent); }
-                   70% { box-shadow:0 0 0 8px transparent; } 100% { box-shadow:0 0 0 0 transparent; } }
-@media (prefers-reduced-motion: reduce) { .live::before { animation:none; } }
 .empty { text-align:center; padding:48px 16px; color:var(--muted); }
 .empty b { display:block; color:var(--ink); font-size:16px; margin-bottom:4px; }
 
@@ -201,10 +217,6 @@ details.menu .menu-items hr { border:0; border-top:1px solid var(--line-2); marg
 .crumbs { font-size:13px; color:var(--muted); margin:0 0 8px; }
 .crumbs a { color:var(--muted); }
 .head-facts { display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; color:var(--muted); margin-top:8px; }
-.run { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px 20px; align-items:center; }
-.run .where { min-width:0; }
-.run .url { color:var(--muted); font-size:13px; display:block; max-width:100%; }
-.run .links { display:flex; gap:14px; font-size:13px; margin-top:4px; }
 .stepper { display:flex; gap:0; margin:6px 0 14px; padding:0; list-style:none; }
 .stepper li { flex:1; position:relative; padding-top:22px; font-size:12.5px; color:var(--muted); text-align:center; }
 .stepper li::before { content:""; position:absolute; top:6px; left:50%; width:12px; height:12px; margin-left:-6px;
@@ -224,6 +236,7 @@ ul.plain { margin:6px 0 0 18px; padding:0; }
 @media (max-width:760px) {
   .topbar-inner { padding:0 16px; gap:14px; }
   .brand small { display:none; }
+  .nav { -webkit-mask-image:linear-gradient(90deg, #000 88%, transparent); mask-image:linear-gradient(90deg, #000 88%, transparent); padding-right:28px; }
   .wrap { padding:20px 16px 64px; }
   .toolbar input[type=search] { width:100%; }
   table.cards thead, table.cards tr.head { display:none; }
@@ -233,9 +246,7 @@ ul.plain { margin:6px 0 0 18px; padding:0; }
   table.cards td.actions { text-align:left; margin-top:6px; }
   table.cards .row-actions { justify-content:flex-start; }
   table.cards details.menu .menu-items { right:auto; left:0; }
-  table.cards tr.note-row td { padding:0 16px 12px; }
-  .run { grid-template-columns:1fr; }
-}
+  table.cards   }
 """
 
 HEAD = """<!doctype html>
@@ -252,15 +263,16 @@ HEAD = """<!doctype html>
 
 # The header every page shows. `request` is Flask's; the tab for the current page is marked.
 HEADER = """
+<a class="skip-link" href="#main">Skip to main content</a>
 <header class="topbar"><div class="topbar-inner">
   <a class="brand" href="/">""" + LOGO_SVG + """<span>Job Agent<small>applies for you, you submit</small></span></a>
   <nav class="nav" aria-label="Main">
-    <a href="/" class="{{ 'active' if request.path == '/' or request.path.startswith('/application/') }}">Applications</a>
-    <a href="/progress" class="{{ 'active' if request.path == '/progress' }}">Progress</a>
-    <a href="/profile" class="{{ 'active' if request.path in ('/profile', '/setup') }}">Profile</a>
-    <a href="/answers" class="{{ 'active' if request.path == '/answers' }}">Saved answers</a>
-    <a href="/settings" class="{{ 'active' if request.path == '/settings' }}">Settings</a>
-    <a href="/health" class="{{ 'active' if request.path == '/health' }}">System Health</a>
+    <a href="/" {% if request.path == '/' or request.path.startswith('/application/') %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/' or request.path.startswith('/application/') }}">Applications</a>
+    <a href="/progress" {% if request.path == '/progress' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/progress' }}">Progress</a>
+    <a href="/profile" {% if request.path in ('/profile', '/setup') %}aria-current="page" {% endif %}class="{{ 'active' if request.path in ('/profile', '/setup') }}">Profile</a>
+    <a href="/answers" {% if request.path == '/answers' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/answers' }}">Saved answers</a>
+    <a href="/settings" {% if request.path == '/settings' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/settings' }}">Settings</a>
+    <a href="/health" {% if request.path == '/health' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/health' }}">System Health</a>
   </nav>
 </div></header>
 """
@@ -273,10 +285,10 @@ def page(title: str, body: str, header: bool = True) -> str:
 
 # Statuses as a person reads them; the pill's colour comes from the status itself.
 STATUS_LABELS = {
-    "prepared": "Prepared", "form_filled": "Filling in", "ready_to_submit": "Ready to submit",
+    "prepared": "Ready to start", "ready_to_apply": "Ready to start", "form_filled": "Filling in", "ready_to_submit": "Ready to submit",
     "needs_user_review": "Needs you", "submitted": "Submitted", "skipped": "Skipped",
     "DISQUALIFIED_POLICY_MISMATCH": "Skipped (policy)", "BLOCKED_VALIDATION_LOOP": "Stuck (needs you)",
-    "job_not_found": "Job doesn't exist",
+    "job_not_found": "Job doesn't exist", "already_applied": "Already applied",
     "interviewing": "Interviewing", "rejected": "Rejected", "offer": "Offer",
 }
 
@@ -293,7 +305,7 @@ def status_class(status: str) -> str:
 _GROUPS = {
     "needs": {"ready_to_submit", "needs_user_review", "blocked_validation_loop"},
     "done": {"submitted", "interviewing", "offer", "rejected"},
-    "skipped": {"skipped", "disqualified_policy_mismatch", "job_not_found"},
+    "skipped": {"skipped", "disqualified_policy_mismatch", "job_not_found", "already_applied"},
 }
 
 

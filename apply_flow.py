@@ -41,7 +41,7 @@ from datetime import datetime, timezone
 from typing import Optional
 import logging
 import sys
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse, urlsplit
 from pathlib import Path
 
 import re
@@ -79,7 +79,7 @@ from state_machine import (
     dump_forensic_failure,
 )
 from job_tracker import (
-    STATUS_FORM_FILLED, STATUS_JOB_NOT_FOUND, STATUS_NEEDS_USER_REVIEW, STATUS_READY_TO_SUBMIT, STATUS_SKIPPED,
+    STATUS_ALREADY_APPLIED, STATUS_FORM_FILLED, STATUS_JOB_NOT_FOUND, STATUS_NEEDS_USER_REVIEW, STATUS_READY_TO_SUBMIT, STATUS_SKIPPED,
     STATUS_SUBMITTED, JobTracker,
 )
 from resume_parser import parse_resume
@@ -116,6 +116,15 @@ class JsonLogHandler(logging.Handler):
         diagnostics.append_log_record(self._path, record)
 
 
+
+
+def record_already_applied(tracker, key, job, outcome) -> None:
+    """The site says this account already applied: record it with the site's words and end the run (f180). Never
+    a submission by the agent -- this run did not send it."""
+    tracker.update_status(key, STATUS_ALREADY_APPLIED,
+                          notes=f"Already applied: {outcome.summary} (this run sent nothing)")
+    logger.warning("ALREADY_APPLIED: %s at %s -- the site says this account already applied; run stopped",
+                   getattr(job, "title", ""), getattr(job, "company", ""))
 
 def refresh_answer_bank(tracker) -> None:
     """Rebuilds the answer bank from the tracker (answer_bank.py): when a run starts, and after each wait for the owner,
@@ -305,10 +314,8 @@ def _tailor_with(client, resume, job, profile, job_dir: Path, resume_txt: Path, 
     """Attempt to tailor the resume using *client*.
 
     Returns the PDF path on success.
-    Returns None on transient / unknown failure so the caller tries the next provider.
-    Raises _OutOfCreditsError when the account has hit a hard usage limit, so the
-    caller can warn the user and still try the next provider rather than silently
-    falling through."""
+    Returns None on provider failure or remaining unsupported claims so the caller
+    tries the next provider. Account credit errors are logged explicitly."""
     try:
         logger.info("Tailoring resume for %s via %s...", job.company, label)
         raw = client.tailor_resume(resume, job, profile)
@@ -336,7 +343,11 @@ def _tailor_with(client, resume, job, profile, job_dir: Path, resume_txt: Path, 
                 if len(still) < len(unsupported):
                     tailored, unsupported = retried, still
             except Exception as retry_exc:
-                logger.warning("TAILORING_RETRY failed (%s) -- keeping the first draft", retry_exc)
+                logger.warning("TAILORING_RETRY failed (%s) -- rejecting the unsupported draft", retry_exc)
+        if unsupported:
+            logger.error("TAILORING_REJECTED (%s): %d unsupported claim(s) remain -- trying the next provider",
+                         label, len(unsupported))
+            return None
         resume_txt.write_text(tailored, encoding="utf-8")
         build_resume_pdf(resume_txt, resume_pdf)
         logger.info("Tailored resume written to %s via %s", resume_pdf.name, label)
@@ -364,6 +375,20 @@ def document_name(profile, kind: str, company: str) -> str:
     return "_".join(part for part in (person, kind, safe_company) if part)
 
 
+def _resume_with_current_email(path: Path, profile, job, job_dir: Path) -> Path:
+    """Keep source PDFs intact; refresh a stale generic attachment locally."""
+    text = parse_resume(path).raw_text
+    emails = re.findall(r"[\w.+-]+@[\w-]+\.[\w.]+", text)
+    if not profile.email or not any(email.casefold() != profile.email.casefold() for email in emails):
+        return path
+    updated = re.sub(r"[\w.+-]+@[\w-]+\.[\w.]+", profile.email, text)
+    target = job_dir / "current_contact_resume.pdf"
+    text_path = target.with_suffix(".txt")
+    text_path.write_text(ensure_resume_header(updated, profile, job), encoding="utf-8")
+    build_resume_pdf(text_path, target)
+    return target
+
+
 def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None, key: str = "") -> Path:
     """Returns the resume PDF to attach for THIS job.
 
@@ -387,6 +412,21 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
         # rather than locking the posting to the generic resume.
         reused = None
     if reused is not None:
+        try:
+            cached_text = parse_resume(reused).raw_text
+            cached_emails = re.findall(r"[\w.+-]+@[\w-]+\.[\w.]+", cached_text)
+            stale_email = profile.email and cached_emails and any(
+                email.casefold() != profile.email.casefold() for email in cached_emails)
+            if stale_email:
+                logger.info("REUSED_RESUME_STALE_CONTACT: profile email changed; preparing a current resume")
+                reused = None
+            elif not cached_text.strip() or safety.unsupported_claims(resume.raw_text, cached_text):
+                logger.warning("REUSED_RESUME_REJECTED: stored resume is empty or contains unsupported claims")
+                reused = None
+        except Exception:
+            logger.warning("REUSED_RESUME_REJECTED: stored resume could not be validated")
+            reused = None
+    if reused is not None:
         logger.info("REUSED_RESUME: %s was already tailored for this posting -- not generating another", reused.name)
         return reused
 
@@ -403,7 +443,7 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
             "TAILORING_SKIPPED: no AI API keys configured -- attaching the local resume. "
             "Add a Claude, Gemini, or OpenAI key in Settings to enable tailoring."
         )
-        return generic
+        return _resume_with_current_email(generic, profile, job, job_dir)
 
     for label, client in found:
         result = _tailor_with(client, resume, job, profile, job_dir, resume_txt, resume_pdf, label)
@@ -419,7 +459,7 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
         "TAILORING_FAILED: every writer (%s) failed -- attaching the local generic resume.",
         ", ".join(label for label, _ in found),
     )
-    return generic
+    return _resume_with_current_email(generic, profile, job, job_dir)
 
 
 def prepare_cover_letter(claude, resume, job, profile, job_dir: Path, tracker=None, key: str = "") -> tuple[Path, Path] | None:
@@ -430,6 +470,11 @@ def prepare_cover_letter(claude, resume, job, profile, job_dir: Path, tracker=No
     reused = reuse_stored_document(tracker, key, "cover_letter", job_dir)
     if reused is not None:
         try:
+            cached_text = (parse_resume(reused).raw_text if reused.suffix.lower() == ".pdf"
+                           else reused.read_text(encoding="utf-8"))
+            emails = re.findall(r"[\w.+-]+@[\w-]+\.[\w.]+", cached_text)
+            if profile.email and any(email.casefold() != profile.email.casefold() for email in emails):
+                raise ValueError("stored cover letter has a previous contact email")
             if reused.suffix.lower() == ".pdf":
                 twin = reused.with_suffix(".txt")
                 if not twin.is_file():
@@ -519,8 +564,9 @@ def decide_next_step(assistant, page, step: int, experience_data: dict, filled_e
     try:
         from interaction import commit_draft_cards
         commit_draft_cards(page)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Could not save the draft experience/education cards before moving on: %s: %s",
+                       type(exc).__name__, str(exc).splitlines()[0][:120] if str(exc) else "")
 
     if assistant.has_next_step(page):
         return "continue"
@@ -567,6 +613,9 @@ def on_form_resume(assistant, prepared):
     return getattr(assistant, "attached_resume", None) or prepared
 
 
+_SEARCH_QUERY_KEYS = frozenset({"q", "query", "search", "searchtext", "keyword", "keywords"})
+
+
 def worth_returning_to(url: str) -> bool:
     """Whether a page is one to reopen later.
 
@@ -576,6 +625,8 @@ def worth_returning_to(url: str) -> bool:
     """
     if not url or not url.startswith("http"):
         return False
+    if any(key.lower() in _SEARCH_QUERY_KEYS for key in parse_qs(urlsplit(url).query)):
+        return False        # a page of search results is never where an application got to (f220)
     lowered = url.lower()
     return not any(mark in lowered for mark in (
         "/api/", "auth/error", "error=", "/error", "signin", "sign-in", "/login",
@@ -592,6 +643,7 @@ def save_stop_page(page, job_dir: Path) -> None:
     try:
         stem = Path(job_dir) / f"stopped_{datetime.now():%Y%m%d_%H%M%S}"
         stem.parent.mkdir(parents=True, exist_ok=True)
+        diagnostics.capture_form_state(page, stem.with_suffix('.state.json'))
         diagnostics.capture_safe_screenshot(page, stem.with_suffix(".png"))
         diagnostics.write_safe_text(stem.with_suffix(".txt"),
             diagnostics.sanitize_snapshot(page.locator("body").aria_snapshot(mode="ai")))
@@ -907,6 +959,14 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
         logger.warning("LEGAL_ANSWER_CONFLICT: %s", conflict)
     # Did the agent actually do anything here? A status of "ready to submit"
     # has to mean a filled form, not an empty page with no errors on it.
+    # A review step shows its answers as text: no inputs, but the application's own Submit button. That page is
+    # the form (f186: Invesco's Workday Review was reported "never reached").
+    if not form_fields and not getattr(assistant, "_seen_application_form", False):
+        try:
+            if hasattr(assistant, "find_submit_button") and assistant.find_submit_button(page) is not None:
+                assistant._seen_application_form = True
+        except Exception as exc:
+            logger.debug("Could not look for the Submit button: %s", exc)
     report["form_reached"] = bool(getattr(assistant, "_seen_application_form", False)) or bool(form_fields)
     report["fields_filled"] = sum(1 for f in form_fields if (f.get("value") or "").strip())
     report["documents_attached"] = len(
@@ -1114,8 +1174,8 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
         if outcome.kind == "submitted":
             try:
                 diagnostics.capture_safe_screenshot(page, job_dir / "submitted_confirmation.png")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("No confirmation screenshot: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
             delete_screenshots(job_dir)
             message = "Submitted by the agent -- the site confirmed it" + (f". Worth checking: {notes}" if notes else "")
             tracker.update_status(key, STATUS_SUBMITTED, notes=message[:1000])
@@ -1170,6 +1230,18 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                     application_key=key,
                 )
             return
+        if outcome.kind == "already_applied":
+            record_already_applied(tracker, key, job, outcome)
+            if RuntimeEvent is not None:
+                RuntimeEvent.emit(
+                    event_name=EventName.RUN_STOPPED,
+                    component="page_agent",
+                    stage="application",
+                    reason_code=ReasonCode.ACTION_VALIDATION_FAILED,
+                    display_message=f"Already applied: {outcome.summary}",
+                    application_key=key,
+                )
+            return
         if outcome.kind == "job_not_found":
             tracker.update_status(key, STATUS_JOB_NOT_FOUND,
                                   notes=f"Job does not exist: the employer's page says so -- {outcome.summary}")
@@ -1199,10 +1271,11 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             return
 
         # Task 3.3: Enforce the Human-in-the-Loop Review Border
-        is_review = assistant.is_review_step(page) or any(
+        step_finality = assistant.submission_step_finality(page)
+        is_review = step_finality != "NON_FINAL" and (assistant.is_review_step(page) or any(
             "ready for you to submit" in r or "last step" in r or "review step" in r.lower()
             for r in outcome.reasons
-        )
+        ))
         if is_review:
             logger.info("REVIEW BORDER: Reached designated final review step. Halting for human review.")
             assistant.save_progress(page)
@@ -1291,7 +1364,12 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             logger.info("  %s", reason)
         for note in agent.notes[:5]:
             logger.info("  worth checking: %s", note)
-        if outcome.kind == "captcha":
+        # Account creation can report owner_needed with a CAPTCHA reason. Use
+        # the account helper's explicit reason so a redraw at wait entry cannot lose
+        # the reason for this stop. The wait still requires live evidence.
+        waiting_for_captcha = outcome.kind == "captcha" or (
+            any("a CAPTCHA is on the form" in reason for reason in outcome.reasons))
+        if waiting_for_captcha:
             logger.info("Solve it in the browser window: the agent notices when it is gone and carries on by "
                         "itself (Continue on the dashboard works too).")
         elif any("still blank" in r for r in outcome.reasons):
@@ -1311,7 +1389,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                                   "reasons": list(outcome.reasons)[:5] or list(agent.notes)[:3]}
         try:
             decision = assistant.wait_for_signal(signal_path, timeout_seconds=args.timeout, page=page,
-                                                 for_captcha=outcome.kind == "captcha",
+                                                 for_captcha=waiting_for_captcha,
                                                  for_blanks=any("still blank" in r for r in outcome.reasons))
         except TimeoutError:
             logger.info("No instruction received; the application is left as it is, unsubmitted.")
@@ -1333,6 +1411,20 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
         # Only the owner's Continue lifts a hold on a sign-in (login_guard): a code reload, a refresh
         # or a re-upload says nothing about whether the account was looked at.
         agent.forget_sign_in_attempts(owner_acted=(decision == "continue"))
+        if decision == "continue":
+            if hasattr(tracker, "read_checkpoint") and hasattr(tracker, "write_checkpoint"):
+                for k in dict.fromkeys([key, getattr(assistant, "submission_key", ""), getattr(agent, "_application_key", lambda: "")()]):
+                    if not k:
+                        continue
+                    try:
+                        cp = tracker.read_checkpoint(k)
+                        if cp and (cp.get("pending_action") or "").startswith("account_creation_dispatched@"):
+                            logger.info("OWNER_CONTINUE: clearing pending account creation marker %s after owner review",
+                                        cp.get("pending_action"))
+                            updated = checkpoint.merge_update(cp, application_key=k, pending_action="")
+                            tracker.write_checkpoint(k, updated)
+                    except Exception as exc:
+                        logger.warning("Could not clear pending account creation on continue: %s", exc)
         if decision == "submitted_by_user":
             evidence = getattr(assistant, "_confirmation_evidence", "") or "the page confirmed it"
             status, note = safety.verification_status(evidence)
@@ -1502,8 +1594,8 @@ def submit_verified(assistant, page, tracker, key, job, job_dir: Path, decision)
     tracker.update_status(key, status, notes=note)
     try:
         diagnostics.capture_safe_screenshot(page, job_dir / "submitted_confirmation.png")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("No confirmation screenshot: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
     if status == STATUS_SUBMITTED:
         delete_screenshots(job_dir)
     logger.info("AUTO_SUBMIT result: %s -- %s", status, note)
@@ -1748,16 +1840,17 @@ def reload_browser_automation(assistant: JobApplicationAssistant) -> JobApplicat
         # reloading only one half left a new call meeting an old adapter --
         # which killed a live Amazon application with AttributeError.
         import sites
-        for module in [sites.base] + [
-            importlib.import_module(f"sites.{name}") for name in
-            ("amazon", "ashby", "eightfold", "greenhouse", "lever", "successfactors", "workday")
-        ]:
+        adapter_modules = list(dict.fromkeys([sites.base] + [
+            importlib.import_module(adapter.__module__) for adapter in sites.ADAPTERS
+        ]))
+        for module in adapter_modules:
             try:
                 compile(Path(module.__file__).read_text(encoding="utf-8"), module.__file__, "exec")
-                importlib.reload(module)
             except SyntaxError as exc:
                 logger.error("RELOAD_REJECTED: %s (line %s): %s", Path(module.__file__).name, exc.lineno, exc.msg)
                 return assistant
+        for module in adapter_modules:
+            importlib.reload(module)
         importlib.reload(sites)
         sites._CACHE.clear()  # adapters are cached per run; drop the old objects
         importlib.reload(browser_automation)
@@ -1839,8 +1932,8 @@ def main() -> None:
         if diag_consumer is not None:
             try:
                 diag_consumer.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Could not close the diagnostics consumer: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
             diag_consumer = None
         if RuntimeEvent is not None:
             RuntimeEvent.clear_current_run()
@@ -2218,8 +2311,9 @@ def main() -> None:
                                 page = page.context.pages[-1]  # it opened in a new tab
                                 try:
                                     page.wait_for_load_state("domcontentloaded", timeout=30_000)
-                                except Exception:
-                                    pass
+                                except Exception as exc:
+                                    logger.debug("The new tab did not finish loading: %s",
+                                                 str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
                             page = assistant.dismiss_apply_chooser(page)
                             continue
                 if decision == "stop":
@@ -2260,11 +2354,11 @@ def main() -> None:
                     diagnostics.capture_safe_screenshot(page, job_dir / "submitted_confirmation.png")
                 except Exception as exc:
                     logger.warning("Could not capture confirmation screenshot: %s", exc)
-                if status == STATUS_SUBMITTED:
-                    delete_screenshots(job_dir)
                 evidence = getattr(assistant, "_confirmation_evidence", "") or \
                     "the page confirmed it (see submitted_confirmation.png)"
                 status, note = safety.verification_status(evidence)
+                if status == STATUS_SUBMITTED:
+                    delete_screenshots(job_dir)
                 tracker.update_status(key, status, notes=note)
                 remember_progress(tracker, key, page, "submitted by the user", assistant=assistant)
                 logger.info("SUBMITTED_BY_USER: confirmation seen on %s", page.url)
@@ -2319,6 +2413,19 @@ def main() -> None:
                 continue
 
             if decision == "continue":
+                if hasattr(tracker, "read_checkpoint") and hasattr(tracker, "write_checkpoint"):
+                    for k in dict.fromkeys([key, getattr(assistant, "submission_key", "")]):
+                        if not k:
+                            continue
+                        try:
+                            cp = tracker.read_checkpoint(k)
+                            if cp and (cp.get("pending_action") or "").startswith("account_creation_dispatched@"):
+                                logger.info("OWNER_CONTINUE: clearing pending account creation marker %s after owner review",
+                                            cp.get("pending_action"))
+                                updated = checkpoint.merge_update(cp, application_key=k, pending_action="")
+                                tracker.write_checkpoint(k, updated)
+                        except Exception as exc:
+                            logger.warning("Could not clear pending account creation on continue: %s", exc)
                 advanced = assistant.click_next_step(page)
                 if not advanced:
                     if getattr(assistant, "_stuck_on", "") == "BLOCKED_VALIDATION_LOOP":

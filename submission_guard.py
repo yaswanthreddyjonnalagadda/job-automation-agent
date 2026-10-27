@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import secrets
 import weakref
 from pathlib import Path
@@ -18,6 +19,10 @@ _GUARD_NAME = "__jaaSubmissionGuardV0"
 
 
 def _guard_script(capability: str) -> str:
+    from sites.adp import POSTING_ENTRY_JS as ADP_POSTING_ENTRY_JS
+    from sites.greenhouse import POSTING_ENTRY_JS as GREENHOUSE_POSTING_ENTRY_JS
+    from sites.bankofamerica import POSTING_ENTRY_JS as BANKOFAMERICA_POSTING_ENTRY_JS
+
     return r"""(() => {
       // A document.open()-class replacement (what Playwright's page.set_content() uses, and
       // what some legacy document.write()-based popup population does) removes every listener
@@ -36,6 +41,10 @@ def _guard_script(capability: str) -> str:
       const capability = CAPABILITY;
       const submitLabel = new RegExp(SUBMIT_PATTERN, "i");
       const safeUtilityLabel = new RegExp(SAFE_UTILITY_PATTERN, "i");
+      const adpPostingEntry = ADP_POSTING_ENTRY;
+      const greenhousePostingEntry = GREENHOUSE_POSTING_ENTRY;
+      const bankofamericaPostingEntry = BANKOFAMERICA_POSTING_ENTRY;
+      const postingEntry = candidate => adpPostingEntry(candidate) || greenhousePostingEntry(candidate) || bankofamericaPostingEntry(candidate);
       const state = {active: false, authorization: null, denials: [], sequence: 0};
       const selector = 'button, input[type="submit"], input[type="image"], [role="button"], a';
       const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
@@ -45,6 +54,12 @@ def _guard_script(capability: str) -> str:
         element.value,
         element.getAttribute("title")
       ].map(normalize).filter(Boolean);
+      // A button's value is an internal action token (Auth0 uses "default"),
+      // not another visible credential action label. Inputs use value as their label.
+      const credentialLabels = element => element instanceof HTMLButtonElement
+        ? [element.getAttribute("aria-label"), element.innerText, element.getAttribute("title")]
+            .map(normalize).filter(Boolean)
+        : labels(element);
       const structuralSubmitter = element =>
         element instanceof HTMLButtonElement
           ? Boolean(element.form)
@@ -53,6 +68,13 @@ def _guard_script(capability: str) -> str:
             && ["submit", "image"].includes(element.type.toLowerCase());
       const ordinaryNavigation = element =>
         labels(element).some(label => /^(next|continue)(?:\b|$)/i.test(label));
+      const adpFinalReviewNext = element => {
+        if (location.hostname !== 'myjobs.adp.com'
+            || !element.matches('sdf-button.wizard-next-step-btn[role="button"]')
+            || !labels(element).some(label => /^next$/i.test(label))) return false;
+        return Array.from(document.querySelectorAll('button, [role="button"]'))
+          .some(step => labels(step).some(label => /^Step Status current Review$/i.test(label)));
+      };
       // Default-deny for a labelled, form-associated control whose own label is neither a known
       // submit synonym nor a known non-final (add/remove/edit/cancel/back/save-for-later/...)
       // word, when it is the only such candidate left in its form: a button[type=button] with a
@@ -91,6 +113,8 @@ def _guard_script(capability: str) -> str:
         if (!(element instanceof Element)) return null;
         const candidate = element.closest(selector);
         if (!candidate) return null;
+        if (postingEntry(candidate)) return null;
+        if (adpFinalReviewNext(candidate)) return candidate;
         if (labels(candidate).some(label => submitLabel.test(label))) return candidate;
         if (structuralSubmitter(candidate) && !ordinaryNavigation(candidate)) return candidate;
         return soleRemainingAction(candidate) ? candidate : null;
@@ -103,13 +127,14 @@ def _guard_script(capability: str) -> str:
       // alone never exempts a button from final-submission containment.
       const credentialForm = element => element.form || element.closest('form');
       const credentialControl = (element, action) => {
-        if (!(element instanceof Element) || !element.matches('button,[role=button]')
+        if (!(element instanceof Element)
+            || !element.matches('button, input[type=submit], input[type=button], [role=button]')
             || !credentialForm(element) || element.disabled
             || element.getAttribute('aria-disabled') === 'true') return false;
         const actionLabel = action === 'creation'
           ? /^(create (?:my |your |an )?account|register|sign up)$/i
           : /^(sign in|log in|login)$/i;
-        if (!labels(element).length || !labels(element).every(label => actionLabel.test(label))) return false;
+        if (!credentialLabels(element).length || !credentialLabels(element).every(label => actionLabel.test(label))) return false;
         const form = credentialForm(element);
         const controls = [...new Set([...form.elements, ...form.querySelectorAll('[role=button]')])];
         if (controls.some(e => e.matches?.('input[type=file],textarea,select'))
@@ -117,21 +142,60 @@ def _guard_script(capability: str) -> str:
         const inputs = controls.filter(e => e instanceof HTMLInputElement
           && !e.disabled && e.type !== 'hidden' && e.getClientRects().length);
         const passwords = inputs.filter(e => e.type === 'password');
-        const emails = inputs.filter(e => e.type !== 'password' && e.type !== 'checkbox'
+        const visibleEmails = inputs.filter(e => e.type !== 'password' && e.type !== 'checkbox'
           && (e.type === 'email' || /e-?mail|user ?name/i.test([
             e.getAttribute('aria-label'), e.name, e.id, e.getAttribute('data-automation-id'),
             e.placeholder, ...Array.from(e.labels || []).map(l => l.innerText),
             ...(e.getAttribute('aria-labelledby') || '').split(/\s+/)
               .map(id => document.getElementById(id)?.innerText || '')
           ].join(' '))));
+        // Auth0/iCIMS carries the already accepted username as a hidden, read-only
+        // text control on the password step. It is still part of this credential form.
+        const priorEmails = action === 'sign_in' && !visibleEmails.length
+          ? controls.filter(e => e instanceof HTMLInputElement && e.type === 'text'
+              && e.readOnly && !e.getClientRects().length && e.value.trim()
+              && e.autocomplete === 'username'
+              && /^(?:user ?name|e-?mail(?: address)?)$/i.test(e.name || ''))
+          : [];
+        const emails = [...visibleEmails, ...priorEmails];
         if (passwords.length !== (action === 'creation' ? 2 : 1)
             || emails.length !== 1 || !emails[0].value.trim() || !passwords[0].value
             || (action === 'creation' && passwords[0].value !== passwords[1].value)) return false;
         if (inputs.some(e => !passwords.includes(e) && !emails.includes(e) && e.type !== 'checkbox')) return false;
         return !controls.some(e => e !== element && e.matches?.(selector)
           && !labels(e).some(label => safeUtilityLabel.test(label))
-          && !(labels(e).length && labels(e).every(label => actionLabel.test(label))));
+          && !(credentialLabels(e).length && credentialLabels(e).every(label => actionLabel.test(label))));
       };
+      // Profile helpers may authorize candidate profile creation on ATS registration steps
+      // (e.g. iCIMS Profile Builder) that collect basic identity and credentials before the application.
+      const candidateProfileControl = element => {
+        if (!(element instanceof Element)
+            || !element.matches('button, input[type=submit], input[type=button], [role=button]')
+            || !credentialForm(element) || element.disabled
+            || element.getAttribute('aria-disabled') === 'true') return false;
+        const profileLabel = /^(submit profile|create (?:your |a |my )?profile|register|create (?:my |your |an )?account)$/i;
+        if (!credentialLabels(element).length || !credentialLabels(element).some(label => profileLabel.test(label))) return false;
+        const form = credentialForm(element);
+        const controls = [...new Set([...form.elements, ...form.querySelectorAll('[role=button]')])];
+        if (form.querySelector('[contenteditable=true]')) return false;
+        const inputs = controls.filter(e => e instanceof HTMLInputElement
+          && !e.disabled && e.type !== 'hidden' && e.getClientRects().length);
+        const passwords = inputs.filter(e => e.type === 'password');
+        if (passwords.length < 1 || !passwords[0].value) return false;
+        if (passwords.length >= 2 && passwords[0].value !== passwords[1].value) return false;
+        const emails = inputs.filter(e => e.type !== 'password' && e.type !== 'checkbox'
+          && (e.type === 'email' || /e-?mail/i.test([
+            e.getAttribute('aria-label'), e.name, e.id, e.getAttribute('data-automation-id'),
+            e.placeholder, ...Array.from(e.labels || []).map(l => l.innerText),
+            ...(e.getAttribute('aria-labelledby') || '').split(/\s+/)
+              .map(id => document.getElementById(id)?.innerText || '')
+          ].join(' '))));
+        if (emails.length < 1 || !emails[0].value.trim()) return false;
+        if (controls.some(e => e !== element && labels(e).some(l => /submit application|send application/i.test(l)))) return false;
+        return true;
+      };
+      const validCredentialControl = (element, action) =>
+        action === 'candidate_profile' ? candidateProfileControl(element) : credentialControl(element, action);
       const recordDenial = (kind, element) => {
         const item = {
           sequence: ++state.sequence,
@@ -146,7 +210,7 @@ def _guard_script(capability: str) -> str:
         event.preventDefault();
         event.stopImmediatePropagation();
       };
-      const authorizedClick = element => {
+      const authorizedClick = (element, event = null) => {
         const authorization = state.authorization;
         if (!authorization || authorization.capability !== capability) {
           return false;
@@ -154,22 +218,32 @@ def _guard_script(capability: str) -> str:
         if (authorization.credentialAction && authorization.element !== element
             && authorization.element.getAttribute('role') === 'button'
             && authorization.clickAllowed && !authorization.companionClickAllowed
-            && element instanceof HTMLButtonElement
+            && (element instanceof HTMLButtonElement || element instanceof HTMLInputElement)
             && credentialForm(authorization.element) === authorization.form
             && credentialForm(element) === authorization.form
-            && credentialControl(authorization.element, authorization.credentialAction)
-            && credentialControl(element, authorization.credentialAction)) {
+            && validCredentialControl(authorization.element, authorization.credentialAction)
+            && validCredentialControl(element, authorization.credentialAction)) {
           authorization.companionClickAllowed = true;
           return true;
         }
         if (authorization.element !== element) return false;
+        // Auth0 can synchronously call this same button's click() from its handler.
+        // Permit one same-turn companion event only inside the original
+        // credential click; the first form submit consumes the authorization.
+        if (authorization.credentialAction && authorization.clickAllowed
+            && !authorization.companionClickAllowed && event
+            && credentialForm(element) === authorization.form
+            && validCredentialControl(element, authorization.credentialAction)) {
+          authorization.companionClickAllowed = true;
+          return true;
+        }
         if (authorization.credentialAction
             && (authorization.clickAllowed || credentialForm(element) !== authorization.form
-              || !credentialControl(element, authorization.credentialAction))) return false;
+              || !validCredentialControl(element, authorization.credentialAction))) return false;
         authorization.clickAllowed = true;
         setTimeout(() => {
           if (state.authorization === authorization) state.authorization = null;
-        }, 0);
+        }, authorization.credentialAction ? 2000 : 0);
         return true;
       };
       const authorizedForm = (form, submitter = null) => {
@@ -178,11 +252,11 @@ def _guard_script(capability: str) -> str:
           && authorization.form === form && authorization.clickAllowed
           && (!authorization.credentialAction || (
             credentialForm(authorization.element) === form
-            && credentialControl(authorization.element, authorization.credentialAction)
+            && validCredentialControl(authorization.element, authorization.credentialAction)
             && (!submitter || submitter === authorization.element
             || (authorization.element.getAttribute('role') === 'button'
               && submitter && credentialForm(submitter) === form
-              && credentialControl(submitter, authorization.credentialAction))))));
+              && validCredentialControl(submitter, authorization.credentialAction))))));
       };
 
       // Named, stable function references -- not inline closures passed directly to
@@ -196,9 +270,13 @@ def _guard_script(capability: str) -> str:
         const clicked = path.find(target => target instanceof Element && target.matches(selector));
         if (credential?.credentialAction && (clicked === credential.element
             || (credential.element.getAttribute('role') === 'button'
-              && clicked instanceof HTMLButtonElement && credentialForm(clicked) === credential.form))) {
-          if (authorizedClick(clicked)) return;
-          denyEvent(event, 'credential_shape_changed', clicked);
+              && (clicked instanceof HTMLButtonElement || clicked instanceof HTMLInputElement)
+              && credentialForm(clicked) === credential.form))) {
+          if (authorizedClick(clicked, event)) return;
+          denyEvent(event, !state.authorization?.clickAllowed && state.authorization?.element !== clicked
+            ? 'credential_element_changed'
+            : state.authorization?.clickAllowed ? 'credential_duplicate_click'
+            : 'credential_shape_changed', clicked);
           return;
         }
         let candidate = null;
@@ -226,7 +304,19 @@ def _guard_script(capability: str) -> str:
         const form = event.target;
         if (!(form instanceof HTMLFormElement) || !finalForm(form, event.submitter)) return;
         if (authorizedForm(form, event.submitter)) {
-          state.authorization = null;
+          const authorization = state.authorization;
+          authorization.formSubmitEvents = (authorization.formSubmitEvents || 0) + 1;
+          if (authorization.formSubmitEvents > 2) {
+            denyEvent(event, 'form_submit', event.submitter || firstSubmitter(form));
+            return;
+          }
+          // An ATS may prevent this first event and submit the same credential
+          // form asynchronously. Consume authorization only when the event's
+          // default action was not prevented by the site's own handler.
+          setTimeout(() => {
+            if (!event.defaultPrevented && state.authorization === authorization)
+              state.authorization = null;
+          }, 0);
           return;
         }
         denyEvent(event, "form_submit", event.submitter || firstSubmitter(form));
@@ -278,9 +368,25 @@ def _guard_script(capability: str) -> str:
           state.authorization = {element, form: element.form || element.closest("form"), capability};
           return true;
         },
+        authorizeIntermediateIcims(element, token) {
+          if (token !== capability || !state.active || !finalControl(element)
+              || !/(^|\.)icims\.com$/i.test(location.hostname)) return false;
+          const markers = Array.from(document.querySelectorAll('li, [role="listitem"]'))
+            .filter(node => /\bstep\s+\d+\s+of\s+\d+\b.*\(current\s+step\)/i.test(node.textContent || ''));
+          if (markers.length !== 1 || !markers[0].getClientRects().length) return false;
+          const match = /\bstep\s+(\d+)\s+of\s+(\d+)\b.*\(current\s+step\)/i.exec(markers[0].textContent || '');
+          if (!match || Number(match[1]) >= Number(match[2]) || Number(match[2]) < 2) return false;
+          state.authorization = {element, form: element.form || element.closest('form'), capability};
+          return true;
+        },
         authorizeAccountCreation(element, token) {
           if (token !== capability || !state.active || !credentialControl(element, 'creation')) return false;
           state.authorization = {element, form: credentialForm(element), capability, credentialAction: 'creation'};
+          return true;
+        },
+        authorizeCandidateProfile(element, token) {
+          if (token !== capability || !state.active || !candidateProfileControl(element)) return false;
+          state.authorization = {element, form: credentialForm(element), capability, credentialAction: 'candidate_profile'};
           return true;
         },
         authorizeAccountSignIn(element, token) {
@@ -301,7 +407,9 @@ def _guard_script(capability: str) -> str:
       Object.defineProperty(window, "__jaaSubmissionGuardV0", {
         value: api, configurable: false, writable: false
       });
-    })()""".replace("CAPABILITY", json.dumps(capability)).replace(
+    })()""".replace("ADP_POSTING_ENTRY", ADP_POSTING_ENTRY_JS).replace(
+        "GREENHOUSE_POSTING_ENTRY", GREENHOUSE_POSTING_ENTRY_JS
+    ).replace("BANKOFAMERICA_POSTING_ENTRY", BANKOFAMERICA_POSTING_ENTRY_JS).replace("CAPABILITY", json.dumps(capability)).replace(
         "SUBMIT_PATTERN", json.dumps(safety.SUBMIT_LABEL_RE.pattern)
     ).replace(
         "SAFE_UTILITY_PATTERN", json.dumps(safety.SAFE_UTILITY_LABEL_RE.pattern)
@@ -311,9 +419,20 @@ def _guard_script(capability: str) -> str:
 class SubmissionGuardV0:
     """Browser-side deny-by-default guard with a one-use verified submit gateway."""
 
+    _INSTANCES: weakref.WeakSet[SubmissionGuardV0] = weakref.WeakSet()
+
+    @classmethod
+    def for_context(cls, context: Any):
+        for inst in list(cls._INSTANCES):
+            if inst.context == context:
+                return inst
+        return None
+
     def __init__(self, context: Any):
+        self._INSTANCES.add(self)
         self.context = context
         self._capability = secrets.token_urlsafe(32)
+        self.last_credential_click = ""   # "performed" | "not_performed" | "unknown" -- see _click_credentials
         self._script = _guard_script(self._capability)
         self._active_pages: weakref.WeakSet = weakref.WeakSet()
         self._tracker: Any = None
@@ -360,7 +479,8 @@ class SubmissionGuardV0:
             denial = json.loads(text[len(prefix):])
             self._record_event(
                 self._tracker, self._dedup_key, "SUBMISSION_BLOCKED",
-                {"reason": str(denial.get("kind", "browser_guard"))[:40]},
+                {"reason": str(denial.get("kind")) if str(denial.get("kind")) in
+                 {"click", "enter", "form_submit"} else "click"},
             )
         except (TypeError, ValueError):
             logger.warning("Could not parse browser submission-denial event")
@@ -404,7 +524,12 @@ class SubmissionGuardV0:
             page.on("framenavigated", lambda frame: self._activate_navigated(page, frame))
             page._jaa_submission_guard_listeners = True
         for frame in page.frames:
-            self._activate_frame(frame)
+            try:
+                self._activate_frame(frame)
+            except PlaywrightError:
+                if not getattr(frame, 'is_detached', lambda: False)():
+                    raise
+                logger.debug('Submission guard skipped a confirmed detached frame during activation')
 
     def _activate_attached(self, page: Any, frame: Any) -> None:
         if not getattr(self, "_handoff_parked", False) and page in self._active_pages:
@@ -494,11 +619,74 @@ class SubmissionGuardV0:
         """One account-helper click, limited to a dedicated credential form."""
         return self._click_credentials(page, locator, "authorizeAccountCreation")
 
+    def click_candidate_profile(self, page: Any, locator: Any) -> bool:
+        """One candidate profile creation click, authorized on an ATS profile creation step."""
+        return self._click_credentials(page, locator, "authorizeCandidateProfile")
+
     def click_account_sign_in(self, page: Any, locator: Any) -> bool:
         """One sign-in click, without authorizing application submission."""
         return self._click_credentials(page, locator, "authorizeAccountSignIn")
 
+    def click_intermediate_icims_submit(self, page: Any, locator: Any) -> bool:
+        """Advance one iCIMS wizard step only while its own current marker says steps remain."""
+        self.activate(page)
+        before = self.denial_count(page)
+        try:
+            if not locator.evaluate(
+                f"(element, token) => window.{_GUARD_NAME}.authorizeIntermediateIcims(element, token)",
+                self._capability,
+            ):
+                return False
+            locator.click(timeout=10_000)
+            return self.denial_count(page) <= before
+        except PlaywrightError as exc:
+            logger.warning("Intermediate iCIMS click failed: %s", str(exc).splitlines()[0][:120])
+            return False
+        finally:
+            for frame in page.frames:
+                try:
+                    frame.evaluate(f"token => window.{_GUARD_NAME}?.clearAuthorization(token)", self._capability)
+                except PlaywrightError as exc:
+                    logger.debug("clearAuthorization on a frame failed: %s", str(exc).splitlines()[0][:100])
+
+    def click_intermediate_icims_packet(self, page: Any) -> bool:
+        """Submit one signed portal packet only when iCIMS shows another packet follows."""
+        try:
+            if not page.url.startswith("https://") or ".icims.com/" not in page.url:
+                return False
+            outer = next(frame for frame in page.frames if frame.name == "icims_content_iframe")
+            inner = next(frame for frame in page.frames if frame.name == "icims_formFrame")
+            if not inner.url.startswith("https://") or ".icims.com/forms" not in inner.url:
+                return False
+            packet = outer.locator("body").inner_text(timeout=3_000)
+            if not re.search(r"Portal Specific Forms\s*\(1/2\)", packet):
+                return False
+            if not (inner.locator("input[name=next]").get_attribute("value") or "").strip():
+                return False
+            if not inner.locator("input[name=icims_f_signature]").is_checked():
+                return False
+            if inner.locator("input[name=icims_f_Veteran]:checked").count() != 1:
+                return False
+            button = inner.locator("input[name=icims_submit]")
+            if button.count() != 1 or not button.is_visible():
+                return False
+            self.activate(page)
+            before = self.denial_count(page)
+            if not button.evaluate(
+                f"(element, token) => window.{_GUARD_NAME}.authorize(element, token)", self._capability
+            ):
+                return False
+            button.click(timeout=10_000)
+            return self.denial_count(page) <= before
+        except (PlaywrightError, StopIteration):
+            return False
+
     def _click_credentials(self, page: Any, locator: Any, authorization_method: str) -> bool:
+        """One credential click. `last_credential_click` says what happened to the press, so a caller that
+        recorded 'about to press' can clear it when nothing was pressed (f175): "not_performed" -- refused before
+        the click, or the click was intercepted and denied; "unknown" -- the click itself raised, so it may have
+        reached the page; "performed" -- pressed and not denied."""
+        self.last_credential_click = "not_performed"
         if not safety.password_allowed(page.url):
             return False
         self.activate(page)
@@ -509,8 +697,16 @@ class SubmissionGuardV0:
                 self._capability,
             ):
                 return False
+            self.last_credential_click = "unknown"
             locator.click(timeout=8_000)
-            return self.denial_count(page) <= before
+            # Some ATS handlers submit the credential form on the next task.
+            # Keep only this form's short-lived authorization until it can fire.
+            page.wait_for_timeout(1_000)
+            if self.denial_count(page) <= before:
+                self.last_credential_click = "performed"
+                return True
+            self.last_credential_click = "not_performed"
+            return False
         except PlaywrightError:
             logger.warning("ACCOUNT_ACTION_BLOCKED: dedicated credential click could not complete")
             return False
@@ -518,8 +714,8 @@ class SubmissionGuardV0:
             for frame in page.frames:
                 try:
                     frame.evaluate(f"token => window.{_GUARD_NAME}?.clearAuthorization(token)", self._capability)
-                except PlaywrightError:
-                    pass
+                except PlaywrightError as _swallowed:
+                    logger.debug("_click_credentials: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
     @staticmethod
     def _valid_authorization(decision: Any) -> bool:
@@ -652,8 +848,8 @@ class SubmissionGuardV0:
                     f"(element, token) => window.{_GUARD_NAME}.clearAuthorization(token)",
                     self._capability,
                 )
-            except PlaywrightError:
-                pass
+            except PlaywrightError as _swallowed:
+                logger.debug("submit_verified: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
 
 class SubmissionProbe:

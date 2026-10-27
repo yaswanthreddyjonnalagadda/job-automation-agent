@@ -1,79 +1,197 @@
 {
   "_about": "What a form question asks, as data (concept_matcher.py reads this beside its own table). A new wording of a known question is a line under more_wordings, not a code change; a new question the profile answers is an entry under concepts with the profile field that answers it. Patterns match the question after clean_text: lower case, punctuation and '(required)' removed. value=true: answered with a fact, so never used for a question put as Yes/No. These come first when two concepts match a question equally. Wordings added 30 September 2026 from the questions no concept matched on the pages saved from real applications.",
   "concepts": {
+    "PHONE_TYPE": {
+      "patterns": [
+        "^(?:primary\\s+)?(?:phone|telephone)(?:\\s+device)?\\s+type$"
+      ],
+      "profile_field": "phone",
+      "resolver": "phone_type",
+      "value": true
+    },
+    "AI_NOTETAKER_CONSENT": {
+      "_about": "Consent to an AI tool listening to, recording or transcribing interviews. The owner's standing decision, given once (profile ai_notetaker_consent: Yes / No; empty = the question comes to the owner).",
+      "patterns": [
+        "\\bai\\b.{0,20}\\bnote[- ]?takers?\\b",
+        "\\b(?:ai|artificial intelligence)\\b.{0,60}\\b(?:transcrib\\w*|record\\w*|summari[sz]\\w*)\\b.{0,60}\\b(?:interview|conversation|call|meeting)s?\\b",
+        "\\b(?:transcrib\\w*|record\\w*)\\b.{0,60}\\b(?:interview|conversation|call|meeting)s?\\b.{0,80}\\b(?:ai|artificial intelligence)\\b"
+      ],
+      "profile_field": "ai_notetaker_consent"
+    },
+    "SHARE_DATA_WITH_PARTNERS": {
+      "_about": "Letting a company pass the owner's resume, contact details or data to partners, affiliates or other third parties. The owner's standing decision (profile share_data_with_partners).",
+      "patterns": [
+        "\\bshare\\b.{0,25}\\b(?:my|your)\\b.{0,25}\\b(?:resume|cv|contact|information|data|details|profile|application)\\b.{0,100}\\b(?:partners?|third[- ]part(?:y|ies)|affiliates?|other (?:companies|employers|organi[sz]ations)|external)\\b",
+        "\\b(?:sell|sale of)\\b.{0,30}\\b(?:my|your)\\b.{0,20}\\b(?:data|information)\\b"
+      ],
+      "profile_field": "share_data_with_partners"
+    },
+    "MARKETING_OPT_IN": {
+      "_about": "Marketing emails, newsletters, job alerts, or joining a talent community. The owner's standing decision (profile marketing_opt_in).",
+      "patterns": [
+        "\\b(?:marketing|promotional|newsletters?)\\b.{0,60}\\b(?:emails?|communications?|messages?|offers?|updates?)\\b",
+        "\\b(?:receive|send|subscribe\\w*)\\b.{0,40}\\b(?:marketing|promotional|newsletters?|job alerts?)\\b",
+        "\\b(?:join|add me to|be part of)\\b.{0,30}\\b(?:talent\\s+(?:community|network|pool)|mailing list)\\b"
+      ],
+      "profile_field": "marketing_opt_in"
+    },
+    "AVAILABLE_WORK_LOCATIONS": {
+      "_about": "Where the owner is available to work, as the places they gave once (profile available_work_locations).",
+      "patterns": [
+        "\\b(?:what|which)\\b.{0,25}\\b(?:cities|locations|states|areas|markets|regions)\\b.{0,60}\\b(?:available|willing|open|able)\\b.{0,25}\\b(?:work|relocate)\\b",
+        "\\bwhere\\b.{0,40}\\b(?:available|willing|open)\\b.{0,20}\\b(?:work|relocate)\\b",
+        "\\b(?:cities|locations|states)\\b.{0,30}\\bavailable\\s+to\\s+work\\b"
+      ],
+      "profile_field": "available_work_locations",
+      "value": true
+    },
     "EMPLOYMENT_ELIGIBILITY": {
-      "patterns": ["\\b(?:describ\\w*|select|choose)\\b.*\\b(?:employment|work)\\s+(?:eligibility|authori[sz]ation\\s+status)\\b"],
+      "patterns": [
+        "\\b(?:describ\\w*|select|choose)\\b.*\\b(?:employment|work)\\s+(?:eligibility|authori[sz]ation\\s+status)\\b"
+      ],
       "negative": "\\b(?:date|expir|when|until)\\b",
       "profile_field": "requires_visa_sponsorship",
       "resolver": "text_if_true",
       "text": "I require sponsorship before I am able to work"
     },
     "OPT_STATUS": {
-      "patterns": ["^\\W*(?:are|is)\\s+(?:you|your)\\b.*\\b(?:stem\\s+)?opt\\b", "^\\W*(?:are|is)\\s+(?:you|your)\\b.*\\boptional\\s+practical\\s+training\\b"],
+      "patterns": [
+        "^\\W*(?:are|is)\\s+(?:you|your)\\b.*\\b(?:stem\\s+)?opt\\b",
+        "^\\W*(?:are|is)\\s+(?:you|your)\\b.*\\boptional\\s+practical\\s+training\\b"
+      ],
       "negative": "\\b(?:date|expir|when|end|start|how\\s+long|until)\\b",
       "profile_field": "work_authorization",
       "resolver": "yes_if_matches",
       "pattern": "\\bopt\\b|optional\\s+practical\\s+training"
     },
     "ADDRESS_LINE_2": {
-      "patterns": ["^\\W*(?:street\\s+|home\\s+|mailing\\s+)?address\\s*(?:line\\s*)?2\\b", "\\baddress\\s+line\\s+two\\b", "^\\W*(?:apartment|apt|suite)\\b(?:\\s*(?:number|no|#))?\\W*$", "^\\W*(?:apartment|apt|suite)\\s*(?:or\\s+|/\\s*)?(?:unit|suite|apt)\\b", "^\\W*unit\\s*(?:number|no|#)\\W*$"],
+      "patterns": [
+        "^\\W*(?:street\\s+|home\\s+|mailing\\s+)?address\\s*(?:line\\s*)?2\\b",
+        "\\baddress\\s+line\\s+two\\b",
+        "^\\W*(?:apartment|apt|suite)\\b(?:\\s*(?:number|no|#))?\\W*$",
+        "^\\W*(?:apartment|apt|suite)\\s*(?:or\\s+|/\\s*)?(?:unit|suite|apt)\\b",
+        "^\\W*unit\\s*(?:number|no|#)\\W*$"
+      ],
       "profile_field": "address_line2",
       "value": true
     },
     "PREFERRED_NAME": {
-      "patterns": ["^\\W*preferred(?:\\s+first)?\\s+name\\b", "\\bpreferred\\s+or\\s+chosen\\s+name\\b", "\\bchosen\\s+name\\b", "\\bnick\\s*name\\b", "\\bknown\\s+as\\b"],
+      "patterns": [
+        "^\\W*preferred(?:\\s+first)?\\s+name\\b",
+        "\\bpreferred\\s+or\\s+chosen\\s+name\\b",
+        "\\bchosen\\s+name\\b",
+        "\\bnick\\s*name\\b",
+        "\\bknown\\s+as\\b"
+      ],
       "profile_field": "preferred_name",
       "value": true
     },
     "GENDER_IDENTITY": {
-      "patterns": ["\\bgender\\s+identity\\b"],
+      "patterns": [
+        "\\bgender\\s+identity\\b"
+      ],
       "profile_field": "gender_identity",
       "fallback_field": "gender"
     },
     "SEXUAL_ORIENTATION": {
-      "patterns": ["\\bsexual\\s+orientation\\b"],
+      "patterns": [
+        "\\bsexual\\s+orientation\\b"
+      ],
       "profile_field": "sexual_orientation"
     },
     "TRANSGENDER": {
-      "patterns": ["\\btransgender\\b"],
+      "patterns": [
+        "\\btransgender\\b"
+      ],
       "profile_field": "transgender"
     },
     "PRONOUNS": {
-      "patterns": ["\\bpronouns?\\b"],
+      "patterns": [
+        "\\bpronouns?\\b"
+      ],
       "profile_field": "pronouns",
       "value": true
     },
     "GPA": {
-      "patterns": ["\\bgpa\\b", "\\bgrade\\s+point\\s+average\\b", "\\bcumulative\\s+grade\\b"],
+      "patterns": [
+        "\\bgpa\\b",
+        "\\bgrade\\s+point\\s+average\\b",
+        "\\bcumulative\\s+grade\\b"
+      ],
       "profile_field": "gpa",
       "value": true
     },
     "MINIMUM_SALARY": {
-      "patterns": ["\\bminimum\\s+(?:salary|pay|compensation)\\b", "\\blowest\\s+(?:salary|pay)\\b", "\\bsalary\\s+requirements?\\b"],
+      "patterns": [
+        "\\bminimum\\s+(?:salary|pay|compensation)\\b",
+        "\\blowest\\s+(?:salary|pay)\\b",
+        "\\bsalary\\s+requirements?\\b"
+      ],
       "profile_field": "salary_min",
       "value": true
     },
     "CERTIFICATIONS": {
-      "patterns": ["\\bcertifications?\\b", "\\bprofessional\\s+licen[cs]es?\\b"],
+      "patterns": [
+        "\\bcertifications?\\b",
+        "\\bprofessional\\s+licen[cs]es?\\b"
+      ],
       "negative": "\\bi\\s+certify\\b|\\bcertify\\s+that\\b",
       "profile_field": "certifications",
       "value": true
     },
     "LANGUAGES_SPOKEN": {
-      "patterns": ["\\blanguages?\\s+(?:do\\s+you\\s+)?(?:speak|spoken|known)\\b", "\\blanguage\\s+skills?\\b", "\\bwhat\\s+languages\\b"],
+      "patterns": [
+        "\\blanguages?\\s+(?:do\\s+you\\s+)?(?:speak|spoken|known)\\b",
+        "\\blanguage\\s+skills?\\b",
+        "\\bwhat\\s+languages\\b"
+      ],
       "negative": "programming|coding|scripting|\\blevel\\b|proficien|fluency",
       "profile_field": "languages",
       "value": true
     },
     "SKILL_RATING": {
-      "patterns": ["\\brate\\s+your\\s+(?:skill|proficiency|experience|expertise|knowledge)", "\\bskill\\s+level\\s+(?:with|in)\\b", "\\bproficiency\\s+(?:level\\s+)?(?:with|in)\\b"],
+      "patterns": [
+        "\\brate\\s+your\\s+(?:skill|proficiency|experience|expertise|knowledge)",
+        "\\bskill\\s+level\\s+(?:with|in)\\b",
+        "\\bproficiency\\s+(?:level\\s+)?(?:with|in)\\b"
+      ],
       "profile_field": "skill_levels",
       "resolver": "skill_level"
+    },
+    "GOVERNMENT_ASSISTANCE": {
+      "patterns": [
+        "\\bgovernment\\s+assistance\\b",
+        "\\b(?:tanf|afdc|snap|food\\s+stamps)\\b",
+        "\\bwelfare\\s+program\\b",
+        "\\btemporary\\s+assistance\\s+for\\s+needy\\s+families\\b"
+      ],
+      "profile_field": "received_government_assistance"
     }
   },
   "more_wordings": {
-    "PREVIOUSLY_EMPLOYED": ["\\bworked\\s+(?:with|for)\\s+us\\s+before\\b", "\\bhave\\s+you\\s+(?:ever\\s+)?worked\\s+(?:with|for)\\s+us\\b"],
-    "PREFERRED_CONTACT": ["\\bpreferred\\s+(?:method|way|mode)\\s+of\\s+contact\\b"],
-    "NOTICE_PERIOD": ["\\bdate\\s+available\\s+to\\s+start\\b", "\\bavailable\\s+start\\s+date\\b", "\\bearliest\\s+(?:possible\\s+)?start(?:\\s+date)?\\b", "\\bwhen\\s+can\\s+you\\s+start\\b"]
+    "DEGREE_LEVEL": [
+      "\\bhighest\\s+level\\s+of\\s+(?:completed|attained|achieved)\\s+education\\b"
+    ],
+    "HOW_DID_YOU_HEAR": [
+      "^(?:candidate|application)\\s+source$"
+    ],
+    "PREVIOUSLY_EMPLOYED": [
+      "\\bworked\\s+(?:with|for)\\s+us\\s+before\\b",
+      "\\bhave\\s+you\\s+(?:ever\\s+)?worked\\s+(?:with|for)\\s+us\\b"
+    ],
+    "PREFERRED_CONTACT": [
+      "\\bpreferred\\s+(?:method|way|mode)\\s+of\\s+contact\\b"
+    ],
+    "NOTICE_PERIOD": [
+      "\\bdate\\s+available\\s+to\\s+start\\b",
+      "\\bavailable\\s+start\\s+date\\b",
+      "\\bearliest\\s+(?:possible\\s+)?start(?:\\s+date)?\\b",
+      "\\bwhen\\s+can\\s+you\\s+start\\b"
+    ],
+    "DESIRED_SALARY": [
+      "\\bexpect(?:ed)?\\s+to\\s+earn\\b",
+      "\\bexpected\\s+(?:annual\\s+|yearly\\s+|base\\s+)?(?:earnings?|salary|pay|compensation)\\b",
+      "\\bdesired\\s+(?:annual\\s+|yearly\\s+|base\\s+|total\\s+)?(?:salary|pay|compensation)\\b"
+    ]
   }
 }

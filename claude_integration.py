@@ -513,19 +513,21 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
                 logger.info("AI had no answer for %r (%r) -- left for the owner", question[:50], ans[:60])
                 return ""
             if options and ans:
-                for opt in options:
-                    if opt.strip().lower() == ans.lower():
-                        return opt
-                return ""
+                import concept_matcher
+                import option_match
+                needs = getattr(profile, "requires_visa_sponsorship", None)
+                return option_match.resolve_offered(
+                    list(options), ans,
+                    needs_sponsorship=None if needs is None else concept_matcher._is_yes(needs),
+                    availability=concept_matcher.match_concept(question=question) == "NOTICE_PERIOD",
+                )
             return ans
         except Exception as exc:
             logger.info("Could not answer single question %r: %s", question[:50], exc)
             return ""
 
-    def _open_answer(self, question: str, resume_text: str, profile: Optional[UserProfile],
-                     job_title: str, company: str, job_text: str, box: dict) -> str:
-        """An open question, written in the owner's plain words by open_answers."""
-        import open_answers
+    @staticmethod
+    def _open_answer_facts(profile) -> str:
         facts = []
         if profile:
             facts.append(f"Name: {profile.full_name}")
@@ -537,18 +539,50 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
                 facts.append(f"Roles wanted: {', '.join(profile.target_titles)}")
             for level, subject, school, year in profile.education[:2]:
                 facts.append(f"Education: {level} in {subject}, {school} {year}".strip())
-        facts.append(f"Applying for: {job_title or 'this role'} at {company or 'this company'}")
+        return "\n".join(facts)
+
+    def review_open_answer(self, question: str, answer: str, *, resume_text: str = "",
+                           profile=None, job_text: str = "") -> list[str]:
+        import open_answers
+        facts = self._open_answer_facts(profile)
+        evidence = open_answers.evidence_text(question, resume_text)
+        key = (question, answer, facts, evidence, job_text)
+        cache = getattr(self, "_open_review_cache", None)
+        if cache is None:
+            cache = self._open_review_cache = {}
+        if key not in cache:
+            cache[key] = open_answers.review(
+                question, answer, ask=lambda system, user, tokens: self._call(
+                    system=system, user_message=user, max_tokens=tokens),
+                facts=facts, resume_text=evidence, job_text=job_text)
+            if len(cache) > 128:
+                del cache[next(iter(cache))]
+        issues = list(cache[key])
+        if any(issue.startswith("content review") for issue in issues):
+            del cache[key]  # A transient provider/schema failure may recover on a later attempt.
+        return issues
+
+    def _open_answer(self, question: str, resume_text: str, profile: Optional[UserProfile],
+                     job_title: str, company: str, job_text: str, box: dict) -> str:
+        """An open question, written in the owner's plain words by open_answers."""
+        import open_answers
+        facts = self._open_answer_facts(profile)
         limits = open_answers.limits_from(question, box.get("hint", ""), maxlength=box.get("maxlength"),
                                           minlength=box.get("minlength"))
         try:
             answer, left = open_answers.write(
                 question, ask=lambda system, user, tokens: self._call(system=system, user_message=user,
                                                                         max_tokens=tokens),
-                facts="\n".join(facts), resume_text=resume_text, job_text=job_text,
-                hint=box.get("hint", ""), limits=limits)
+                facts=facts, resume_text=resume_text,
+                job_text=f"Target role: {job_title} at {company}\n{job_text}",
+                hint=box.get("hint", ""), limits=limits,
+                reviewer=lambda answer: self.review_open_answer(
+                    question, answer, resume_text=resume_text, profile=profile, job_text=job_text))
         except ClaudeIntegrationError as exc:
             logger.info("Could not write an answer to %r: %s", question[:50], exc)
             return ""
+        if not answer:
+            logger.info("OPEN_ANSWER_REJECTED: content unavailable or unverified (%d issue(s))", len(left))
         return answer
 
     # ------------------------------------------------------------------

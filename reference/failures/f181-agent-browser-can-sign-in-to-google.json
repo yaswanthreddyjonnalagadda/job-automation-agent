@@ -1,0 +1,16 @@
+{
+  "id": "f181",
+  "date": "2026-10-17",
+  "site": "Google / Gmail in the agent's own browser (account-verification emails on every ATS)",
+  "class": "A dependency on the owner's own sign-in was unreachable because the browser the sign-in had to happen in announced itself as automated",
+  "symptom": "The agent stopped at every 'verify your email' step because its browser was not signed in to Gmail, and the owner could not sign in: Google refuses sign-in on a browser that says it is automated.",
+  "root_cause": "The browser was started with Playwright's default --enable-automation (and AutomationControlled blink features), and .env pinned BROWSER_CHANNEL=chromium (Playwright's bundled build) instead of the real Chrome the code defaults to. There was also no simple way for the owner to open the agent's browser just to sign in.",
+  "why_tests_missed": "Nothing asserted how the browser is launched; the sign-in step is a human action no test could perform.",
+  "fix": "The launch drops --enable-automation and disables the AutomationControlled feature; the setting is BROWSER_CHANNEL=chrome (real Chrome, same profile); sign_in_browser.py / 'Sign In Agent Browser.bat' opens the agent's browser for the owner to sign in once. The agent still never types a Google password.",
+  "tests": [
+    "tests/test_browser_signs_in_to_google.py::test_the_browser_never_starts_with_the_automation_flag",
+    "tests/test_browser_signs_in_to_google.py::test_real_chrome_is_used_when_asked_and_the_bundled_build_otherwise",
+    "tests/test_browser_signs_in_to_google.py::test_the_sign_in_helper_loads_and_only_opens_the_browser_when_run"
+  ],
+  "prevention": "When the agent depends on a human sign-in inside its own browser, make sure that browser can complete the sign-in and give the human a one-step way to do it; do not assume the browser configuration allows it."
+}

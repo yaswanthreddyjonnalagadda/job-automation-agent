@@ -1,0 +1,16 @@
+{
+  "id": "f174",
+  "date": "2026-10-17",
+  "site": "All (the replay guard itself)",
+  "class": "A regression guard compared only what it already knew how to measure, so a change to the words that classify a page passed unseen",
+  "symptom": "Marathon's posting was read as the application's review step because of one footer sentence (f170); the replay guard, which replays 500+ saved pages through old and new code, reported nothing.",
+  "root_cause": "replay_guard compared questions, concepts and answers per page, never what kind of page it was. The classification lived in a regex buried inside a Playwright method, so it could not be replayed from a saved snapshot.",
+  "why_tests_missed": "The guard had no reading for page kind, and the unit tests for the classifier used hand-written pages, not the real ones.",
+  "fix": "browser_automation.looks_like_posting_text() is the one function that decides 'do the words say this is a posting'; on_job_description() calls it and replay_guard reads its verdict on every saved page, so a change that flips any real page is listed before it is committed.",
+  "tests": [
+    "tests/test_replay_reads_the_page_kind.py::test_one_function_decides_whether_the_words_are_a_posting",
+    "tests/test_replay_reads_the_page_kind.py::test_the_replay_reads_the_verdict_for_every_saved_page",
+    "tests/test_replay_reads_the_page_kind.py::test_a_page_whose_verdict_flips_is_reported_as_a_change"
+  ],
+  "prevention": "Put every decision that classifies a page in a pure function of the page's text, and have the regression guard replay that function, so each new decision gets a replay by construction."
+}

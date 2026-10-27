@@ -611,8 +611,8 @@ def choose(page, f: Field, answer: str, timeout_ms: int = 5_000) -> bool:
     if chosen is None:
         try:
             frame.keyboard.press("Escape")
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("choose: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return False
     frame.wait_for_timeout(300)
     return _kept(f, chosen)
@@ -623,7 +623,7 @@ def pick_open_row(scope, answer: str, timeout_ms: int = 3_000) -> Optional[str]:
     returns its text -- or None, closing the list, when no row is. Never ArrowDown + Enter: that takes whichever row
     is first ("United States" became "Afghanistan"), and in a box with no list open it sends the whole form -- Lucid,
     30 September: Greenhouse took it as Submit, showed its errors and mailed its security code."""
-    rows = scope.locator(", ".join(f"{s}:visible" for s in _OPTION_SELECTOR.split(", ")) + ", [role=listbox] li:visible")
+    rows = scope.locator(", ".join(f"{s}:visible" for s in _OPTION_SELECTOR.split(", ")) + ", [role=listbox] li:visible, [class*=dropdown-location]:visible")
     texts = []
     try:
         for i in range(min(rows.count(), 80)):
@@ -634,8 +634,8 @@ def pick_open_row(scope, answer: str, timeout_ms: int = 3_000) -> Optional[str]:
     if index is None:
         try:
             scope.keyboard.press("Escape")
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("pick_open_row: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return None
     try:
         rows.nth(index).click(timeout=timeout_ms)
@@ -660,8 +660,8 @@ def read_choices(f: Field, timeout_ms: int = 4_000) -> list[str]:
         rows = []
     try:
         f.frame.keyboard.press("Escape")
-    except Exception:
-        pass
+    except Exception as _swallowed:
+        logger.debug("read_choices: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
     return [r for r in rows if r and not is_placeholder(r)]
 
 
@@ -696,6 +696,19 @@ def choose_several(page, boxes: list[Field], answers: list[str]) -> list[str]:
 
 _MONTHS = {m.lower(): n for n, m in enumerate(("January February March April May June July August September "
                                                "October November December").split(), start=1)}
+
+
+def date_matches(shown: str, expected: str) -> bool:
+    """Compare a committed date at the precision provided by the saved fact."""
+    actual, wanted = parse_date(shown), parse_date(expected)
+    if actual is None or wanted is None:
+        return False
+    expected = expected.strip()
+    if re.fullmatch(r"\d{4}", expected):
+        return actual[0] == wanted[0]
+    if re.fullmatch(r"(?:[A-Za-z]+\.?,?\s+\d{4}|\d{1,2}[/-]\d{4}|\d{4}-\d{1,2})", expected):
+        return actual[:2] == wanted[:2]
+    return actual == wanted
 
 
 def parse_date(text: str) -> Optional[tuple[int, int, int]]:
@@ -787,8 +800,8 @@ def fill_date(page, f: Field, value: str) -> bool:
     placeholder = ""
     try:
         placeholder = (f.locator().get_attribute("placeholder") or "").lower()
-    except Exception:
-        pass
+    except Exception as _swallowed:
+        logger.debug("fill_date: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
     text = date_text(value, f.type, placeholder)
     if text is None:
         logger.info("Not a date the agent can read: %r for %r", value, f.question)

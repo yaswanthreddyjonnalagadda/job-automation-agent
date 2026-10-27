@@ -1,5 +1,45 @@
 # What the assistant does, and what it never does
 
+Labelled dropdown buttons with a nested placeholder (such as "State Select...") are recognised as unanswered questions. The agent opens the button itself through its guarded click helper, selects an offered option and verifies it; a denied click stops that attempt. Phone Type is resolved only when the primary phone uniquely matches an explicitly typed mobile, home or work number in the profile. A number without that evidence does not establish its type.
+
+ADP asynchronous dropdowns use the active widget's internal filter and offered choices. Existing offered equivalents, such as Mobile and Cell, are matched before applying a text filter. Candidate Source and Application source use the saved how-did-you-hear answer.
+
+When ADP displays an empty current-step region and disables Next while its fields load, the agent uses its existing bounded readiness wait before planning that page. Disabled navigation alone does not establish that a step is loading.
+
+Explicit questions retain ownership of their radio choices when explanatory text becomes a group's accessible name. Adjacent fields and independently named questions keep separate scopes. Current-employee questions use the stated current employer, including when a past employer also appears in the saved history; absent current-employer evidence remains unanswered.
+
+Highest completed, attained or achieved education questions use the saved degree and an offered matching option, just as highest-level-of-education questions do.
+
+Submission-guard activation continues past a frame that is confirmed detached during navigation. An activation failure on a live frame still stops that operation; the submission rules are unchanged.
+
+Named parent questions own checkbox choices even when rows separate the visible labels. Explicit complete owner/library answers may replace that group's stale selections only after every option matches; punctuation within option labels is retained and unrelated groups stay unchanged.
+
+A named choice answer uses the question’s offered labels even when the planner requests a check action on a different option. Literal checked/unchecked instructions still address an individual box.
+
+Selected dropdown answers are kept separate from question labels during classification. A race option's Hispanic/Latino qualifier does not turn a race question into a Hispanic-only question. Domestic or military-partner status is not inferred from relatives' employment status; required personal facts without an approved answer remain blocked for the owner.
+
+Structured profile degrees remain available when resume extraction is absent or partial; distinct degrees at the same school remain separate. Repeated education date groups such as “To (Actual or Expected)” identify the completion year. Where Workday explicitly instructs Enter to search for a school, Enter submits that search only; the agent must then click and verify the matching offered university.
+
+Workday nested prompts scan all virtual leaf rows within a category before matching an answer through the shared option matcher. Offered aliases can be selected when unambiguous; a competing label later in the list prevents selection. A bounded incomplete scan does not authorize a match. The clicked offered leaf must still pass the existing committed-value check.
+
+Gmail readers open a mail tab when needed and confirm the exact applying email from the visible Google Account button before reading a code, account-verification link or application confirmation. A Gmail URL with an account hint is insufficient: Gmail can fall back to another signed-in mailbox. When the identity is missing or different, the agent leaves an add-account tab open for the owner to sign in. Google passwords remain a human step; authorized employer verification can continue afterward.
+
+An explicit change to the owner's application email updates both the private profile and ATS login setting for future runs. An account recorded under a different email does not establish an account for the new identity; successful account recording updates the current identity. Submitted applications and duplicate-submission checks retain their history. Cached resumes and cover letters with a different contact email are regenerated; a generic fallback with an old email is refreshed locally without changing the source PDF. Restart a waiting run to load the new identity rather than continuing its old authentication state.
+
+On Bank of America's public career job-detail page, Apply may open the same-job Workday disclosure/navigation popup. The submission guard permits that opener only when its career host, popup marker, matching Workday tenant/job link and lack of visible application controls prove posting entry. It continues to block final submission and ambiguous controls.
+
+### Motivation answers and self-identification dates (23 October 2026)
+
+Employer/role motivation answers must explain a concrete reason to choose that employer or role using the posting, then connect relevant supported experience. A list of qualifications alone is incomplete. The existing answer reviewer and bounded rewrite enforce this requirement; company facts and personal preferences are not invented to make an answer sound specific.
+
+A Date field within a voluntary self-identification section uses today's date in the format the field requests. Heading scope is retained across explanatory subheadings and ends at a peer section, containing boundary or separator. An unrelated bare Date remains ambiguous. Existing owner-entered values and consent/submission gates remain authoritative.
+
+### Runtime audit corrections (23 October 2026)
+
+The cockpit Stop and handoff Cancel actions stop the active run through the existing stop mechanism and return a JSON result. Cancel clears the handoff after stopping. Answer overrides include the application's host when saved to tracker memory; a tracker synchronization failure is reported in the server log without the answer text.
+
+Gemini form-answer mode also sends factual answer reviews to Gemini. Current security-clearance possession does not establish whether the applicant ever held a clearance; historical questions require their own supported answer. Browser upload dialogs and Workday multiselect inspection use their owning implementations. The rules engine resolves confirmation status before screenshot cleanup and clears checkpoints using its own application keys.
+
 The agent prepares a job application end to end and then **stops before the
 final Submit button**. Only the verified auto-submit gateway may click it,
 which is off by default and refuses on any uncertainty. Otherwise the visible
@@ -49,8 +89,22 @@ System Health reports an available application database as connected in both
 the page and JSON response, and reports a warning when opening the tracker fails.
 Waiting workers are labeled **Waiting for you**, with their recorded reason,
 instead of appearing to process the form. Continue and Reload create the waiting
-worker's signal file. Pause is unavailable and disabled; an old client's pause
-request is refused without sending a command that could resume automation.
+worker's signal file. There is no Pause: the runtime cannot pause, so the page has
+no such button and a stray pause request finds no route and sends no command that
+could resume automation.
+
+The Applications page (23 October 2026) leads with what needs you: a **Needs your
+action** strip when the agent is waiting, then the current application, then suggested
+jobs, then your list. When nothing runs, the current-application card is a short
+invitation with nothing to press. While a run is live, **Continue** shows only while
+the agent is waiting for you, **Show browser** and **Stop application** only while it
+runs, and each says what happened (a short message, read aloud to a screen reader).
+Stop, Delete, Mark as submitted and Start again ask first in a dialog, and Cancel
+sends nothing. Text from an employer's page (activity messages, reasons, your saved
+answers) is always shown as plain text. In **Answers it gave**, an answer you changed
+says **You changed it**, and saving an edit keeps it for next time. The page can be
+used by keyboard and screen reader (skip link, labelled controls, visible focus) and its
+colours are readable in light and dark mode.
 Deliberate sponsorship skips and already-submitted applications
 have their own run outcomes instead of a generic failed exit.
 
@@ -165,8 +219,13 @@ only on the same site in nearly the same words -- so a question answered on a Wo
 form was a new question on Greenhouse. Now every question that was answered on an
 application **you sent** -- by the AI, or by the agent and read back on the page --
 and every answer **you** gave, anywhere, is kept in one answer bank
-(`data/_answer_bank.json`, on your computer only) and reused on every portal. It is
-rebuilt when a run starts and after each time you press Continue.
+(`data/_answer_bank.json`, on your computer only) and reused on every portal. The
+agent's answers on an application held for your review but not sent are kept too, as
+a weaker source: any answer from a sent application or from you wins over them. The
+bank is added to when a run starts and after each time you press Continue, and it
+never shrinks: a database that holds less than the one the bank was learned from
+(one that was down, or a new one) cannot drop an answer. An answer leaves it only if
+you put its question under `forgotten`, or it no longer passes the refusals below.
 
 It is asked **last**: your profile, your saved answers and your own earlier answers on
 that site always come first, so changing your profile is never hidden behind an old
@@ -175,7 +234,8 @@ signature, a legal, visa or sponsorship question, an essay, a question that name
 employer, a box of one job or one degree ("Company", "School"), a date (a start date
 goes stale), a two-word label ("Month", "Location"), or what older runs recorded that
 was not an answer (a press such as "open it"). When a question has several answers,
-yours wins over the agent's and the newest over older ones. To stop an answer being
+yours wins over the agent's, a sent application's over a held one's, and the newest over older ones. Page text
+that reads like a question ("for more details.") and an answer of "Not specified ..." are never kept. To stop an answer being
 reused, put its question under `forgotten` in that file.
 
 The answer keeps its meaning, not one portal's words: a Yes or No stays Yes or No
@@ -194,6 +254,13 @@ Fixed facts live in `config.py` (`UserProfile`) and are filled on every
 application without asking: citizenship, clearance, years of experience,
 salary range, education, EEO answers. A pay-band dropdown is answered with the
 band that overlaps your range; a band outside it is left for you.
+
+### Where the history is kept
+
+With Postgres configured (`POSTGRES_PASSWORD` in `.env`), the agent uses Postgres. If it
+is not running, the run **stops** and tells you to start it (`docker compose up -d`);
+it no longer quietly records into a separate SQLite file. To use SQLite on purpose, set
+`TRACKER=sqlite`.
 
 ## Questions it could not answer
 
@@ -437,6 +504,12 @@ consent checks. Authorization is cleared afterwards, and final application
 submission still requires its own verified gateway. A blocked click is not
 counted as an account-creation attempt, and a form that remains open is reported
 as an unconfirmed creation attempt rather than a created account.
+
+For two-step sign-in, the password form may carry the previously accepted
+username in a hidden read-only control. The sign-in gateway accepts that
+credential form when it has one filled password and a Log In action. If the
+gateway blocks the click, the agent records that no password attempt occurred
+instead of treating the unchanged form as a rejected sign-in.
 
 An account section the application page itself calls optional ("Create a Career Profile
 account (optional)" at the foot of Meta's form) is part of the application, not an account
@@ -1188,6 +1261,8 @@ While a visible dialog is open, the page reader focuses on that dialog and exclu
 
 ## Diagnostic privacy (P0-B5)
 
+Owner-authorized local testing (20 October 2026): `LOCAL_DEBUG_CAPTURE=1` adds private copies under Git-ignored `local_debug/`. They retain personal application details, question/option labels, runtime log messages and exception details, plus readable screenshots paired with accessibility snapshots and HTML for each readable frame. Captures occur at page-loop reads, unreadable-menu diagnostics, and existing screenshot/stop boundaries. Password/code controls are masked in screenshots; known configured secrets, credential assignments, and token-bearing URLs are redacted from text, and scripts/hidden input values are omitted from HTML. This is sensitive local evidence, not a safe-to-share export. Failed frame inspection suppresses that screenshot and records a capture error. No existing safe viewer/export accepts these files. Existing sanitized logs and exports keep their default policy below; safety and submission gates do not change. The option defaults off; changing it requires restarting the dashboard/worker. Local debug files are retained until the owner deletes them and are not covered by DIAGNOSTIC_RETENTION_DAYS. Already-redacted historical evidence cannot be recovered.
+
 Persisted diagnostics use one privacy layer. HTML is a structural projection:
 field values, scripts, bootstrap state, arbitrary text, document content and
 active attributes are omitted. Saved accessibility text retains roles, known
@@ -1348,3 +1423,386 @@ own script reacting to the search -- a browser tab this search did not ask for
 is closed immediately rather than left open, and a skill the widget's list does
 not recognize is followed by a short pause before the next search. Nothing
 about which skills are offered, chosen, or left blank changes.
+
+## Opening a posting's Apply link (f170)
+
+On a job posting, an Apply that is a link is opened by going to its address, whatever the plan
+calls the step. Nothing is clicked and nothing is submitted; the submission guard still refuses
+any click on a control that could send the application.
+
+
+## Account forms with a disclosure button (f171)
+
+A "Read More" / "Learn More" button inside the Create Account form (it only expands the consent text) no longer
+stops the account-creation click. Any other button the agent does not recognise in that form still does, and
+nothing that could send the application is ever authorised.
+
+## Sign in or create an account (f173)
+
+The agent uses Google sign-in wherever the site offers it, picking your already-signed-in Google account; it never
+types a Google password. Where there is no Google option, it checks whether you have applied to the same employer
+before (an account on record, or an application already sent): if so it signs in with the configured ATS password and
+does not create an account. Only an employer it has never dealt with gets a new account. If a sign-in is refused on
+an account the agent only inferred from an earlier application, it then creates one; if it was refused on an account
+it has on record, it follows the existing reset rules.
+
+## A refused Create Account press leaves nothing pending (f175)
+
+If the browser guard refuses the Create Account press, nothing was pressed and no account exists, so the agent
+forgets that it was about to press and can try again. Only a press that may really have happened stops the run
+with "check whether the account now exists".
+
+## When Create Account cannot be completed, the stop says why (f176)
+
+If the agent cannot finish the Create Account form -- no ATS password set, a CAPTCHA, a box only you may tick, a
+box that would not keep what was typed, no Create Account button, or the site keeping the form open -- the run stops
+and names that reason ("Create Account was not completed on <site>: ..."). It never goes on to press the form's
+button as if it were an ordinary page.
+
+## A consent box labelled only "Yes, I consent" (f179)
+
+Its meaning is the text above it, and that text is what the consent rule judges. If it agrees only to creating the
+account, the agent ticks it. Your standing decision of 2 October 2026: if the same required consent also agrees to
+calls and text messages *about your application* (Marathon Petroleum's: "recurring calls and text messages, including
+by automated means, regarding my application or employment opportunities"), the agent ticks it too. If it agrees to
+anything else -- marketing, promotions, newsletters, sharing or selling your data, terms and conditions, a declaration --
+the agent does not tick it and does not press Create Account: the run stops and shows you the words the box agrees to.
+This is only for the consent a site requires to create the account; a separate text-message box on an application still
+follows your preferred contact method.
+
+## "Already applied" (f180)
+
+When the site, signed in as you, says in its own words that you already applied for the job ("You've already applied
+for this job."), and this run did not send anything, the run ends with the status "Already applied". The site's words
+are kept in the note, the browser closes, and you are told on your phone. It is never counted as an application the
+agent submitted. A confirmation page that does not say you applied before still comes to you.
+
+## Signing in to Gmail in the agent's browser (f181)
+
+The agent reads an account-verification email from the Gmail its own browser is signed in to. That sign-in is yours:
+double-click "Sign In Agent Browser.bat", sign in to the Gmail your job accounts use, then close the window; it stays in
+the agent's browser. The agent's browser (real Chrome, `BROWSER_CHANNEL=chrome`) no longer announces itself as
+automated, because Google refuses to sign anyone in on one that does. The agent never types a Google password, and it
+reads only the verification link from your mail, as before.
+
+## A school list that holds nothing (f183)
+
+Some employers' Workday draws School as a search-and-pick list that is empty for their tenant ("No Items." for every
+search, even an empty one). Nobody can choose a school there, and an Education entry would make School required. Since
+Education is optional, the agent then leaves the section empty rather than adding an entry it cannot finish, and logs
+why. A list that offers schools, even if it loads slowly, is filled as before; a school missing from a list that does
+offer others still comes to you.
+
+## "Yes, without restrictions" or "Yes, with company sponsorship" (f184)
+
+When a list offers both rows for a question like "Are you legally eligible to work in this country?", your answer "Yes"
+means the row your profile supports: if your profile says you need visa sponsorship, the agent chooses **"Yes, with
+company sponsorship"**, never "Yes, without restrictions" (which would be false). If your profile says you do not need
+sponsorship it chooses the unrestricted row. If your profile does not say, or the list offers only the row that would be
+untrue for you, the question comes to you. Lists without sponsorship wording are answered as before.
+
+## An optional question the form cannot take (f185)
+
+If a question the form does not require (marked "Required" or with a star) is still blank because its list has no row
+for your answer -- Invesco's Veteran Status has no "I am not a veteran" -- the agent leaves it blank, notes that it did,
+and carries on, instead of stopping the run. It never guesses another row for you. A question the form requires, or an
+optional one that holds some other value, still comes to you.
+
+## The review step is the application (f186)
+
+When the agent stops at a review step -- your answers shown as text, with the application's Submit button and no
+fields to fill -- it reports the application as ready for you to check and submit. It used to say "the application form
+was never reached" there, because the page had no fields. A page with neither fields nor the Submit button (a sign-in
+page, say) still reads as not reached.
+
+## Numerical expected earnings and sponsorship-qualified radio/select choices (f187)
+
+Questions asking what you expect to earn per year or your desired annual/base compensation ("What would you expect to
+earn per year in the position for which you have applied? Please provide a numerical value.", "What is your desired
+annual compensation?") are recognized as `DESIRED_SALARY` from your profile instead of falling through to an open-ended
+AI paragraph. When the question asks for a numerical value ("numerical value", "numbers only", "single number",
+"whole number"), the agent fills your plain numeric `salary_min` (`125000`) rather than a `$min - $max` range string.
+In addition, sponsorship-qualified "Yes" options ("Yes, without restrictions" vs "Yes, with company sponsorship") now
+follow `profile.requires_visa_sponsorship` across radio button groups, cached native `<select>` elements, and group
+choices just as they do on custom dropdowns.
+
+## Greenhouse 8-character alphanumeric codes, country location questions, and WOTC coverage (f188)
+
+When Greenhouse emails an 8-character alphanumeric security code ("EvPGU6Qy") and the form either shows 8 character
+boxes or states "enter the 8-character code", the code-entry step keeps letters as well as digits (only digit-labeled
+boxes such as "digit 1 of six" strip non-digits). Embedded Greenhouse boards using `?gh_jid=` also match the
+Greenhouse adapter and inspect embedded Greenhouse frames for attachment state. Questions asking "Which country are you
+located in?" now resolve to `COUNTRY` (`profile.country`) rather than `RESIDES_IN`; "Where would you like to receive a
+verification code?" selects your preferred contact channel (`Email` by default) on both dropdowns and radio buttons;
+and WOTC government-assistance questions (TANF, AFDC, SNAP) map to `profile.received_government_assistance`.
+
+## SmartRecruiters guest apply, option range matching, file upload decoupling, and iCIMS scoping (f189)
+
+On SmartRecruiters and other guest apply forms, a field asking to "Confirm your email" alongside applicant personal fields
+(First Name, Last Name, Phone, Resume) is recognized as an application form input rather than being misclassified as an
+account verification gate (`VERIFY_EMAIL`). Verification-sent notifications on account creation pages (e.g. Workday) are
+recognized and prompt verification link retrieval before attempting sign-in. Option selection now supports numeric
+intervals for total annual compensation and expected earnings buckets (e.g. choosing "$111,000 - $120,000/yr" for an
+expected salary of 120000 or "$120,000") and years of experience. File upload buttons ("Choose file", "Upload file",
+"Browse") are decoupled from generic dropdown placeholders so Playwright never clicks them as select inputs to open native
+OS file dialogs. iCIMS portals are handled by a dedicated adapter (`sites/icims.py`) that scopes form filling to
+`#icims_content_iframe` to prevent outer corporate header search bars from hijacking application navigation, and ATS vendor
+job postings extract the tenant employer from the URL path when microdata is absent or records the software vendor name.
+
+
+
+
+## Datadog audit fixes (f190-f194)
+
+- **No writer key no longer stops the run (f190).** With no AI writer set in Settings, the run used to stop before the
+  browser opened. It now goes on and attaches your own resume as it is, as it always promised.
+- **"No, I need sponsorship now" is your true answer, not a conflict (f191).** When a work-authorization list's rows say
+  what you need ("No, I need sponsorship now", "Yes, with company sponsorship", "Yes, without restrictions"), the agent
+  checks the chosen row against whether your profile says you need sponsorship -- not against its first word. A bare
+  "No" to "Are you authorized to work?" is still flagged.
+- **A required "Preferred name" takes your first name (f192).** If your profile has no preferred name and the form
+  requires one (a star, or marked required), the agent types your first name and leaves it there. An optional
+  preferred-name box is still left blank. A label written "Name*" (no space before the star) now counts as required.
+- **The review stop waits for you (f193).** A run's "waiting" note no longer overwrites its own Continue/Stop signal.
+- **Your most specific saved answer wins (f194).** When several of your saved answers match a question, the one saved
+  for exactly that question -- or the one that covers most of it -- answers it, not whichever comes first in the file.
+
+## A new account that is refused at sign-in (f195)
+
+When the agent has just created your account on a site and the site then refuses the sign-in -- Workday says only
+"You may have entered the wrong email address or password or your account might be locked." while a new account's
+email is not verified yet -- the agent no longer hands that page to you straight away. It first opens the verification
+link the site emailed you (from your Gmail, as before). If no link arrives, it resets the password to the ATS password
+in Settings with the code the site emails. Only if that does not work either is the sign-in left for you.
+
+## A CAPTCHA stop ends when the page moves on (f196)
+
+When the agent stops for a CAPTCHA (such as hCaptcha on iCIMS profile creation) and you solve it, the wait loop
+watches the browser page progression. As soon as the site submits and navigates to the next page or application step
+(the URL path changes or password inputs disappear), the agent immediately carries on with the application without
+waiting indefinitely, even if the site keeps third-party CAPTCHA scripts or invisible widget frames embedded in its layout.
+
+## Owner Continue clears uncertain account creation marker (f197)
+
+When an account creation attempt was interrupted (leaving an advisory `account_creation_dispatched` marker in the
+checkpoint) and the agent stopped to ask you to verify whether the account exists on the site, clicking Continue
+on the dashboard or signal file now clears the pending marker so the agent can execute the owner-approved retry,
+rather than repeatedly stopping with the same advisory note. Additionally, iCIMS Candidate Profile builder forms
+inside `#icims_content_iframe` are classified as registration and their "Submit Profile" button is properly targeted.
+
+## Candidate profile gateway and step finality on multi-step ATS builders (f198)
+
+ATS portals that build a candidate profile before the application form (such as iCIMS `/candidate?from=profilebuilder`)
+combine candidate contact details, file uploads, login credentials, and a button labeled "Submit Profile".
+The agent now recognizes candidate profile creation actions through a dedicated, authorized gateway that validates
+matching passwords and email while strictly enforcing that no final application submission button exists on the form.
+Furthermore, intermediate wizard step progression (e.g. iCIMS "Step 1 of 3", "Step 2 of 3") is recognized as non-final,
+ensuring multi-step registration and application flows proceed smoothly to the final review step without premature stops.
+
+## Input submit elements supported in credential and candidate profile gateways (f199)
+
+Portals like iCIMS that render profile creation and sign-in actions with `<input type="submit">` or
+`<input type="button">` (instead of standard HTML5 `<button>` elements) are now fully recognized and
+authorized by `SubmissionGuardV0`'s credential and candidate profile creation gateways, eliminating
+false-positive click blocks when creating ATS accounts or candidate profiles.
+
+## Dynamic CAPTCHA detection after account or profile submission (f200)
+
+When submitting an account creation or candidate profile form triggers an interactive CAPTCHA modal
+(such as hCaptcha on iCIMS profile builder), the filler detects the newly presented CAPTCHA immediately
+rather than mistaking the held-open form for a generic validation failure. The run enters the dedicated
+CAPTCHA handoff loop, prompting the user and resuming as soon as the challenge is completed.
+
+## Owner Continue clears pending account creation across key aliases (f201)
+
+When resuming an application after owner handoff or restart, `apply_flow.py` and `PageAgent.forget_sign_in_attempts`
+clear any pending `account_creation_dispatched` checkpoint markers across all key aliases (the human-readable slug
+key and the 64-character SHA-256 submission key). This prevents runs from getting trapped in an infinite
+`ACCOUNT_CREATION_UNCERTAIN` loop when resuming after an interrupted account creation or CAPTCHA step.
+
+
+On embedded ATS account forms, CAPTCHA handoff observes the application frame even when the outer page stays unchanged. It follows a replaced frame and keeps waiting if the frame temporarily disappears. The wait also retains an explicit CAPTCHA reason from an account-creation stop. No CAPTCHA is solved by the agent.
+
+An explicit owner Continue that successfully clears a pending account-creation checkpoint also clears the matching in-memory attempt hold. Automatic refresh, failed checkpoint writes, and confirmed creation history do not receive this reset.
+
+Stopped-page and account-failure captures include a `.state.json` report of field validity flags, filled/required/disabled booleans, submit counts, visible-alert counts and known submission-guard denial types. This report excludes field values, labels, URLs, and CAPTCHA-frame contents, and follows the existing artifact retention rules.
+
+Resume tailoring rejects drafts with any remaining claims detected by the existing unsupported-claim checker after correction, including when the correction request fails. It tries the next configured writer and ultimately uses the original resume if all writers fail. Stored tailored PDFs are checked against the current source resume before reuse; unreadable, empty, or flagged PDFs are regenerated. This lexical checker is not a complete semantic fact checker.
+
+Gemini document requests share the configured request-timeout budget across their model attempts, log attempt start/end timing, and move to provider fallback without sleeping on per-minute limits. Responses arriving after the budget are rejected. This is a cooperative budget, not forced cancellation of an active HTTP request; socket inactivity timeouts can overrun elapsed time. Page-answer retry behavior is unchanged.
+
+## Human-paced typing on application inputs (f206)
+
+Filling form fields in 0ms using synthetic instant value assignment triggers anti-bot telemetry and challenge blocks (hCaptcha, Turnstile, DataDome) and can fail custom input controls with keydown listeners. The agent now types normal inputs (<200 characters) character-by-character via natural keypress sequences with variable human delays (30-65ms) and a natural settling pause between fields (150-350ms). Empty inputs do not issue unnecessary clear keystrokes, and long answers/essays (>200 chars) are inserted directly like a pasted response. Fallback logic automatically catches swallowed keys and applies instant fill so fields are never left blank or corrupted. Readback verification requires exact comparison by default (including letter case, punctuation, and decimals) so dropped characters in passwords or numbers trigger immediate fallback fill; only recognized masked phone number inputs allow formatting differences. Human-paced typing is enabled by default in runtime (`HUMAN_TYPING=1`) and disabled in the test suite (`HUMAN_TYPING=0` in `conftest.py`) for speed.
+
+
+### Open application answers: evidence and content review (20 October 2026, f209)
+
+Technical experience and other open answers use the original resume already parsed for the run, not a
+browser extraction helper or a generated attachment. Ordinary resumes are kept up to 12,000 characters;
+longer resumes use question-relevant lines within that budget. Profile and approved answers retain priority.
+
+A separate content review checks the final fitted answer for supported personal claims and coverage of the
+question, including requested scale/examples. Missing resume evidence does not establish lack of experience.
+The shared writer permits at most two drafts and two reviews, reuses identical reviews, and returns no answer
+if content approval is missing, malformed, unavailable, or still rejects the draft. Exact known answers do
+not need review. Full-page planner fills and corrections must pass the same content review, regardless of
+the source label proposed by the model. The selected answering provider performs reviews; document writers
+do not. Default word targets no longer force short complete answers to be padded. Explicit form limits remain
+mandatory; tone preferences remain advisory after the bounded rewrite.
+
+Unsupported optional fields remain blank under the existing optional-field rules; required gaps use the
+existing review/handoff path. Owner-entered values and submission gates are unchanged. Existing filled
+answers are not silently rewritten by restarting the code. Semantic review adds a check, not a guarantee;
+the owner still reviews generated application answers before submission.
+
+
+### Personal web addresses require evidence (21 October 2026, f210)
+
+For recognized personal URL fields, the shared browser fill boundary accepts a URL only when it matches
+an existing profile/approved answer or a URL explicitly present in the original resume. URL syntax alone
+is insufficient; generic platform homepages and invented handles are not substitutes for missing user
+facts. Email-address fragments do not establish a personal website. Required gaps remain for review;
+unsupported optional fields remain blank under existing rules.
+# Related experience in application narratives
+
+When the question names a technology not explicitly documented, the answer writer first connects concrete supported work to the requested skills. It leads with relevant experience instead of resume-omission disclaimers. The reviewer accepts accurate transferable experience without requiring an exact keyword match. This does not authorize invented projects, tool usage, metrics, or negative experience claims. Explicit factual requirements such as exact years using a tool still need evidence.
+
+## ADP job-listing navigation
+
+The submission guard permits ADP's verified job-detail Apply opener when the live URL and component structure identify the posting and no visible form, dialog, or input is present. Apply buttons on application pages, form-associated controls, and final-submit labels remain guarded. This opens the application workflow; it does not authorize submission.
+
+Modal confirmation matches whole accessible button names. Agree cannot match Disagree, and Accept cannot match a negative action containing that word. Existing consent and attestation requirements still apply.
+
+## Radio accessible name recovery from live validation errors (f214)
+
+When an employer portal (such as ADP) displays validation errors on an unselected required question, it associates error messages (e.g. "Error Add response.") with the radio buttons via aria-describedby or aria-errormessage, which pollutes their computed accessible names in the accessibility tree and prevents option matching from recognizing the choices. The accessibility snapshot parser now recognizes validation error banners and placeholder phrases on radio, checkbox, and switch controls and recovers the genuine choice label from child or sibling text nodes ("Yes" / "No").
+
+## ADP post-submission Applied button confirmation (f215)
+
+On ADP career sites (such as `myjobs.adp.com`), completing an application submission redirects the user back to the job description page (`/cx/job-details?reqId=...`) where the action button dynamically changes from "Apply" to a disabled or toggled "Applied" button, without displaying an explicit "Thank you for applying" confirmation page. The dedicated `AdpAdapter` now detects this terminal status on ADP job details pages. If the application form was active (`_seen_form` or `final_pressed`), the runner recognizes submission confirmation, updates the tracker to `submitted`, saves `submitted_confirmation.png`, and cleanly terminates the browser session instead of stalling into `needs_user_review`. If the posting is opened for the first time without prior form interaction in the run, it is recognized as `already_applied`.
+
+## Autonomous ATS Discovery Fleet, 3-Column Command Cockpit & Remote Notifications (P3-1, P3-4, P3-5)
+
+The local web UI and runtime agent feature a 3-column unified command cockpit (`web_ui.py`):
+1. **Discovered Feed & Fast Apply (Left)**: Continuous background crawler (`job_discovery.py`) discovers newly posted roles directly from Greenhouse and Lever JSON APIs without browser overhead. Pre-filters against candidate target titles, locations, and visa criteria, assigning match scores (0-100%). Users can 1-Click Apply, dismiss, or paste direct URLs.
+2. **Active Application Cockpit (Center)**: Real-time visual stepper, live action display, last verified operation, inline handoff review cards, and direct pause/resume/reload controls during active runs. When idle, shows clear standby status and safety guarantees.
+3. **Application Tracker & History (Right)**: Searchable and filterable history with live status pills, relative timestamps, and one-click access to application details and receipts.
+4. **Remote 1-Tap Notifications (`notifications.py`)**: Webhook dispatcher supporting Telegram, Discord, Slack, and generic HTTP endpoints. Automatically alerts the owner when high-fit opportunities (>=85% match) are discovered, with 1-tap `/apply <id>` or `/dismiss <id>` command processing via `/api/webhook/command` and `/api/webhook/telegram`. All final submit gates (`SubmissionGuardV0`) remain active without exception.
+
+
+## Worker profile ownership and ADP receipts (22 October 2026)
+
+The runtime leases its persistent browser profile before cleaning up old browser
+processes. If another updated worker holds that profile, startup stops with a
+profile-in-use message and leaves that browser untouched. The lease is released
+on teardown, failed startup or process exit. This does not enable simultaneous
+applications in the dashboard or change the visible-browser default. Finish older
+workers before deploying this change; they do not participate in the lease.
+
+ADP's Applied-button receipt requires current live evidence: the exact Applied
+label within the posting action row on the requisition's ADP job-details route,
+with no visible application form controls. Open shadow roots are inspected.
+Cached snapshots, body prose, unrelated buttons and label prefixes cannot mark an
+application submitted. Existing generic confirmation banners continue to work.
+
+Direct API submission remains unimplemented: official Greenhouse and Lever write
+APIs require employer integration credentials, and the existing verified browser
+submission gateway is retained. No personal application payload is POSTed through
+an alternative transport. See `docs/MULTI_AGENT_PLAN.md` section 5.2 for prerequisites.
+
+
+## Authentication page changes after a failed action (22 October 2026, f219)
+
+A failed registration or sign-in can still navigate to a different account step.
+The reader now checks the resulting URL and account state before using its old
+form controls. A changed page is read again; a page that cannot be read is handed
+off explicitly. Authentication is not marked successful merely because it moved,
+and credential retry, verification and password-reset policies are unchanged.
+
+## Gemini-guided sign-in fallback (22 October 2026)
+
+When the normal employer sign-in helper cannot locate its controls, a configured
+Gemini key enables one guidance attempt per employer host per run through the
+configured quick-model ladder. Gemini sees
+redacted control labels and types, and selects local control indices. The runtime
+fills the configured email and ATS password locally; credentials, input values,
+cookies, full page text and screenshots are not sent in this request.
+
+This fallback runs only on a recognized sign-in page before a failed dispatch.
+It preserves different existing credential values, rejects changed pages and
+invalid plans, and requires the existing dedicated credential-form submission
+guard. It does not retry a rejected password, create accounts, reset passwords,
+operate identity-provider logins, solve CAPTCHA or authorize final submission.
+Unknown button labels that the guard does not support still require handoff.
+A verification prompt or a disappearing form alone is not recorded as a successful
+login. Model failures leave the existing recovery/handoff path in control.
+
+### Sign-in latency cleanup (22 October 2026, f221)
+
+Hidden password inputs no longer cause a four-second wait followed by unnecessary
+Gemini guidance when a visible password input is available. Login outcome checks
+also ignore hidden duplicates. Redundant case-only button lookups were removed.
+Gemini sign-in guidance makes one pass through the configured quick-model ladder
+without sleeping for quota resets or retrying the entire request. Unavailable
+models return to the existing handoff/recovery flow. Other page-answer and document
+model policies retain their existing behavior; credential and submission checks
+remain in place.
+
+### Reading an answer for a list, and a sign-up form's password rule (f225, f226)
+
+- When the AI answers a question that has a list of options, the agent now accepts the option that means the answer in the bounded ways only: the same words, the profile's own answer on sponsorship for a bare "Yes" (and nothing at all if the profile cannot back any row), a listed equivalent such as "Bachelor's" for "Bachelor's Degree", and, for a start-date question, the same wait in days or weeks ("2 weeks" for "Within 2 weeks"). If two options state the same wait, or none matches, the question is left for you.
+- On a plain drop-down the profile's sponsorship answer is applied before any other match, as it already was on other lists.
+- On an account-creation form, a message such as "Password is invalid: must include a symbol" is treated as the site's rule for the new password, never as a refusal of your password, so it does not start a password reset.
+
+## Your standing decisions on consent, and where you are available to work (f229)
+
+Four questions that forms ask in many wordings are answered from your profile, once, on every form: **AI interview notetakers** (your decision of 23 October 2026: consent, "Yes, I consent"); **sharing your resume or contact details with a company's partners or third parties** (No); **marketing emails, newsletters, job alerts and joining a talent community** (No); and **where you are available to work** (the places you gave). Each is a setting in your profile (`ai_notetaker_consent`, `share_data_with_partners`, `marketing_opt_in`, `available_work_locations`). When a setting is empty the question is left for you, never guessed, and the account-creation rules above are unchanged: a box that also agrees to marketing or sharing your data is still not ticked for you. New wordings of these questions are added as lines in `reference/concepts.json`, not as code.
+
+## Answering from your profile first, not from a model (f230)
+
+Before any AI model is asked, the agent answers fact questions itself from your profile, resume and work history, in any wording: languages you speak, whether you may work in a named country, your current employer's name, how you heard of the job, years in a named skill, degree level, ties to the company, work arrangement, contact preference, clearance, and privacy-notice acknowledgements. Experience is claimed only where your resume shows it; where it does not, the answer follows your `unproven_experience_answer` setting (default "No"; "ask" leaves it for you). A free-text box is never answered Yes or No. Who you are (gender, race, veteran status, disability) and declarations or attestations are never answered by this step. On a page that marks which fields are required, optional questions the agent cannot answer are left blank rather than stopping the run or calling a model (`skip_optional_questions`, on by default).
+
+## Lever-style forms (f231)
+
+On forms that put the required star on its own line, the agent now knows which questions are required, so optional boxes it cannot answer from your profile are left blank instead of being written up by a model. A list whose first row is an instruction ("Click Here ...") counts as unanswered and is chosen from your profile. A town typed into a search-as-you-type box (Current location) is confirmed by clicking the suggestion that names the same town, never the first row. The Date under your name on a voluntary self-identification form is the day it is filled in.
+
+
+## ADP uploads, repeated cards and saved choices (f252–f256)
+
+ADP document uploads open their own dialog, attach through its shadow file input,
+and save before the existing attachment receipt check can report success. A denied
+guarded click stops the action. Existing numbered employer and education cards are
+expanded and scoped by both their headers and sibling regions; each uses its own
+saved history, including Current/Previous and the current job's blank end date.
+Approved reasons and employer-contact permissions are merged only into the matching
+employer record. Missing permission remains unanswered. No permission is inferred.
+
+A saved dropdown choice nested under a button is separated from its question when
+the explicit preceding field label matches. Unrelated button prose is unchanged.
+Paused code reload refreshes all registered portal adapters before rebuilding the
+registry, rather than retaining an older ADP implementation.
+
+Employment date correction and post-fill verification compare dates in the format
+the site commits (f257). A saved month/year accepts the same month without
+replacing an already supplied day; a saved full date still requires the same day.
+
+Education cards use school-matched `education_details` for explicit city, state,
+country and graduation answers (f258). Unknown facts remain unanswered. Inline
+education cards are added only up to the saved degree count, with the same
+post-action count check used for work entries.
+
+Personal-profile corrections exclude mapped work and education controls (f259).
+An employer's or school's city cannot be replaced by the home city. Named
+signature containers provide context for their typed-name fields; authorized
+signature plans select affirmative radio choices and never check Decline (f260).
+The standing signature permission and sign-last checks still apply. A bare From
+Date outside a mapped record no longer borrows the current job's dates (f261).
+
+On ADP, the wizard's Next control on its current Review step is treated as a
+final submission action (f262). The guarded agent and supervised actions stop
+there for owner review unless final submission is separately authorized.
+
+Known answers to individual text questions stay scoped to that question. Answering Address does not supply Address 2, and answering Employer does not supply Previous Employer.
+
+A guarded employer sign-in can accept one same-button click that the site triggers synchronously while handling the authorized Log In action. A prevented first sign-in form submit can be followed once by the site on that same form; an accepted submit consumes authorization, and additional clicks remain blocked.

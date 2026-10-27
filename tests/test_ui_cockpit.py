@@ -8,6 +8,7 @@ import sqlite3
 import pytest
 from flask import Flask
 
+import answer_ledger
 import web_ui
 import ui_shell
 import handoff
@@ -18,7 +19,7 @@ from runtime_events import RuntimeEvent, EventName, ReasonCode, AnswerSource
 def client(tmp_path, monkeypatch):
     """Test client with test DB and isolated environment."""
     test_db = tmp_path / "test_applications.db"
-    monkeypatch.setattr(web_ui, "_LEDGER_DB_PATH", test_db)
+    monkeypatch.setattr(answer_ledger, "DB_PATH", test_db)
     
     app = web_ui.app
     app.config["TESTING"] = True
@@ -28,7 +29,7 @@ def client(tmp_path, monkeypatch):
 
 def test_init_and_record_answer_ledger(tmp_path, monkeypatch):
     test_db = tmp_path / "test_answers.db"
-    monkeypatch.setattr(web_ui, "_LEDGER_DB_PATH", test_db)
+    monkeypatch.setattr(answer_ledger, "DB_PATH", test_db)
 
     # Record first answer
     row_id = web_ui.record_answer_ledger(
@@ -67,7 +68,7 @@ def test_init_and_record_answer_ledger(tmp_path, monkeypatch):
 
 def test_runtime_events_auto_record_into_ledger(tmp_path, monkeypatch):
     test_db = tmp_path / "test_events_ledger.db"
-    monkeypatch.setattr(web_ui, "_LEDGER_DB_PATH", test_db)
+    monkeypatch.setattr(answer_ledger, "DB_PATH", test_db)
 
     # Emit ANSWER_WRITTEN
     RuntimeEvent.emit(
@@ -140,31 +141,17 @@ def test_api_cockpit_state(client, monkeypatch):
 
 
 def test_api_cockpit_controls(client, monkeypatch):
-    # The runtime has no cooperative pause command. Never acknowledge a pause
-    # or send refresh (which resumes automation) in response to this request.
-    res_pause = client.post("/api/cockpit/pause")
-    assert res_pause.status_code == 409
-    assert res_pause.get_json()["ok"] is False
-
-    # Test resume
+    # Resume (Continue) and raise-browser are the controls that exist; there is no pause or takeover route.
     res_resume = client.post("/api/cockpit/resume")
     assert res_resume.status_code == 200
     assert res_resume.get_json()["ok"] is True
 
-    # Test raise browser
     monkeypatch.setattr(web_ui, "raise_browser_window", lambda: True)
     res_raise = client.post("/api/cockpit/raise-browser")
     assert res_raise.status_code == 200
     assert res_raise.get_json()["ok"] is True
-
-    # Test takeover
-    res_takeover = client.post("/api/cockpit/takeover")
-    assert res_takeover.status_code == 200
-    assert res_takeover.get_json()["ok"] is True
-    active = handoff.get_active_handoff()
-    assert active is not None
-    assert active["category"] == handoff.OWNER_REVIEW
-    handoff.clear_active_handoff()
+    for gone in ("/api/cockpit/pause", "/api/cockpit/takeover"):
+        assert client.post(gone).status_code in (404, 405)
 
 
 def test_captcha_handoff_resolution_fail_closed(client):
@@ -198,7 +185,7 @@ def test_captcha_handoff_resolution_fail_closed(client):
 
 def test_api_answers_update(client, tmp_path, monkeypatch):
     test_db = tmp_path / "test_update_answers.db"
-    monkeypatch.setattr(web_ui, "_LEDGER_DB_PATH", test_db)
+    monkeypatch.setattr(answer_ledger, "DB_PATH", test_db)
 
     aid = web_ui.record_answer_ledger(
         application_key="app_update_test",

@@ -126,6 +126,27 @@ def test_with_nothing_configured_the_tracker_is_sqlite(monkeypatch, tmp_path):
     assert isinstance(tracking.open_tracker(tmp_path / "a.db"), JobTracker)
 
 
+def test_a_configured_postgres_that_is_down_is_an_error_not_a_quiet_sqlite(monkeypatch, tmp_path):
+    """21-23 October 2026: Postgres down -> SQLite for that run, ~1,800 times; the history split in two."""
+    psycopg = pytest.importorskip("psycopg")
+    db = pytest.importorskip("db")
+    monkeypatch.setattr(tracking, "chosen", lambda: "postgres")
+
+    def down():
+        raise psycopg.OperationalError("connection refused")
+    monkeypatch.setattr(db, "get_tracker", down)
+    with pytest.raises(RuntimeError, match="docker compose up -d"):
+        tracking.open_tracker(tmp_path / "a.db")
+    assert not (tmp_path / "a.db").exists()
+
+
+def test_tracker_sqlite_set_on_purpose_still_works_with_postgres_configured(monkeypatch, tmp_path):
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
+    monkeypatch.setenv("TRACKER", "sqlite")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "set")
+    assert isinstance(tracking.open_tracker(tmp_path / "a.db"), JobTracker)
+
+
 # --- the dashboard on SQLite -------------------------------------------------------------------------
 
 def test_the_dashboard_works_on_sqlite(monkeypatch, tmp_path):

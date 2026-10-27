@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 # Every public method of ClaudeClient belongs to exactly one side (tests/test_gemini_answers.py checks it), so a
 # model call added later cannot end up at the wrong company by default.
-ANSWERS = frozenset({"plan_page", "read_page", "choose_option", "answer_screening_questions", "answer_single_question"})
+ANSWERS = frozenset({"plan_page", "read_page", "choose_option", "answer_screening_questions", "answer_single_question", "review_open_answer"})
 DOCUMENTS = frozenset({"tailor_resume", "generate_cover_letter"})
 LOCAL = frozenset({"cost_summary"})   # reports kept on this machine; nothing is sent anywhere
 
@@ -152,8 +152,8 @@ def _retry_delay(reply) -> float:
             found = re.fullmatch(r"\s*([\d.]+)s\s*", str(detail.get("retryDelay") or ""))
             if found:
                 return min(float(found.group(1)), MAX_RATE_LIMIT_WAIT)
-    except (ValueError, AttributeError):
-        pass
+    except (ValueError, AttributeError) as _swallowed:
+        logger.debug("_retry_delay: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
     return 2.0
 
 
@@ -221,20 +221,38 @@ class _Messages:
         self.tier = "page"
 
     def create(self, *, model: str, max_tokens: int, system: str, messages: list[dict],
-               timeout: Optional[float] = None, **_ignored: Any) -> SimpleNamespace:
+               timeout: Optional[float] = None, wait_on_pause: bool = True,
+               **_ignored: Any) -> SimpleNamespace:
         key = str(getattr(self._config, "gemini_api_key", "") or "")
         base = str(getattr(self._config, "gemini_base_url", "") or DEFAULT_GEMINI_BASE_URL).rstrip("/")
+        # Document calls share a budget across the model ladder. Page calls
+        # retain their existing retry policy. This is a cooperative budget;
+        # requests' socket timeout is not a hard wall-clock cancellation.
+        started = time.monotonic()
+        deadline = started + timeout if not self._json_reply and timeout is not None else None
 
         def send(name: str) -> SimpleNamespace:
+            request_timeout = timeout
+            if deadline is not None:
+                request_timeout = deadline - time.monotonic()
+                if request_timeout <= 0:
+                    raise GeminiTimeout("Gemini document attempt budget exhausted")
+                logger.info("DOCUMENT_MODEL_START: %s (%.1fs remaining)", name, request_timeout)
+            attempt_started = time.monotonic()
             try:
                 reply = requests.post(f"{base}/models/{name}:generateContent",
                                       json=_payload(name, system, messages, max_tokens, self._json_reply),
                                       headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-                                      timeout=timeout)
+                                      timeout=request_timeout)
             except requests.exceptions.Timeout:
                 raise Failed(GeminiTimeout("Gemini did not answer in time")) from None
             except requests.exceptions.RequestException as exc:
                 raise Failed(GeminiConnectionError(f"could not reach Gemini ({type(exc).__name__})")) from None
+            finally:
+                if deadline is not None:
+                    logger.info("DOCUMENT_MODEL_END: %s after %.1fs", name, time.monotonic() - attempt_started)
+            if deadline is not None and time.monotonic() > deadline:
+                raise GeminiTimeout("Gemini document response arrived after its attempt budget")
             if reply.status_code == 429:
                 if _no_free_tier(reply):
                     raise NoFreeTier(GeminiStatusError(f"{name} has no free allowance on this key", 429))
@@ -258,6 +276,7 @@ class _Messages:
 
         return model_ladder.climb(
             models_for(self._config, self.tier), send, label="GEMINI", tier=self.tier,
+            wait_on_pause=self._json_reply and wait_on_pause,
             all_spent=lambda: GeminiDailyLimit(
                 "every model's daily allowance is used up -- they come back at midnight Pacific time "
                 "(or add billing at aistudio.google.com)", 429),
@@ -308,10 +327,9 @@ class GeminiDocumentClient(GeminiClient):
     setattr, so subclasses inherit them.  We restore the original ClaudeClient
     implementations here so tailor_resume / generate_cover_letter actually run.
 
-    Unlike the base GeminiClient (which retries page-planning calls with long
-    waits), this client fails fast on connection errors so the provider loop in
-    prepare_materials can immediately try the next provider (OpenAI, local resume)
-    without making the user wait 30-90 seconds per attempt.
+    Unlike page-planning calls, document calls do not sleep on rate limits.
+    Model attempts share the configured request-timeout budget; transport socket
+    timeouts are cooperative, not a hard cancellation of an active request.
     """
 
     def __init__(self, config: Any):
@@ -320,7 +338,7 @@ class GeminiDocumentClient(GeminiClient):
         self._remembered = {}
 
     def _call(self, *, system: str, user_message: str, max_tokens: int = 2000) -> str:
-        """Single-attempt call -- fails fast so the provider fallback loop moves on."""
+        """One budgeted model ladder, without an outer retry loop."""
         try:
             response = self._client.messages.create(
                 model=self._model,

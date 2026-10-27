@@ -1,0 +1,14 @@
+{
+  "id": "f262",
+  "date": "2026-10-26",
+  "class": "ADP final Review Next bypassed the final-submission boundary",
+  "symptom": "During supervised Church Mutual application 548, the Review page showed only Next. A guarded manual click on Next submitted the application, despite the owner's instruction to stop before final submission. The page then displayed Application Submitted!",
+  "site": "Church Mutual ADP Senior Network Engineer application 548, 26 October 2026",
+  "root_cause": "The browser submission guard recognized submit labels and structural submit controls but treated a type=button Next as ordinary navigation. The reading agent did classify the Review action as final and stopped; the supervised click bypassed that higher-level classification.",
+  "why_tests_missed": "ADP guard tests covered posting Apply and explicit submit labels, not the real wizard's Review Next control. This was also a supervision judgement error: the higher-level final classification was known before the manual click.",
+  "fix": "Treat ADP's Next control on the current Review step as final in the browser guard. Its non-final wizard Next remains navigable. Record the actual submission and site confirmation, preserve evidence and owner-visible disclosure. No safety.py change.",
+  "tests": [
+    "tests/test_submission_firewall.py::test_adp_review_next_is_a_final_action"
+  ],
+  "prevention": "At any Review step, reconcile the agent's finality classification before supervised navigation. Do not dispatch a button that the application may use to submit, regardless of its Next label."
+}

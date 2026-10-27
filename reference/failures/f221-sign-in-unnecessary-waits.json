@@ -1,0 +1,18 @@
+{
+  "id": "f221",
+  "date": "2026-10-22",
+  "class": "Unnecessary sign-in waits and model escalation",
+  "site": "Synthetic employer-login and Gemini transport fixtures; no live employer incident attributed",
+  "symptom": "A hidden password input before the visible login form consumed a four-second visibility wait and triggered Gemini unnecessarily. Synthetic Gemini quota failures scheduled 42 seconds of sleeps, and server failures scheduled 30 seconds, despite the sign-in helper allowing only one outer attempt.",
+  "root_cause": "Login selected the first password input before filtering visibility, and its outcome checker made the same mistake. Gemini authentication reused the general answer client's retry wrapper, which sleeps even after its last attempt, plus the quota-waiting transport. Case-only duplicate button selectors repeated case-insensitive queries.",
+  "why_tests_missed": "The original fallback integration test accepted the hidden-input escalation as expected behavior. Prompt tests mocked the high-level call and did not inspect transport sleeps. Existing outcome tests did not combine a hidden password input with a still-visible login form.",
+  "fix": "Select visible password inputs for both filling and outcome checks. Remove case-only duplicate button selectors. Send authentication guidance directly through one quick-model ladder pass with quota waiting disabled, preserving default behavior for other callers. Consolidate malformed-plan browser setups while retaining every rejection case.",
+  "tests": [
+    "tests/test_gemini_auth.py::test_hidden_password_uses_visible_form_without_ai",
+    "tests/test_gemini_auth.py::test_auth_model_failure_has_no_retry_sleep",
+    "tests/test_gemini_auth.py::test_invalid_model_actions_do_nothing",
+    "tests/test_gemini_model_ladder.py",
+    "tests/test_account_dialog_scope.py"
+  ],
+  "prevention": "Filter hidden controls before waiting or escalating to AI. Reuse the same visibility rule when verifying outcomes. Keep interactive authentication model requests free of retry sleeps, and test transport latency decisions with a fake clock/network rather than only mocking the model response. Retain distinct security scenarios while sharing expensive test setup."
+}

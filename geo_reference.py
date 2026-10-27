@@ -30,7 +30,7 @@ COUNTRY = "COUNTRY"
 US_STATE = "US_STATE"
 
 # Entries that are prompts, not answers ("- Select -", "Please choose").
-_PLACEHOLDER = re.compile(r"^\W*(select|choose|please (select|choose)|none|--+|pick)\b.*$|^\W*$", re.IGNORECASE)
+_PLACEHOLDER = re.compile(r"^\W*(select|choose|please (select|choose)|none|--+|pick|click here|tap here)\b.*$|^\W*$", re.IGNORECASE)
 
 
 def normalize(text: str) -> str:
@@ -185,6 +185,11 @@ def _regions(parts: list[str]) -> tuple[set[str], set[str]]:
     return states, countries
 
 
+def _others(parts: list[str]) -> set[str]:
+    """The parts of a town's later spelling that are neither a US state nor a country."""
+    return {normalize(p) for p in parts if normalize(p) and not us_state_code(p) and not country_code(p)}
+
+
 def same_locality(a: str, b: str) -> bool:
     """True when two spellings name the same town: "Springfield, IL" and
     "Springfield, Illinois, United States".
@@ -202,6 +207,10 @@ def same_locality(a: str, b: str) -> bool:
         return False
     states_a, countries_a = _regions(first[1:])
     states_b, countries_b = _regions(second[1:])
+    # A part that is neither a state nor a country ("Waterford" in "Fairfax, Waterford, VA") names another place
+    # inside the town's region: the same town only when both sides name it.
+    if _others(first[1:]) != _others(second[1:]):
+        return False
     if states_a != states_b or (countries_a and countries_b and countries_a != countries_b):
         return False
     return bool(states_a or (countries_a and countries_b))

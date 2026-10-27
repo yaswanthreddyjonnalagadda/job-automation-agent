@@ -177,4 +177,6 @@ def test_the_planner_is_given_the_forms_own_words_and_the_question_is_answered_i
     agent.claude = planner
     agent.run(page)
     assert page.locator("#value").inner_text() == "Never Employed by Praxis"
-    assert any("'Never Employed by Praxis'" in f for f in planner.feedbacks)
+    # The profile answers this one itself now (f230), in the form's words; whenever the planner is asked about a
+    # question the agent could not answer, it is told the form's own words.
+    assert all("'Never Employed by Praxis'" in f for f in planner.feedbacks if "could not answer these itself" in f)

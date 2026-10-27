@@ -1,0 +1,19 @@
+{
+  "id": "f229",
+  "date": "2026-10-23",
+  "site": "Every form that asks for a consent or preference (Palantir/Lever, Datadog/Greenhouse, Stripe, Cloudflare ...)",
+  "class": "Each new kind of consent or preference question was a gap in the agent, left blank for the owner on every form, because the answers lived as code per kind (a text-message regex here, a privacy rule there) and not as the owner's standing decisions",
+  "symptom": "On Palantir, 'AI notetakers ... Yes, I consent / No' and 'share my resume with external partners' were left blank, and 'share my resume' was even matched to the resume-upload concept; on Datadog 'In what cities are you available to work?' stopped an application.",
+  "root_cause": "No concept existed for these questions, and the owner had never been asked for a standing decision on them, so each form was a fresh question for the owner. The safety classifier also flags the notetaker text as a legal-status question (a false positive in safety.py, reported to the owner, not changed).",
+  "why_tests_missed": "Tests covered the consent kinds that had already been coded (text messages, privacy notices); nothing exercised a consent kind the code had not seen, and the replay corpus only shows pages after a failure.",
+  "fix": "Four concepts in reference/concepts.json (AI_NOTETAKER_CONSENT, SHARE_DATA_WITH_PARTNERS, MARKETING_OPT_IN, AVAILABLE_WORK_LOCATIONS), each answered from a profile field the owner sets once (empty = the question comes to the owner, never guessed). Data concepts already win ties over the code table, so the share-my-resume wording no longer becomes a resume upload. Owner decisions of 23 October 2026: notetaker Yes, share with partners No, marketing and talent community No, and the places available to work. Replay of 721 saved pages: 8 pages differ, all corrections (Datadog's cities question and Palantir's two consents).",
+  "tests": [
+    "tests/test_consent_and_availability_concepts.py::test_an_ai_notetaker_question_follows_the_owners_decision",
+    "tests/test_consent_and_availability_concepts.py::test_sharing_data_with_partners_is_never_mistaken_for_a_resume_upload",
+    "tests/test_consent_and_availability_concepts.py::test_marketing_and_talent_community_follow_the_owners_decision",
+    "tests/test_consent_and_availability_concepts.py::test_where_the_owner_is_available_to_work_is_answered_with_what_they_gave",
+    "tests/test_consent_and_availability_concepts.py::test_a_decision_the_owner_has_not_made_is_never_guessed",
+    "tests/test_consent_and_availability_concepts.py::test_the_new_concepts_do_not_take_over_ordinary_questions"
+  ],
+  "prevention": "Treat an owner's consent and preference decisions as data (a profile setting plus wordings in a data file), asked for once and applied in any wording; find the next unknown wordings by reading questions ahead of time from the portals' public question lists, not by waiting for applications to stop."
+}
