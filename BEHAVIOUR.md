@@ -1846,3 +1846,7 @@ any other form stay held for you (f274).
 The go-back-to-the-job recovery (f271) now runs when the loop guard really stops the run: the page stopped changing while it
 was neither the application, its posting nor a review step. A CAPTCHA, a question for you, or any other hand-over is never
 treated as such a stall (f275).
+
+On a create-account form, a marketing opt-in box (newsletters, offers, "send me emails about new arrivals") is never left ticked
+for you: one the site ticked itself is unticked before the form is sent, and if the site will not let it go the form is held and
+shows which box. If your site-value setting is "leave", the site's own value stands (f276).

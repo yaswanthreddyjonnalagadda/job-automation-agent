@@ -35,6 +35,7 @@ import geo_reference
 import emailed_codes
 import phone_console
 import login_guard
+import marketing_opt_in
 import provenance
 import account_state
 import form_fields
@@ -5288,6 +5289,45 @@ class JobApplicationAssistant(EmailVerificationMixin):
         self._account_form_failure = reason
         return False
 
+    _CHECKBOX_LABEL_JS = ("e => (e.labels && e.labels[0] ? e.labels[0].innerText : '') || e.getAttribute('aria-label') || "
+                          "e.closest('label')?.innerText || e.parentElement?.innerText || ''")
+
+    def _clear_site_ticked_marketing(self, page: Page) -> list[str]:
+        """Unticks the marketing boxes the site itself ticked on an account form (f276).
+
+        The owner's rule is that a marketing opt-in is never given for them; a site that draws one already ticked
+        (Walmart's "Send me emails about new arrivals ...") would otherwise have it given when Continue is pressed.
+        Only while the owner's policy for values the site put there is "correct" (the default): under "leave" the
+        site's own values stand. Returns the labels of any box that could not be cleared, so the form is held for
+        the owner and never sent with one ticked."""
+        from config import site_prefill_policy
+        if site_prefill_policy() != "correct":
+            return []
+        stuck: list[str] = []
+        boxes = page.locator("input[type='checkbox']")
+        for i in range(boxes.count()):
+            box = boxes.nth(i)
+            label = ""
+            try:
+                if not box.is_visible() or not box.is_checked():
+                    continue
+                label = " ".join((box.evaluate(self._CHECKBOX_LABEL_JS) or "").split())
+                if not marketing_opt_in.is_marketing_opt_in(label):
+                    continue
+                try:
+                    box.uncheck(timeout=3_000)
+                except Exception as exc:
+                    logger.debug("_clear_site_ticked_marketing: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                    box.evaluate("e => e.click()")
+                if box.is_checked():
+                    stuck.append(label[:70])
+                    logger.info("LEFT_FOR_YOU: could not untick %r", label[:70])
+                else:
+                    logger.info("ACCOUNT: unticked a marketing opt-in the site had ticked")
+            except Exception as exc:
+                logger.debug("_clear_site_ticked_marketing: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+        return stuck
+
     def fill_create_account_form(self, page: Page, email: str) -> bool:
         """Fills a careers-site Create Account form: email (and its retype),
         the .env password (and its retype), first/last name, country, and only
@@ -5402,8 +5442,8 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     context = box.evaluate("e => (e.closest('form') || e.parentElement)?.innerText || ''")
                 except Exception:
                     context = label
-                if re.search(r"hear more|newsletter|campaign|marketing|job alert|promotion", label):
-                    continue  # marketing opt-ins are the user's choice, not ours
+                if marketing_opt_in.is_marketing_opt_in(label):
+                    continue  # marketing opt-ins are the user's choice, not ours (one the site ticked: cleared below)
                 is_terms_acknowledgment = bool(re.search(
                     r"\bterms?(?:\s+and\s+conditions?)?\b", label, re.IGNORECASE
                 ))
@@ -5446,6 +5486,11 @@ class JobApplicationAssistant(EmailVerificationMixin):
             if needs_candidate_acknowledgment:
                 logger.warning("ACCOUNT_HELD: a terms or attestation checkbox needs the candidate")
                 return self._account_form_failed("a box only you may tick: " + "; ".join(dict.fromkeys(held_boxes)) + " -- tick it, then press Continue")
+            ticked_by_site = self._clear_site_ticked_marketing(page)
+            if ticked_by_site:
+                logger.warning("ACCOUNT_HELD: a marketing opt-in ticked by the site could not be cleared")
+                return self._account_form_failed("a marketing box the site ticked could not be cleared: "
+                                                 + "; ".join(dict.fromkeys(ticked_by_site)) + " -- untick it, then press Continue")
 
             # Workday re-renders as the name, country and terms are filled,
             # which clears the keyboard-set password fields: re-enter and
@@ -5600,13 +5645,16 @@ class JobApplicationAssistant(EmailVerificationMixin):
 
             # Acknowledgment checkbox (required on some tenants). Only privacy
             # consent -- an attestation or a marketing opt-in is never ticked.
+            if self._clear_site_ticked_marketing(page):
+                logger.warning("ACCOUNT_HELD: a marketing opt-in ticked by the site could not be cleared")
+                return False
             boxes = page.locator("input[type='checkbox']")
             for i in range(boxes.count()):
                 box = boxes.nth(i)
                 if not box.is_visible() or box.is_checked():
                     continue
                 label = (box.evaluate("e => e.closest('label')?.innerText || e.parentElement?.innerText || ''") or "")
-                if safety.is_attestation(label) or re.search(r"marketing|newsletter|job alert", label, re.IGNORECASE):
+                if safety.is_attestation(label) or marketing_opt_in.is_marketing_opt_in(label):
                     logger.info("LEFT_FOR_YOU: not ticking %r", " ".join(label.split())[:70])
                     continue
                 box.check(timeout=3_000)
