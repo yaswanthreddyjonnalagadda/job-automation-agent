@@ -1836,3 +1836,9 @@ go on and is shown to you in the site's own words (f272).
 A question the site flags with its own "Required" alert inside it is treated as required even when its name carries no
 star: the agent answers it from your profile or leaves it for you, instead of passing it over as optional and pressing
 Continue until the form stops, and the form's complaint names that question (f273).
+
+On a terms-and-conditions, privacy or consent step, the agent presses the step's own consent button (Agree, I Agree, Accept,
+Accept and Continue) after signing the page under your standing signature permission: your decision of 30 September is that
+terms and privacy notices are accepted. The button is pressed only when its whole label is a consent word, its form is about
+terms, privacy or consent, and nothing else in that form says Submit; "Agree and Submit", "Disagree" and a lone "Agree" on
+any other form stay held for you (f274).

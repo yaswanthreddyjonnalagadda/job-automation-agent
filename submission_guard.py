@@ -112,6 +112,19 @@ def _guard_script(capability: str) -> str:
         return !Array.from(candidate.form.elements)
           .some(el => el !== candidate && unclassifiedFinalCandidate(el));
       };
+      // A terms-and-conditions step's own consent button (Walmart, 27 October 2026, 86%: "Agree" beside "Back"). Its form
+      // holds nothing else to press, so the sole-remaining-action rule above took it for the last click. It is not one when
+      // its whole label is a consent word, its form is about terms, privacy or consent, and no control in that form carries
+      // a submit label. "Agree and Submit", "Disagree" and an "Agree" on any other form stay under the rules above.
+      const consentLabel = /^(?:i\s+)?(?:agree|accept)(?:\s+(?:and|&)\s+continue)?$/i;
+      const consentStep = candidate => {
+        const own = labels(candidate);
+        if (!candidate.form || !own.length || !own.every(label => consentLabel.test(label))) return false;
+        if (!/terms\s*(?:and|&)\s*conditions|terms of (?:use|service)|privacy (?:notice|policy|statement)|consent/i
+              .test(candidate.form.innerText || "")) return false;
+        return !Array.from(candidate.form.elements).some(
+          el => el !== candidate && labels(el).some(label => submitLabel.test(label)));
+      };
       const finalControl = element => {
         if (!(element instanceof Element)) return null;
         const candidate = element.closest(selector);
@@ -119,6 +132,7 @@ def _guard_script(capability: str) -> str:
         if (postingEntry(candidate)) return null;
         if (adpFinalReviewNext(candidate)) return candidate;
         if (labels(candidate).some(label => submitLabel.test(label))) return candidate;
+        if (consentStep(candidate)) return null;
         if (structuralSubmitter(candidate) && !ordinaryNavigation(candidate)) return candidate;
         return soleRemainingAction(candidate) ? candidate : null;
       };
