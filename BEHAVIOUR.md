@@ -1819,3 +1819,7 @@ name: the submission guard lets it through when the button is outside every form
 or Apply for this job, and no application form, dialog, frame or input is showing (the site's own header search box does
 not count). It never applies on a job board, aggregator or social site, whose Apply can submit for you, and any page
 that shows something to submit stays guarded as before (f269).
+
+A code the site wants typed one character per box (boxes named "Digit 1 of 6" and so on) is a code step like any other:
+the agent reads the emailed code under the same rules and types it across the boxes, instead of handing over as if a link
+had to be clicked (f270).
