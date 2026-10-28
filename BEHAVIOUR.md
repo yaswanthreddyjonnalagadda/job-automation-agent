@@ -1823,3 +1823,12 @@ that shows something to submit stays guarded as before (f269).
 A code the site wants typed one character per box (boxes named "Digit 1 of 6" and so on) is a code step like any other:
 the agent reads the emailed code under the same rules and types it across the boxes, instead of handing over as if a link
 had to be clicked (f270).
+
+If the site sends the browser somewhere that is neither the application nor its job posting (its careers home after an
+emailed code, for example) and the run stalls there, the agent goes back to the job's own page and opens the application
+again, up to twice in one run, before it hands over. A review step is never left this way, and a site's header search box
+does not count as an application field (f271).
+
+A note that only explains the required marker ("Fields marked with an asterisk (*) are required") is never taken for an
+error on the form; a real error that mentions the marker, or any error beside the note, still stops a form that will not
+go on and is shown to you in the site's own words (f272).

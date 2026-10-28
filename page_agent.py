@@ -971,6 +971,12 @@ _ERROR_TEXT = re.compile(
     r"^please (enter|select|provide|upload|choose|complete|fill)|^(error|errors found)\b|\binvalid\b|"
     r"must be (a|an|at|in|between|less|more)\b|not a valid", re.IGNORECASE)
 _NOT_AN_ERROR = re.compile(r"indicates a required field|^\*|^required$|^error$|^errors found$", re.IGNORECASE)
+# The legend that explains the required marker ("Fields marked with an asterisk (*) are required"): it names the marker
+# and says what the marker means, and asks for nothing. Walmart, 27 October 2026: read as an error, it stopped a form
+# that was moving on. A real error that mentions the marker says what to do ("must", "please", "enter", "select").
+_REQUIRED_LEGEND = re.compile(
+    r"(?=.*(?:asterisk|\(\*\)|\*|\bstar\b))(?=.*\b(?:marked|indicat\w*|denot\w*|identified|flagged|signif\w*)\b)"
+    r"(?!.*\b(?:must|invalid|please|enter|select)\b)", re.IGNORECASE)
 _UPLOAD_ERROR = re.compile(r"upload|attach|resume|\bcv\b|file", re.IGNORECASE)
 
 
@@ -986,6 +992,7 @@ def page_errors(snapshot: str) -> list[str]:
         for quoted, trailing in re.findall(r'"((?:[^"\\]|\\.)*)"|:\s+(.+)$', line.strip()):
             text = " ".join((quoted or trailing or "").split()).strip('"')
             if 8 <= len(text) <= 200 and _ERROR_TEXT.search(text) and not _NOT_AN_ERROR.search(text) \
+                    and not _REQUIRED_LEGEND.search(text) \
                     and not text.lower().startswith("error ") and text not in found:
                 found.append(text)
     return found[:8]

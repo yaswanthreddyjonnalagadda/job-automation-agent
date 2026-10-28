@@ -27,6 +27,16 @@ def test_the_workday_errors_panel_is_read_in_its_own_words():
     ('- generic [ref=e1]: Please select a state', ["Please select a state"]),
     ('- alert [ref=e1]: Email address is invalid', ["Email address is invalid"]),
     ('- text: Start date must be before the end date', []),
+    # the legend that explains the required marker is not an error, however it is worded (Walmart, 27 October 2026)
+    ('- note [ref=e1]: Fields marked with an asterisk (*) are required', []),
+    ('- note [ref=e1]: Fields marked with * are required', []),
+    ('- generic [ref=e1]: Required fields are marked with an asterisk (*)', []),
+    ('- generic [ref=e1]: "An asterisk (*) denotes a required field"', []),
+    ('- generic [ref=e1]: Fields marked with an asterisk (*) are required\n- alert [ref=e2]: Phone number is required',
+     ["Phone number is required"]),
+    # a real error that happens to mention the marker is still an error
+    ('- alert [ref=e1]: The field First name (marked with an asterisk) is required and must have a value.',
+     ["The field First name (marked with an asterisk) is required and must have a value."]),
     ('- generic [ref=e1]: Zip code must be a 5-digit number', ["Zip code must be a 5-digit number"]),
     ('- generic [ref=e1]: "* Indicates a required field"\n- button "Degree Graduate Required" [ref=e2]', []),
     ('- button "Errors Found" [ref=e1]\n- text: Error', []),
