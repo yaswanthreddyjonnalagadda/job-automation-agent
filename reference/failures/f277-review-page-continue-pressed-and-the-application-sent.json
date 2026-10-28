@@ -1,0 +1,19 @@
+{
+  "id": "f277",
+  "date": "2026-10-28",
+  "class": "A review page was recognised only by a Submit button or a wizard marker, so a review page whose final button is called Continue was pressed as an ordinary step",
+  "symptom": "Walmart (careers.walmart.com): on 'Review your application' (93%), whose only buttons are Edit, Continue and Back, the agent pressed Continue and the next page said 'Application Submitted!'. The application was sent without the stop for the owner's review that every last step is meant to have. The tracker still said 'Needs you' (the confirmation wording was not recognised), until it was corrected from the site's own confirmation.",
+  "site": "Walmart careers site, 28 October 2026 (saved pages output/Walmart_(USA)_Senior_Network_Engineer/pages/20261028_002035, page_14 then page_15; confirmation screenshot saved beside them)",
+  "root_cause": "JobApplicationAssistant.is_review_step answered True only for a visible 'Submit' / 'Submit Application' button or a progress marker reading 'Review'. Walmart's review page has neither, and the submission guard treats a 'Continue' as ordinary navigation, so nothing on the way to the click said it was final. The plan called the step a next step and the press went through. The same class as ADP's Review 'Next' (f262), which was fixed for ADP alone.",
+  "why_tests_missed": "Every final-step test used a Submit-labelled button or a wizard marker. None had a review page whose only forward button is named Continue or Next, and the only such case (ADP) was fixed by an ADP-specific rule.",
+  "fix": "is_review_step_by_heading is a third, label-independent signal: a visible heading that reads Review / Review and submit / Review your application / information / details / answers / Application review, in any frame (an application is often an iframe), on a page with nothing left to fill outside the site's header, navigation and footer. is_review_step returns True for it, so PageAgent treats the forward button as the final step and stops for the owner ('ready for you to submit') whatever it is called. A false positive costs the owner one press; the other mistake sends an application.",
+  "tests": [
+    "tests/test_review_page_is_the_last_step.py::test_continue_on_the_review_page_is_not_pressed_it_is_left_for_the_owner",
+    "tests/test_review_page_is_the_last_step.py::test_a_review_heading_with_nothing_left_to_fill_is_the_review_step",
+    "tests/test_review_page_is_the_last_step.py::test_a_review_inside_an_iframe_is_found_too",
+    "tests/test_review_page_is_the_last_step.py::test_the_search_box_in_the_site_header_does_not_hide_it",
+    "tests/test_review_page_is_the_last_step.py::test_anything_else_is_not_taken_for_the_review_step",
+    "tests/test_review_page_is_the_last_step.py::test_continue_on_an_ordinary_step_is_still_pressed"
+  ],
+  "prevention": "Recognise the last step from what the page is (its heading, and that nothing is left to fill), not from what its button is called; when a fix is made for one portal's last step, ask what other labels the final press can have, and test the real press path with the plan calling it an ordinary next step."
+}

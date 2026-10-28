@@ -3187,8 +3187,35 @@ class JobApplicationAssistant(EmailVerificationMixin):
         try:
             if page.locator("button:text-is('Submit'):visible, [role='button']:text-is('Submit'):visible, button:has-text('Submit Application'):visible").count():
                 return True
-            return self.is_review_step_by_wizard_marker(page)
+            return self.is_review_step_by_wizard_marker(page) or self.is_review_step_by_heading(page)
         except Exception:
+            return False
+
+    _REVIEW_HEADING_JS = r"""() => {
+        const heading = /^\s*(review(\s+(and|&)\s+submit)?|review\s+(your\s+)?(application|information|details|answers)|application\s+review)\s*$/i;
+        const found = Array.from(document.querySelectorAll('h1, h2, [role=heading]'))
+            .some(h => h.getClientRects().length > 0 && heading.test(h.innerText || ''));
+        if (!found) return false;
+        const chrome = n => Boolean(n.closest('header, nav, footer, [role=banner], [role=navigation], [role=search], [role=contentinfo]'));
+        return !Array.from(document.querySelectorAll(
+            'input:not([type=hidden]):not([type=search]):not([type=submit]):not([type=button]), textarea, select, '
+            + '[role=combobox], [role=radio], [role=checkbox]'
+        )).some(n => n.getClientRects().length > 0 && !chrome(n));
+    }"""
+
+    def is_review_step_by_heading(self, page: Page) -> bool:
+        """True on a page headed "Review your application" (or "Review and submit", "Review") with nothing left to fill.
+
+        Walmart, 28 October 2026: the review page offers only Edit, Continue and Back, and Continue is the final
+        submission. Neither a Submit button nor a wizard marker reading "Review" is there, so the agent took it for an
+        ordinary step and pressed it, and the application was sent without the owner's pause (f277). Whatever the
+        forward button is called, the page that summarises the application for a last look is the last step. Read in
+        every frame, since an application is often an iframe. Mistaking an ordinary page for it costs the owner one
+        press; the other mistake sends an application."""
+        try:
+            return any(bool(frame.evaluate(self._REVIEW_HEADING_JS)) for frame in page.frames)
+        except Exception as exc:
+            logger.debug("is_review_step_by_heading: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
             return False
 
     def is_review_step_by_wizard_marker(self, page: Page) -> bool:

@@ -1850,3 +1850,8 @@ treated as such a stall (f275).
 On a create-account form, a marketing opt-in box (newsletters, offers, "send me emails about new arrivals") is never left ticked
 for you: one the site ticked itself is unticked before the form is sent, and if the site will not let it go the form is held and
 shows which box. If your site-value setting is "leave", the site's own value stands (f276).
+
+A page headed "Review your application" (or "Review and submit", "Review") with nothing left to fill is the last step of the
+application, whatever its forward button is called (Continue, Next, Submit): the agent stops there and hands it to you, and the
+button is yours to press. Walmart's review page was pressed through as an ordinary "Continue" and the application was sent
+without your pause (f277).
