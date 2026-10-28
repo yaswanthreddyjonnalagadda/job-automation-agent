@@ -1,0 +1,14 @@
+{
+  "id": "f268",
+  "date": "2026-10-27",
+  "class": "A portal-specific click path was attached to a generic condition, so every other portal took it",
+  "symptom": "A real Workday intermediate step (a Submit-worded button with another step still to come) stopped with 'intermediate iCIMS step could not be safely authorized' instead of moving on; found on the way to fixing BCBSKS (Workday), by tests/test_authority_boundary.py, which was already failing on the committed branch.",
+  "site": "Any non-iCIMS portal with a Submit-worded intermediate button; seen on the Workday fixture, 27 October 2026",
+  "root_cause": "page_agent._press_next_locked sent every non-final Submit-word click through SubmissionGuard.click_intermediate_icims_submit. That method authorizes only an iCIMS wizard marker, so on any other portal it refused and the agent stopped. The neighbouring Update Profile branch checked the iCIMS host; this one did not.",
+  "why_tests_missed": "The iCIMS tests ran against iCIMS pages only, and the authority-boundary test that does cover a Workday intermediate step was not part of the focused set run before the iCIMS commit.",
+  "fix": "The intermediate-step branch applies only on an iCIMS page (\"icims.com\" in the tab URL), like the Update Profile branch above it; every other portal keeps its original click path, still behind the page-level submit guard.",
+  "tests": [
+    "tests/test_authority_boundary.py::test_a_real_workday_intermediate_step_still_proceeds"
+  ],
+  "prevention": "A portal-specific branch must test the portal (host or adapter) in the same condition; run the authority-boundary and firewall suites, not only the new portal's tests, before committing a guard change."
+}

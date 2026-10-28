@@ -179,6 +179,37 @@ def test_a_verify_message_beside_a_sign_in_form_is_the_sign_in_form():
     assert A.read_state(snapshot).kind == A.SIGN_IN_FORM
 
 
+def test_sign_in_page_offering_creation_uses_it_for_a_confirmed_new_employer():
+    snapshot = form() + '\n- button "Create Account" [ref=e20]'
+    state = A.read_state(snapshot)
+    assert state.kind == A.SIGN_IN_FORM and state.create_offered
+    assert A.next_step(state, A.Memory(account_absent=True)).action == A.CREATE
+    assert A.next_step(state, A.Memory(account_exists=True)).action == A.SIGN_IN
+
+
+def test_rejected_password_does_not_prompt_reset_for_confirmed_new_employer():
+    snapshot = form('You may have entered the wrong email address or password or your account might be locked.') \
+        + '\n- button "Create Account" [ref=e20]'
+    state = A.read_state(snapshot)
+    assert state.kind == A.WRONG_PASSWORD
+    assert A.next_step(state, A.Memory(account_absent=True, signed_in_tried=True)).action == A.CREATE
+
+
+@pytest.mark.parametrize("entry", ['- button "Create Account" [ref=e20]', '- link "Create an Account" [ref=e20]',
+                                   '- button "Register Now" [ref=e20]', '- link "Sign Up" [ref=e20]'])
+@pytest.mark.parametrize("record", ["known", "absent", "unknown"])
+@pytest.mark.parametrize("offered", [True, False])
+@pytest.mark.parametrize("rejected", [False, True])
+def test_creation_is_chosen_only_when_absence_is_confirmed_and_creation_is_offered(entry, record, offered, rejected):
+    """f267, the whole class: sign in versus create comes from the account record first and the page second."""
+    error = 'You may have entered the wrong email address or password or your account might be locked.' if rejected else ''
+    state = A.read_state(form(error) + (chr(10) + entry if offered else ""))
+    assert state.create_offered is offered
+    memory = A.Memory(account_exists=(record == "known"), account_absent=(record == "absent"), signed_in_tried=rejected)
+    chosen = A.next_step(state, memory).action
+    assert (chosen == A.CREATE) is (record == "absent" and offered)
+
+
 # --- what to do ------------------------------------------------------------------------------------
 
 def step(kind, google=False, **memory):

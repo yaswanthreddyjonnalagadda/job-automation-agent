@@ -1891,8 +1891,8 @@ class PageAgent:
                 form_scope = self.assistant.adapter(tab)._scope(tab)
                 if form_scope.get_by_role("link", name="Log Out").count() == 1:
                     return False
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("sign_in_step: iCIMS signed-in check failed: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
         if "login.icims.com" == host:
             from sites.icims import IcimsAdapter
             if IcimsAdapter().dismiss_optional_passkey_enrollment(tab):
@@ -1923,10 +1923,16 @@ class PageAgent:
             exists = (expected() if callable(expected) else self.assistant.account_on_record()) is True
         except Exception:
             exists = False
+        try:
+            # its own guard: not knowing whether the account is absent must never undo what is known about it existing
+            account_absent = bool(self.assistant.account_confirmed_absent())
+        except Exception:
+            account_absent = False
         memory = account_state.Memory(
             google_tried=host in self._google_tried, google_refused=host in self._google_failed,
             created=host in self._created_at, signed_in_tried=host in self._signed_in_at,
             email_given=host in self._emailed_in, account_exists=exists or host in self._account_known,
+            account_absent=account_absent,
             reset_tried=host in self._reset_asked,
             verify_tried=host in self._verify_asked,
             refused_before=bool(email) and login_guard.refused_before(host, email),
@@ -6853,7 +6859,7 @@ class PageAgent:
         elif re.fullmatch(r"update profile", label, re.I) and "icims.com" in tab.url:
             if guard is None or not guard.click_candidate_profile(tab, locator):
                 return "stop", page, "iCIMS candidate profile update could not be safely authorized"
-        elif submit_word and not final:
+        elif submit_word and not final and "icims.com" in tab.url:
             if guard is None or not guard.click_intermediate_icims_submit(tab, locator):
                 return "stop", page, "intermediate iCIMS step could not be safely authorized"
         else:

@@ -3897,6 +3897,8 @@ class JobApplicationAssistant(EmailVerificationMixin):
             if candidate_state not in ("registration", "registration_error") or has_dialog:
                 scope = self._sign_in_scope(page)
                 if scope is not None and self._read_ats_password():
+                    if self.account_confirmed_absent() and self._create_account_control(page) is not None:
+                        return self.create_account_from_link(page, email)
                     # Sign In opens as a modal ON TOP of Create Account, and that
                     # stacked state is unreliable to drive (fields clear, clicks
                     # land on the form underneath). The dedicated login page has
@@ -5051,6 +5053,11 @@ class JobApplicationAssistant(EmailVerificationMixin):
         except Exception as exc:
             logger.warning("Could not check earlier applications: %s", exc)
             return False
+
+    def account_confirmed_absent(self) -> bool:
+        """The tracker positively knows there is no account with this employer: none on record for the configured
+        email, and no earlier application. An unknown (no tracker, no employer) is not an absence."""
+        return self.account_on_record() is False and not self.applied_before()
 
     def account_expected(self) -> bool:
         """An account is expected here: one is on record, or we have applied to this employer before. Then the

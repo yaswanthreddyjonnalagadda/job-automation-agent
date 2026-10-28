@@ -123,6 +123,7 @@ class AccountState:
     google_offered: bool = False
     password_boxes: int = 0
     form_error: str = ""             # what the site says is wrong with the form it is showing
+    create_offered: bool = False      # a visible Create Account entry, not merely prose
 
     def __str__(self) -> str:
         return f"{self.kind}" + (f" ({self.why[:80]})" if self.why else "")
@@ -162,8 +163,12 @@ def read_state(snapshot: str, password_boxes: Optional[int] = None) -> AccountSt
     step = _STEP.search(snapshot or "")
     on_account_step = bool(_first(_ACCOUNT_STEP, texts))
 
+    create_offered = bool(re.search(
+        r'- (?:button|link) "(?:Create (?:an |a new |your |my )?Account|Register(?: Now)?|Sign Up)"',
+        snapshot or "", re.IGNORECASE))
+
     def state(kind, why=""):
-        return AccountState(kind, why, google, passwords, form_error)
+        return AccountState(kind, why, google, passwords, form_error, create_offered)
 
     if any(re.fullmatch(r"choose an account", t, re.IGNORECASE) for t in texts):
         # Google's own account picker: part of a Google sign-in already under way, not the employer's page.
@@ -288,6 +293,7 @@ class Memory:
     signed_in_tried: bool = False
     email_given: bool = False
     account_exists: bool = False
+    account_absent: bool = False      # tracker checked this employer and found no account or prior application
     reset_tried: bool = False        # a reset to the ATS password was already asked for on this site
     refused_before: bool = False     # login_guard: this account's last sign-in here was refused (kept across runs)
     verify_tried: bool = False       # the verification link was already looked for on this site in this run
@@ -333,6 +339,8 @@ def next_step(state: AccountState, memory: Memory) -> Step:
     if kind == CODE_ENTRY:
         return Step(ENTER_CODE, "a code was emailed")
     if kind == WRONG_PASSWORD:
+        if memory.account_absent and state.create_offered and not memory.created:
+            return Step(CREATE, "no account is recorded for this employer and the site offers Create Account")
         # The owner's rule (CLAUDE.md §5): an account the site knows -- on record, or the site took the email and
         # asked for its password -- whose password it refused is reset to the same ATS password with the code
         # emailed to the owner, once per site per run. 'Wrong email or password' alone does not say the account
@@ -379,6 +387,8 @@ def next_step(state: AccountState, memory: Memory) -> Step:
                                    "look at the page, then press Continue")
         return Step(CREATE, "no account here yet")
     if kind == SIGN_IN_FORM:
+        if memory.account_absent and state.create_offered and not memory.created:
+            return Step(CREATE, "no account is recorded for this employer and the site offers Create Account")
         if memory.signed_in_tried:
             return Step(FOR_OWNER, "signing in did not get past the sign-in form: look at the page, then Continue")
         return Step(SIGN_IN)
