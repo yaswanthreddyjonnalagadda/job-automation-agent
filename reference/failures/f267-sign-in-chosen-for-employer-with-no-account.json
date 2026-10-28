@@ -1,0 +1,18 @@
+{
+  "id": "f267",
+  "date": "2026-10-27",
+  "class": "A sign-in surface that also offers account creation was always treated as a sign-in, whatever the account record said",
+  "symptom": "BCBSKS (Workday): the Sign In modal offered Create Account, the tracker held no account and no earlier application for the employer, yet the agent typed the ATS password into Sign In, and the site answered 'wrong email address or password or your account might be locked'.",
+  "site": "BCBSKS Workday candidate Sign In dialog, 27 October 2026 (saved pages output/Bcbsks_Senior_Network_Engineer/pages/20261027_210718)",
+  "root_cause": "Two decisions ignored the account record when a page showed one password box. account_state.next_step returned SIGN_IN for a sign-in form (and a recovery path for a refused password) without asking whether a visible Create Account entry plus a confirmed absence of any account made creation the right step; and handle_auth_gate entered the sign-in modal whenever a password was configured, then called the login helper with its create-account fallback switched off. A site reading is one password field = sign-in, so the owner's rule (applied-before -> sign in, otherwise create) was never consulted on this surface.",
+  "why_tests_missed": "Every sign-in test fixture was an employer with an account, or a page with no Create Account entry; no test combined a sign-in form that offers creation with a tracker that positively knows there is no account.",
+  "fix": "AccountState.create_offered records a visible Create Account / Register / Sign Up button or link (not prose). Memory.account_absent is set from JobApplicationAssistant.account_confirmed_absent() -- the one place that decides 'no account on record for the configured email and no earlier application'; an unknown (no tracker or employer) is not an absence. next_step answers CREATE for a sign-in form or a refused password when both hold and nothing was created yet; handle_auth_gate opens Create Account from the sign-in modal under the same condition. An employer with a record or an earlier application still signs in.",
+  "tests": [
+    "tests/test_account_state.py::test_sign_in_page_offering_creation_uses_it_for_a_confirmed_new_employer",
+    "tests/test_account_state.py::test_rejected_password_does_not_prompt_reset_for_confirmed_new_employer",
+    "tests/test_account_state.py::test_creation_is_chosen_only_when_absence_is_confirmed_and_creation_is_offered",
+    "tests/test_account_dialog_scope.py::test_auth_helper_opens_creation_from_sign_in_for_new_employer",
+    "tests/test_account_dialog_scope.py::test_auth_helper_signs_in_modal_before_background_registration"
+  ],
+  "prevention": "Decide sign-in versus create from the account record first and the page second; a new authentication surface must be tested with all four combinations of (account known / confirmed absent / unknown) and (creation offered / not offered)."
+}

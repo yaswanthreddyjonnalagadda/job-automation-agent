@@ -62,7 +62,8 @@ def test_auth_helper_signs_in_modal_before_background_registration(page):
     assistant.adapter = lambda _: SimpleNamespace(candidate_account_state=lambda _: "registration")
     assistant._read_ats_password = lambda: "Synthetic-Password1!"
     assistant._account_exists_message = lambda _: False
-    assistant.account_on_record = lambda: False
+    assistant.account_on_record = lambda: True
+    assistant.applied_before = lambda: True
     assistant._goto_login_page = lambda _: False
     assistant.fill_create_account_form = Mock(return_value=True)
     assistant.attempt_auto_login = Mock(return_value=True)
@@ -70,6 +71,26 @@ def test_auth_helper_signs_in_modal_before_background_registration(page):
     assistant.fill_create_account_form.assert_not_called()
     assert assistant.attempt_auto_login.call_count == 1
     assert assistant.attempt_auto_login.call_args.kwargs["create_if_missing"] is False
+
+
+def test_auth_helper_opens_creation_from_sign_in_for_new_employer(page):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from browser_automation import JobApplicationAssistant
+
+    page.set_content('<section role=dialog><form><h2>Sign In</h2>'
+                     '<input type=email><input type=password><button>Sign In</button>'
+                     '<button type=button>Create Account</button></form></section>')
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant.adapter = lambda _: SimpleNamespace(candidate_account_state=lambda _: "sign_in")
+    assistant._read_ats_password = lambda: "Synthetic-Password1!"
+    assistant.account_on_record = lambda: False
+    assistant.applied_before = lambda: False
+    assistant.create_account_from_link = Mock(return_value=True)
+    assistant.attempt_auto_login = Mock(return_value=True)
+    assert assistant.handle_auth_gate(page, "owner@example.com")
+    assistant.create_account_from_link.assert_called_once_with(page, "owner@example.com")
+    assistant.attempt_auto_login.assert_not_called()
 
 
 @pytest.mark.parametrize("passwords", [1, 2])
