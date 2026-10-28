@@ -1,0 +1,17 @@
+{
+  "id": "f269",
+  "date": "2026-10-27",
+  "class": "Each portal had its own narrow test for a posting's Apply button, so every new employer site stopped the run at its first page",
+  "symptom": "Walmart (careers.walmart.com): the run stopped two minutes in with 'final submission is only available through the verified gateway or human handoff'. The page was the job description; the only control involved was its 'Apply now' button, which opens the application.",
+  "site": "Walmart careers site, 27 October 2026 (saved pages output/Walmart_(USA)_Senior_Network_Engineer/pages/20261027_223420)",
+  "root_cause": "submission_guard denies any button that reads as a final submission, and let a posting's own Apply through only where a portal had written a test for it: ADP, Greenhouse and Bank of America (f224, f235). A new employer site had none, so the same button was treated as a submission; the same fault had to be fixed again for every portal. The Greenhouse-style test could not simply be reused: it required that no input be visible anywhere, and a careers site's header search box is a visible input.",
+  "why_tests_missed": "The posting-Apply tests were written per portal and copied, six dead duplicates among them, and none was shaped like a site with a search box in its header or a host the code had never seen.",
+  "fix": "posting_entry.py holds one structural test that needs no portal: the control is a button or link outside any form, labelled exactly Apply / Apply now / Apply for this job; no application form, dialog or frame is visible, and no input is visible outside the site's header, navigation or search landmarks; the host is not a job board, aggregator or social site (job_sources lists them). The guard accepts it beside the three portal tests, which stay. A page that shows anything to submit, or a label that says submit, stays guarded. Six duplicate copies of the Greenhouse test in tests/test_submission_firewall.py were removed (one remains; 12 cases still collected).",
+  "tests": [
+    "tests/test_posting_entry_structural.py::test_a_posting_apply_button_on_any_employer_site_only_opens_the_application",
+    "tests/test_posting_entry_structural.py::test_a_page_with_something_to_submit_stays_guarded",
+    "tests/test_posting_entry_structural.py::test_a_job_board_one_click_apply_stays_guarded",
+    "tests/test_posting_entry_structural.py::test_a_site_whose_name_merely_contains_a_social_host_is_not_a_job_board"
+  ],
+  "prevention": "A guard exception for a whole kind of page is a structural test with a negative case for every way the page could hold something to submit, never a list of sites. Test a new guard rule against a header search box, a cookie dialog and a job-board host, not only the portal it was written for."
+}

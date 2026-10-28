@@ -1813,3 +1813,9 @@ On a sign-in page that also offers Create Account, the agent creates the account
 positively knows the employer has none: no account recorded for the configured email and no earlier application. If the
 record is unknown, or an account or earlier application exists, it signs in as before; a refused sign-in on a confirmed new
 employer is followed by creation, not a password reset (f267).
+
+A job posting's own Apply button opens the application on any employer site, not only the portals the agent knows by
+name: the submission guard lets it through when the button is outside every form and labelled exactly Apply, Apply now
+or Apply for this job, and no application form, dialog, frame or input is showing (the site's own header search box does
+not count). It never applies on a job board, aggregator or social site, whose Apply can submit for you, and any page
+that shows something to submit stays guarded as before (f269).
