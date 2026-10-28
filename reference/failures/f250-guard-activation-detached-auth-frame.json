@@ -1,0 +1,14 @@
+{
+  "id": "f250",
+  "date": "2026-10-25",
+  "class": "A frame disappears while submission-guard activation iterates frames",
+  "symptom": "After authorized ADP emailed-code reauthentication, the runtime raised Frame.evaluate: Frame was detached from submission guard activation instead of continuing the application.",
+  "site": "Church Mutual supervised ADP reauthentication on 25 October 2026; owning helper traceback through PageAgent._run_locked, protect_submission and SubmissionGuardV0.activate",
+  "root_cause": "The page.frames list can become stale during navigation. activate propagates a Playwright exception from a frame that has already detached, even though that frame no longer exists to receive actions.",
+  "why_tests_missed": "Containment tests cover navigation callbacks, reinjection and handoff parking but not detachment during the synchronous all-frames activation loop.",
+  "fix": "Ignore an activation error only when the affected frame is confirmed detached, and continue protecting remaining frames. Errors on live frames still propagate; existing init scripts, frame callbacks and submission policy remain authoritative.",
+  "tests": [
+    "tests/test_guard_detached_frame.py::test_activation_ignores_only_a_confirmed_detached_frame"
+  ],
+  "prevention": "Exercise lifecycle races at enforcement boundaries with paired tests: disappearance may be recoverable, while the same failure on a live target must remain fail-closed."
+}

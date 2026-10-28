@@ -1,6 +1,14 @@
 {
   "_about": "What a form question asks, as data (concept_matcher.py reads this beside its own table). A new wording of a known question is a line under more_wordings, not a code change; a new question the profile answers is an entry under concepts with the profile field that answers it. Patterns match the question after clean_text: lower case, punctuation and '(required)' removed. value=true: answered with a fact, so never used for a question put as Yes/No. These come first when two concepts match a question equally. Wordings added 30 September 2026 from the questions no concept matched on the pages saved from real applications.",
   "concepts": {
+    "PHONE_TYPE": {
+      "patterns": [
+        "^(?:primary\\s+)?(?:phone|telephone)(?:\\s+device)?\\s+type$"
+      ],
+      "profile_field": "phone",
+      "resolver": "phone_type",
+      "value": true
+    },
     "AI_NOTETAKER_CONSENT": {
       "_about": "Consent to an AI tool listening to, recording or transcribing interviews. The owner's standing decision, given once (profile ai_notetaker_consent: Yes / No; empty = the question comes to the owner).",
       "patterns": [
@@ -161,6 +169,12 @@
     }
   },
   "more_wordings": {
+    "DEGREE_LEVEL": [
+      "\\bhighest\\s+level\\s+of\\s+(?:completed|attained|achieved)\\s+education\\b"
+    ],
+    "HOW_DID_YOU_HEAR": [
+      "^(?:candidate|application)\\s+source$"
+    ],
     "PREVIOUSLY_EMPLOYED": [
       "\\bworked\\s+(?:with|for)\\s+us\\s+before\\b",
       "\\bhave\\s+you\\s+(?:ever\\s+)?worked\\s+(?:with|for)\\s+us\\b"

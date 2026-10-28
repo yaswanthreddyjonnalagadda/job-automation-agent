@@ -1,0 +1,14 @@
+{
+  "id": "f255",
+  "date": "2026-10-26",
+  "class": "Hot reload misses registered portal adapters",
+  "symptom": "Resumed code called a new ADP adapter hook on an old adapter class and raised AttributeError.",
+  "site": "Church Mutual ADP Senior Network Engineer application 548, supervised continuation 25\u201326 October 2026",
+  "root_cause": "The reload module list hardcoded a subset of portals, omitting ADP and other registered adapters.",
+  "why_tests_missed": "Reload tests checked selected helpers but not every registered portal.",
+  "fix": "Derive adapter modules from sites.ADAPTERS, precompile the batch, then reload adapters before the registry and browser.",
+  "tests": [
+    "tests/test_code_reload.py::test_code_reload_refreshes_every_registered_portal_adapter"
+  ],
+  "prevention": "Retain portal-shaped regression fixtures, inspect every repeated record, verify committed values and preserve submission and personal-answer gates."
+}

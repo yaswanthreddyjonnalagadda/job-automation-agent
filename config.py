@@ -108,6 +108,8 @@ class UserProfile:
     # Why each job ended, in your own words. A work-history entry takes the
     # reason for its own employer, not the current one's.
     reasons_for_leaving: tuple[tuple[str, str], ...] = ()
+    # Explicit permission for each named employer; absence never means Yes.
+    employer_contact_permissions: tuple[tuple[str, str], ...] = ()
     current_employer_location: str = ""
     employment_statuses: tuple[str, ...] = ()  # Text field or checkboxes: select all that apply
     how_did_you_hear: str = ""
@@ -157,6 +159,8 @@ class UserProfile:
     education: tuple[tuple[str, str, str, str], ...] = ()
     # The same degrees with the dates forms ask for: (school, started, finished).
     education_dates: tuple[tuple[str, str, str], ...] = ()
+    # Explicit school facts: dictionaries keyed by school, with city/state/country/graduated.
+    education_details: tuple[dict, ...] = ()
     # What the break between jobs was, for forms that ask about gaps.
     work_history_gap: str = ""
     # Substitutes the OWNER has approved for a value a list may not offer, tried in order after the

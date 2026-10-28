@@ -1,0 +1,14 @@
+{
+  "id": "f251",
+  "date": "2026-10-25",
+  "class": "A completion qualifier interrupts a known highest-education question pattern",
+  "symptom": "ADP's required highest level of completed education dropdown stayed blank despite a saved master's degree, and the runtime repeated Next until its validation-loop breaker stopped it.",
+  "site": "Church Mutual ADP Preliminary Questions, supervised continuation on 25 October 2026; page_17 and later snapshots in pages/20261025_150804",
+  "root_cause": "DEGREE_LEVEL recognizes highest level of education but not the intervening completed/attained/achieved qualifier. The field has no required star and reports Add response, so the unknown answer is not surfaced clearly before progression retries.",
+  "why_tests_missed": "Education tests cover degree options and repeated degree records, but not this wording variant for a single highest-education dropdown.",
+  "fix": "Add the qualifier variants to canonical concept wording data and reuse the saved degree through existing offered-option matching. During supervision the guarded choice helper selected the offered Master's level degree and verified the displayed value. Unmarked Add response requirement diagnostics remain a separate follow-up.",
+  "tests": [
+    "tests/test_labeled_dropdown_placeholders.py::test_highest_completed_education_uses_the_saved_degree"
+  ],
+  "prevention": "Cover common qualifier insertions in question-pattern tests and retain field-level validation evidence independently of visible required markers. Never infer a degree without structured profile evidence."
+}

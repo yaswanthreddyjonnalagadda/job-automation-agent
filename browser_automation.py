@@ -2709,11 +2709,12 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     len(boxes), [ (b.get('q') or '')[:34] for b in boxes ][:6])
         for box in boxes:
             question = " ".join((box["q"] or "").split())
+            question_answers = list(answers)
             if question:
                 from_profile = self._rule_for(question, profile_rules)
                 if from_profile and from_profile[0]:
-                    answers = answers + [(re.compile(re.escape(question), re.I), from_profile[0])]
-            for pattern, value in answers:
+                    question_answers.append((re.compile(re.escape(question), re.I), from_profile[0]))
+            for pattern, value in question_answers:
                 if question and pattern.search(question):
                     if self.set_value(page, f"[id={json.dumps(box['id'])}]", value, question,
                                       source="profile:standard answer"):
@@ -3347,7 +3348,9 @@ class JobApplicationAssistant(EmailVerificationMixin):
         authoritative final-submit gateway. Only "NON_FINAL" may authorize that ordinary click;
         both "FINAL" and "UNKNOWN" must refuse it."""
         try:
-            result = page.evaluate(self._STEP_FINALITY_SCRIPT)
+            adapter = self.adapter(page)
+            scope = adapter._scope(page) if getattr(adapter, "name", "") == "icims" else page
+            result = scope.evaluate(self._STEP_FINALITY_SCRIPT)
             return result if result in ("FINAL", "NON_FINAL", "UNKNOWN") else "UNKNOWN"
         except Exception:
             return "UNKNOWN"
@@ -4559,8 +4562,9 @@ class JobApplicationAssistant(EmailVerificationMixin):
         input. The picker is answered programmatically with the file."""
         # Platform-specific upload first (SuccessFactors' "+" icon, say).
         kind = "cover_letter" if "cover" in label_pattern.lower() else "resume"
-        if self.adapter(page).upload_attachment(self, page, kind, Path(file_path)):
-            return True
+        uploaded = self.adapter(page).upload_attachment(self, page, kind, Path(file_path))
+        if uploaded is not None:
+            return uploaded
 
         tile = page.locator("a, button, [role=button], div, span").filter(
             has_text=re.compile(label_pattern, re.IGNORECASE)

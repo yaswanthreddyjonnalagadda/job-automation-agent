@@ -1,0 +1,15 @@
+{
+  "id": "f248",
+  "date": "2026-10-25",
+  "class": "A descriptive radio-group name replaces the enclosing field question",
+  "symptom": "ADP's required Hispanic/Latino question remained unanswered even though the saved profile supplies No. The radios were classified under the explanatory definition rather than the question.",
+  "site": "Church Mutual ADP EEO; output/Churchmutual_Looking_to_join_a_vibrant_organization_that_makes_a_difference/pages/20261025_150804/page_02.txt and subsequent EEO snapshots",
+  "root_cause": "The snapshot parser trusts a named radiogroup or the nearest text. A description between a marked question and its radios overwrites that context, including when the description itself becomes the group's accessible name.",
+  "why_tests_missed": "Existing regressions recover radio option labels from validation errors and retain questions across list items, but do not place explanatory prose between an enclosing question and a named/unnamed radio group.",
+  "fix": "Retain explicit question text within its immediate enclosing structure and use it when a following group borrows intervening explanatory text. End scope at peer/outer boundaries, preserve independently named questions, and avoid interpreting generic starred section headings as questions.",
+  "tests": [
+    "tests/test_radio_question_description_scope.py::test_marked_field_question_owns_described_radios",
+    "tests/test_radio_question_description_scope.py::test_an_explicit_question_on_a_radio_group_is_preserved"
+  ],
+  "prevention": "Test question ownership independently of option-label recovery, including descriptions, nested groups and adjacent unrelated fields. Compare parser changes against saved real pages before accepting broader grouping changes."
+}

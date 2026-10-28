@@ -1,5 +1,17 @@
 # What the assistant does, and what it never does
 
+Labelled dropdown buttons with a nested placeholder (such as "State Select...") are recognised as unanswered questions. The agent opens the button itself through its guarded click helper, selects an offered option and verifies it; a denied click stops that attempt. Phone Type is resolved only when the primary phone uniquely matches an explicitly typed mobile, home or work number in the profile. A number without that evidence does not establish its type.
+
+ADP asynchronous dropdowns use the active widget's internal filter and offered choices. Existing offered equivalents, such as Mobile and Cell, are matched before applying a text filter. Candidate Source and Application source use the saved how-did-you-hear answer.
+
+When ADP displays an empty current-step region and disables Next while its fields load, the agent uses its existing bounded readiness wait before planning that page. Disabled navigation alone does not establish that a step is loading.
+
+Explicit questions retain ownership of their radio choices when explanatory text becomes a group's accessible name. Adjacent fields and independently named questions keep separate scopes. Current-employee questions use the stated current employer, including when a past employer also appears in the saved history; absent current-employer evidence remains unanswered.
+
+Highest completed, attained or achieved education questions use the saved degree and an offered matching option, just as highest-level-of-education questions do.
+
+Submission-guard activation continues past a frame that is confirmed detached during navigation. An activation failure on a live frame still stops that operation; the submission rules are unchanged.
+
 Named parent questions own checkbox choices even when rows separate the visible labels. Explicit complete owner/library answers may replace that group's stale selections only after every option matches; punctuation within option labels is retained and unrelated groups stay unchanged.
 
 A named choice answer uses the question’s offered labels even when the planner requests a check action on a different option. Literal checked/unchecked instructions still address an individual box.
@@ -492,6 +504,12 @@ consent checks. Authorization is cleared afterwards, and final application
 submission still requires its own verified gateway. A blocked click is not
 counted as an account-creation attempt, and a form that remains open is reported
 as an unconfirmed creation attempt rather than a created account.
+
+For two-step sign-in, the password form may carry the previously accepted
+username in a hidden read-only control. The sign-in gateway accepts that
+credential form when it has one filled password and a Log In action. If the
+gateway blocks the click, the agent records that no password attempt occurred
+instead of treating the unchanged form as a rejected sign-in.
 
 An account section the application page itself calls optional ("Create a Career Profile
 account (optional)" at the foot of Meta's form) is part of the application, not an account
@@ -1748,3 +1766,45 @@ Before any AI model is asked, the agent answers fact questions itself from your 
 ## Lever-style forms (f231)
 
 On forms that put the required star on its own line, the agent now knows which questions are required, so optional boxes it cannot answer from your profile are left blank instead of being written up by a model. A list whose first row is an instruction ("Click Here ...") counts as unanswered and is chosen from your profile. A town typed into a search-as-you-type box (Current location) is confirmed by clicking the suggestion that names the same town, never the first row. The Date under your name on a voluntary self-identification form is the day it is filled in.
+
+
+## ADP uploads, repeated cards and saved choices (f252–f256)
+
+ADP document uploads open their own dialog, attach through its shadow file input,
+and save before the existing attachment receipt check can report success. A denied
+guarded click stops the action. Existing numbered employer and education cards are
+expanded and scoped by both their headers and sibling regions; each uses its own
+saved history, including Current/Previous and the current job's blank end date.
+Approved reasons and employer-contact permissions are merged only into the matching
+employer record. Missing permission remains unanswered. No permission is inferred.
+
+A saved dropdown choice nested under a button is separated from its question when
+the explicit preceding field label matches. Unrelated button prose is unchanged.
+Paused code reload refreshes all registered portal adapters before rebuilding the
+registry, rather than retaining an older ADP implementation.
+
+Employment date correction and post-fill verification compare dates in the format
+the site commits (f257). A saved month/year accepts the same month without
+replacing an already supplied day; a saved full date still requires the same day.
+
+Education cards use school-matched `education_details` for explicit city, state,
+country and graduation answers (f258). Unknown facts remain unanswered. Inline
+education cards are added only up to the saved degree count, with the same
+post-action count check used for work entries.
+
+Personal-profile corrections exclude mapped work and education controls (f259).
+An employer's or school's city cannot be replaced by the home city. Named
+signature containers provide context for their typed-name fields; authorized
+signature plans select affirmative radio choices and never check Decline (f260).
+The standing signature permission and sign-last checks still apply. A bare From
+Date outside a mapped record no longer borrows the current job's dates (f261).
+
+On ADP, the wizard's Next control on its current Review step is treated as a
+final submission action (f262). The guarded agent and supervised actions stop
+there for owner review unless final submission is separately authorized.
+
+Known answers to individual text questions stay scoped to that question. Answering Address does not supply Address 2, and answering Employer does not supply Previous Employer.
+
+A guarded employer sign-in can accept one same-button click that the site triggers synchronously while handling the authorized Log In action. A prevented first sign-in form submit can be followed once by the site on that same form; an accepted submit consumes authorization, and additional clicks remain blocked.
+
+On iCIMS, the application-frame step marker controls whether a Submit-labelled button advances an intermediate step. Update Profile uses the guarded candidate-profile action. A signed voluntary portal packet marked 1/2 may advance using approved profile facts and the owner's signature preference. The portal's explicit submitted-job status confirms the application even when an optional follow-up form remains open (f266).

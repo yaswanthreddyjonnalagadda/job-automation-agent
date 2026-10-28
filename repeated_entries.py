@@ -182,6 +182,20 @@ def with_profile(history: dict, profile, resume_text: str = "") -> dict:
     2015, April 2019"). UKG's degree entries asked From and To, the history had no start, and the run stopped for
     the owner to type dates the profile already held (30 September). A date the history has is kept."""
     history = dict(history or {})
+    import employment_history
+    jobs = []
+    for saved in history.get('experience', ()) or ():
+        record = dict(saved)
+        for profile_field, record_field in (('reasons_for_leaving', 'reason_for_leaving'),
+                                             ('employer_contact_permissions', 'may_contact')):
+            matches = {str(row[1]).strip() for row in getattr(profile, profile_field, ()) or ()
+                       if len(row) >= 2 and str(row[1]).strip()
+                       and employment_history.same_organisation(str(row[0]), str(record.get('company') or ''))}
+            if len(matches) == 1:
+                record[record_field] = matches.pop()
+        jobs.append(record)
+    if 'experience' in history:
+        history['experience'] = jobs
     dated = [tuple(d) for d in (getattr(profile, "education_dates", ()) or ()) if d and len(d) >= 3]
     profile_degrees = [tuple(row) for row in (getattr(profile, "education", ()) or ()) if row and len(row) >= 3]
     degrees = []
@@ -206,6 +220,10 @@ def with_profile(history: dict, profile, resume_text: str = "") -> dict:
         claimed.add(len(records) - 1)
     for record in records:
         record = dict(record)
+        details = [row for row in getattr(profile, 'education_details', ()) or ()
+                   if isinstance(row, dict) and _identifies(str(row.get('school') or ''), str(record.get('school') or ''))]
+        if len(details) == 1:
+            record.update({key: details[0][key] for key in ('city', 'state', 'country', 'graduated') if key in details[0]})
         candidates = [row for row in profile_degrees if _identifies(str(row[2]), str(record.get("school") or ""))]
         if len(candidates) > 1:
             candidates = [row for row in candidates if _identifies(str(row[0]), str(record.get("degree") or ""))]
@@ -279,6 +297,9 @@ def describe(entry: Optional[Entry], history: dict) -> str:
 
 # What a label asks for, in an entry of each kind: (pattern, the record's field).
 _WORK_FIELDS = (
+    (r"\breason\b.*\bleav|\blooking\s+to\s+leave\b", "reason_for_leaving"),
+    (r"^may\s+we\s+contact\b", "may_contact"),
+    (r"^type(?:\s+(?:select|choose)\b.*)?$", "employment_type"),
     (r"\bcurrent(ly)?\b|\bstill\b|present", "current"),       # before "title": "Is current position?"
     (r"\b(company|employer|organi[sz]ation)\b", "company"),
     (r"\b(position|job)?\s*title\b|\bposition\b|\brole\b", "title"),
@@ -287,7 +308,10 @@ _WORK_FIELDS = (
     (r"\b(location|city)\b", "location"),
 )
 _EDUCATION_FIELDS = (
-    (r"\bcountry\b", None),                       # not in the record: never guessed from another box
+    (r"\bcountry\b", "country"),
+    (r"\bcity\b", "city"),
+    (r"\bstate\b|\bprovince\b", "state"),
+    (r"^graduated\?", "graduated"),
     (r"\bstatus\b|\bgpa\b|\bgrade\b|\bhonou?rs?\b", None),
     (r"\b(institution|school|university|college)\b", "school"),
     (r"\b(area of study|field|major|subject|specializ|discipline)\b", "field"),
@@ -311,7 +335,15 @@ def answer(entry: Entry, history: dict) -> tuple[str, str, bool]:
             continue
         if key is None:
             return "", "", False
+        if key in ('city', 'state', 'country') and not record.get(key):
+            return "", "", False
         source = f"work history ({record.get('company') or record.get('school') or 'entry ' + str(entry.index + 1)})"
+        if key == "employment_type":
+            current = record.get('current')
+            return ('Current' if current else 'Previous', source, False) if isinstance(current, bool) else ('', '', False)
+        if key == "graduated":
+            graduated = record.get('graduated')
+            return ('Yes' if graduated else 'No', source, False) if isinstance(graduated, bool) else ('', '', False)
         if key == "current":
             return ("Yes" if record.get("current") else "No"), source, False
         if key == "end" and entry.section == "work" and record.get("current"):

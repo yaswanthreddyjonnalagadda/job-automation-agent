@@ -1,0 +1,14 @@
+{
+  "id": "f261",
+  "date": "2026-10-26",
+  "class": "An unscoped From Date borrows current-employer dates",
+  "symptom": "Personal Information displayed the current-job start in From Date below a No answer to prior Church Mutual employment.",
+  "site": "Church Mutual ADP Senior Network Engineer application 548, supervised continuation 26 October 2026",
+  "root_cause": "WORK_START_DATE resolved generic start/from wording to current_employment_dates without requiring that the question identifies current employment.",
+  "why_tests_missed": "Date tests exercised formatting and repeated-entry ownership, not an unrelated unscoped From Date.",
+  "fix": "Require explicit current-employment wording for profile current-job date resolution. Repeated entries keep their own scoped date path. Clear the unsupported live value.",
+  "tests": [
+    "tests/test_committed_history_dates.py::test_unscoped_from_date_does_not_borrow_current_employment_dates"
+  ],
+  "prevention": "Cover complete portal-shaped workflows and verify committed answers against the correct personal, employer or school scope; preserve owner values and final-submission gates."
+}

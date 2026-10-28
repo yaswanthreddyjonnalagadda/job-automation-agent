@@ -698,6 +698,19 @@ _MONTHS = {m.lower(): n for n, m in enumerate(("January February March April May
                                                "October November December").split(), start=1)}
 
 
+def date_matches(shown: str, expected: str) -> bool:
+    """Compare a committed date at the precision provided by the saved fact."""
+    actual, wanted = parse_date(shown), parse_date(expected)
+    if actual is None or wanted is None:
+        return False
+    expected = expected.strip()
+    if re.fullmatch(r"\d{4}", expected):
+        return actual[0] == wanted[0]
+    if re.fullmatch(r"(?:[A-Za-z]+\.?,?\s+\d{4}|\d{1,2}[/-]\d{4}|\d{4}-\d{1,2})", expected):
+        return actual[:2] == wanted[:2]
+    return actual == wanted
+
+
 def parse_date(text: str) -> Optional[tuple[int, int, int]]:
     """(year, month, day) from the ways the profile and work history write a date: '02/2025', 'February 2025',
     'Feb 2025', '2025-02-01', '02/01/2025', '2025'. A missing day is 1; a missing month is 1."""

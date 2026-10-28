@@ -82,6 +82,33 @@ def test_account_gateway_requires_filled_matching_credentials(page):
     assert page.evaluate("window.created") is None
 
 
+def test_sign_in_gateway_accepts_prior_read_only_username_on_password_step(page):
+    serve(page, '<form onsubmit="window.signedIn=true;return false">'
+          '<input type="text" name="username" autocomplete="username" '
+          'value="owner@example.com" readonly style="display:none">'
+          '<input type="password" name="password" autocomplete="current-password" '
+          'value="Synthetic-Password1!">'
+          '<button type="submit" value="default">LOG IN</button></form>')
+    guard = SubmissionGuardV0(page.context)
+    assert guard.click_account_sign_in(page, page.get_by_role("button", name="LOG IN"))
+    assert page.evaluate("window.signedIn") is True
+
+
+@pytest.mark.parametrize("username", [
+    '<input type="text" name="username" autocomplete="username" '
+    'value="owner@example.com" style="display:none">',
+    '<input type="text" name="username" autocomplete="username" '
+    'readonly style="display:none">',
+])
+def test_sign_in_gateway_rejects_unaccepted_prior_username(page, username):
+    serve(page, '<form onsubmit="window.signedIn=true;return false">' + username
+          + '<input type="password" value="Synthetic-Password1!">'
+          '<button type="submit">LOG IN</button></form>')
+    guard = SubmissionGuardV0(page.context)
+    assert not guard.click_account_sign_in(page, page.get_by_role("button", name="LOG IN"))
+    assert page.evaluate("window.signedIn") is None
+
+
 def test_account_gateway_rejects_file_fields_associated_from_outside_form(page):
     serve(page, FORM.replace('<form ', '<form id="registration" ') +
           '<input type="file" form="registration" style="display:none">')
@@ -139,3 +166,58 @@ def test_denied_creation_does_not_spend_a_creation_attempt(page, monkeypatch):
     monkeypatch.setattr(login_guard, "record_account_attempt", lambda *args: attempts.append(args))
     assert not assistant.fill_create_account_form(page, "owner@example.com")
     assert attempts == []
+
+def test_sign_in_gateway_accepts_password_visibility_utility_on_two_step_form(page):
+    serve(page, '<form onsubmit="window.signedIn=true;return false">'
+          '<input type="text" name="username" autocomplete="username" '
+          'value="owner@example.com" readonly style="display:none">'
+          '<input type="password" name="password" autocomplete="current-password" '
+          'value="Synthetic-Password1!">'
+          '<button type="button" role="switch" aria-checked="false" aria-label="Show password" data-action="toggle"><span aria-hidden="true">Show password</span></button>'
+          '<button type="submit" value="default" name="action" data-action-button-primary="true">LOG IN</button></form>')
+    guard = SubmissionGuardV0(page.context)
+    assert guard.click_account_sign_in(page, page.get_by_role("button", name="LOG IN"))
+    assert page.evaluate("window.signedIn") is True
+
+def test_sign_in_gateway_allows_one_reentrant_button_click_but_one_form_submit(page):
+    serve(page, '<form onsubmit="window.submits=(window.submits||0)+1;return false">'
+          '<input type="text" name="username" autocomplete="username" '
+          'value="owner@example.com" readonly style="display:none">'
+          '<input type="password" name="password" value="Synthetic-Password1!">'
+          '<button type="submit" value="default" onclick="if(!window.reclicked){window.reclicked=true;this.click();return false}">LOG IN</button></form>')
+    guard=SubmissionGuardV0(page.context)
+    assert guard.click_account_sign_in(page,page.get_by_role('button',name='LOG IN'))
+    assert page.evaluate('window.submits')==1
+
+def test_sign_in_gateway_still_blocks_third_reentrant_click(page):
+    serve(page, '<form onsubmit="window.submits=(window.submits||0)+1;return false">'
+          '<input type="text" name="username" autocomplete="username" '
+          'value="owner@example.com" readonly style="display:none">'
+          '<input type="password" name="password" value="Synthetic-Password1!">'
+          '<button type="submit" value="default" onclick="if(!window.reclicked){window.reclicked=true;this.click();this.click();return false}">LOG IN</button></form>')
+    guard=SubmissionGuardV0(page.context)
+    assert not guard.click_account_sign_in(page,page.get_by_role('button',name='LOG IN'))
+    assert page.evaluate('window.submits')==1
+
+def test_sign_in_gateway_allows_delayed_submit_of_same_credential_form(page):
+    serve(page, '<form onsubmit="window.submits=(window.submits||0)+1;return false">'
+          '<input type="text" name="username" autocomplete="username" '
+          'value="owner@example.com" readonly style="display:none">'
+          '<input type="password" name="password" value="Synthetic-Password1!">'
+          '<button type="submit" value="default" '
+          'onclick="event.preventDefault();setTimeout(()=>this.form.requestSubmit(this),80)">LOG IN</button></form>')
+    guard=SubmissionGuardV0(page.context)
+    assert guard.click_account_sign_in(page,page.get_by_role('button',name='LOG IN'))
+    page.wait_for_timeout(160)
+    assert page.evaluate('window.submits')==1
+
+def test_sign_in_gateway_allows_followup_after_prevented_submit(page):
+    serve(page, '<form onsubmit="if(!window.reSubmitted){window.reSubmitted=true;event.preventDefault();setTimeout(()=>this.requestSubmit(this.querySelector(\'button[type=submit]\')),80);return false}window.submits=(window.submits||0)+1;return false">'
+          '<input type="text" name="username" autocomplete="username" '
+          'value="owner@example.com" readonly style="display:none">'
+          '<input type="password" name="password" value="Synthetic-Password1!">'
+          '<button type="submit" value="default">LOG IN</button></form>')
+    guard=SubmissionGuardV0(page.context)
+    assert guard.click_account_sign_in(page,page.get_by_role('button',name='LOG IN'))
+    page.wait_for_timeout(160)
+    assert page.evaluate('window.submits')==1
