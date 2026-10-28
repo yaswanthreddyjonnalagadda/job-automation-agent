@@ -898,9 +898,53 @@ def split_optional(still_open: list[str], required: set[str]) -> tuple[list[str]
     return [q for q in still_open if q.endswith("*")], [q for q in still_open if not q.endswith("*")]
 
 
+_INLINE_REQUIRED = re.compile(r"^(?:this )?(?:field )?(?:is )?required\.?$", re.IGNORECASE)
+_NAMED_QUESTION = re.compile(
+    r"""^\s*- '?(?:radiogroup|group|textbox|combobox|listbox|spinbutton|searchbox|checkbox)\s+"(.*)"(?:\s*\[[^\]]*\])*\s*'?:?\s*$""")
+
+
+def inline_required_questions(snapshot: str) -> list[str]:
+    """The questions the site itself flags with a "Required" alert inside them.
+
+    Walmart, 27 October 2026 (Military Service): a question with no asterisk in its name showed a red "Required" alert
+    once Continue was pressed. A question is known to be required from its star, and a bare "Required" is not taken for a
+    complaint (it is also the label of a column or a field), so the run left that question blank and pressed Continue until
+    the loop guard stopped it. An alert saying only that, inside a question's own block, is the site's word that this
+    question is required and unanswered; one outside any question marks nothing."""
+    lines = (snapshot or "").splitlines()
+    found: list[str] = []
+    for index, line in enumerate(lines):
+        if not re.match(r"\s*- alert\b", line):
+            continue
+        indent = len(line) - len(line.lstrip())
+        said = []
+        inline = re.search(r"\]?:\s+(.+)$", line.strip())
+        if inline:
+            said.append(inline.group(1))
+        for child in lines[index + 1:]:
+            if child.strip() and len(child) - len(child.lstrip()) <= indent:
+                break
+            text = re.match(r"\s*- text:\s*(.+)$", child)
+            if text:
+                said.append(text.group(1))
+        if not any(_INLINE_REQUIRED.match(" ".join(part.split()).strip('"')) for part in said):
+            continue
+        for earlier in range(index - 1, -1, -1):
+            candidate = lines[earlier]
+            if candidate.strip() and len(candidate) - len(candidate.lstrip()) < indent:
+                named = _NAMED_QUESTION.match(candidate)
+                if named:
+                    name = " ".join(named.group(1).split())
+                    if name and name not in found:
+                        found.append(name)
+                break
+    return found
+
+
 def required_questions(snapshot: str) -> set[str]:
-    """The questions a form marks with a star."""
+    """The questions a form marks with a star, or flags with its own "Required" alert."""
     marked = set(re.findall(r'- generic "([^"]{2,120})" \[ref=[\w-]+\]: "\*"', snapshot or ""))
+    marked |= set(inline_required_questions(snapshot))
     marked |= {m.strip() for m in re.findall(r'- generic \[ref=[\w-]+\]: ([^\n]{2,120}?) ?\*$',
                                              snapshot or "", re.MULTILINE)}
     # Lever/Palantir: the label is a text line and its star a separate line after it, or the star ends the box's name.
@@ -995,6 +1039,11 @@ def page_errors(snapshot: str) -> list[str]:
                     and not _REQUIRED_LEGEND.search(text) \
                     and not text.lower().startswith("error ") and text not in found:
                 found.append(text)
+    # A "Required" alert inside a question names the question, so the owner and the planner are told which one.
+    for name in inline_required_questions(snapshot):
+        said = f"{name[:90]}{'...' if len(name) > 90 else ''}: Required"
+        if said not in found:
+            found.append(said)
     return found[:8]
 
 

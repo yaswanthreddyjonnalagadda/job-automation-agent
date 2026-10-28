@@ -1,0 +1,19 @@
+{
+  "id": "f273",
+  "date": "2026-10-27",
+  "class": "A question was known to be required only from a star in its name, and a bare 'Required' alert inside it was not read as the site's complaint",
+  "symptom": "Walmart (careers.walmart.com), Military Service (voluntary disclosure, 71%): 'Have you already left Active Duty ...' was left blank as optional; after Continue the site showed a red 'Required' alert inside the question, and the run pressed Continue three times until the loop guard stopped it for the owner ('the page did not change after three tries').",
+  "site": "Walmart careers site, 27 October 2026 (saved pages output/Walmart_(USA)_Senior_Network_Engineer/pages/20261027_231617, page_11-12)",
+  "root_cause": "required_questions finds required questions by an asterisk in a name or label. This question's name (410 characters, ending 'other than “Yes”.') carries none; the site signals 'required' only by an alert inside the question after a failed Continue. page_errors deliberately ignores the bare word 'Required' (it is also a column or field label, e.g. 'Degree Graduate Required'), so the one signal that mattered was filtered out and the question stayed optional.",
+  "why_tests_missed": "Required-marking tests used starred names and the Workday legend; none had a question without a star that the site flagged only with an inline alert.",
+  "fix": "inline_required_questions reads an alert whose own words are only 'Required' (or 'This field is required') inside a question's block as the site's word that this question is required and unanswered. required_questions includes it, so the answering pass treats the question as required; page_errors reports it by name ('<question>: Required') so the planner and the owner are told which one. An alert outside any question marks nothing, and a label that merely contains the word is still not an error.",
+  "tests": [
+    "tests/test_inline_required_alert.py::test_a_question_with_an_inline_required_alert_is_a_required_question",
+    "tests/test_inline_required_alert.py::test_without_the_alert_that_question_stays_optional",
+    "tests/test_inline_required_alert.py::test_the_alert_names_the_question_in_what_the_form_says",
+    "tests/test_inline_required_alert.py::test_a_label_that_merely_contains_the_word_required_is_still_not_an_error",
+    "tests/test_inline_required_alert.py::test_the_alert_wordings_that_mean_the_same_thing",
+    "tests/test_inline_required_alert.py::test_an_alert_that_is_not_inside_a_question_marks_nothing"
+  ],
+  "prevention": "Take 'required' from every signal the site gives (a star, a legend, an inline alert after a failed press), not from one convention; keep structure (an alert inside a named question) as the evidence, never the bare word."
+}

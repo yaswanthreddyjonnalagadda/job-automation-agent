@@ -1832,3 +1832,7 @@ does not count as an application field (f271).
 A note that only explains the required marker ("Fields marked with an asterisk (*) are required") is never taken for an
 error on the form; a real error that mentions the marker, or any error beside the note, still stops a form that will not
 go on and is shown to you in the site's own words (f272).
+
+A question the site flags with its own "Required" alert inside it is treated as required even when its name carries no
+star: the agent answers it from your profile or leaves it for you, instead of passing it over as optional and pressing
+Continue until the form stops, and the form's complaint names that question (f273).
