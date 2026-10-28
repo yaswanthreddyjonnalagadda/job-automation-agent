@@ -439,7 +439,12 @@ different password.
 
 The same is done when a sign-in is refused on an account the site knows: the
 account is on record, or the site took your email and then asked for that
-account's password (iCIMS signs in this way). Before, only an "account already
+account's password without a confirmed absence of an employer account. An
+email-first gateway may show a password page to someone who has no account
+with that employer. In that case, the agent uses a visible Create Account
+control if offered; if the page offers only login, it stops and identifies
+the missing registration path rather than trying or resetting a password.
+Before, only an "account already
 exists" message led to the reset; a refused sign-in stopped the run and asked you
 for the username and password (Mutual of Enumclaw, 29 September). A "wrong email
 or password" on an account the site has not shown it knows is still yours: it may

@@ -3925,8 +3925,9 @@ class JobApplicationAssistant(EmailVerificationMixin):
             if candidate_state not in ("registration", "registration_error") or has_dialog:
                 scope = self._sign_in_scope(page)
                 if scope is not None and self._read_ats_password():
-                    if self.account_confirmed_absent() and self._create_account_control(page) is not None:
-                        return self.create_account_from_link(page, email)
+                    new_account_route = self._new_employer_login_route(page, email)
+                    if new_account_route is not None:
+                        return new_account_route
                     # Sign In opens as a modal ON TOP of Create Account, and that
                     # stacked state is unreliable to drive (fields clear, clicks
                     # land on the form underneath). The dedicated login page has
@@ -3977,6 +3978,9 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 # The older Workday routine ticks every checkbox; only fall back
                 # to it when the careful filler didn't recognise the form at all.
                 return False if self._create_form_attempted else self.create_ats_account(page, email)
+            new_account_route = self._new_employer_login_route(page, email)
+            if new_account_route is not None:
+                return new_account_route
             return self.attempt_auto_login(page, email, "")
         except BlockedLoginDomainError as exc:
             logger.error("LOGIN_BLOCKED: %s", exc)
@@ -5087,6 +5091,17 @@ class JobApplicationAssistant(EmailVerificationMixin):
         email, and no earlier application. An unknown (no tracker, no employer) is not an absence."""
         return self.account_on_record() is False and not self.applied_before()
 
+    def _new_employer_login_route(self, page: Page, email: str, *, allow_create: bool = True) -> Optional[bool]:
+        """Choose creation or hold when a new employer presents a password page."""
+        if not self.account_confirmed_absent():
+            return None
+        if allow_create and self._create_account_control(page) is not None:
+            return self.create_account_from_link(page, email)
+        self._login_paused = ("No account is recorded for this employer, and this login page "
+                              "offers no usable registration path")
+        logger.warning("LOGIN_NO_ACCOUNT: %s", self._login_paused)
+        return False
+
     def account_expected(self) -> bool:
         """An account is expected here: one is on record, or we have applied to this employer before. Then the
         agent signs in; only a client never dealt with gets a new account (owner's rule, 17 October 2026)."""
@@ -5744,9 +5759,11 @@ class JobApplicationAssistant(EmailVerificationMixin):
         # Don't try saved credentials on an employer we have no account with:
         # IGT rejected them twice before anyone checked. Create the account
         # instead when the page offers to.
-        if create_if_missing and self.account_on_record() is False and not self.applied_before() \
-                and self._create_account_control(page) is not None:
-            return self.create_account_from_link(page, email)
+        # A gateway may display a password page after accepting any email.
+        # For a confirmed new employer, never spend a credential attempt there.
+        new_account_route = self._new_employer_login_route(page, email, allow_create=create_if_missing)
+        if new_account_route is not None:
+            return new_account_route
 
         # Every wrong password counts towards a lock (Workday: 5 in a row, 30 minutes), the page says the
         # same for a wrong password, no account, an unverified one and a locked one, and the count used to

@@ -195,6 +195,22 @@ def test_rejected_password_does_not_prompt_reset_for_confirmed_new_employer():
     assert A.next_step(state, A.Memory(account_absent=True, signed_in_tried=True)).action == A.CREATE
 
 
+def test_login_only_gateway_does_not_prove_new_employer_has_an_account():
+    """Post Consumer Brands: accepting an email can lead to a password page even without an account."""
+    state = A.read_state(form())
+    memory = A.Memory(account_absent=True, email_given=True)
+    choice = A.next_step(state, memory)
+    assert choice.action == A.FOR_OWNER
+    assert "Create Account" in choice.why
+
+
+def test_refused_login_only_gateway_does_not_reset_a_nonexistent_account():
+    state = A.read_state(form("Wrong username or password"))
+    choice = A.next_step(state, A.Memory(account_absent=True, email_given=True, signed_in_tried=True))
+    assert choice.action == A.FOR_OWNER
+    assert "registration" in choice.why.lower()
+
+
 @pytest.mark.parametrize("entry", ['- button "Create Account" [ref=e20]', '- link "Create an Account" [ref=e20]',
                                    '- button "Register Now" [ref=e20]', '- link "Sign Up" [ref=e20]'])
 @pytest.mark.parametrize("record", ["known", "absent", "unknown"])
