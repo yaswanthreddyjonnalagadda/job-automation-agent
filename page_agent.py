@@ -1494,6 +1494,7 @@ class Outcome:
     kind: str                  # submitted | owner_needed | no_sponsorship | captcha | gave_up
     page: object
     reasons: list[str] = field(default_factory=list)
+    stalled: bool = False      # the loop guard stopped it: the page would not move on (apply_flow may try to recover)
 
     @property
     def summary(self) -> str:
@@ -3622,6 +3623,7 @@ class PageAgent:
 
     def _run_locked(self, page) -> Outcome:
         self._ensure_state()
+        self.stalled_on_page = False     # set only when the loop guard trips in this call, and read in this call
         tries = 0
         stick_tries = 0      # re-reads of one page because an answer did not stay
         last_fingerprint = ""
@@ -4088,10 +4090,11 @@ class PageAgent:
             if moved == "moved":
                 self._last_press_errors = ()
                 stick_tries = 0
+                self.stalled_on_page = False
             if moved == "submitted":
                 return Outcome("submitted", page, ["the site confirmed the application"])
             if moved == "stop":
-                return Outcome("owner_needed", page, [feedback])
+                return Outcome("owner_needed", page, [feedback], stalled=bool(getattr(self, "stalled_on_page", False)))
         return Outcome("gave_up", page, ["too many pages in one run"])
 
     # -- answering ------------------------------------------------------------------
@@ -6876,6 +6879,7 @@ class PageAgent:
             except Exception:
                 blank = []
             still = ("; still blank and required: " + " | ".join(q[:90] for q in blank[:10])) if blank else ""
+            self.stalled_on_page = True
             return "stop", page, (f"the page did not change after three tries -- stuck in a validation loop "
                                   f"({state}); evidence in {dump_dir}{still}")
         elif meta and meta.get("consecutive", 0) >= 2:

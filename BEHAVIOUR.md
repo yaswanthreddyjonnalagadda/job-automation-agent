@@ -1842,3 +1842,7 @@ Accept and Continue) after signing the page under your standing signature permis
 terms and privacy notices are accepted. The button is pressed only when its whole label is a consent word, its form is about
 terms, privacy or consent, and nothing else in that form says Submit; "Agree and Submit", "Disagree" and a lone "Agree" on
 any other form stay held for you (f274).
+
+The go-back-to-the-job recovery (f271) now runs when the loop guard really stops the run: the page stopped changing while it
+was neither the application, its posting nor a review step. A CAPTCHA, a question for you, or any other hand-over is never
+treated as such a stall (f275).

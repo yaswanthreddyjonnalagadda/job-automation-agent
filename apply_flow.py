@@ -1174,7 +1174,8 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             raise
 
         page = agent.tab(outcome.page)
-        if outcome.kind == "blocked_validation_loop" and returns_to_job < MAX_RETURNS_TO_JOB \
+        stalled = outcome.kind == "blocked_validation_loop" or bool(getattr(outcome, "stalled", False))
+        if stalled and returns_to_job < MAX_RETURNS_TO_JOB \
                 and getattr(job, "url", "") and left_the_application(assistant, page):
             returns_to_job += 1
             logger.info("RECOVERY: the page is neither the application nor its posting -- back to the job (%d of %d)",

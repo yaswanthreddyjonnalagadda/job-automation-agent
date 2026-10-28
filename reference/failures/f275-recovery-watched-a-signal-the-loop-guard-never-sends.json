@@ -1,0 +1,17 @@
+{
+  "id": "f275",
+  "date": "2026-10-28",
+  "class": "A recovery was keyed to an outcome kind that the code path it was meant for never produces, and its tests faked that kind",
+  "symptom": "Walmart (careers.walmart.com): after the emailed code the site showed its careers home page, the page stopped changing, and the run waited for the owner ('the page did not change after three tries -- stuck in a validation loop') although f271's 'go back to the job' recovery was in place for exactly this.",
+  "site": "Walmart careers site, 28 October 2026 (saved pages output/Walmart_(USA)_Senior_Network_Engineer/pages/20261028_001106)",
+  "root_cause": "f271 recovered when agent.run returned kind 'blocked_validation_loop'. PageAgent's loop guard (page_agent._press_next_locked) never returns that kind: it returns a 'stop' that run() turns into Outcome('owner_needed', ...), distinguished from other hand-overs only by its wording. The 'blocked_validation_loop' branch in apply_flow is reached by a different, wizard-level path. The recovery therefore never ran on the real stall.",
+  "why_tests_missed": "tests/test_left_the_application.py built its stalled outcome by hand with the kind the recovery looked for, so the test and the code agreed with each other and not with PageAgent. No test connected the real loop guard to the recovery.",
+  "fix": "Outcome carries an explicit stalled flag. PageAgent sets stalled_on_page when its loop guard trips and run() puts it on the owner_needed outcome (cleared at the start of each run and when a press moves the page). apply_flow recovers when the outcome is stalled (or has the old kind) and the page is neither the application, its posting, nor a review step; a hand-over that is not a stall is never taken for one. The tests now build the real outcome, drive the real hand-over path when no recovery applies, and check that the real loop guard sets the flag.",
+  "tests": [
+    "tests/test_left_the_application.py::test_the_real_loop_guard_marks_its_stop_as_a_stall",
+    "tests/test_left_the_application.py::test_a_loop_on_the_careers_home_goes_back_to_the_job_and_carries_on",
+    "tests/test_left_the_application.py::test_a_hand_over_that_is_not_a_stall_is_never_taken_for_one",
+    "tests/test_left_the_application.py::test_an_outcome_is_not_a_stall_unless_the_loop_guard_says_so"
+  ],
+  "prevention": "Test a recovery with the signal the real code path produces, taken from that code, never one written by hand into the test; where two components must agree on a signal, make it an explicit field both tests exercise."
+}
