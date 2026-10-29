@@ -107,7 +107,7 @@ def test_adp_review_next_is_a_final_action(page,step,blocked):
     ("posting", True),
     ("form", False),
     ("application", False),
-    ("other_host", False),
+    ("other_host", True),        # f269: no portal list decides this any more; posting_entry.py's structural test does
     ("submit", False),
     ("dialog", False),
 ])
@@ -120,6 +120,8 @@ def test_adp_posting_apply_is_navigation_only(page, variant, allowed):
     if variant == 'form':
         control = '<form>' + control + '</form>'
     markup = '<cx-job-details-page><div class="cx-apply-row">' + control + '</div></cx-job-details-page>'
+    if variant == 'application':
+        markup += '<form><input aria-label="First Name"></form>'      # an application page holds the application
     if variant == 'dialog':
         markup += '<div role="dialog"><input aria-label="Email"></div>'
     page.route('**/*', lambda route: route.fulfill(body=markup, content_type='text/html'))
@@ -134,36 +136,7 @@ def test_adp_posting_apply_is_navigation_only(page, variant, allowed):
     ("posting", True),
     ("form", False),
     ("application", False),
-    ("other_host", False),
-    ("submit", False),
-    ("dialog", False),
-])
-def test_greenhouse_posting_apply_is_navigation_only(page, variant, allowed):
-    host = 'example.test' if variant == 'other_host' else 'careers.roblox.com'
-    query = '?gh_jid=7645403' if variant != 'other_host' else ''
-    label = 'Submit Application' if variant == 'submit' else 'Apply Now'
-    control = f'''<button role="button" type="button" aria-label="{label}"
-        onclick="window.opened = true">{label}</button>'''
-    if variant == 'form':
-        control = '<form>' + control + '</form>'
-    markup = '<div class="job-detail">' + control + '</div>'
-    if variant == 'dialog':
-        markup += '<div role="dialog"><input aria-label="Email"></div>'
-    if variant == 'application':
-        markup += '<form><input aria-label="First Name"></form>'
-    page.route('**/*', lambda route: route.fulfill(body=markup, content_type='text/html'))
-    page.goto(f'https://{host}/jobs/7645403{query}')
-    guard = guarded(page)
-    page.get_by_role('button', name=label, exact=True).click()
-    assert bool(page.evaluate('window.opened')) is allowed
-    assert bool(guard.denials(page)) is (not allowed)
-
-
-@pytest.mark.parametrize("variant,allowed", [
-    ("posting", True),
-    ("form", False),
-    ("application", False),
-    ("other_host", False),
+    ("other_host", True),        # f269: a posting page on an unlisted employer site is a posting too
     ("submit", False),
     ("dialog", False),
 ])
@@ -304,35 +277,6 @@ def test_interaction_resilient_click_stops_before_force_fallback(page):
     assert page.evaluate("window.submitted") is None
 
 
-@pytest.mark.parametrize("variant,allowed", [
-    ("posting", True),
-    ("form", False),
-    ("application", False),
-    ("other_host", False),
-    ("submit", False),
-    ("dialog", False),
-])
-def test_greenhouse_posting_apply_is_navigation_only(page, variant, allowed):
-    host = 'example.test' if variant == 'other_host' else 'careers.roblox.com'
-    query = '?gh_jid=7645403' if variant != 'other_host' else ''
-    label = 'Submit Application' if variant == 'submit' else 'Apply Now'
-    control = f'''<button role="button" type="button" aria-label="{label}"
-        onclick="window.opened = true">{label}</button>'''
-    if variant == 'form':
-        control = '<form>' + control + '</form>'
-    markup = '<div class="job-detail">' + control + '</div>'
-    if variant == 'dialog':
-        markup += '<div role="dialog"><input aria-label="Email"></div>'
-    if variant == 'application':
-        markup += '<form><input aria-label="First Name"></form>'
-    page.route('**/*', lambda route: route.fulfill(body=markup, content_type='text/html'))
-    page.goto(f'https://{host}/jobs/7645403{query}')
-    guard = guarded(page)
-    page.get_by_role('button', name=label, exact=True).click()
-    assert bool(page.evaluate('window.opened')) is allowed
-    assert bool(guard.denials(page)) is (not allowed)
-
-
 @pytest.mark.parametrize("label", ["Verify", "Create Account"])
 def test_an_account_step_submit_typed_button_is_denied_not_silently_clicked(page, label):
     """Cross-phase matrix cell A (B1 x B2, Phase 0 final review): an account-creation or
@@ -445,35 +389,6 @@ def test_page_agent_plan_does_not_authorize_submit(page, tmp_path, next_kind, ex
     assert (denials[0]["kind"] if denials else None) == expected_denial
 
 
-@pytest.mark.parametrize("variant,allowed", [
-    ("posting", True),
-    ("form", False),
-    ("application", False),
-    ("other_host", False),
-    ("submit", False),
-    ("dialog", False),
-])
-def test_greenhouse_posting_apply_is_navigation_only(page, variant, allowed):
-    host = 'example.test' if variant == 'other_host' else 'careers.roblox.com'
-    query = '?gh_jid=7645403' if variant != 'other_host' else ''
-    label = 'Submit Application' if variant == 'submit' else 'Apply Now'
-    control = f'''<button role="button" type="button" aria-label="{label}"
-        onclick="window.opened = true">{label}</button>'''
-    if variant == 'form':
-        control = '<form>' + control + '</form>'
-    markup = '<div class="job-detail">' + control + '</div>'
-    if variant == 'dialog':
-        markup += '<div role="dialog"><input aria-label="Email"></div>'
-    if variant == 'application':
-        markup += '<form><input aria-label="First Name"></form>'
-    page.route('**/*', lambda route: route.fulfill(body=markup, content_type='text/html'))
-    page.goto(f'https://{host}/jobs/7645403{query}')
-    guard = guarded(page)
-    page.get_by_role('button', name=label, exact=True).click()
-    assert bool(page.evaluate('window.opened')) is allowed
-    assert bool(guard.denials(page)) is (not allowed)
-
-
 @pytest.mark.parametrize("label", ["Next", "Continue"])
 def test_ordinary_navigation_buttons_still_work(page, label):
     page.set_content("""
@@ -503,35 +418,6 @@ def test_enter_for_an_intermediate_next_button_still_works(page):
 
     assert page.evaluate("window.moved") is True
     assert guard.denials(page) == []
-
-
-@pytest.mark.parametrize("variant,allowed", [
-    ("posting", True),
-    ("form", False),
-    ("application", False),
-    ("other_host", False),
-    ("submit", False),
-    ("dialog", False),
-])
-def test_greenhouse_posting_apply_is_navigation_only(page, variant, allowed):
-    host = 'example.test' if variant == 'other_host' else 'careers.roblox.com'
-    query = '?gh_jid=7645403' if variant != 'other_host' else ''
-    label = 'Submit Application' if variant == 'submit' else 'Apply Now'
-    control = f'''<button role="button" type="button" aria-label="{label}"
-        onclick="window.opened = true">{label}</button>'''
-    if variant == 'form':
-        control = '<form>' + control + '</form>'
-    markup = '<div class="job-detail">' + control + '</div>'
-    if variant == 'dialog':
-        markup += '<div role="dialog"><input aria-label="Email"></div>'
-    if variant == 'application':
-        markup += '<form><input aria-label="First Name"></form>'
-    page.route('**/*', lambda route: route.fulfill(body=markup, content_type='text/html'))
-    page.goto(f'https://{host}/jobs/7645403{query}')
-    guard = guarded(page)
-    page.get_by_role('button', name=label, exact=True).click()
-    assert bool(page.evaluate('window.opened')) is allowed
-    assert bool(guard.denials(page)) is (not allowed)
 
 
 @pytest.mark.parametrize("label", [
@@ -614,35 +500,6 @@ def test_a_dropdown_opener_beside_a_file_chooser_is_not_swept_up(page):
 
     assert page.evaluate("window.dropdownOpened") is True
     assert guard.denials(page) == []
-
-
-@pytest.mark.parametrize("variant,allowed", [
-    ("posting", True),
-    ("form", False),
-    ("application", False),
-    ("other_host", False),
-    ("submit", False),
-    ("dialog", False),
-])
-def test_greenhouse_posting_apply_is_navigation_only(page, variant, allowed):
-    host = 'example.test' if variant == 'other_host' else 'careers.roblox.com'
-    query = '?gh_jid=7645403' if variant != 'other_host' else ''
-    label = 'Submit Application' if variant == 'submit' else 'Apply Now'
-    control = f'''<button role="button" type="button" aria-label="{label}"
-        onclick="window.opened = true">{label}</button>'''
-    if variant == 'form':
-        control = '<form>' + control + '</form>'
-    markup = '<div class="job-detail">' + control + '</div>'
-    if variant == 'dialog':
-        markup += '<div role="dialog"><input aria-label="Email"></div>'
-    if variant == 'application':
-        markup += '<form><input aria-label="First Name"></form>'
-    page.route('**/*', lambda route: route.fulfill(body=markup, content_type='text/html'))
-    page.goto(f'https://{host}/jobs/7645403{query}')
-    guard = guarded(page)
-    page.get_by_role('button', name=label, exact=True).click()
-    assert bool(page.evaluate('window.opened')) is allowed
-    assert bool(guard.denials(page)) is (not allowed)
 
 
 @pytest.mark.parametrize("label", ["Add Experience", "Remove", "Upload", "Cancel", "Back", "Skip"])
@@ -947,35 +804,6 @@ def test_vision_fallback_never_directly_clicks_any_candidate_with_no_guard(page,
 
     assert clicked is False, case_id
     assert page.evaluate("window.submitted") is None, case_id
-
-
-@pytest.mark.parametrize("variant,allowed", [
-    ("posting", True),
-    ("form", False),
-    ("application", False),
-    ("other_host", False),
-    ("submit", False),
-    ("dialog", False),
-])
-def test_greenhouse_posting_apply_is_navigation_only(page, variant, allowed):
-    host = 'example.test' if variant == 'other_host' else 'careers.roblox.com'
-    query = '?gh_jid=7645403' if variant != 'other_host' else ''
-    label = 'Submit Application' if variant == 'submit' else 'Apply Now'
-    control = f'''<button role="button" type="button" aria-label="{label}"
-        onclick="window.opened = true">{label}</button>'''
-    if variant == 'form':
-        control = '<form>' + control + '</form>'
-    markup = '<div class="job-detail">' + control + '</div>'
-    if variant == 'dialog':
-        markup += '<div role="dialog"><input aria-label="Email"></div>'
-    if variant == 'application':
-        markup += '<form><input aria-label="First Name"></form>'
-    page.route('**/*', lambda route: route.fulfill(body=markup, content_type='text/html'))
-    page.goto(f'https://{host}/jobs/7645403{query}')
-    guard = guarded(page)
-    page.get_by_role('button', name=label, exact=True).click()
-    assert bool(page.evaluate('window.opened')) is allowed
-    assert bool(guard.denials(page)) is (not allowed)
 
 
 @pytest.mark.parametrize("label", [

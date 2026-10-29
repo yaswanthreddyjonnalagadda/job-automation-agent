@@ -439,7 +439,12 @@ different password.
 
 The same is done when a sign-in is refused on an account the site knows: the
 account is on record, or the site took your email and then asked for that
-account's password (iCIMS signs in this way). Before, only an "account already
+account's password without a confirmed absence of an employer account. An
+email-first gateway may show a password page to someone who has no account
+with that employer. In that case, the agent uses a visible Create Account
+control if offered; if the page offers only login, it stops and identifies
+the missing registration path rather than trying or resetting a password.
+Before, only an "account already
 exists" message led to the reset; a refused sign-in stopped the run and asked you
 for the username and password (Mutual of Enumclaw, 29 September). A "wrong email
 or password" on an account the site has not shown it knows is still yours: it may
@@ -1813,3 +1818,45 @@ On a sign-in page that also offers Create Account, the agent creates the account
 positively knows the employer has none: no account recorded for the configured email and no earlier application. If the
 record is unknown, or an account or earlier application exists, it signs in as before; a refused sign-in on a confirmed new
 employer is followed by creation, not a password reset (f267).
+
+A job posting's own Apply button opens the application on any employer site, not only the portals the agent knows by
+name: the submission guard lets it through when the button is outside every form and labelled exactly Apply, Apply now
+or Apply for this job, and no application form, dialog, frame or input is showing (the site's own header search box does
+not count). It never applies on a job board, aggregator or social site, whose Apply can submit for you, and any page
+that shows something to submit stays guarded as before (f269).
+
+A code the site wants typed one character per box (boxes named "Digit 1 of 6" and so on) is a code step like any other:
+the agent reads the emailed code under the same rules and types it across the boxes, instead of handing over as if a link
+had to be clicked (f270).
+
+If the site sends the browser somewhere that is neither the application nor its job posting (its careers home after an
+emailed code, for example) and the run stalls there, the agent goes back to the job's own page and opens the application
+again, up to twice in one run, before it hands over. A review step is never left this way, and a site's header search box
+does not count as an application field (f271).
+
+A note that only explains the required marker ("Fields marked with an asterisk (*) are required") is never taken for an
+error on the form; a real error that mentions the marker, or any error beside the note, still stops a form that will not
+go on and is shown to you in the site's own words (f272).
+
+A question the site flags with its own "Required" alert inside it is treated as required even when its name carries no
+star: the agent answers it from your profile or leaves it for you, instead of passing it over as optional and pressing
+Continue until the form stops, and the form's complaint names that question (f273).
+
+On a terms-and-conditions, privacy or consent step, the agent presses the step's own consent button (Agree, I Agree, Accept,
+Accept and Continue) after signing the page under your standing signature permission: your decision of 30 September is that
+terms and privacy notices are accepted. The button is pressed only when its whole label is a consent word, its form is about
+terms, privacy or consent, and nothing else in that form says Submit; "Agree and Submit", "Disagree" and a lone "Agree" on
+any other form stay held for you (f274).
+
+The go-back-to-the-job recovery (f271) now runs when the loop guard really stops the run: the page stopped changing while it
+was neither the application, its posting nor a review step. A CAPTCHA, a question for you, or any other hand-over is never
+treated as such a stall (f275).
+
+On a create-account form, a marketing opt-in box (newsletters, offers, "send me emails about new arrivals") is never left ticked
+for you: one the site ticked itself is unticked before the form is sent, and if the site will not let it go the form is held and
+shows which box. If your site-value setting is "leave", the site's own value stands (f276).
+
+A page headed "Review your application" (or "Review and submit", "Review") with nothing left to fill is the last step of the
+application, whatever its forward button is called (Continue, Next, Submit): the agent stops there and hands it to you, and the
+button is yours to press. Walmart's review page was pressed through as an ordinary "Continue" and the application was sent
+without your pause (f277).

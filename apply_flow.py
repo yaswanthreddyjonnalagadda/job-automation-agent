@@ -664,12 +664,38 @@ def shows_the_application(assistant, page) -> bool:
             found = frame.evaluate("""() => [...document.querySelectorAll(
                     'input:not([type=hidden]):not([type=search]):not([type=submit]):not([type=button]), '
                     + 'textarea, select, [role=combobox], [role=radio], [role=checkbox]')]
-                .some(e => !!(e.offsetParent || e.getClientRects().length))""")
+                .some(e => !!(e.offsetParent || e.getClientRects().length)
+                    && !e.closest('header, nav, footer, [role=banner], [role=navigation], [role=search], [role=contentinfo]'))""")
             if found:
                 return True
     except Exception:
         return True                             # when the page cannot be read, leave it as it was
     return False
+
+
+MAX_RETURNS_TO_JOB = 2     # how often one run goes back to the posting after the site sent it somewhere else
+
+
+def left_the_application(assistant, page) -> bool:
+    """The page is neither the application nor its posting, and is not a review step: the site sent the browser
+    somewhere else (Walmart, 27 October 2026: after the emailed code it showed its careers home, and the run pressed
+    the home page's picture carousel 'Next' until the loop guard stopped it). Judged by what is on the page."""
+    try:
+        if assistant.is_review_step(page):
+            return False
+    except Exception:
+        return False
+    return not shows_the_application(assistant, page)
+
+
+def reopen_application(assistant, job):
+    """The job's own page, and from it the application: the way a fresh run starts."""
+    page = assistant.open_job_page(job.url)
+    page = assistant.open_embedded_form(page)
+    if assistant.on_job_description(page):
+        page = assistant.click_apply_button(page)
+        page = assistant.dismiss_apply_chooser(page)
+    return assistant.open_embedded_form(page)
 
 
 def write_recovery_checkpoint(tracker, assistant, key: str, page, job, handoff_reason: str = "",
@@ -1109,6 +1135,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
     import repeated_entries
     # each job and degree, for boxes that repeat per entry; a degree's dates completed from the profile
     agent.history = repeated_entries.with_profile(experience_data, profile)
+    returns_to_job = 0
     while True:
         try:
             outcome = agent.run(page)
@@ -1147,6 +1174,17 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             raise
 
         page = agent.tab(outcome.page)
+        stalled = outcome.kind == "blocked_validation_loop" or bool(getattr(outcome, "stalled", False))
+        if stalled and returns_to_job < MAX_RETURNS_TO_JOB \
+                and getattr(job, "url", "") and left_the_application(assistant, page):
+            returns_to_job += 1
+            logger.info("RECOVERY: the page is neither the application nor its posting -- back to the job (%d of %d)",
+                        returns_to_job, MAX_RETURNS_TO_JOB)
+            try:
+                page = reopen_application(assistant, job)
+                continue
+            except Exception as exc:
+                logger.warning("RECOVERY: could not go back to the job: %s", str(exc).splitlines()[0][:120])
         remember_progress(tracker, key, page, outcome.summary[:200], assistant=assistant)
         owner_handoff = None
         if outcome.kind != "submitted":

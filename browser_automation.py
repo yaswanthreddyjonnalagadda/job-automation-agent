@@ -35,6 +35,7 @@ import geo_reference
 import emailed_codes
 import phone_console
 import login_guard
+import marketing_opt_in
 import provenance
 import account_state
 import form_fields
@@ -3186,8 +3187,35 @@ class JobApplicationAssistant(EmailVerificationMixin):
         try:
             if page.locator("button:text-is('Submit'):visible, [role='button']:text-is('Submit'):visible, button:has-text('Submit Application'):visible").count():
                 return True
-            return self.is_review_step_by_wizard_marker(page)
+            return self.is_review_step_by_wizard_marker(page) or self.is_review_step_by_heading(page)
         except Exception:
+            return False
+
+    _REVIEW_HEADING_JS = r"""() => {
+        const heading = /^\s*(review(\s+(and|&)\s+submit)?|review\s+(your\s+)?(application|information|details|answers)|application\s+review)\s*$/i;
+        const found = Array.from(document.querySelectorAll('h1, h2, [role=heading]'))
+            .some(h => h.getClientRects().length > 0 && heading.test(h.innerText || ''));
+        if (!found) return false;
+        const chrome = n => Boolean(n.closest('header, nav, footer, [role=banner], [role=navigation], [role=search], [role=contentinfo]'));
+        return !Array.from(document.querySelectorAll(
+            'input:not([type=hidden]):not([type=search]):not([type=submit]):not([type=button]), textarea, select, '
+            + '[role=combobox], [role=radio], [role=checkbox]'
+        )).some(n => n.getClientRects().length > 0 && !chrome(n));
+    }"""
+
+    def is_review_step_by_heading(self, page: Page) -> bool:
+        """True on a page headed "Review your application" (or "Review and submit", "Review") with nothing left to fill.
+
+        Walmart, 28 October 2026: the review page offers only Edit, Continue and Back, and Continue is the final
+        submission. Neither a Submit button nor a wizard marker reading "Review" is there, so the agent took it for an
+        ordinary step and pressed it, and the application was sent without the owner's pause (f277). Whatever the
+        forward button is called, the page that summarises the application for a last look is the last step. Read in
+        every frame, since an application is often an iframe. Mistaking an ordinary page for it costs the owner one
+        press; the other mistake sends an application."""
+        try:
+            return any(bool(frame.evaluate(self._REVIEW_HEADING_JS)) for frame in page.frames)
+        except Exception as exc:
+            logger.debug("is_review_step_by_heading: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
             return False
 
     def is_review_step_by_wizard_marker(self, page: Page) -> bool:
@@ -3897,8 +3925,9 @@ class JobApplicationAssistant(EmailVerificationMixin):
             if candidate_state not in ("registration", "registration_error") or has_dialog:
                 scope = self._sign_in_scope(page)
                 if scope is not None and self._read_ats_password():
-                    if self.account_confirmed_absent() and self._create_account_control(page) is not None:
-                        return self.create_account_from_link(page, email)
+                    new_account_route = self._new_employer_login_route(page, email)
+                    if new_account_route is not None:
+                        return new_account_route
                     # Sign In opens as a modal ON TOP of Create Account, and that
                     # stacked state is unreliable to drive (fields clear, clicks
                     # land on the form underneath). The dedicated login page has
@@ -3949,6 +3978,9 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 # The older Workday routine ticks every checkbox; only fall back
                 # to it when the careful filler didn't recognise the form at all.
                 return False if self._create_form_attempted else self.create_ats_account(page, email)
+            new_account_route = self._new_employer_login_route(page, email)
+            if new_account_route is not None:
+                return new_account_route
             return self.attempt_auto_login(page, email, "")
         except BlockedLoginDomainError as exc:
             logger.error("LOGIN_BLOCKED: %s", exc)
@@ -5059,6 +5091,17 @@ class JobApplicationAssistant(EmailVerificationMixin):
         email, and no earlier application. An unknown (no tracker, no employer) is not an absence."""
         return self.account_on_record() is False and not self.applied_before()
 
+    def _new_employer_login_route(self, page: Page, email: str, *, allow_create: bool = True) -> Optional[bool]:
+        """Choose creation or hold when a new employer presents a password page."""
+        if not self.account_confirmed_absent():
+            return None
+        if allow_create and self._create_account_control(page) is not None:
+            return self.create_account_from_link(page, email)
+        self._login_paused = ("No account is recorded for this employer, and this login page "
+                              "offers no usable registration path")
+        logger.warning("LOGIN_NO_ACCOUNT: %s", self._login_paused)
+        return False
+
     def account_expected(self) -> bool:
         """An account is expected here: one is on record, or we have applied to this employer before. Then the
         agent signs in; only a client never dealt with gets a new account (owner's rule, 17 October 2026)."""
@@ -5288,6 +5331,45 @@ class JobApplicationAssistant(EmailVerificationMixin):
         self._account_form_failure = reason
         return False
 
+    _CHECKBOX_LABEL_JS = ("e => (e.labels && e.labels[0] ? e.labels[0].innerText : '') || e.getAttribute('aria-label') || "
+                          "e.closest('label')?.innerText || e.parentElement?.innerText || ''")
+
+    def _clear_site_ticked_marketing(self, page: Page) -> list[str]:
+        """Unticks the marketing boxes the site itself ticked on an account form (f276).
+
+        The owner's rule is that a marketing opt-in is never given for them; a site that draws one already ticked
+        (Walmart's "Send me emails about new arrivals ...") would otherwise have it given when Continue is pressed.
+        Only while the owner's policy for values the site put there is "correct" (the default): under "leave" the
+        site's own values stand. Returns the labels of any box that could not be cleared, so the form is held for
+        the owner and never sent with one ticked."""
+        from config import site_prefill_policy
+        if site_prefill_policy() != "correct":
+            return []
+        stuck: list[str] = []
+        boxes = page.locator("input[type='checkbox']")
+        for i in range(boxes.count()):
+            box = boxes.nth(i)
+            label = ""
+            try:
+                if not box.is_visible() or not box.is_checked():
+                    continue
+                label = " ".join((box.evaluate(self._CHECKBOX_LABEL_JS) or "").split())
+                if not marketing_opt_in.is_marketing_opt_in(label):
+                    continue
+                try:
+                    box.uncheck(timeout=3_000)
+                except Exception as exc:
+                    logger.debug("_clear_site_ticked_marketing: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                    box.evaluate("e => e.click()")
+                if box.is_checked():
+                    stuck.append(label[:70])
+                    logger.info("LEFT_FOR_YOU: could not untick %r", label[:70])
+                else:
+                    logger.info("ACCOUNT: unticked a marketing opt-in the site had ticked")
+            except Exception as exc:
+                logger.debug("_clear_site_ticked_marketing: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+        return stuck
+
     def fill_create_account_form(self, page: Page, email: str) -> bool:
         """Fills a careers-site Create Account form: email (and its retype),
         the .env password (and its retype), first/last name, country, and only
@@ -5402,8 +5484,8 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     context = box.evaluate("e => (e.closest('form') || e.parentElement)?.innerText || ''")
                 except Exception:
                     context = label
-                if re.search(r"hear more|newsletter|campaign|marketing|job alert|promotion", label):
-                    continue  # marketing opt-ins are the user's choice, not ours
+                if marketing_opt_in.is_marketing_opt_in(label):
+                    continue  # marketing opt-ins are the user's choice, not ours (one the site ticked: cleared below)
                 is_terms_acknowledgment = bool(re.search(
                     r"\bterms?(?:\s+and\s+conditions?)?\b", label, re.IGNORECASE
                 ))
@@ -5446,6 +5528,11 @@ class JobApplicationAssistant(EmailVerificationMixin):
             if needs_candidate_acknowledgment:
                 logger.warning("ACCOUNT_HELD: a terms or attestation checkbox needs the candidate")
                 return self._account_form_failed("a box only you may tick: " + "; ".join(dict.fromkeys(held_boxes)) + " -- tick it, then press Continue")
+            ticked_by_site = self._clear_site_ticked_marketing(page)
+            if ticked_by_site:
+                logger.warning("ACCOUNT_HELD: a marketing opt-in ticked by the site could not be cleared")
+                return self._account_form_failed("a marketing box the site ticked could not be cleared: "
+                                                 + "; ".join(dict.fromkeys(ticked_by_site)) + " -- untick it, then press Continue")
 
             # Workday re-renders as the name, country and terms are filled,
             # which clears the keyboard-set password fields: re-enter and
@@ -5600,13 +5687,16 @@ class JobApplicationAssistant(EmailVerificationMixin):
 
             # Acknowledgment checkbox (required on some tenants). Only privacy
             # consent -- an attestation or a marketing opt-in is never ticked.
+            if self._clear_site_ticked_marketing(page):
+                logger.warning("ACCOUNT_HELD: a marketing opt-in ticked by the site could not be cleared")
+                return False
             boxes = page.locator("input[type='checkbox']")
             for i in range(boxes.count()):
                 box = boxes.nth(i)
                 if not box.is_visible() or box.is_checked():
                     continue
                 label = (box.evaluate("e => e.closest('label')?.innerText || e.parentElement?.innerText || ''") or "")
-                if safety.is_attestation(label) or re.search(r"marketing|newsletter|job alert", label, re.IGNORECASE):
+                if safety.is_attestation(label) or marketing_opt_in.is_marketing_opt_in(label):
                     logger.info("LEFT_FOR_YOU: not ticking %r", " ".join(label.split())[:70])
                     continue
                 box.check(timeout=3_000)
@@ -5669,9 +5759,11 @@ class JobApplicationAssistant(EmailVerificationMixin):
         # Don't try saved credentials on an employer we have no account with:
         # IGT rejected them twice before anyone checked. Create the account
         # instead when the page offers to.
-        if create_if_missing and self.account_on_record() is False and not self.applied_before() \
-                and self._create_account_control(page) is not None:
-            return self.create_account_from_link(page, email)
+        # A gateway may display a password page after accepting any email.
+        # For a confirmed new employer, never spend a credential attempt there.
+        new_account_route = self._new_employer_login_route(page, email, allow_create=create_if_missing)
+        if new_account_route is not None:
+            return new_account_route
 
         # Every wrong password counts towards a lock (Workday: 5 in a row, 30 minutes), the page says the
         # same for a wrong password, no account, an unverified one and a locked one, and the count used to

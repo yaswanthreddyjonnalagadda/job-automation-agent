@@ -82,6 +82,9 @@ _MFA = re.compile(
     r"code (?:that )?(?:was |has been )?(?:sent|texted) to your (?:phone|mobile|cell)|"
     r"phone number ending",
     re.IGNORECASE)
+# A code typed one character per box, the boxes named by position and not by "code" ("Digit 1 of 6": Walmart, 27 October
+# 2026, read as a link to click and handed to the owner). Four or more such boxes together are a code entry.
+_SEGMENT_BOX = re.compile(r'- textbox "(?:digit|character|number|box|field)\s*\d+\s*(?:of|/)\s*\d+"', re.IGNORECASE)
 _VERIFY = re.compile(
     r"verify (your|the) (email|e-mail|account|address)|verification (email|e-mail|link)|check your (email|e-mail|inbox)|"
     r"we('ve| have)? sent (you )?(an? )?(email|e-mail|link|message)|activate your account|confirm your (email|account)",
@@ -176,7 +179,8 @@ def read_state(snapshot: str, password_boxes: Optional[int] = None) -> AccountSt
 
     # A box for an emailed code makes it a code step, whatever else the page says: "Your account is not verified.
     # Enter the verification code we sent" is verified with the code, not with a link.
-    code_box = re.search(r'- textbox "[^"]*(code|passcode|otp)[^"]*"', snapshot or "", re.IGNORECASE)
+    code_box = re.search(r'- textbox "[^"]*(code|passcode|otp)[^"]*"', snapshot or "", re.IGNORECASE) \
+        or len(_SEGMENT_BOX.findall(snapshot or "")) >= 4
     wants_code = bool(code_box and _first(_CODE, texts))
     # Resume-choice pages may offer an existing-account login alongside
     # independent ways to begin an application. That login is optional only
@@ -309,6 +313,10 @@ class Step:
 def _knows_account(memory: Memory) -> bool:
     """The site knows this account: it is on record, the site took the email and asked for its password, or the agent
     created it here in this run (f195)."""
+    # Some login gateways ask *any* email for a password. That transition cannot
+    # establish an account when the employer is confirmed new (Post Consumer Brands).
+    if memory.account_absent and not (memory.account_exists or memory.created):
+        return False
     return memory.account_exists or memory.email_given or memory.created
 
 
@@ -341,6 +349,9 @@ def next_step(state: AccountState, memory: Memory) -> Step:
     if kind == WRONG_PASSWORD:
         if memory.account_absent and state.create_offered and not memory.created:
             return Step(CREATE, "no account is recorded for this employer and the site offers Create Account")
+        if memory.account_absent and not memory.created:
+            return Step(FOR_OWNER, "no account is recorded for this employer and this login page offers no "
+                                   "registration path. The password error does not establish an account")
         # The owner's rule (CLAUDE.md §5): an account the site knows -- on record, or the site took the email and
         # asked for its password -- whose password it refused is reset to the same ATS password with the code
         # emailed to the owner, once per site per run. 'Wrong email or password' alone does not say the account
@@ -389,6 +400,9 @@ def next_step(state: AccountState, memory: Memory) -> Step:
     if kind == SIGN_IN_FORM:
         if memory.account_absent and state.create_offered and not memory.created:
             return Step(CREATE, "no account is recorded for this employer and the site offers Create Account")
+        if memory.account_absent and not memory.created:
+            return Step(FOR_OWNER, "no account is recorded for this employer and this login page offers no Create "
+                                   "Account option. Find the employer's registration path, then press Continue")
         if memory.signed_in_tried:
             return Step(FOR_OWNER, "signing in did not get past the sign-in form: look at the page, then Continue")
         return Step(SIGN_IN)

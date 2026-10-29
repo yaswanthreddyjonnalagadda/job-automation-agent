@@ -93,6 +93,39 @@ def test_auth_helper_opens_creation_from_sign_in_for_new_employer(page):
     assistant.attempt_auto_login.assert_not_called()
 
 
+@pytest.mark.parametrize("markup", [
+    '<h1>Enter Your Password</h1><form><input type=password><button>Log In</button></form>',
+    '<h1>Sign In</h1><form><input type=email><input type=password><button>Sign In</button></form>',
+])
+def test_auth_helper_holds_login_only_page_for_new_employer(page, markup):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from browser_automation import JobApplicationAssistant
+
+    page.set_content(markup)
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant.adapter = lambda _: SimpleNamespace(candidate_account_state=lambda _: "sign_in")
+    assistant._read_ats_password = lambda: "Synthetic-Password1!"
+    assistant.account_on_record = lambda: False
+    assistant.applied_before = lambda: False
+    assistant.attempt_auto_login = Mock(return_value=True)
+    assert not assistant.handle_auth_gate(page, "owner@example.com")
+    assistant.attempt_auto_login.assert_not_called()
+    assert "registration" in assistant._login_paused.lower()
+
+
+def test_direct_login_helper_does_not_type_for_new_employer_without_registration(page):
+    from browser_automation import JobApplicationAssistant
+
+    page.set_content('<h1>Enter Your Password</h1><form><input type=password>'
+                     '<button>Log In</button></form>')
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant.account_on_record = lambda: False
+    assistant.applied_before = lambda: False
+    assert not assistant.attempt_auto_login(page, "owner@example.com", "Synthetic-Password1!")
+    assert page.locator('input[type=password]').input_value() == ""
+
+
 @pytest.mark.parametrize("passwords", [1, 2])
 def test_registration_dialog_is_not_a_sign_in_scope(page, passwords):
     from browser_automation import JobApplicationAssistant

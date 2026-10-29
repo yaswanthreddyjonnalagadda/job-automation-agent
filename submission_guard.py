@@ -22,6 +22,7 @@ def _guard_script(capability: str) -> str:
     from sites.adp import POSTING_ENTRY_JS as ADP_POSTING_ENTRY_JS
     from sites.greenhouse import POSTING_ENTRY_JS as GREENHOUSE_POSTING_ENTRY_JS
     from sites.bankofamerica import POSTING_ENTRY_JS as BANKOFAMERICA_POSTING_ENTRY_JS
+    from posting_entry import posting_entry_js
 
     return r"""(() => {
       // A document.open()-class replacement (what Playwright's page.set_content() uses, and
@@ -44,7 +45,9 @@ def _guard_script(capability: str) -> str:
       const adpPostingEntry = ADP_POSTING_ENTRY;
       const greenhousePostingEntry = GREENHOUSE_POSTING_ENTRY;
       const bankofamericaPostingEntry = BANKOFAMERICA_POSTING_ENTRY;
-      const postingEntry = candidate => adpPostingEntry(candidate) || greenhousePostingEntry(candidate) || bankofamericaPostingEntry(candidate);
+      const structuralPostingEntry = STRUCTURAL_POSTING_ENTRY;
+      const postingEntry = candidate => adpPostingEntry(candidate) || greenhousePostingEntry(candidate) || bankofamericaPostingEntry(candidate)
+        || structuralPostingEntry(candidate);
       const state = {active: false, authorization: null, denials: [], sequence: 0};
       const selector = 'button, input[type="submit"], input[type="image"], [role="button"], a';
       const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
@@ -109,6 +112,19 @@ def _guard_script(capability: str) -> str:
         return !Array.from(candidate.form.elements)
           .some(el => el !== candidate && unclassifiedFinalCandidate(el));
       };
+      // A terms-and-conditions step's own consent button (Walmart, 27 October 2026, 86%: "Agree" beside "Back"). Its form
+      // holds nothing else to press, so the sole-remaining-action rule above took it for the last click. It is not one when
+      // its whole label is a consent word, its form is about terms, privacy or consent, and no control in that form carries
+      // a submit label. "Agree and Submit", "Disagree" and an "Agree" on any other form stay under the rules above.
+      const consentLabel = /^(?:i\s+)?(?:agree|accept)(?:\s+(?:and|&)\s+continue)?$/i;
+      const consentStep = candidate => {
+        const own = labels(candidate);
+        if (!candidate.form || !own.length || !own.every(label => consentLabel.test(label))) return false;
+        if (!/terms\s*(?:and|&)\s*conditions|terms of (?:use|service)|privacy (?:notice|policy|statement)|consent/i
+              .test(candidate.form.innerText || "")) return false;
+        return !Array.from(candidate.form.elements).some(
+          el => el !== candidate && labels(el).some(label => submitLabel.test(label)));
+      };
       const finalControl = element => {
         if (!(element instanceof Element)) return null;
         const candidate = element.closest(selector);
@@ -116,6 +132,7 @@ def _guard_script(capability: str) -> str:
         if (postingEntry(candidate)) return null;
         if (adpFinalReviewNext(candidate)) return candidate;
         if (labels(candidate).some(label => submitLabel.test(label))) return candidate;
+        if (consentStep(candidate)) return null;
         if (structuralSubmitter(candidate) && !ordinaryNavigation(candidate)) return candidate;
         return soleRemainingAction(candidate) ? candidate : null;
       };
@@ -409,7 +426,9 @@ def _guard_script(capability: str) -> str:
       });
     })()""".replace("ADP_POSTING_ENTRY", ADP_POSTING_ENTRY_JS).replace(
         "GREENHOUSE_POSTING_ENTRY", GREENHOUSE_POSTING_ENTRY_JS
-    ).replace("BANKOFAMERICA_POSTING_ENTRY", BANKOFAMERICA_POSTING_ENTRY_JS).replace("CAPABILITY", json.dumps(capability)).replace(
+    ).replace("BANKOFAMERICA_POSTING_ENTRY", BANKOFAMERICA_POSTING_ENTRY_JS).replace(
+        "STRUCTURAL_POSTING_ENTRY", posting_entry_js()
+    ).replace("CAPABILITY", json.dumps(capability)).replace(
         "SUBMIT_PATTERN", json.dumps(safety.SUBMIT_LABEL_RE.pattern)
     ).replace(
         "SAFE_UTILITY_PATTERN", json.dumps(safety.SAFE_UTILITY_LABEL_RE.pattern)

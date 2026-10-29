@@ -195,6 +195,22 @@ def test_rejected_password_does_not_prompt_reset_for_confirmed_new_employer():
     assert A.next_step(state, A.Memory(account_absent=True, signed_in_tried=True)).action == A.CREATE
 
 
+def test_login_only_gateway_does_not_prove_new_employer_has_an_account():
+    """Post Consumer Brands: accepting an email can lead to a password page even without an account."""
+    state = A.read_state(form())
+    memory = A.Memory(account_absent=True, email_given=True)
+    choice = A.next_step(state, memory)
+    assert choice.action == A.FOR_OWNER
+    assert "Create Account" in choice.why
+
+
+def test_refused_login_only_gateway_does_not_reset_a_nonexistent_account():
+    state = A.read_state(form("Wrong username or password"))
+    choice = A.next_step(state, A.Memory(account_absent=True, email_given=True, signed_in_tried=True))
+    assert choice.action == A.FOR_OWNER
+    assert "registration" in choice.why.lower()
+
+
 @pytest.mark.parametrize("entry", ['- button "Create Account" [ref=e20]', '- link "Create an Account" [ref=e20]',
                                    '- button "Register Now" [ref=e20]', '- link "Sign Up" [ref=e20]'])
 @pytest.mark.parametrize("record", ["known", "absent", "unknown"])
@@ -208,6 +224,33 @@ def test_creation_is_chosen_only_when_absence_is_confirmed_and_creation_is_offer
     memory = A.Memory(account_exists=(record == "known"), account_absent=(record == "absent"), signed_in_tried=rejected)
     chosen = A.next_step(state, memory).action
     assert (chosen == A.CREATE) is (record == "absent" and offered)
+
+
+def segmented_code_page(boxes, noun="Digit", total=None, heading="Check your email for the verification code."):
+    total = total or boxes
+    rows = "\n".join(f'    - textbox "{noun} {i} of {total}" [ref=e{i + 10}]' for i in range(1, boxes + 1))
+    return (f'- heading "{heading}" [level=1]\n'
+            '- paragraph: We have sent a verification code to ya*******@gmail.com. Please enter it below.\n'
+            f'{rows}\n- button "Resend code (58s)" [disabled]\n- button "Verify" [disabled]')
+
+
+@pytest.mark.parametrize("noun,boxes", [("Digit", 6), ("Digit", 4), ("Character", 8), ("Number", 6)])
+def test_a_code_typed_one_character_per_box_is_a_code_step_not_a_link_to_click(noun, boxes):
+    """Walmart, 27 October 2026: boxes named 'Digit 1 of 6' were not recognised as a code box, so 'Check your email
+    for the verification code' read as a link to click and the run handed over to the owner."""
+    state = A.read_state(segmented_code_page(boxes, noun))
+    assert state.kind == A.CODE_ENTRY
+    assert A.next_step(state, A.Memory()).action == A.ENTER_CODE
+
+
+def test_fewer_than_four_position_named_boxes_are_not_a_code_entry():
+    """Three boxes named by position are not enough to call a code entry: the page keeps its other reading."""
+    assert A.read_state(segmented_code_page(3, total=3)).kind != A.CODE_ENTRY
+
+
+def test_a_link_page_with_no_boxes_is_still_a_link_to_click():
+    page = '- heading "Check your email" [level=1]\n- paragraph: We have sent you an email with a verification link.'
+    assert A.read_state(page).kind == A.VERIFY_EMAIL
 
 
 # --- what to do ------------------------------------------------------------------------------------

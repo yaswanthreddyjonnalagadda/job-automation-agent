@@ -898,9 +898,53 @@ def split_optional(still_open: list[str], required: set[str]) -> tuple[list[str]
     return [q for q in still_open if q.endswith("*")], [q for q in still_open if not q.endswith("*")]
 
 
+_INLINE_REQUIRED = re.compile(r"^(?:this )?(?:field )?(?:is )?required\.?$", re.IGNORECASE)
+_NAMED_QUESTION = re.compile(
+    r"""^\s*- '?(?:radiogroup|group|textbox|combobox|listbox|spinbutton|searchbox|checkbox)\s+"(.*)"(?:\s*\[[^\]]*\])*\s*'?:?\s*$""")
+
+
+def inline_required_questions(snapshot: str) -> list[str]:
+    """The questions the site itself flags with a "Required" alert inside them.
+
+    Walmart, 27 October 2026 (Military Service): a question with no asterisk in its name showed a red "Required" alert
+    once Continue was pressed. A question is known to be required from its star, and a bare "Required" is not taken for a
+    complaint (it is also the label of a column or a field), so the run left that question blank and pressed Continue until
+    the loop guard stopped it. An alert saying only that, inside a question's own block, is the site's word that this
+    question is required and unanswered; one outside any question marks nothing."""
+    lines = (snapshot or "").splitlines()
+    found: list[str] = []
+    for index, line in enumerate(lines):
+        if not re.match(r"\s*- alert\b", line):
+            continue
+        indent = len(line) - len(line.lstrip())
+        said = []
+        inline = re.search(r"\]?:\s+(.+)$", line.strip())
+        if inline:
+            said.append(inline.group(1))
+        for child in lines[index + 1:]:
+            if child.strip() and len(child) - len(child.lstrip()) <= indent:
+                break
+            text = re.match(r"\s*- text:\s*(.+)$", child)
+            if text:
+                said.append(text.group(1))
+        if not any(_INLINE_REQUIRED.match(" ".join(part.split()).strip('"')) for part in said):
+            continue
+        for earlier in range(index - 1, -1, -1):
+            candidate = lines[earlier]
+            if candidate.strip() and len(candidate) - len(candidate.lstrip()) < indent:
+                named = _NAMED_QUESTION.match(candidate)
+                if named:
+                    name = " ".join(named.group(1).split())
+                    if name and name not in found:
+                        found.append(name)
+                break
+    return found
+
+
 def required_questions(snapshot: str) -> set[str]:
-    """The questions a form marks with a star."""
+    """The questions a form marks with a star, or flags with its own "Required" alert."""
     marked = set(re.findall(r'- generic "([^"]{2,120})" \[ref=[\w-]+\]: "\*"', snapshot or ""))
+    marked |= set(inline_required_questions(snapshot))
     marked |= {m.strip() for m in re.findall(r'- generic \[ref=[\w-]+\]: ([^\n]{2,120}?) ?\*$',
                                              snapshot or "", re.MULTILINE)}
     # Lever/Palantir: the label is a text line and its star a separate line after it, or the star ends the box's name.
@@ -971,6 +1015,12 @@ _ERROR_TEXT = re.compile(
     r"^please (enter|select|provide|upload|choose|complete|fill)|^(error|errors found)\b|\binvalid\b|"
     r"must be (a|an|at|in|between|less|more)\b|not a valid", re.IGNORECASE)
 _NOT_AN_ERROR = re.compile(r"indicates a required field|^\*|^required$|^error$|^errors found$", re.IGNORECASE)
+# The legend that explains the required marker ("Fields marked with an asterisk (*) are required"): it names the marker
+# and says what the marker means, and asks for nothing. Walmart, 27 October 2026: read as an error, it stopped a form
+# that was moving on. A real error that mentions the marker says what to do ("must", "please", "enter", "select").
+_REQUIRED_LEGEND = re.compile(
+    r"(?=.*(?:asterisk|\(\*\)|\*|\bstar\b))(?=.*\b(?:marked|indicat\w*|denot\w*|identified|flagged|signif\w*)\b)"
+    r"(?!.*\b(?:must|invalid|please|enter|select)\b)", re.IGNORECASE)
 _UPLOAD_ERROR = re.compile(r"upload|attach|resume|\bcv\b|file", re.IGNORECASE)
 
 
@@ -986,8 +1036,14 @@ def page_errors(snapshot: str) -> list[str]:
         for quoted, trailing in re.findall(r'"((?:[^"\\]|\\.)*)"|:\s+(.+)$', line.strip()):
             text = " ".join((quoted or trailing or "").split()).strip('"')
             if 8 <= len(text) <= 200 and _ERROR_TEXT.search(text) and not _NOT_AN_ERROR.search(text) \
+                    and not _REQUIRED_LEGEND.search(text) \
                     and not text.lower().startswith("error ") and text not in found:
                 found.append(text)
+    # A "Required" alert inside a question names the question, so the owner and the planner are told which one.
+    for name in inline_required_questions(snapshot):
+        said = f"{name[:90]}{'...' if len(name) > 90 else ''}: Required"
+        if said not in found:
+            found.append(said)
     return found[:8]
 
 
@@ -1438,6 +1494,7 @@ class Outcome:
     kind: str                  # submitted | owner_needed | no_sponsorship | captcha | gave_up
     page: object
     reasons: list[str] = field(default_factory=list)
+    stalled: bool = False      # the loop guard stopped it: the page would not move on (apply_flow may try to recover)
 
     @property
     def summary(self) -> str:
@@ -3566,6 +3623,7 @@ class PageAgent:
 
     def _run_locked(self, page) -> Outcome:
         self._ensure_state()
+        self.stalled_on_page = False     # set only when the loop guard trips in this call, and read in this call
         tries = 0
         stick_tries = 0      # re-reads of one page because an answer did not stay
         last_fingerprint = ""
@@ -4032,10 +4090,11 @@ class PageAgent:
             if moved == "moved":
                 self._last_press_errors = ()
                 stick_tries = 0
+                self.stalled_on_page = False
             if moved == "submitted":
                 return Outcome("submitted", page, ["the site confirmed the application"])
             if moved == "stop":
-                return Outcome("owner_needed", page, [feedback])
+                return Outcome("owner_needed", page, [feedback], stalled=bool(getattr(self, "stalled_on_page", False)))
         return Outcome("gave_up", page, ["too many pages in one run"])
 
     # -- answering ------------------------------------------------------------------
@@ -6820,6 +6879,7 @@ class PageAgent:
             except Exception:
                 blank = []
             still = ("; still blank and required: " + " | ".join(q[:90] for q in blank[:10])) if blank else ""
+            self.stalled_on_page = True
             return "stop", page, (f"the page did not change after three tries -- stuck in a validation loop "
                                   f"({state}); evidence in {dump_dir}{still}")
         elif meta and meta.get("consecutive", 0) >= 2:
