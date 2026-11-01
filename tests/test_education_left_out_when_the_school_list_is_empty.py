@@ -78,3 +78,20 @@ def test_a_list_that_is_slow_to_load_is_not_taken_for_an_empty_one(page, monkeyp
     adapter, calls = adapter_for(monkeypatch)
     adapter.fill_education_section(agent().assistant, page, EDUCATION)
     assert calls.schools, "the list was read as empty before it had loaded"
+
+
+def test_a_list_that_populates_only_after_search_and_enter_is_not_taken_for_empty(page, monkeypatch):
+    """CHAGEE Workday (f281): clicking an empty --school box shows 'No Items.' until a query is typed and Enter pressed."""
+    page.set_content(SCHOOL_LIST.format(rows=EMPTY) + """<script>
+      const input = document.getElementById('row--school');
+      input.setAttribute('enterkeyhint', 'search');
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && input.value.trim()) {
+          document.getElementById('prompt').innerHTML =
+            '<div data-automation-id="promptOption" data-automation-label="Eastern Illinois University">Eastern Illinois University</div>';
+        }
+      });</script>""")
+    adapter, calls = adapter_for(monkeypatch)
+    adapter.fill_education_section(agent().assistant, page, EDUCATION)
+    assert calls.schools == ["--school"] and calls.degrees == 1
+    assert page.locator("#row--school").input_value() == ""

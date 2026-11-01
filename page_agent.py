@@ -127,7 +127,7 @@ OPENS_A_FILE_DIALOG = re.compile(
 # Workday answered a page press with "Something went wrong. Please refresh the
 # page and then try again." -- a passing fault, and the page says what to do.
 ASKS_FOR_A_REFRESH = re.compile(r"something went wrong|please (refresh|reload) (the |this )?page|"
-                                r"try (again|reloading)", re.IGNORECASE)
+                                r"try (again|reloading)|\bpage error\b[\s\S]{0,120}\berror code: I\|", re.IGNORECASE)
 
 # A confirmation says so in words only a confirmation uses. "Thank you for your interest" is
 # not one of them: a create-account page opens with it ("Thank you for your interest in a career
@@ -330,6 +330,7 @@ def parse_snapshot(snapshot: str) -> list[Control]:
     paragraph_questions: dict[int, str] = {}
     textbox_wrappers: set[str] = set()
     search_landmarks: list[int] = []   # indents of the `search` landmarks the current line sits inside
+    non_app_scopes: list[int] = []     # indents of job-alert / similar-jobs sections on a posting page (f280)
     sections: list[tuple[int, int, str]] = []  # heading indent, level and title
     signature_scopes: list[tuple[int, str]] = []
     for raw in (snapshot or "").splitlines():
@@ -395,6 +396,10 @@ def parse_snapshot(snapshot: str) -> list[Control]:
             search_landmarks.pop()
         if role == "search":
             search_landmarks.append(indent)
+        while non_app_scopes and non_app_scopes[-1] >= indent:
+            non_app_scopes.pop()
+        if role in ("region", "group", "form", "complementary") and _NON_APPLICATION_SCOPE.search(name):
+            non_app_scopes.append(indent)
         if role in ("radio", "checkbox") and inside_choice:
             # A tick or radio drawn inside a list's own option is that choice's picture, not a question: Workday's
             # Field of Study list, left open on the page, was read as a question per subject -- "Accounting",
@@ -421,6 +426,8 @@ def parse_snapshot(snapshot: str) -> list[Control]:
         if entry_box is not None and role == "text" and value and not entry_box[1].value:
             entry_box[1].value = value
             continue
+        if owner is not None and owner.role in PRESS_ROLES and not owner.value and role == "text" and value:
+            owner.value = value
         # A search-and-pick box shows what was picked as a tag inside it, named by the choice:
         #   - combobox "Institution" [ref=e179]:
         #     - textbox "Eastern Illinois University" [ref=e1006]:
@@ -436,6 +443,8 @@ def parse_snapshot(snapshot: str) -> list[Control]:
 
         if role in ("text", "paragraph", "heading", "strong", "emphasis", "generic") and (value or name):
             candidate_text = (value or name).strip()[:200]
+            if role in ("text", "paragraph", "generic") and _JOB_ALERT_PROMPT.search(candidate_text) and stack:
+                non_app_scopes.append(stack[-1][0])
             if stack and re.search(r'\?\s*\*?$', candidate_text) \
                     and (owner is None or owner.role not in ('radio', 'checkbox', 'switch')):
                 field_questions.append((stack[-1][0], candidate_text.rstrip('*').strip()))
@@ -590,6 +599,13 @@ def parse_snapshot(snapshot: str) -> list[Control]:
                     and name and _same_question(controls[-1].value, name):
                 controls[-1].value = ""
             control_name = (name or value).strip() if clickable_generic else name
+            if role == "textbox" and last_text and (
+                not control_name or re.match(r"^Date picker (?:closed|opened)\b", control_name, re.IGNORECASE)
+            ) and re.fullmatch(
+                r"(?:From|To(?:\s*\([^)]*\))?|Start(?: Date)?|End(?: Date)?)\s*\*?",
+                last_text.strip(), re.IGNORECASE,
+            ):
+                control_name = last_text.strip()
             control = Control(
                 ref=ref_m.group(1), role=("button" if clickable_generic else role),
                 name=control_name, value="" if clickable_generic else shown,
@@ -620,6 +636,11 @@ def parse_snapshot(snapshot: str) -> list[Control]:
                 continue
             if control.role in ("textbox", "searchbox") and is_honeypot(control.name):
                 # A decoy for robots: not a question, never answered, never "still blank".
+                stack.append((indent, "", None))
+                continue
+            if non_app_scopes or any(_NON_APPLICATION_SCOPE.search(title) for _i, _l, title in sections):
+                # Job-alert / talent-community signup widgets and "Similar jobs" cards on a posting page
+                # do not belong to this application (Pacific Life, 31 October 2026 -- f280).
                 stack.append((indent, "", None))
                 continue
             controls.append(control)
@@ -866,6 +887,40 @@ _STANDING_ANSWERS: tuple[tuple[re.Pattern, str], ...] = (
      "willing_drug_test_and_physical"),
 )
 
+# Career-site job-alert / talent-community subscription widgets and similar-job recommendations on a posting page:
+# their email boxes, Submit buttons and other-job Apply links do not belong to this application (f280).
+_NON_APPLICATION_SCOPE = re.compile(
+    r"\b(?:get notified for similar jobs|sign up (?:to receive |for )?job alerts?|receive job alerts?|"
+    r"create (?:a )?job alert|manage alerts|similar jobs|recommended jobs|related jobs|"
+    r"jobs you may like|more jobs like this|recently viewed jobs|"
+    r"join (?:our |the )?talent (?:community|network)|talent (?:community|network)\s+(?:sign\s*up|opt[- ]?in))\b",
+    re.IGNORECASE,
+)
+_JOB_ALERT_PROMPT = re.compile(
+    r"\b(?:get notified for similar jobs|sign up (?:to receive |for )?job alerts?|receive job alerts?|"
+    r"create (?:a )?job alert)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_opening_apply_label(name: str, value: str = "") -> bool:
+    """Whether a button or link label opens the application from a job posting (including 'Apply Now <Job Title>')."""
+    clean_name = " ".join((name or "").split())
+    clean_val = " ".join((value or "").split())
+    if not clean_name or NEVER_PRESS.search(clean_name):
+        return False
+    if re.search(r"\b(?:with|using|via|filter|filters|search|code|coupon|promo|discount|settings|changes)\b",
+                 clean_name, re.IGNORECASE):
+        return False
+    if re.fullmatch(r"apply(?: now| for this job)?|start application|begin application", clean_name, re.IGNORECASE):
+        return True
+    if clean_val and re.fullmatch(r"apply(?: now| for this job)?|start application|begin application",
+                                  clean_val, re.IGNORECASE) \
+            and re.match(r"^(?:apply|start application|begin application)\b", clean_name, re.IGNORECASE):
+        return True
+    return bool(re.match(r"^(?:apply\s+now|apply\s+(?:for|to))\s+\S", clean_name, re.IGNORECASE))
+
+
 # What a button that moves an application on is called, and what is never
 # pressed on the agent's own initiative.
 FORWARD_LABEL = re.compile(r"^(apply|apply now|start application|begin application|apply manually|create account|next|continue|continue to application|continue application|save and continue|save & continue|save and next|next step|"
@@ -1013,7 +1068,7 @@ def _learnable_recipe_question(question: str) -> bool:
 _ERROR_TEXT = re.compile(
     r"is required and must have a value|\bis required\b|\bare required\b|must have a value|"
     r"^please (enter|select|provide|upload|choose|complete|fill)|^(error|errors found)\b|\binvalid\b|"
-    r"must be (a|an|at|in|between|less|more)\b|not a valid", re.IGNORECASE)
+    r"must be (a|an|at|in|between|less|more)\b|not a valid|\berror code\b|\bpage error\b", re.IGNORECASE)
 _NOT_AN_ERROR = re.compile(r"indicates a required field|^\*|^required$|^error$|^errors found$", re.IGNORECASE)
 # The legend that explains the required marker ("Fields marked with an asterisk (*) are required"): it names the marker
 # and says what the marker means, and asks for nothing. Walmart, 27 October 2026: read as an error, it stopped a form
@@ -1031,12 +1086,13 @@ def page_errors(snapshot: str) -> list[str]:
     in an Errors Found panel, and the agent pressed Save and Continue some thirty times without reading it."""
     found: list[str] = []
     for line in (snapshot or "").splitlines():
-        if "/url:" in line:
+        if "/url:" in line or re.match(r"^\s*-\s*option\b", line):
             continue
         for quoted, trailing in re.findall(r'"((?:[^"\\]|\\.)*)"|:\s+(.+)$', line.strip()):
             text = " ".join((quoted or trailing or "").split()).strip('"')
             if 8 <= len(text) <= 200 and _ERROR_TEXT.search(text) and not _NOT_AN_ERROR.search(text) \
                     and not _REQUIRED_LEGEND.search(text) \
+                    and not PLACEHOLDER.match(text) and not option_match.is_placeholder(text) \
                     and not text.lower().startswith("error ") and text not in found:
                 found.append(text)
     # A "Required" alert inside a question names the question, so the owner and the planner are told which one.
@@ -1293,7 +1349,7 @@ def choices_in(snapshot: str, under: str = "", any_list: bool = False) -> list[t
 # ("Choose an option"): the words are a prompt, not a name, and its choices are
 # not on the page until it is opened.
 _PROMPT_NAME = re.compile(
-    r"^\W*(choose( an option| one)?|select( an option| one| an item)?|please select|make a selection)\W*$",
+    r"^\W*(choose( an option| one)?|select( an option| one| an item)?|please select|make a selection)(\s+required)?\W*$",
     re.IGNORECASE)
 
 
@@ -1655,6 +1711,10 @@ class PageAgent:
         self._woken = set()
         self._peeked = {}
         self._opened_entries = set()
+        self._entries_added = set()
+        self._entries_redone = set()
+        self._misfit = set()
+        self._inline_entry_blocker = None
         self._list_retries = 0
         # The loop guard's three tries are for one stretch of the run. Left as it
         # was, a guard that had tripped tripped again on the first press after the
@@ -2455,12 +2515,13 @@ class PageAgent:
             if shown is None:
                 continue
             if shown == 0:
-                if (host, heading) in done:
+                if (host, heading) in done or re.search(r'- heading "Review"', snapshot or "", re.IGNORECASE):
                     continue
                 done.add((host, heading))
                 logger.info("ENTRIES: %s is empty -- adding your %d %s the site's way", heading, len(entries),
                             "jobs" if record == "experience" else "degrees")
             else:
+                done.add((host, heading))
                 # Entries the site refused, or more or fewer than the record holds (an extra, empty one): the site's
                 # filler clears the section and enters the record again -- once per section per run. Ciena, 30
                 # September: an extra empty degree and a job's start month kept Save and Continue refused.
@@ -2510,6 +2571,37 @@ class PageAgent:
         `uncertain_actions` field by `apply_flow.write_recovery_checkpoint`; never a question,
         an answer, or any other applicant-specific content."""
         return tuple(sorted(self._uncertain_entry_sections))
+
+    def _reopen_incomplete_review_education(self, page, snapshot: str) -> bool:
+        """If the Review page shows an Education summary table missing the profile's start years, click Edit on My experience once."""
+        if getattr(self, "_review_education_reopened", False):
+            return False
+        if not re.search(r"School or University\s+Degree\s+Field of Study.*From\s+To", snapshot or ""):
+            return False
+        edu_match = re.search(r'- heading "Education".*?(?=- heading |\Z)', snapshot or "", re.DOTALL)
+        if not edu_match:
+            return False
+        edu_block = edu_match.group(0)
+        history = getattr(self, "history", {}) or {}
+        start_years = []
+        for rec in history.get("education") or ():
+            if isinstance(rec, dict):
+                ym = re.search(r"\b(19\d\d|20\d\d)\b", str(rec.get("start") or ""))
+                if ym:
+                    start_years.append(ym.group(1))
+        if not start_years or all(y in edu_block for y in start_years):
+            return False
+        edit_m = re.search(r'- text:\s*My experience\s*\n\s*- link "Edit"\s*\[ref=([\w-]+)\]', snapshot or "")
+        if not edit_m:
+            return False
+        self._review_education_reopened = True
+        logger.info("REVIEW_EDUCATION: Education summary is missing start year(s) %s -- clicking Edit on My experience", start_years)
+        try:
+            self.locate(page, edit_m.group(1)).click(timeout=5_000)
+            return True
+        except Exception as exc:
+            logger.debug("Could not click Edit on My experience: %s", str(exc).splitlines()[0][:100])
+            return False
 
     def open_entry_for_missing_field(self, page, snapshot: str, controls: list[Control]) -> bool:
         """Opens a collapsed entry the page is complaining about.
@@ -2901,7 +2993,7 @@ class PageAgent:
         if forward is None:
             return PagePlan(page_kind="application_form", answers=answers)
         label = " ".join((forward.name or "").split())
-        opening = bool(re.fullmatch(r"apply(?: now)?|start application|begin application", label, re.IGNORECASE))
+        opening = _is_opening_apply_label(forward.name, forward.value)
         # The step counter the page shows ("Step 1 of 2"), as the AI plan reports it: a "Submit" on
         # a step with more to come only saves that step (Schwab's step 2 of 5). Without it, a page
         # answered from the profile alone called its "Submit" the last and stopped for a resume
@@ -2948,13 +3040,15 @@ class PageAgent:
             if assessment is not None:
                 return assessment
         options = [c for c in controls if c.role in PRESS_ROLES and c.name and not c.disabled
-                   and FORWARD_LABEL.match(" ".join(c.name.split())) and not NEVER_PRESS.search(c.name)]
+                   and (FORWARD_LABEL.match(" ".join(c.name.split())) or _is_opening_apply_label(c.name, c.value))
+                   and not NEVER_PRESS.search(c.name)]
         if not options:
             return None
-        priority = ("apply now", "apply", "start application", "begin application", "continue", "next",
-                    "review", "submit application", "submit")
+        priority = ("apply now", "apply", "start application", "begin application", "save and continue",
+                    "save & continue", "continue", "next", "next step", "submit application", "submit", "review")
         for wanted in priority:
-            found = next((c for c in options if " ".join(c.name.split()).lower() == wanted), None)
+            found = next((c for c in options if " ".join(c.name.split()).lower() == wanted
+                          or (wanted == "apply now" and _is_opening_apply_label(c.name, c.value))), None)
             if found is not None:
                 return found
         return options[0] if len(options) == 1 else None
@@ -3374,6 +3468,8 @@ class PageAgent:
                     not control.group or value.strip().lower() in ("checked", "true", "unchecked", "false")
                     or (control.ref in getattr(self, "_entries", {}) and value.strip().lower() in ("yes", "no"))):
                 action = "check" if value.strip().lower() not in ("no", "false", "0", "unchecked") else "uncheck"
+                if (action == "uncheck" and not control.checked) or (action == "check" and control.checked):
+                    continue
             try:
                 answer = Answer(control.ref, control.question, action, value, source)
                 app_key = getattr(self, "key", "")
@@ -3752,6 +3848,9 @@ class PageAgent:
                 # (SMS/text or an authenticator app): say so precisely, rather than let the box
                 # fall through to the ordinary question-answering path or a generic stuck loop.
                 return Outcome("owner_needed", page, [self.account_blocker])
+            if self._reopen_incomplete_review_education(page, snapshot):
+                self.settle(page, 2_500)
+                continue
             if self.open_entry_for_missing_field(page, snapshot, controls):
                 self.settle(page, 1_500)
                 continue
@@ -3863,6 +3962,11 @@ class PageAgent:
                                     field = self._inventory_field(page, ctrl)
                                     if field is not None:
                                         ctrl.options = form_fields.read_choices(field)
+                                # Workday draws a pick-one list as `button "Select One Required"` whose rows exist
+                                # only once opened: asked without them, the AI declined a plain multiple-choice
+                                # question as "a personal preference" (Orion, 31 October 2026, f282).
+                                if not ctrl.options and is_workday_choice_button(ctrl):
+                                    ctrl.options = self._read_button_choices(page, ctrl)
                                 val = self.claude.answer_single_question(
                                     question=self._question_for(ctrl),
                                     options=ctrl.options,
@@ -4030,6 +4134,8 @@ class PageAgent:
                 given_questions = set(self.written) | {answer.question for answer, _control in given}
                 missing_required = []
                 for control in after:
+                    if control.role == "group" and not control.holds_choices:
+                        continue
                     question = control.question
                     # A star that marks a question stands at its start or end ("Email address *", "* Company"),
                     # not inside it: UKG's password rule "Special characters (e.g. !@#$%^&*)" was named a blank
@@ -4038,7 +4144,8 @@ class PageAgent:
                         or any(_same_question(question, item) for item in required)
                     # A "question" with no words is layout, not a question: UKG drew a row of required stars
                     # ("* * * * *") and the run stopped for it as a blank required field (30 September).
-                    if not question or not marked_required or not re.search(r"[A-Za-z]{2}", question):
+                    if not question or not marked_required or not re.search(r"[A-Za-z]{2}", question) \
+                            or _NOT_AN_ERROR.search(question) or _REQUIRED_LEGEND.search(question):
                         continue
                     answered = bool(control.answer)
                     if control.role in ("radio", "checkbox", "switch") and control.group:
@@ -4066,6 +4173,7 @@ class PageAgent:
                     for blank in form_fields.blank_required(form_fields.inventory(self.tab(page))):
                         question = re.sub(r"[\s*✱:]+$", "", blank.question or blank.label)
                         if question and re.search(r"[A-Za-z]{2}", question) \
+                                and not _NOT_AN_ERROR.search(question) and not _REQUIRED_LEGEND.search(question) \
                                 and not any(_same_question(question, m) for m in missing_required) \
                                 and not any(_same_question(question, g) for g in given_questions):
                             missing_required.append(question)
@@ -4184,7 +4292,8 @@ class PageAgent:
                     logger.info('FIELD_ACTION: application field handled')
                     processed_refs.add(control.ref)
                     continue
-                if value and not _same_answer(answer.value, value):
+                if value and not _same_answer(answer.value, value) \
+                        and (control.question, value) not in getattr(self, "_misfit", set()):
                     logger.info('FIELD_ACTION: application field handled')
                     answer = Answer(answer.ref, answer.question, answer.action, value, source)
             refusal = self.refusal(page, answer, control, current_controls)
@@ -4690,7 +4799,11 @@ class PageAgent:
                 # Use exact comparison for the planner's value against the profile value:
                 # _same_answer considers "Jane" ≈ "Jane Marie" via prefix matching,
                 # but the profile's canonical value must be preserved exactly.
-                if _plain(answer.value) != _plain(known_val):
+                same_phone = (
+                    len(re.sub(r"\D", "", known_val)) >= 10
+                    and re.sub(r"\D", "", answer.value)[-10:] == re.sub(r"\D", "", known_val)[-10:]
+                )
+                if _plain(answer.value) != _plain(known_val) and not same_phone:
                     return f"already answered from your profile ({current!r}) -- not changing to {answer.value!r}"
             if not self._ours(question, current):
                 return f"already answered {current[:40]!r} -- not changing an answer the agent didn't give"
@@ -5085,6 +5198,64 @@ class PageAgent:
                 return True
         return False
 
+    def _fill_react_datepicker(self, tab, loc, fill_value: str) -> bool:
+        """Click the matching year cell in a react-datepicker year picker when direct text entry is ignored."""
+        try:
+            is_dp = loc.evaluate(
+                "el => Boolean(el.closest('.react-datepicker-wrapper')) || "
+                "(el.getAttribute('aria-describedby') || '').endsWith('-live-region')",
+                timeout=1_000,
+            )
+            if not is_dp:
+                return False
+            year_m = re.search(r"\b(19\d\d|20\d\d)\b", str(fill_value or ""))
+            if not year_m:
+                return False
+            target_year = int(year_m.group(1))
+            loc.click(timeout=2_000)
+            tab.wait_for_timeout(200)
+            for _ in range(8):
+                step = loc.evaluate(
+                    """(el, targetYear) => {
+                        const root = el.closest('.date-range-picker, .form-group, body') || document.body;
+                        const popper = root.querySelector('.react-datepicker-popper') || document.querySelector('.react-datepicker-popper');
+                        if (!popper) return 'no_popper';
+                        const years = Array.from(popper.querySelectorAll('.react-datepicker__year-text'));
+                        if (!years.length) return 'not_year_picker';
+                        const match = years.find(y => y.textContent.trim() === String(targetYear) && !y.classList.contains('react-datepicker__year-text--disabled'));
+                        if (match) {
+                            match.click();
+                            return 'clicked';
+                        }
+                        const header = (popper.querySelector('.react-datepicker-year-header') || {}).textContent || '';
+                        const range = header.match(/(\\d{4})\\s*-\\s*(\\d{4})/);
+                        if (range) {
+                            const start = parseInt(range[1], 10);
+                            const end = parseInt(range[2], 10);
+                            if (targetYear < start) {
+                                const prev = popper.querySelector('.react-datepicker__navigation--previous');
+                                if (prev) { prev.click(); return 'nav'; }
+                            } else if (targetYear > end) {
+                                const next = popper.querySelector('.react-datepicker__navigation--next');
+                                if (next) { next.click(); return 'nav'; }
+                            }
+                        }
+                        return 'not_found';
+                    }""",
+                    target_year,
+                    timeout=1_500,
+                )
+                if step == "clicked":
+                    tab.wait_for_timeout(250)
+                    shown = (loc.input_value(timeout=1_500) or "").strip()
+                    return str(target_year) in shown
+                if step != "nav":
+                    break
+                tab.wait_for_timeout(150)
+        except Exception as exc:
+            logger.debug("_fill_react_datepicker: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+        return False
+
     def do(self, page, answer: Answer, control: Control) -> bool:
         tab = self.tab(page)
         if control.role == "group" and not control.name and not control.holds_choices:
@@ -5158,7 +5329,8 @@ class PageAgent:
                 from browser_automation import FramedPage
                 frame = loc.element_handle().owner_frame()
                 target = FramedPage(tab, frame) if frame != tab.main_frame else tab
-                if re.fullmatch(r"(?:type to add )?skills", control.question.strip(), re.IGNORECASE):
+                clean_q = re.sub(r"[*✱]+", "", control.question).strip()
+                if re.fullmatch(r"(?:type to add\s+)?skills", clean_q, re.IGNORECASE):
                     chosen, missing = WorkdayAdapter().select_skills(
                         self.assistant, target, loc, re.split(r"[,;\n]+", answer.value))
                     if missing:
@@ -5170,8 +5342,13 @@ class PageAgent:
                     if missing and not chosen and not required:
                         self._entry_blank.add(control.ref)
                     return bool(chosen) or not required
+                candidates = [answer.value] + self._alternatives_for(answer.value)
+                if identifier.endswith("--school"):
+                    for s in WorkdayAdapter._school_names(self.assistant, answer.value, page=target):
+                        if s not in candidates:
+                            candidates.append(s)
                 return WorkdayAdapter().select_from_searchable_input(
-                    self.assistant, target, identifier, [answer.value] + self._alternatives_for(answer.value), keyboard=False)
+                    self.assistant, target, identifier, candidates, keyboard=False)
         if control.holds_choices and answer.action in ("choose", "check", "fill"):
             # The choices have no reference of their own: click the one that
             # says what the answer says, inside the group.
@@ -5202,7 +5379,8 @@ class PageAgent:
                     timeout=2_000)
             except Exception:
                 input_type, placeholder = "", ""
-            if input_type == "tel" or re.search(r"phone|mobile|telephone", control.question, re.I):
+            is_phone_box = input_type == "tel" or bool(re.search(r"phone|mobile|telephone", control.question, re.I))
+            if is_phone_box:
                 fill_value = form_fields.phone_text(fill_value, placeholder, getattr(self.profile, "country", ""))
             # A date goes into a date box the one way every date is written (form_fields.date_text): in the box's own
             # format, whatever the answer's ("December 2022", "2 weeks", "12/15/2022"). An answer that is not a date
@@ -5214,6 +5392,8 @@ class PageAgent:
                                 control.question[:50])
                     return False
                 fill_value = written
+            if self._fill_react_datepicker(tab, loc, fill_value):
+                return True
             try:
                 fill_and_dispatch(loc, fill_value, timeout=2_500)
             except Exception:
@@ -5281,6 +5461,25 @@ class PageAgent:
                 loc.press("Tab", timeout=2_000)
             except Exception as _swallowed:
                 logger.debug("do: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            if is_phone_box and not fill_value.isdigit():
+                try:
+                    tab.wait_for_timeout(150)
+                    phone_invalid = loc.evaluate(
+                        """el => el.getAttribute('aria-invalid') === 'true' ||
+                                 Boolean(el.closest('[aria-invalid="true"], .has-error, .field-error, .is-invalid'))""",
+                        timeout=1_000,
+                    )
+                    if phone_invalid:
+                        digits_only = form_fields.phone_text(
+                            fill_value, "XXXXXXXXXX", getattr(self.profile, "country", "")
+                        )
+                        if digits_only and digits_only != fill_value:
+                            fill_and_dispatch(loc, digits_only, timeout=2_500)
+                            loc.press("Tab", timeout=2_000)
+                            fill_value = digits_only
+                            answer.value = digits_only
+                except Exception as _swallowed:
+                    logger.debug("do phone retry: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
             # Read the committed value back and verify it, rather than trusting that .fill()
             # not throwing means the value stuck (Phase 0-B4; task sections 4, 6-7). A plain
             # <input>/<textarea> is what this path fills.
@@ -5416,6 +5615,8 @@ class PageAgent:
         if answer.action == "choose" and control.role == "spinbutton":
             return self.put_in_a_spinbutton(page, loc, answer.value)
         if answer.action == "choose" and control.role in ("textbox", "searchbox"):
+            if self._fill_react_datepicker(tab, loc, answer.value):
+                return True
             fill_and_dispatch(loc, answer.value, timeout=8_000)     # a plain box, whatever the plan called it
             # Verify the committed value (Phase 0-B4 closure) -- the same positive-evidence
             # check the ordinary "fill" action uses; a readback failure is NOT verified, not
@@ -6269,6 +6470,15 @@ class PageAgent:
                              + " -- answer it with one of these if the facts settle it")
         return "; ".join(notes)
 
+    def _read_button_choices(self, page, control: Control) -> list[str]:
+        """The real choices of a dropdown drawn as a button, read by opening it once; placeholders dropped."""
+        key = f"{self._current_host}|{(control.question or control.ref)[:80]}"
+        if self._peeked.get(key, 0) >= 2:
+            return []
+        self._peeked[key] = self._peeked.get(key, 0) + 1
+        return [c for c in self._open_and_read(page, control, control.question)
+                if c.strip() and not option_match.is_placeholder(c) and not PLACEHOLDER.match(c)]
+
     def _open_and_read(self, page, control: Control, label: str) -> list[str]:
         """Opens one dropdown, reads what it offers, and closes it again."""
         tab = self.tab(page)
@@ -6659,6 +6869,46 @@ class PageAgent:
         except Exception:
             return False
 
+    _CONSENT_COOKIE = re.compile(r"^(notice_|cmapi_|trustarc|truste)", re.IGNORECASE)
+
+    def _reload_a_page_that_drew_nothing(self, tab) -> bool:
+        """Loads a page again when it shows no heading or field at all (f279); True when it did.
+
+        Post Consumer Brands' posting (Jibe, 31 October): the agent's own profile drew the site's header and footer
+        but not the job or its Apply button, while a fresh browser drew both. Reading the page again read the same
+        half-drawn page until the tries ran out. The first time an address draws nothing it is loaded again; the
+        second time the site's cookie choice is cleared and the banner answered with Accept, because this site hides
+        the job from a visitor who declined optional cookies and draws it for one who accepted."""
+        try:
+            drew = tab.evaluate("""() => !!document.querySelector(
+                'input, select, textarea, h1, h2, h3, [role=heading]')""")
+            if drew:
+                return False
+            tries = self.__dict__.setdefault("_undrawn_attempts", {})
+            if tries.get(tab.url, 0) >= 2:
+                return False
+            tries[tab.url] = tries.get(tab.url, 0) + 1
+            if tries[tab.url] == 1:
+                logger.info("The page drew no heading or field -- loading it again")
+                tab.reload(wait_until="domcontentloaded", timeout=45_000)
+            else:
+                logger.info("The page still drew nothing -- clearing this site's cookie choice and accepting")
+                host = host_of(tab.url)
+                for cookie in tab.context.cookies():
+                    if self._CONSENT_COOKIE.match(cookie["name"]) and host.endswith(cookie["domain"].lstrip(".")):
+                        tab.context.clear_cookies(name=cookie["name"], domain=cookie["domain"])
+                tab.reload(wait_until="domcontentloaded", timeout=45_000)
+                tab.wait_for_timeout(3_000)
+                accept = tab.get_by_role("button", name=re.compile(r"^accept( all( cookies)?)?$", re.IGNORECASE)).first
+                if accept.count() and accept.is_visible():
+                    accept.click(timeout=4_000)
+                    tab.wait_for_timeout(2_000)
+            self.settle(tab, 3_000)
+            return True
+        except Exception as exc:
+            logger.debug("reload of an undrawn page: %s", str(exc).splitlines()[0][:100])
+            return False
+
     def press_next(self, page, plan: PagePlan, controls: list[Control]) -> tuple[str, object, str]:
         """("moved" | "submitted" | "retry" | "stop", page, what happened)."""
         lock_factory = getattr(self.assistant, "_execution_lock", None)
@@ -6802,7 +7052,8 @@ class PageAgent:
         # A posting's Apply is a link: its address opens the application with a plain GET, which submits nothing,
         # so it is followed before any click -- whatever kind of step the plan called it (f170). Clicking it was
         # refused by the submission guard, as a click on a button labelled Apply must be.
-        if plan.next_kind != "open_application" and hasattr(self.assistant, "follow_application_entry")                 and re.fullmatch(r"apply(?: now| for this job)?|start application|begin application", label, re.IGNORECASE):
+        if plan.next_kind != "open_application" and hasattr(self.assistant, "follow_application_entry")                 and (re.fullmatch(r"apply(?: now| for this job)?|start application|begin application", label, re.IGNORECASE)
+                     or _is_opening_apply_label(control.name, control.value)):
             if self.assistant.follow_application_entry(tab, self.locate(page, control.ref)):
                 self.settle(page, 2_500)
                 return "moved", page, "followed the posting's application link"
@@ -7280,6 +7531,8 @@ class PageAgent:
                or adapter.form_loading(snapshot)) \
             and time.time() < deadline:
             self.tab(page).wait_for_timeout(1_000)
+            snapshot = self.snapshot(page)
+        if self._reload_a_page_that_drew_nothing(self.tab(page)):
             snapshot = self.snapshot(page)
         try:
             self._entries = self._entry_map(page, snapshot)

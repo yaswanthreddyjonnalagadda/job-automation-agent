@@ -264,7 +264,7 @@ def degree(ask: Ask, q: str):
 
 _HEARD = re.compile(r"\b(?:how|where)\s+did\s+you\b[^?]{0,15}\b(?:hear|learn|find|come across|discover|see)\w*\b[^?]{0,40}\b(?:about|of)\b"
                     r"|\bhow\s+you\s+(?:heard|learned|found)\b")
-_HEARD_ORDER = ("linkedin", "job board", "indeed", "careers", "career site", "company website", "website", "search", "online", "social", "other")
+_HEARD_ORDER = ("linkedin", "job board", "job site", "social", "indeed", "careers", "career site", "company website", "website", "search", "online", "other")
 
 
 def how_heard(ask: Ask, q: str):
@@ -312,6 +312,17 @@ def marketing_alerts(ask: Ask, q: str):
         return None
     fact = _yes(_say(ask.profile, "marketing_opt_in"))
     return yes_no(ask, fact, "profile.marketing_opt_in") if fact is not None else None
+
+
+_OPTIONAL_NAME_EXTRA = re.compile(r"\bwould you like to (?:include|add|provide|share)\b[^?]{0,40}\b(?:phonetic|pronunciation|pronounce)\w*")
+
+
+def optional_name_extra(ask: Ask, q: str):
+    """'Would you like to include a phonetic pronunciation for your name?' (Orion, 31 October 2026): Yes only when the
+    profile holds one to give; otherwise No -- a Yes would only ask for a pronunciation nobody has written."""
+    if not _OPTIONAL_NAME_EXTRA.search(q):
+        return None
+    return yes_no(ask, bool(_say(ask.profile, "name_pronunciation")), "profile.name_pronunciation")
 
 
 def clearance(ask: Ask, q: str):
@@ -475,7 +486,8 @@ def acknowledgement(ask: Ask, q: str):
 
 
 FAMILIES = (employer_name, names, current_location, available_locations, language_fluency, country_eligibility, ties_to_the_company, degree,
-            how_heard, communication, work_arrangement, marketing_alerts, clearance, programming_language, years_bins, experience, acknowledgement)
+            how_heard, communication, work_arrangement, marketing_alerts, optional_name_extra, clearance, programming_language,
+            years_bins, experience, acknowledgement)
 
 
 def answer(ask: Ask) -> tuple[str, str]:

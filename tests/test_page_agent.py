@@ -1846,3 +1846,16 @@ def test_the_last_submit_is_never_pressed_from_here_whatever_the_settings(page, 
         outcome = agent.run(page)
         assert handed_over(outcome), (settings, outcome.reasons)
         assert not page.url.endswith("/done")
+
+
+def test_workdays_bare_page_error_banner_is_refreshed_once(page, resume_file):
+    """f283: HonorHealth's My Experience answered Next with 'Errors Found / Page Error - Error Code: I|<id>' and no
+    word about refreshing; the agent pressed Next again until the validation-loop guard stopped the run."""
+    page.set_content('<h3>My Experience</h3><button>Errors Found</button>'
+                     '<h4>Error <span aria-hidden="true">-</span> Page Error</h4>'
+                     '<div>- Error Code: I|36cf2ad4-723c-4401-b6df-d97706a7cc02</div>')
+    agent = make_agent(SimpleNamespace(plan_page=lambda s, f, fb="": {
+        "page_kind": "other", "answers": [], "next": {"ref": "", "label": "", "kind": "none"}}), resume_file)
+    assert agent._refreshed is False
+    agent.run(page)
+    assert agent._refreshed is True

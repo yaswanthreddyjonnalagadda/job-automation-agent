@@ -91,18 +91,33 @@ def _degree_candidates(degree: str) -> list[str]:
     return [degree]
 
 
+_MONTH_BY_NAME = {
+    "jan": "1", "feb": "2", "mar": "3", "apr": "4", "may": "5", "jun": "6",
+    "jul": "7", "aug": "8", "sep": "9", "oct": "10", "nov": "11", "dec": "12",
+}
+
+
 def _split_month_year(date_str: str | None) -> tuple[str, str]:
-    """'02/2025' -> ('2', '2025'). Empty/malformed input -> ('', '').
+    """'02/2025' or 'August 2021' -> ('2', '2025') / ('8', '2021'); '2021' -> ('', '2021').
 
     The month is deliberately NOT zero-padded: a two-character month makes
     these spinbutton widgets auto-advance to the next date part mid-write,
     and the year keystrokes then land in the wrong sub-field (observed
     producing 'MM/2812' across every date). Unpadded worked."""
-    if not date_str or "/" not in date_str:
+    if not date_str:
         return "", ""
-    month, _, year = date_str.partition("/")
-    month = month.strip()
-    return (str(int(month)) if month.isdigit() else ""), (year or "").strip()
+    s = str(date_str).strip()
+    if "/" in s:
+        month, _, year = s.partition("/")
+        month = month.strip()
+        return (str(int(month)) if month.isdigit() else ""), (year or "").strip()
+    year_match = re.search(r"\b((?:19|20)\d{2})\b", s)
+    if not year_match:
+        return "", ""
+    year = year_match.group(1)
+    month_match = re.search(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b", s, re.I)
+    month = _MONTH_BY_NAME.get(month_match.group(1).lower()[:3], "") if month_match else ""
+    return month, year
 
 # Maps our known profile fields to likely form field identifiers (name/id/
 # placeholder/label substrings, lowercased). Extend as you encounter new ATS
@@ -275,7 +290,7 @@ class WorkdayAdapter(SiteAdapter):
             return None
 
     @staticmethod
-    def _school_names(assistant, school: str) -> list[str]:
+    def _school_names(assistant, school: str, page: Page | None = None) -> list[str]:
         """Every name the owner has for this school, record first: the profile's own spelling of it ("JNTU" in the
         work history is "JNTU Hyderabad" in the profile) and the substitutes the owner listed (answer_alternatives).
         A list is picked only by a row matching one of them."""
@@ -289,6 +304,18 @@ class WorkdayAdapter(SiteAdapter):
         alternatives = getattr(profile, "answer_alternatives", None) or {}
         for name in list(names):
             names += [str(a) for a in (alternatives.get(name) or [])]
+        if page is not None:
+            try:
+                edu = page.get_by_role("group", name="Education", exact=True)
+                edu_text = edu.inner_text(timeout=500) if edu.count() == 1 else ""
+                if re.search(
+                    r"(?:not\s+listed|cannot\s+find|can't\s+find)[^.\n]*?(?:select|choose|pick|search)[^.\n]*?['\"\u201c\u201d]?other['\"\u201c\u201d]?",
+                    edu_text,
+                    re.I,
+                ):
+                    names.append("Other")
+            except Exception:
+                pass
         return [n for n in dict.fromkeys(n.strip() for n in names) if n]
 
     @staticmethod
@@ -302,13 +329,16 @@ class WorkdayAdapter(SiteAdapter):
                 candidates.extend(str(value) for value in values if str(value).strip())
         return list(dict.fromkeys(candidates))
 
-    def _school_list_is_empty(self, assistant, page: Page, index: int) -> bool:
+    def _school_list_is_empty(self, assistant, page: Page, index: int, probe_school: str = "") -> bool:
         """True when the School search-and-pick list of entry `index` holds nothing at all (f183).
 
         Invesco's tenant answers its schools call with 200 and shows 'No Items.' for every search, even an empty one: no
         school can be chosen, whoever applies. The server answers a moment after the list opens, so it is read three
-        times over a few seconds, and any real option ends the wait."""
+        times over a few seconds, and any real option ends the wait. Some tenants (CHAGEE) show 'No Items.' on an empty
+        open and only populate options after typing a query and pressing Enter, so a search probe is tried before
+        declaring the catalogue empty."""
         field = page.locator("input[id$='--school']").nth(index)
+        typed_probe = False
         try:
             if field.count() == 0:
                 return False
@@ -319,11 +349,27 @@ class WorkdayAdapter(SiteAdapter):
                            if t.strip()] or [t.strip() for t in page.get_by_role("option").all_inner_texts() if t.strip()]
                 if options and not all(re.fullmatch(r"no items\.?", o, re.IGNORECASE) for o in options):
                     return False
+            probes = [w for w in [(probe_school or "").split()[0] if (probe_school or "").split() else "", "University", "Other"] if w]
+            for probe in dict.fromkeys(probes):
+                typed_probe = True
+                field.fill("")
+                field.type(probe, delay=30)
+                field.press("Enter")
+                page.wait_for_timeout(1_200)
+                options = [t.strip() for t in page.locator("[data-automation-id='promptOption']").all_inner_texts()
+                           if t.strip()] or [t.strip() for t in page.get_by_role("option").all_inner_texts() if t.strip()]
+                if options and not all(re.fullmatch(r"no items\.?", o, re.IGNORECASE) for o in options):
+                    return False
             return True
         except Exception as exc:
             logger.debug("Could not read the school list: %s", str(exc).splitlines()[0][:100])
             return False
         finally:
+            if typed_probe:
+                try:
+                    field.fill("")
+                except Exception:
+                    pass
             try:
                 page.keyboard.press("Escape")
             except Exception as exc:
@@ -331,31 +377,36 @@ class WorkdayAdapter(SiteAdapter):
 
     def fill_education_section(self, assistant, page: Page, education: list[dict]) -> None:
         self.delete_all_entries(assistant, page, "Education", "Certifications")
-        # Some Workday tenants collect only school, degree and field of study.
-        # Avoid a 30-second locator wait per row when this optional date control
-        # is not rendered at all (as on Verizon's form).
-        has_completion_year = page.locator(
-            "input[data-automation-id='dateSectionYear-input'][id*='education']"
-        ).count() > 0
         # The School box is a text box on some tenants (--schoolName) and a search-and-pick list on others (--school,
         # Ciena, 30 September). Counted only by the text box, every entry looked missing and "Add Another" was
         # pressed again and again (an extra, empty entry whose Degree was then "required"), and typed into, the
         # list never took the school. Entries are counted by whichever the tenant draws; a list is picked from.
         school_probe = "input[id$='--schoolName'], [data-automation-id='formField-school']"
+        has_start_year = False
+        has_completion_year = False
         for i, edu in enumerate(education):
             self._ensure_entry_slot(assistant, page, "Education", school_probe, i)
-            if i == 0 and self._school_list_is_empty(assistant, page, 0):
+            if i == 0:
+                # Some Workday tenants collect only school, degree and field of study.
+                # Check after the first slot is created so delete_all_entries does not hide the inputs.
+                has_start_year = page.locator(
+                    "input[data-automation-id='dateSectionYear-input'][id*='education'][id*='firstYearAttended']"
+                ).count() > 0
+                has_completion_year = page.locator(
+                    "input[data-automation-id='dateSectionYear-input'][id*='education']"
+                ).count() > 0
+            school = edu.get("school", "")
+            if i == 0 and self._school_list_is_empty(assistant, page, 0, school):
                 # Education is optional on Workday, and an entry whose required School can never be chosen only
                 # blocks the form: the section is left empty (f183).
                 logger.warning("EDUCATION_SKIPPED: this employer's school list is empty (Workday shows 'No Items.' for "
                                "every search) -- Education is optional, so the section is left empty")
                 self.delete_all_entries(assistant, page, "Education", "Certifications")
                 return
-            school = edu.get("school", "")
             if page.locator("input[id$='--schoolName']").count() > i:
                 self.fill_by_id_suffix(assistant, page, "--schoolName", i, school)
             elif school and not self.select_from_searchable_input(assistant, page, "--school",
-                                                                  self._school_names(assistant, school), i,
+                                                                  self._school_names(assistant, school, page=page), i,
                                                                   keyboard=False):
                 logger.info("School %r is not in this employer's list as written -- left for you", school)
             degree = edu.get("degree", "")
@@ -366,13 +417,18 @@ class WorkdayAdapter(SiteAdapter):
             # still treats it as blank; type only to filter, then commit an
             # option from the tenant's list.
             field = edu.get("field", "")
-            if field:
+            if field and page.locator("input[id$='--fieldOfStudy']").count() > i:
                 self.select_from_searchable_input(assistant, page, "--fieldOfStudy",
                                                   self._field_names(assistant, field), i, keyboard=False)
+            if has_start_year:
+                start_month, start_year = _split_month_year(edu.get("start", ""))
+                if start_year:
+                    self.fill_date_spinner(assistant, page, "education", "firstYearAttended", i, start_month, start_year)
             if has_completion_year:
-                _, end_year = _split_month_year(edu.get("end", ""))
+                end_month, end_year = _split_month_year(edu.get("end", ""))
                 # Education's date part is 'lastYearAttended', not 'endDate'.
-                self.fill_date_spinner(assistant, page, "education", "lastYearAttended", i, "", end_year)
+                if end_year:
+                    self.fill_date_spinner(assistant, page, "education", "lastYearAttended", i, end_month, end_year)
         logger.info("Filled %d education entries", len(education))
 
         # Dates belong in the correction pass too: a year that verified as
@@ -384,13 +440,17 @@ class WorkdayAdapter(SiteAdapter):
                 if page.locator("input[id$='--schoolName']").count() > i:
                     self.fill_by_id_suffix(assistant, page, "--schoolName", i, edu.get("school", ""))
                 field = edu.get("field", "")
-                if field and not self._multiselect_selection(page, "--fieldOfStudy", index=i):
+                if field and page.locator("input[id$='--fieldOfStudy']").count() > i and not self._multiselect_selection(page, "--fieldOfStudy", index=i):
                     self.select_from_searchable_input(assistant, page, "--fieldOfStudy",
                                                   self._field_names(assistant, field), i, keyboard=False)
+                if has_start_year:
+                    start_month, start_year = _split_month_year(edu.get("start", ""))
+                    if start_year and not self._date_year_is(assistant, page, "education", "firstYearAttended", i, start_year):
+                        self.fill_date_spinner(assistant, page, "education", "firstYearAttended", i, start_month, start_year)
                 if has_completion_year:
-                    _, end_year = _split_month_year(edu.get("end", ""))
+                    end_month, end_year = _split_month_year(edu.get("end", ""))
                     if end_year and not self._date_year_is(assistant, page, "education", "lastYearAttended", i, end_year):
-                        self.fill_date_spinner(assistant, page, "education", "lastYearAttended", i, "", end_year)
+                        self.fill_date_spinner(assistant, page, "education", "lastYearAttended", i, end_month, end_year)
         logger.info("Final correction pass done for education")
 
     def _date_year_is(self, assistant, page: Page, section_key: str, date_key: str, index: int, year: str) -> bool:
@@ -522,6 +582,7 @@ class WorkdayAdapter(SiteAdapter):
                 )
                 return False
             month_input = part("Month") if month else None
+            has_month = bool(month and month_input is not None and month_input.count() > 0)
 
             # These segments are NOT independent inputs -- they're parts of
             # one composite date control that consumes a digit STREAM and
@@ -530,8 +591,8 @@ class WorkdayAdapter(SiteAdapter):
             # was observed leaving month='12', year='5'). So do what a
             # person does: focus the first segment and type the whole date
             # as digits, letting the widget advance on its own.
-            stream = (month.zfill(2) + year) if month else year
-            first_segment = month_input if (month and month_input is not None and month_input.count() > 0) else year_input
+            stream = (month.zfill(2) + year) if has_month else year
+            first_segment = month_input if has_month else year_input
             for attempt in range(3):
                 try:
                     first_segment.focus(timeout=5_000)
@@ -543,11 +604,11 @@ class WorkdayAdapter(SiteAdapter):
                 page.wait_for_timeout(400)
                 try:
                     got_year = (year_input.input_value() or "").strip()
-                    got_month = (month_input.input_value() or "").strip() if month_input is not None else ""
+                    got_month = (month_input.input_value() or "").strip() if has_month else ""
                 except Exception:
                     return False
                 # The widget may render the month unpadded ('5') or padded ('05').
-                month_ok = (not month) or got_month.lstrip("0") == month.lstrip("0")
+                month_ok = (not has_month) or got_month.lstrip("0") == month.lstrip("0")
                 if got_year == year and month_ok:
                     return True
                 logger.warning(
@@ -571,15 +632,20 @@ class WorkdayAdapter(SiteAdapter):
         deleted = 0
         for _ in range(max_deletes):
             try:
-                next_box = page.get_by_text(next_heading, exact=True).first.bounding_box()
-            except Exception:
-                next_box = None
-            try:
                 heading = page.get_by_text(section_heading, exact=True).first
                 del_btn = heading.locator("xpath=following::button[contains(., 'Delete')][1]")
                 if del_btn.count() == 0:
                     break
-                btn_box = del_btn.bounding_box()
+                next_box = None
+                try:
+                    next_loc = page.get_by_text(next_heading, exact=True)
+                    if next_loc.count() == 0:
+                        next_loc = heading.locator("xpath=following::*[self::h3 or self::h4][1]")
+                    if next_loc.count() > 0:
+                        next_box = next_loc.first.bounding_box(timeout=1_000)
+                except Exception:
+                    next_box = None
+                btn_box = del_btn.bounding_box(timeout=2_000)
                 if next_box and btn_box and btn_box["y"] >= next_box["y"]:
                     break  # that Delete button belongs to a later section
                 del_btn.click(timeout=5_000)
@@ -677,11 +743,16 @@ class WorkdayAdapter(SiteAdapter):
     @staticmethod
     def is_searchable_input(field) -> bool:
         """A Workday prompt can expose a textbox role while requiring a selected row."""
-        return bool(field.evaluate("""e => e.tagName === 'INPUT' && (
-            e.getAttribute('data-uxi-widget-type') === 'selectinput' ||
-            (e.getAttribute('data-automation-id') === 'searchBox' &&
-             e.closest('[data-automation-id="monikerSearchBox"]')))
-        """))
+        try:
+            return bool(field.evaluate("""e => e.tagName === 'INPUT' && (
+                e.getAttribute('data-uxi-widget-type') === 'selectinput' ||
+                (e.getAttribute('data-automation-id') === 'searchBox' &&
+                 e.closest('[data-automation-id="monikerSearchBox"]')) ||
+                Boolean(e.id && (e.id.endsWith('--skills') || e.id.endsWith('--school') || e.id.endsWith('--fieldOfStudy'))) ||
+                (e.getAttribute('enterkeyhint') === 'search')
+            )"""))
+        except Exception:
+            return False
 
     @staticmethod
     def _close_unexpected_tabs(page, known_pages: set) -> None:
@@ -702,9 +773,28 @@ class WorkdayAdapter(SiteAdapter):
         import option_match
         identifier = field.get_attribute("id") or ""
         widget = field.get_attribute("data-uxi-multiselect-id") or ""
-        field = page.locator(f"input[id={json.dumps(identifier)}]")
+        field = page.locator(f"input[id={json.dumps(identifier)}]") if identifier else field
         container = field.locator('xpath=ancestor::*[@data-automation-id="multiSelectContainer"][1]')
-        selected = lambda: container.locator('[data-automation-id="selectedItem"]').all_text_contents()
+        if container.count() == 0:
+            container = field.locator('xpath=ancestor::*[div[contains(@class,"css-") or @role="listbox"]][2]')
+        if container.count() == 0:
+            container = field.locator('xpath=..')
+
+        def selected() -> list[str]:
+            pills = container.locator('[data-automation-id="selectedItem"]').all_text_contents()
+            if pills:
+                return [p.strip() for p in pills if p.strip()]
+            items = container.locator('[role="listbox"][aria-label*="selected"] [role="option"], [id^="pill-"]').all_text_contents()
+            if items:
+                clean = lambda s: re.sub(r",?\s*press delete to clear value\.?$", "", s, flags=re.I).strip()
+                return [clean(p) for p in items if clean(p)]
+            hidden_desc = container.locator('[aria-hidden="true"]').all_text_contents()
+            for h in hidden_desc:
+                m = re.search(r"(\d+)\s+items?\s+selected(?:,\s*(.*))?", h, re.I)
+                if m and m.group(2):
+                    return [s.strip() for s in m.group(2).split(",") if s.strip()]
+            return []
+
         missing = []
         for value in dict.fromkeys(v.strip() for v in values if v.strip()):
             if option_match.best_option(selected(), value) is not None:
@@ -713,18 +803,31 @@ class WorkdayAdapter(SiteAdapter):
             self._open_prompt(assistant, page, field, widget)
             field.fill("")
             field.type(value, delay=10)
+            page.wait_for_timeout(300)
+            field.press("Enter")
             page.wait_for_timeout(700)
+
             popup = page.locator(f'[data-automation-id="responsiveMonikerPrompt"][data-associated-widget={json.dumps(widget)}]')
-            rows = popup.locator('[data-automation-id="promptOption"]')
-            labels = rows.all_text_contents()
+            if popup.count() and popup.is_visible():
+                rows = popup.locator('[data-automation-id="promptOption"]')
+                labels = rows.all_text_contents()
+            else:
+                rows = page.locator('[role="listbox"]:not([aria-label*="selected"]) [role="option"], [data-automation-id="promptOption"]')
+                if rows.count() == 0:
+                    rows = page.locator('[role="option"]:not([aria-label*="delete"])')
+                labels = [r.inner_text().strip() for r in rows.all()]
+
             index = option_match.best_option(labels, value)
-            if index is not None:
+            if index is not None and index < rows.count():
                 rows.nth(index).click(timeout=3_000)
-                page.wait_for_timeout(300)
+                page.wait_for_timeout(400)
             found_missing = option_match.best_option(selected(), value) is None
             if found_missing:
                 missing.append(value)
-            field.fill("")
+            try:
+                field.fill("")
+            except Exception:
+                pass
             page.keyboard.press("Escape")
             if popup.count() and popup.is_visible():
                 heading = page.get_by_role("heading", name="Skills", exact=True)
@@ -792,11 +895,24 @@ class WorkdayAdapter(SiteAdapter):
                     # Some school catalogues fetch only after an explicit
                     # search submission. Enter here requests results; the
                     # matching row must still be clicked and verified below.
-                    education = page.get_by_role("group", name="Education", exact=True)
-                    if id_suffix.endswith("--school") and education.count() == 1 and re.search(
-                            r"press\s+Enter\s+to\s+search", education.inner_text(), re.I):
-                        field.press("Enter")
-                        page.wait_for_timeout(700)
+                    if id_suffix.endswith("--school"):
+                        education = page.get_by_role("group", name="Education", exact=True)
+                        prompt = page.locator(
+                            f'[data-automation-id="responsiveMonikerPrompt"][data-associated-widget={json.dumps(multiselect_id)}]')
+                        root = prompt if prompt.count() else page
+                        visible_rows = [
+                            (r.get_attribute("data-automation-label") or r.inner_text() or "").strip()
+                            for r in root.locator('[data-automation-id="promptOption"]').all()
+                        ]
+                        has_real_rows = any(r and not re.fullmatch(r"no items\.?", r, re.I) for r in visible_rows)
+                        needs_enter = (
+                            not has_real_rows
+                            or (field.get_attribute("enterkeyhint") or "").lower() == "search"
+                            or (education.count() == 1 and bool(re.search(r"press\s+Enter\s+to\s+search", education.inner_text(), re.I)))
+                        )
+                        if needs_enter:
+                            field.press("Enter")
+                            page.wait_for_timeout(1_000)
 
                     if strategy == "matched_row":
                         import option_match
@@ -820,6 +936,10 @@ class WorkdayAdapter(SiteAdapter):
                             continue
                         row = root.locator(f"[data-automation-id='promptOption']"
                                            f"[data-automation-label={json.dumps(rows[k])}]")
+                        if not row.count():
+                            row = root.get_by_role("option", name=rows[k], exact=True)
+                        if not row.count():
+                            row = root.locator(f"[role='option']:has-text({json.dumps(rows[k])})")
                         if not row.count() or not assistant._click_resiliently(row.first):
                             continue
                         page.wait_for_timeout(800)
@@ -848,6 +968,10 @@ class WorkdayAdapter(SiteAdapter):
                     )
 
             if not keyboard:
+                try:
+                    field.fill("")
+                except Exception:
+                    pass
                 page.keyboard.press("Escape")       # none of the owner's names is in the list: left for the owner
                 return False
             # None of our wordings matched this tenant's list. Read what it
@@ -1081,7 +1205,7 @@ class WorkdayAdapter(SiteAdapter):
             return (
                 box.evaluate(
                     """el => {
-                        const box = el.closest('[data-automation-id="multiSelectContainer"]') || el;
+                        const box = el.closest('[data-automation-id="multiSelectContainer"]') || el.closest('[class*="css-"]')?.parentElement || el.parentElement || el;
                         const clean = s => (s || '').replace(/,?\\s*press delete to clear value\\.?$/i, '').trim();
 
                         const pills = [...box.querySelectorAll('[data-automation-id="selectedItem"]')];

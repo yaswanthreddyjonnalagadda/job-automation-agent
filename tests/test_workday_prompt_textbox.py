@@ -160,3 +160,105 @@ def test_nested_virtual_prompt_reads_all_leaf_options_before_matching(page, extr
     control=next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.role=="textbox")
     assert a.do(page,page_agent.Answer(control.ref,control.question,"fill","LinkedIn","profile"),control) is expected
     assert page.locator('[data-automation-id=selectedItem]').inner_text()==("LinkedIn.com" if expected else "")
+
+
+def test_school_search_enter_without_instruction_prose_and_other_fallback(page):
+    """CHAGEE Workday (f281): --school with enterkeyhint='search' shows 'No Items.' until Enter is pressed,
+    and falls back to 'Other' when the institution is not listed and the section instructs selecting 'Other'."""
+    page.set_content('''<fieldset aria-label="Education">
+      <p><b>Instructions: Enter your highest level of education. If your institution is not listed, please select “Other.”</b></p>
+      <label for="education-0--school">School or University</label>
+      <div data-automation-id="multiSelectContainer"><div data-automation-id="monikerSearchBox">
+        <input id="education-0--school" enterkeyhint="search" data-uxi-widget-type="selectinput" data-uxi-multiselect-id="school-picker"
+          onkeydown="if(event.key==='Enter'){window.schoolSearch(this.value);event.preventDefault();}">
+      </div><span data-automation-id="selectedItem"></span>
+      <div id="school-results" data-automation-id="responsiveMonikerPrompt" data-associated-widget="school-picker">
+        <div data-automation-id="promptOption">No Items.</div>
+      </div></div></fieldset><script>window.schoolSearch=(query)=>{
+        const box=document.getElementById('school-results');
+        if(/other/i.test(query)){
+          box.innerHTML='<div data-automation-id="promptOption" data-automation-label="Other">Other</div>';
+          const row=box.querySelector('[data-automation-label="Other"]');
+          row.onclick=()=>{document.querySelector('[data-automation-id=selectedItem]').textContent='Other';document.querySelector('input').value='';box.hidden=true;};
+        } else {
+          box.innerHTML='<div data-automation-id="promptOption">No Items.</div>';
+        }
+      };</script>''')
+    a = agent()
+    control = next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.role == "textbox")
+    assert a.do(page, page_agent.Answer(control.ref, control.question, "fill", "JNTU Hyderabad", "profile.education"), control)
+    assert page.locator('[data-automation-id=selectedItem]').inner_text() == "Other"
+    assert page.locator("input").input_value() == ""
+
+
+def test_school_search_cannot_find_search_other_fallback(page):
+    """HonorHealth Workday (f282): 'If you cannot find your school in the list, please search \"other\" and press enter.'
+    broadens _school_names fallback regex beyond 'not listed' so 'Other' is queried when the school is absent."""
+    page.set_content('''<div role="group" aria-label="Education">
+      <p>How to Enter a School: If you cannot find your school in the list, please search "<b>other</b>" and press enter.</p>
+      <label for="education-1--school">School or University*</label>
+      <div class="css-ujzx5o">
+        <input id="education-1--school" enterkeyhint="search" placeholder="Search"
+          onkeydown="if(event.key==='Enter'){window.schoolSearch(this.value);event.preventDefault();}">
+        <div aria-hidden="true">0 items selected</div>
+      </div>
+      <div id="school-results" hidden></div>
+    </div><script>window.schoolSearch=(query)=>{
+      const box=document.getElementById('school-results');
+      box.hidden=false;
+      if(/other/i.test(query)){
+        box.innerHTML='<div role="option" data-automation-label="Other">Other</div>';
+        const row=box.querySelector('[role="option"]');
+        row.onclick=()=>{
+          document.querySelector('[aria-hidden="true"]').textContent='1 item selected, Other';
+          document.getElementById('education-1--school').value='';
+          box.hidden=true;
+        };
+      } else {
+        box.innerHTML='<div role="option">No Items.</div>';
+      }
+    };</script>''')
+    a = agent()
+    control = next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.role == "textbox")
+    assert a.do(page, page_agent.Answer(control.ref, control.question, "fill", "JNTU Hyderabad", "profile.education"), control)
+    assert "Other" in page.locator('[aria-hidden="true"]').inner_text()
+    assert page.locator("input").input_value() == ""
+
+
+def test_modern_workday_skills_enter_and_option_selection(page):
+    """HonorHealth Workday (f282): Modern Canvas-style skills input lacks data-automation-id and data-uxi-widget-type,
+    has enterkeyhint='search', requires Enter to query options, and registers selection in items selected list."""
+    page.set_content('''<div>
+      <h4>Skills</h4>
+      <p>You must press ENTER for skills to populate.</p>
+      <label for="skills--skills">Type to Add Skills*</label>
+      <div class="css-container">
+        <div class="css-ujzx5o">
+          <input id="skills--skills" enterkeyhint="search" placeholder="Search"
+            onkeydown="if(event.key==='Enter'){window.searchSkills(this.value);event.preventDefault();}">
+          <div aria-hidden="true" class="selected-summary">0 items selected</div>
+        </div>
+        <ul role="listbox" aria-label="items selected"></ul>
+        <div id="results" hidden></div>
+      </div>
+    </div><script>window.searchSkills=(query)=>{
+      const box=document.getElementById('results');
+      box.hidden=false;
+      box.innerHTML='<div role="option">Python</div><div role="option">Network Security</div>';
+      box.querySelectorAll('[role="option"]').forEach(opt=>{
+        opt.onclick=()=>{
+          const sel=document.querySelector('ul[role="listbox"]');
+          const li=document.createElement('li');
+          li.setAttribute('role','option');
+          li.textContent=opt.textContent+', press delete to clear value.';
+          sel.appendChild(li);
+          document.querySelector('.selected-summary').textContent='1 item selected, '+opt.textContent;
+          document.getElementById('skills--skills').value='';
+          box.hidden=true;
+        };
+      });
+    };</script>''')
+    a = agent()
+    control = next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.role == "textbox")
+    assert a.do(page, page_agent.Answer(control.ref, control.question, "fill", "Python, Network Security", "profile.skills"), control)
+    assert "Python" in page.locator('ul[role="listbox"]').inner_text()

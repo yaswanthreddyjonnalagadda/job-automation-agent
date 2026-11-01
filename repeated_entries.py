@@ -58,6 +58,7 @@ def entry_map(snapshot: str) -> dict[str, Entry]:
     date_groups: list[tuple[int, str]] = []
     last_box: Optional[tuple[int, str]] = None      # (indent, label) of the last box, whose value may follow
     pending_separator = False
+    pending_date_label = ""
     for raw in (snapshot or "").splitlines():
         m = _LINE.match(raw)
         if not m:
@@ -72,6 +73,13 @@ def entry_map(snapshot: str) -> dict[str, Entry]:
             name, re.IGNORECASE) if role == "group" else None)
         if date_group:
             date_groups.append((indent, date_group.group(1)))
+        if section is not None and indent > section_indent and role in ("generic", "text", "label"):
+            cand_label = " ".join((name or value).split()).rstrip("*").strip()
+            if re.fullmatch(
+                r"(?:From|To(?:\s*\([^)]*\))?|Start(?: date)?|End(?: date)?)",
+                cand_label, re.IGNORECASE,
+            ):
+                pending_date_label = cand_label
         # A text box with a placeholder shows what it holds as a child line ("- text: Capital One").
         if last_box is not None and indent > last_box[0] and role == "text" and value and section:
             if not current.get(last_box[1].lower()):
@@ -113,6 +121,13 @@ def entry_map(snapshot: str) -> dict[str, Entry]:
                 section = None
                 last_section = None
             pending_separator = False
+        if section is not None and role == "textbox" and ref and pending_date_label and (
+            not name or re.match(r"^Date picker (?:closed|opened)\b", name, re.IGNORECASE)
+        ):
+            name = pending_date_label
+            pending_date_label = ""
+        elif role in _FIELD_ROLES and ref and name:
+            pending_date_label = ""
         if section is None or role not in _FIELD_ROLES or not ref or not name:
             continue
         if role == "button" and re.search(r"\b(remove|delete|add|save|cancel)\b", name, re.IGNORECASE):
@@ -302,6 +317,7 @@ _WORK_FIELDS = (
     (r"^type(?:\s+(?:select|choose)\b.*)?$", "employment_type"),
     (r"\bcurrent(ly)?\b|\bstill\b|present", "current"),       # before "title": "Is current position?"
     (r"\b(company|employer|organi[sz]ation)\b", "company"),
+    (r"\b(?:role\s+|job\s+)?description\b|\bresponsibilit|\bduties\b|\bsummary\b", "description"),
     (r"\b(position|job)?\s*title\b|\bposition\b|\brole\b", "title"),
     (r"\b(start|from|began|begin)\b", "start"),
     (r"\b(end|to|until|left)\b", "end"),
@@ -356,6 +372,14 @@ def answer(entry: Entry, history: dict) -> tuple[str, str, bool]:
             if part and value:
                 import concept_matcher
                 value = concept_matcher._date_part(value, part.group(1).lower()) or value
+            elif entry.section == "education" and value and any(
+                re.fullmatch(r'"?\d{4}"?', str(v or "").strip())
+                for peer in (entry.peers or [entry.values])
+                for k, v in (peer or {}).items()
+                if re.search(r"\b(start|from|end|to|graduat|complet)\b", k, re.IGNORECASE)
+            ):
+                import concept_matcher
+                value = concept_matcher._date_part(value, "year") or value
             return value, source, False
         return str(record.get(key) or "").strip(), source, False
     return "", "", False

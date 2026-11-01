@@ -3185,7 +3185,14 @@ class JobApplicationAssistant(EmailVerificationMixin):
         """True on the final review/summary step -- where auto mode stops and
         hands back to the human, because Submit is theirs to press."""
         try:
-            if page.locator("button:text-is('Submit'):visible, [role='button']:text-is('Submit'):visible, button:has-text('Submit Application'):visible").count():
+            submits = page.locator(
+                "button:text-is('Submit'):visible, [role='button']:text-is('Submit'):visible, "
+                "button:has-text('Submit Application'):visible"
+            )
+            if any(
+                not self._in_popup(submits.nth(i)) and not self._in_non_app_widget(submits.nth(i))
+                for i in range(min(submits.count(), 10))
+            ):
                 return True
             return self.is_review_step_by_wizard_marker(page) or self.is_review_step_by_heading(page)
         except Exception:
@@ -3241,16 +3248,26 @@ class JobApplicationAssistant(EmailVerificationMixin):
         real, uncontained submit). Left unchanged and still callable on its own: nothing below
         depends on it, but removing it would be an unrelated regression for any other caller."""
         try:
-            markers = page.locator(
-                "[aria-current='step']:visible, [data-automation-id='progressBarActiveStep']:visible, "
-                "[class*='active']:visible"
-            )
             review = re.compile(r"^\s*review(?:\s+(?:your\s+)?application)?\s*$", re.I)
+            explicit = page.locator(
+                "[aria-current='step']:visible, [data-automation-id='progressBarActiveStep']:visible, "
+                ".progress-current:visible"
+            )
+            if explicit.count() > 0:
+                for i in range(explicit.count()):
+                    if review.fullmatch(explicit.nth(i).inner_text(timeout=2_000)):
+                        return True
+                return False
+            markers = page.locator("[class*='active']:visible")
             for i in range(markers.count()):
+                el = markers.nth(i)
+                cls = (el.get_attribute("class", timeout=1_000) or "").lower()
+                if "active" not in cls.replace("slick-active", ""):
+                    continue
                 # Read visible text on the marker itself. A search form's class
                 # containing 'active' and hidden option containing 'Review' is
                 # neither a wizard step nor evidence of a final application.
-                if review.fullmatch(markers.nth(i).inner_text(timeout=2_000)):
+                if review.fullmatch(el.inner_text(timeout=2_000)):
                     return True
             return False
         except Exception:
@@ -3391,10 +3408,35 @@ class JobApplicationAssistant(EmailVerificationMixin):
         "a:has-text('Continue')",
     )
 
+    _NON_APP_WIDGET_JS = r"""e => {
+        if (e.closest('header, nav, footer, [role=banner], [role=navigation], [role=search], [role=contentinfo]')) return true;
+        for (let n = e.parentElement; n && n !== document.body; n = n.parentElement) {
+            const role = (n.getAttribute('role') || '').toLowerCase();
+            const tag = n.tagName.toLowerCase();
+            if (!['region', 'complementary', 'group', 'form'].includes(role)
+                && !['section', 'aside', 'form'].includes(tag)) continue;
+            if (n.querySelector('input[type=password], input[type=file]')) continue;
+            if (n.querySelectorAll('input:not([type=hidden]), select, textarea').length > 3) continue;
+            const heading = (n.querySelector('h1, h2, h3, [role=heading]')?.textContent || '').trim();
+            const text = ((n.getAttribute('aria-label') || '') + ' ' + heading + ' ' + (n.textContent || '').slice(0, 240)).trim();
+            if (/\b(?:get notified for similar jobs|sign up (?:to receive |for )?job alerts?|receive job alerts?|create (?:a )?job alert|manage alerts|join (?:our |the )?talent (?:community|network)|similar jobs|recommended jobs|jobs you may like)\b/i.test(text)) {
+                return true;
+            }
+        }
+        return false;
+    }"""
+
     @staticmethod
     def _in_popup(el) -> bool:
         try:
             return bool(el.evaluate("e => !!e.closest('[role=dialog], [aria-modal=true]')"))
+        except Exception:
+            return False
+
+    @classmethod
+    def _in_non_app_widget(cls, el) -> bool:
+        try:
+            return bool(el.evaluate(cls._NON_APP_WIDGET_JS))
         except Exception:
             return False
 
@@ -4791,7 +4833,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             try:
                 for i in range(min(candidate.count(), 5)):
                     element = candidate.nth(i)
-                    if not element.is_visible():
+                    if not element.is_visible() or self._in_non_app_widget(element):
                         continue
                     name = (element.get_attribute("aria-label") or element.inner_text() or "").strip()
                     logger.info("Apply control found: %r", name[:40] or "(unnamed link)")
@@ -7192,7 +7234,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             for i in range(min(loc.count(), 10)):
                 el = loc.nth(i)
                 try:
-                    if not el.is_visible() or self._in_popup(el):
+                    if not el.is_visible() or self._in_popup(el) or self._in_non_app_widget(el):
                         continue
                     if needs_label:
                         label = (el.inner_text() or el.get_attribute("value") or "").strip()

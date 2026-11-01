@@ -950,6 +950,8 @@ def resolve_profile_value(
         matched_opt = best_option_match(val, options)
         if matched_opt:
             return matched_opt, src
+        if concept == "HOW_DID_YOU_HEAR":
+            return "", ""
 
     return val, src
 

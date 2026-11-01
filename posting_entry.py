@@ -27,8 +27,27 @@ _TEMPLATE = r"""element => {
       || element.closest('form') || element.hasAttribute('form')) return false;
   const labels = [element.getAttribute('aria-label'), element.textContent]
     .map(value => (value || '').trim()).filter(Boolean);
-  if (!labels.length || !labels.every(value => /^(?:apply|apply now|apply for this job)$/i.test(value))) return false;
-  const siteChrome = node => Boolean(node.closest('header, nav, footer, [role="banner"], [role="navigation"], [role="search"], [role="contentinfo"]'));
+  const isApplyLabel = value => /^(?:apply|apply now(?:\s+\S.*)?|apply (?:for|to) (?:this job|\S.*))$/i.test(value)
+    && !/\b(?:submit|with|using|via|linkedin|indeed|facebook|filter|filters|search)\b/i.test(value);
+  if (!labels.length || !labels.every(isApplyLabel)) return false;
+  const nonAppWidget = (node, allowContainingElement = false) => {
+    for (let n = node.parentElement; n && n !== document.body; n = n.parentElement) {
+      if (!allowContainingElement && n.contains(element)) continue;
+      const role = (n.getAttribute('role') || '').toLowerCase();
+      const tag = n.tagName.toLowerCase();
+      if (!['region', 'complementary', 'group', 'form'].includes(role)
+          && !['section', 'aside', 'form'].includes(tag)) continue;
+      if (n.querySelector('input[type="password"], input[type="file"]')) continue;
+      const heading = (n.querySelector('h1, h2, h3, [role="heading"]')?.textContent || '').trim();
+      const text = ((n.getAttribute('aria-label') || '') + ' ' + heading + ' ' + (n.textContent || '').slice(0, 240)).trim();
+      if (/\b(?:get notified for similar jobs|sign up (?:to receive |for )?job alerts?|receive job alerts?|create (?:a )?job alert|manage alerts|join (?:our |the )?talent (?:community|network)|similar jobs|recommended jobs|jobs you may like)\b/i.test(text)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  if (nonAppWidget(element, true)) return false;
+  const siteChrome = node => Boolean(node.closest('header, nav, footer, [role="banner"], [role="navigation"], [role="search"], [role="contentinfo"]')) || nonAppWidget(node);
   // A frame is harmless only when it can be looked into (same origin), has no address of its own to load, and holds
   // no form control; a cross-origin or still-loading frame may be an embedded application, so it blocks.
   const frameHoldsAnApplication = frame => {

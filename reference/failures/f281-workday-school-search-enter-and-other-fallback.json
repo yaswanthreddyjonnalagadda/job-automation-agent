@@ -1,0 +1,16 @@
+{
+  "id": "f281",
+  "date": "2026-10-31",
+  "site": "Workday (CHAGEE CA LLC — chagee.wd102.myworkdayjobs.com)",
+  "class": "Workday school search-and-pick prompt that shows 'No Items.' until Enter is pressed was misclassified as an empty school catalogue and never submitted Enter or fell back to 'Other' for unlisted schools",
+  "symptom": "On CHAGEE's Workday My Experience step, fill_education_section logged EDUCATION_SKIPPED after opening the empty School or University prompt and seeing 'No Items.', then PageAgent.do typed 'Eastern Illinois University' and 'JNTU Hyderabad' without pressing Enter and left both required School or University fields unselected.",
+  "root_cause": "1) WorkdayAdapter._school_list_is_empty only clicked the empty --school input without typing a search query and pressing Enter, so tenants whose school prompt returns 'No Items.' until a search is submitted were mistaken for Invesco's empty school list (f183). 2) WorkdayAdapter.select_from_searchable_input only pressed Enter on --school when the Education group text contained 'press Enter to search', missing tenants that use enterkeyhint='search' and return 'No Items.' until Enter is pressed. 3) When an institution (JNTU Hyderabad) was not in the tenant's catalogue and the Education instructions stated 'If your institution is not listed, please select Other', 'Other' was not included as a fallback candidate.",
+  "why_tests_missed": "Existing school-search tests either included the literal instruction 'press Enter to search' in the Education fieldset or populated options on click/input without requiring Enter.",
+  "fix": "1) In _school_list_is_empty, probe with a search query and Enter when the initial open shows only 'No Items.'. 2) In select_from_searchable_input, press Enter on --school whenever no real options are visible after typing or enterkeyhint='search' is set, and clear uncommitted search text on failure. 3) In _school_names and PageAgent.do, append 'Other' as the last fallback candidate when the Education group instructs selecting 'Other' for unlisted institutions.",
+  "tests": [
+    "tests/test_education_left_out_when_the_school_list_is_empty.py::test_a_list_that_populates_only_after_search_and_enter_is_not_taken_for_empty",
+    "tests/test_workday_prompt_textbox.py::test_school_search_enter_without_instruction_prose_and_other_fallback"
+  ],
+  "prevention": "Treat search-on-Enter prompts as empty only after a real search query is submitted with Enter, and honor section-level fallback instructions ('select Other' when not listed) after all profile school names have been tried."
+}
+
