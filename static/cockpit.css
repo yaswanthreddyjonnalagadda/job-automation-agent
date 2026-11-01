@@ -178,6 +178,11 @@
 .tag.remote { background: var(--ok-soft); color: var(--ok); }
 .job-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 4px; }
 .job-foot form { margin: 0; }
+button.linklike { background: none; border: 0; box-shadow: none; color: var(--muted); text-decoration: underline; font-weight: 500; padding: 0 4px; min-height: 32px; }
+button.linklike:hover { color: var(--ink); background: none; filter: none; }
+.job-card.is-applied { opacity: .75; }
+.tag.new { background: var(--accent); color: #fff; border-color: var(--accent); }
+.tag.applied { background: var(--surface-2); color: var(--ink-2); font-weight: 600; }
 .dash-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .dash-chip { border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); padding: 5px 13px; border-radius: 99px; font-size: 13.5px; font-weight: 500; min-height: 32px; }
 .dash-chip:hover { background: var(--surface-2); filter: none; }

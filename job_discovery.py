@@ -399,7 +399,7 @@ class JobDiscoveryEngine:
         return stats
 
     def get_discovered_jobs(
-        self, min_score: int = 50, status: str = "discovered", limit: int = 50
+        self, min_score: int = 50, status: str = "discovered", limit: int = 50, hide_applied: bool = True
     ) -> list[dict[str, Any]]:
         """Returns discovered jobs matching filters, ordered by highest match score."""
         conn = self._get_connection()
@@ -407,7 +407,7 @@ class JobDiscoveryEngine:
             # Exclude positions that are already submitted or already applied in applications
             has_apps = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='applications'").fetchone() is not None
             sub_filter = ""
-            if has_apps:
+            if has_apps and hide_applied:
                 sub_filter = """
                     AND url NOT IN (SELECT url FROM applications WHERE status IN ('submitted', 'already_applied'))
                     AND NOT EXISTS (

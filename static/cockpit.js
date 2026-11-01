@@ -304,16 +304,26 @@
       confirmText: 'Stop application', danger: true });
     if (!yes) return;
     const res = await postJson('/api/cockpit/stop');
-    toast(res.ok === false ? (res.error || 'Could not stop it.') : 'Stopped.', res.ok === false);
+    if (res.ok === false) toast(res.error || 'Could not stop it.', true);
+    else if (res.status === 'not_running') toast('Nothing was running.');
+    else toast('Stopped.');
     fetchState();
   }
   async function raiseBrowser() {
     const res = await postJson('/api/cockpit/raise-browser');
     toast(!res.ok ? (res.error || 'Could not reach the browser window.') : (res.raised ? 'Browser brought to the front.' : 'No agent browser window was found.'), !res.ok || !res.raised);
   }
-  async function solveHandoff(id) {
-    const res = await postJson('/api/handoff/resolve', { handoff_id: id, action: 'check_and_resume' });
-    toast(res.ok ? 'Checked. The agent is carrying on.' : (res.error || 'It still shows on the page. Finish it in the browser window first.'), !res.ok);
+  async function solveHandoff(id, button) {
+    // Only the next status refresh can say whether the agent carried on, so this says "Checking" and no more.
+    const label = button ? button.textContent : '';
+    if (button) { button.disabled = true; button.textContent = 'Checking…'; }
+    try {
+      const res = await postJson('/api/handoff/resolve', { handoff_id: id, action: 'check_and_resume' });
+      toast(res.ok ? 'Checking the page… the status above updates when the agent has looked.'
+                   : (res.error || 'It still shows on the page. Finish it in the browser window first.'), !res.ok);
+    } finally {
+      if (button) { button.disabled = false; button.textContent = label; }
+    }
     fetchState();
   }
   async function editAnswer(id, question, current) {
@@ -358,7 +368,7 @@
     if (act === 'continue') resumeRun();
     else if (act === 'stop') stopRun();
     else if (act === 'raise-browser') raiseBrowser();
-    else if (act === 'solve') solveHandoff(t.dataset.handoff);
+    else if (act === 'solve') solveHandoff(t.dataset.handoff, t);
     else if (act === 'edit-answer') editAnswer(t.dataset.id, t.dataset.question, t.dataset.value);
   });
 

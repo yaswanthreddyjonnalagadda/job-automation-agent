@@ -120,8 +120,9 @@ def test_the_screenshot_is_a_fixed_height_thumbnail():
 # -- scores and "Needs you" --------------------------------------------------------------------------------------
 
 def test_the_match_percentage_says_what_it_measures(make_client, monkeypatch):
-    job = SimpleNamespace(id=1, company_name="Acme", job_title="Engineer", url="https://x.example/1", location="Austin",
-                          is_remote=False, ats_type="greenhouse", match_score=65, matched_skills=["Title"])
+    job = dict(id=1, company_name="Acme", job_title="Engineer", url="https://x.example/1", location="Austin",
+               is_remote=False, ats_type="greenhouse", match_score=65, matched_skills=["Title"],
+               discovered_at="2026-11-01T09:00:00")
     import job_discovery
     monkeypatch.setattr(job_discovery.JobDiscoveryEngine, "__init__", lambda self, *a, **k: None)
     monkeypatch.setattr(job_discovery.JobDiscoveryEngine, "get_discovered_jobs", lambda self, **k: [job])

@@ -83,6 +83,14 @@ answers** on the dashboard; answer it once there and it is used on every form th
 asks it. Resumes and cover letters are named after you (`Jane_Doe_Resume_Acme.pdf`).
 Everything stays on your computer, in `data/`.
 
+Suggested jobs you have already applied to stay in the list, marked "Already applied"
+and placed after the rest (the tracker is only read). Each card shows how long ago the
+job was found, a "New" badge for the last three days, the first place with "+N more",
+and "Remote" once. "Not interested" is a plain link. After "Find new jobs" the page
+says when it last checked and how many boards. In the live panel, Stop says
+"Nothing was running" when nothing was, and "Check and continue" shows "Checking" until
+the next status update shows whether the agent carried on. There is no Pause.
+
 What the dashboard says about submitting follows your setting: with verified
 auto-submit off it says you review and submit everything yourself; with it on it
 says "Submits only when every answer is verified; otherwise stops for you." Links to

@@ -33,6 +33,7 @@ from pathlib import Path
 from flask import Flask, Response, abort, g, redirect, render_template_string, request, send_file, url_for
 
 import diagnostics
+import discovered_view
 diagnostics.install_log_privacy()
 import application_status
 import ui_shell
@@ -295,8 +296,32 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 def scan_discovered():
     from job_discovery import JobDiscoveryEngine
     engine = JobDiscoveryEngine()
-    engine.scan_all(min_match_threshold=60)
+    stats = engine.scan_all(min_match_threshold=60)
+    _remember_scan(stats)
     return redirect(url_for("index"))
+
+
+_LAST_SCAN = BASE_DIR / "data" / "_last_scan.json"
+
+
+def _remember_scan(stats) -> None:
+    """What the last scan did, so the page can say so after it reloads (when, and how many boards)."""
+    try:
+        record = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                  "boards": int((stats or {}).get("companies_scanned") or 0),
+                  "saved": int((stats or {}).get("relevant_jobs_saved") or 0)}
+        _LAST_SCAN.write_text(json.dumps(record), encoding="utf-8")
+    except (OSError, TypeError, ValueError) as _swallowed:
+        logger.debug("_remember_scan: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+
+
+def last_scan() -> dict:
+    try:
+        record = json.loads(_LAST_SCAN.read_text(encoding="utf-8"))
+        record["at"] = datetime.fromisoformat(record["at"])
+        return record
+    except (OSError, ValueError, KeyError):
+        return {}
 
 
 @app.post("/api/discovered/<int:job_id>/apply")
@@ -1464,7 +1489,9 @@ def index():
     try:
         from job_discovery import JobDiscoveryEngine
         discovery_engine = JobDiscoveryEngine()
-        discovered_jobs = discovery_engine.get_discovered_jobs(min_score=60, limit=12)
+        # Jobs already applied to are shown and marked, not dropped without a word.
+        discovered_jobs = discovered_view.prepare(
+            discovery_engine.get_discovered_jobs(min_score=60, limit=12, hide_applied=False), apps)
     except Exception:
         discovered_jobs = []
 
@@ -1473,7 +1500,7 @@ def index():
         more=min(show + PAGE_SIZE, MAX_SHOWN), can_show_more=show < min(len(apps), MAX_SHOWN),
         groups=ui_shell.group_counts(apps), runs=latest_run(runs), signals=signals, error=request.args.get("error"),
         working_url=working_url, is_running=bool(live), job_title=job_title, employer=employer, stage=stage,
-        discovered_jobs=discovered_jobs,
+        discovered_jobs=discovered_jobs, last_scan=last_scan(),
     )
 
 
@@ -2048,6 +2075,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
       <div>
         <h2 id="jobs-h">Suggested jobs <span class="count">{{ discovered_jobs | length }}</span></h2>
         <p class="dash-sub">Roles found on employers' own job boards that fit your profile. Starting one prepares the application; you review it before anything is sent.</p>
+        <p class="dash-sub" id="scan-status" role="status" aria-live="polite">{% if last_scan %}Updated {{ last_scan.at|local('%I:%M %p') }} &middot; {{ last_scan.boards }} board{{ '' if last_scan.boards == 1 else 's' }} checked{% else %}Not checked yet{% endif %}</p>
       </div>
       <form method="post" action="/api/discovered/scan" data-busy="Checking job boards&hellip;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -2064,7 +2092,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
       </div>
       <div class="dash-jobs" id="discovered-feed">
         {% for dj in discovered_jobs %}
-          <article class="job-card" data-score="{{ dj.match_score }}" data-remote="{{ dj.is_remote }}" data-ats="{{ dj.ats_type }}">
+          <article class="job-card{{ ' is-applied' if dj.already_applied }}" data-score="{{ dj.match_score }}" data-remote="{{ dj.is_remote }}" data-ats="{{ dj.ats_type }}">
             <div class="job-top">
               <div class="ring {% if dj.match_score >= 85 %}high{% elif dj.match_score >= 70 %}mid{% endif %}" style="--p:{{ dj.match_score }}"
                    role="img" aria-label="Title match {{ dj.match_score }} percent"><b>{{ dj.match_score }}%</b></div>
@@ -2075,19 +2103,22 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
             </div>
             <div class="job-meta">
               <span class="tag" title="Scored from the job title, location and seniority only; the posting's requirements are not read">Title match {{ dj.match_score }}%</span>
-              <span>{{ dj.location or 'Location not stated' }}</span>
+              {% if dj.place %}<span title="{{ dj.location }}">{{ dj.place }}{% if dj.more_places %} <small>+{{ dj.more_places }} more</small>{% endif %}</span>
+              {% elif not dj.is_remote %}<span>Location not stated</span>{% endif %}
               {% if dj.is_remote %}<span class="tag remote">Remote</span>{% endif %}
+              {% if dj.already_applied %}<span class="tag applied">Already applied</span>{% elif dj.is_new %}<span class="tag new">New</span>{% endif %}
+              {% if dj.age %}<span class="muted">{{ dj.age }}</span>{% endif %}
               <span class="tag">{{ dj.ats_type | capitalize }}</span>
             </div>
             {% if dj.matched_skills %}<div class="job-meta">{% for m in dj.matched_skills[:3] %}<span class="tag">{{ m }}</span>{% endfor %}</div>{% endif %}
             <div class="job-foot">
               <form method="post" action="/api/discovered/{{ dj.id }}/apply">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="small">Start application</button>
+                <button type="submit" class="small{{ ' ghost' if dj.already_applied }}"{% if dj.already_applied %} title="You already applied to this one; start it only to apply again"{% endif %}>Start application</button>
               </form>
               <form method="post" action="/api/discovered/{{ dj.id }}/dismiss">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="ghost small" aria-label="Not interested in {{ dj.job_title }} at {{ dj.company_name }}">Not interested</button>
+                <button type="submit" class="linklike" aria-label="Not interested in {{ dj.job_title }} at {{ dj.company_name }}">Not interested</button>
               </form>
             </div>
           </article>
