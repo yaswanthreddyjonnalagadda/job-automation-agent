@@ -6,6 +6,22 @@ loaded from the internet: the dashboard works offline.
 """
 from __future__ import annotations
 
+def submit_promise() -> str:
+    """What the dashboard may tell the owner about submitting. It follows the setting, so the copy is never a promise
+    the agent will not keep (verified auto-submit can send an application without the owner pressing Submit)."""
+    import config
+    if config.auto_submit_verified_only_enabled():
+        return "Submits only when every answer is verified; otherwise stops for you."
+    return "You review everything, and you submit it yourself."
+
+
+def brand_tagline() -> str:
+    import config
+    if config.auto_submit_verified_only_enabled():
+        return "submits only what is verified"
+    return "applies for you, you submit"
+
+
 # A briefcase with a tick, drawn inline: the tab icon and the header mark.
 LOGO_SVG = ('<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">'
             '<rect x="2" y="8" width="28" height="20" rx="5" fill="#2f5bd3"/>'
@@ -227,8 +243,9 @@ details.menu .menu-items hr { border:0; border-top:1px solid var(--line-2); marg
 .stepper li.done::before { background:var(--accent); border-color:var(--accent); }
 .stepper li.done::after { background:var(--accent); }
 .stepper li.blocked::before { background:var(--warn); border-color:var(--warn); }
-.shot { display:block; border:1px solid var(--line); border-radius:var(--radius-sm); overflow:hidden; }
-.shot img { display:block; width:100%; height:auto; }
+.shot { display:block; border:1px solid var(--line); border-radius:var(--radius-sm); overflow:hidden; max-height:400px; }
+.shot img { display:block; width:100%; height:400px; object-fit:cover; object-position:top; }
+.nav a[data-count]::after { content:attr(data-count); display:inline-block; min-width:20px; margin-left:6px; padding:0 6px; border-radius:99px; background:var(--warn); color:#fff; font-size:12px; font-weight:700; line-height:20px; text-align:center; }
 .grid-2 { display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:16px; }
 ul.plain { margin:6px 0 0 18px; padding:0; }
 
@@ -265,9 +282,9 @@ HEAD = """<!doctype html>
 HEADER = """
 <a class="skip-link" href="#main">Skip to main content</a>
 <header class="topbar"><div class="topbar-inner">
-  <a class="brand" href="/">""" + LOGO_SVG + """<span>Job Agent<small>applies for you, you submit</small></span></a>
+  <a class="brand" href="/">""" + LOGO_SVG + """<span>Job Agent<small>{{ brand_tagline() }}</small></span></a>
   <nav class="nav" aria-label="Main">
-    <a href="/" {% if request.path == '/' or request.path.startswith('/application/') %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/' or request.path.startswith('/application/') }}">Applications</a>
+    {% set _n = needs_you_count() %}<a href="/" {% if _n %}data-count="{{ _n }}" aria-label="Applications, {{ _n }} need you" {% endif %}{% if request.path == '/' or request.path.startswith('/application/') %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/' or request.path.startswith('/application/') }}">Applications</a>
     <a href="/progress" {% if request.path == '/progress' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/progress' }}">Progress</a>
     <a href="/profile" {% if request.path in ('/profile', '/setup') %}aria-current="page" {% endif %}class="{{ 'active' if request.path in ('/profile', '/setup') }}">Profile</a>
     <a href="/answers" {% if request.path == '/answers' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/answers' }}">Saved answers</a>
@@ -326,4 +343,4 @@ def group_counts(records) -> dict:
 
 def install(app) -> None:
     """Make the helpers above available to every template."""
-    app.jinja_env.globals.update(status_label=status_label, status_class=status_class, status_group=status_group)
+    app.jinja_env.globals.update(submit_promise=submit_promise, brand_tagline=brand_tagline, status_label=status_label, status_class=status_class, status_group=status_group)

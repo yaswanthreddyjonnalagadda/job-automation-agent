@@ -83,6 +83,16 @@ answers** on the dashboard; answer it once there and it is used on every form th
 asks it. Resumes and cover letters are named after you (`Jane_Doe_Resume_Acme.pdf`).
 Everything stays on your computer, in `data/`.
 
+What the dashboard says about submitting follows your setting: with verified
+auto-submit off it says you review and submit everything yourself; with it on it
+says "Submits only when every answer is verified; otherwise stops for you." Links to
+a run's log or a page capture appear only when the dashboard can open them, and name
+the file by its place in the project, never your own folders. An application that is
+submitted or skipped no longer shows "What to do". A suggested job's percentage is
+labelled "Title match" (it is scored from the title, location and seniority only). The
+"Needs you" filter is dimmed when nothing needs you and highlighted, with a count on
+the Applications tab, when something does.
+
 The Applications dashboard renders its live cockpit whether there are no
 applications, the agent is idle, a run is active, or an owner handoff is waiting.
 System Health reports an available application database as connected in both

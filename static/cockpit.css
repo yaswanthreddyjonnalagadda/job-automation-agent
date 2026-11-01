@@ -182,6 +182,8 @@
 .dash-chip { border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); padding: 5px 13px; border-radius: 99px; font-size: 13.5px; font-weight: 500; min-height: 32px; }
 .dash-chip:hover { background: var(--surface-2); filter: none; }
 .dash-chip[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.dash-chip.is-zero { opacity: .55; }
+.dash-chip.has-items { border-color: var(--warn); font-weight: 700; box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 25%, transparent); }
 .dash-chip .n { opacity: .7; margin-left: 5px; font-variant-numeric: tabular-nums; }
 .dash-empty { text-align: center; padding: 40px 16px; color: var(--ink-2); border: 1px dashed var(--line); border-radius: 16px; background: var(--surface); }
 .dash-empty b { display: block; color: var(--ink); font-size: 16px; margin-bottom: 4px; }

@@ -65,7 +65,7 @@ def test_index_renders_discovered_jobs(client):
     assert "Suggested jobs" in html
     assert "Cloudflare" in html
     assert "Senior Network Engineer" in html
-    assert "95 percent match" in html and "Start application" in html
+    assert "Title match" in html and "95%" in html and "Start application" in html
 
 
 def test_dismiss_discovered_job(client):
