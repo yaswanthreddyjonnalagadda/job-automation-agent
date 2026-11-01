@@ -14,6 +14,24 @@
   let polling = false;
   let failures = 0;
   let lastState = null;
+  let announced = null;     // the status last spoken; null until the first read, which is not announced
+
+  // Put a change in a live region so a screen reader speaks it; the sighted owner sees the badge change.
+  function announce(message) {
+    let el = $('sr-announce');
+    if (!el) {
+      el = make('div', { id: 'sr-announce', class: 'sr-only', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' });
+      document.body.append(el);
+    }
+    el.textContent = '';
+    setTimeout(() => { el.textContent = message; }, 50);
+  }
+  function noteStatus(label, detail) {
+    const first = announced === null;
+    const changed = label !== announced;
+    announced = label;
+    if (!first && changed) announce(`Application status: ${label}${detail ? ' – ' + detail : ''}`);
+  }
 
   const $ = (id) => document.getElementById(id);
   const make = (tag, props = {}, ...kids) => {
@@ -224,6 +242,7 @@
     if (!running && !handoff) {
       card.classList.remove('is-active', 'is-stalled', 'is-handoff');
       if (dot) dot.className = 'cockpit-status-dot';
+      noteStatus('Idle');
       if (status) status.textContent = 'Idle';
       ['btn-continue', 'btn-raise', 'btn-stop'].forEach((id) => setVisible(id, false));
       renderBanner(null);
@@ -236,6 +255,7 @@
     const warning = data.loop_status === 'warning';
     const waiting = !!data.is_waiting;
     card.classList.toggle('is-stalled', stalled);
+    noteStatus(handoff ? 'Needs you' : waiting ? 'Waiting for you' : (data.stage || 'Working'), data.job_title);
     if (status) status.textContent = waiting ? 'Waiting for you' : (data.stage || 'Working');
     if (dot) dot.className = stalled ? 'cockpit-status-dot danger'
       : (warning || handoff || waiting) ? 'cockpit-status-dot warning' : 'cockpit-status-dot pulsing';

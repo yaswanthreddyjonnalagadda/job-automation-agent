@@ -148,9 +148,9 @@ input:focus, select:focus, textarea:focus { outline:none; border-color:var(--acc
 main:focus { outline:none; }
 button:disabled { opacity:.5; cursor:not-allowed; filter:none; }
 .button:hover { text-decoration:none; }
-button, .button { min-height:38px; transition:background-color .15s, border-color .15s, box-shadow .15s, transform .15s; }
+button, .button { min-height:40px; transition:background-color .15s, border-color .15s, box-shadow .15s, transform .15s; }
 button:active:not(:disabled) { transform:translateY(1px); }
-button.ghost.small, button.small, .button.small { min-height:32px; }
+button.ghost.small, button.small, .button.small { min-height:40px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration:.001ms !important; animation-iteration-count:1 !important;
                            transition-duration:.001ms !important; scroll-behavior:auto !important; }
@@ -196,7 +196,8 @@ td.label, th.label { width:150px; white-space:nowrap; color:var(--muted); font-s
 /* --- an overflow menu for row actions -------------------------------------------------------------- */
 details.menu { position:relative; display:inline-block; }
 details.menu > summary { list-style:none; cursor:pointer; border:1px solid var(--line); border-radius:var(--radius-sm);
-  padding:5px 10px; background:var(--surface); color:var(--ink-2); font-weight:700; line-height:1.2; }
+  padding:5px 10px; background:var(--surface); color:var(--ink-2); font-weight:700; line-height:1.2;
+  min-height:40px; min-width:40px; display:inline-flex; align-items:center; justify-content:center; }
 details.menu > summary::-webkit-details-marker { display:none; }
 details.menu[open] > summary { background:var(--surface-2); }
 details.menu .menu-items { position:absolute; right:0; top:calc(100% + 6px); z-index:30; min-width:200px;
@@ -204,7 +205,7 @@ details.menu .menu-items { position:absolute; right:0; top:calc(100% + 6px); z-i
   padding:6px; display:flex; flex-direction:column; gap:2px; }
 details.menu .menu-items form { margin:0; }
 details.menu .menu-items button { width:100%; justify-content:flex-start; background:transparent; color:var(--ink-2);
-  border:0; padding:8px 10px; font-weight:500; border-radius:6px; }
+  border:0; padding:8px 10px; font-weight:500; border-radius:6px; min-height:40px; }
 details.menu .menu-items button:hover { background:var(--surface-2); }
 details.menu .menu-items button.danger { color:var(--bad); }
 tr.app:nth-last-child(-n+2):not(:nth-child(-n+3)) details.menu .menu-items { top:auto; bottom:calc(100% + 6px); }

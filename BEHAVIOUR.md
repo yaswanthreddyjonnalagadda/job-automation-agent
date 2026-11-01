@@ -83,6 +83,11 @@ answers** on the dashboard; answer it once there and it is used on every form th
 asks it. Resumes and cover letters are named after you (`Jane_Doe_Resume_Acme.pdf`).
 Everything stays on your computer, in `data/`.
 
+Buttons, filter chips and the row menu are at least 40 pixels tall, and the tabs
+scroll sideways with a fade on a narrow screen. A screen reader is told when the
+agent's status changes (for example to "Waiting for you") and how many applications
+need you; the first status read on a page is not announced.
+
 Suggested jobs you have already applied to stay in the list, marked "Already applied"
 and placed after the rest (the tracker is only read). Each card shows how long ago the
 job was found, a "New" badge for the last three days, the first place with "+N more",

@@ -1969,6 +1969,7 @@ SETTINGS_HTML = ui_shell.page("Settings", """
 
 INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
 <main id="main" class="dash" tabindex="-1">
+  <p class="sr-only" id="needs-live" role="status" aria-live="polite">{% if groups.needs %}{{ groups.needs }} application{{ '' if groups.needs == 1 else 's' }} need{{ 's' if groups.needs == 1 else '' }} you{% else %}Nothing needs you{% endif %}</p>
   <header class="dash-head">
     <div>
       <h1>Applications</h1>
