@@ -9,7 +9,7 @@
   "fix": "ui_shell.submit_promise and brand_tagline read the one auto-submit reader (config.auto_submit_verified_only_enabled), so the copy follows the setting. Links to logs and captures are drawn only when web_ui.artifact_ok says the viewer will serve them, and carry a project-relative reference (web_ui._artifact_ref and _artifact_path), never the owner's path. 'What to do' is hidden for done and skipped statuses. The score is labelled 'Title match' with what it measures. The 'Needs you' chip is dimmed at 0 and highlighted above 0, with a count on the Applications tab. The screenshot is a 400px thumbnail.",
   "tests": [
     "tests/test_dashboard_tells_the_truth.py::test_the_header_promise_follows_the_auto_submit_setting",
-    "tests/test_dashboard_tells_the_truth.py::test_the_resting_card_does_not_say_you_review_everything_when_auto_submit_is_on",
+    "tests/test_dashboard_tells_the_truth.py::test_the_page_does_not_say_you_review_everything_when_auto_submit_is_on",
     "tests/test_dashboard_tells_the_truth.py::test_an_unservable_log_or_screenshot_is_not_linked",
     "tests/test_dashboard_tells_the_truth.py::test_artifact_links_never_carry_the_owners_absolute_path",
     "tests/test_dashboard_tells_the_truth.py::test_finished_applications_are_not_told_what_to_do",

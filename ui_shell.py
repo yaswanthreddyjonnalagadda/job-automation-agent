@@ -6,6 +6,8 @@ loaded from the internet: the dashboard works offline.
 """
 from __future__ import annotations
 
+import re
+
 def submit_promise() -> str:
     """What the dashboard may tell the owner about submitting. It follows the setting, so the copy is never a promise
     the agent will not keep (verified auto-submit can send an application without the owner pressing Submit)."""
@@ -13,6 +15,14 @@ def submit_promise() -> str:
     if config.auto_submit_verified_only_enabled():
         return "Submits only when every answer is verified; otherwise stops for you."
     return "You review everything, and you submit it yourself."
+
+
+def company_label(company) -> str:
+    """The company as shown. A value that cannot be a name (nothing, or a single letter or symbol) is shown as unclear
+    rather than as if it were one; the stored value is untouched. A longer company that also appears in the title is
+    kept, because that is often right ("Acme" in "Acme Network Engineer")."""
+    text = str(company or "").strip()
+    return text if len(re.findall(r"[^\W_]", text)) >= 2 else "Company unclear"
 
 
 def brand_tagline() -> str:
@@ -344,4 +354,4 @@ def group_counts(records) -> dict:
 
 def install(app) -> None:
     """Make the helpers above available to every template."""
-    app.jinja_env.globals.update(submit_promise=submit_promise, brand_tagline=brand_tagline, status_label=status_label, status_class=status_class, status_group=status_group)
+    app.jinja_env.globals.update(company_label=company_label, submit_promise=submit_promise, brand_tagline=brand_tagline, status_label=status_label, status_class=status_class, status_group=status_group)

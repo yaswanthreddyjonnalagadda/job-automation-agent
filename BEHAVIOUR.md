@@ -83,6 +83,12 @@ answers** on the dashboard; answer it once there and it is used on every form th
 asks it. Resumes and cover letters are named after you (`Jane_Doe_Resume_Acme.pdf`).
 Everything stays on your computer, in `data/`.
 
+The Applications page lists what needs you first, then the current run (one line when
+nothing runs, with how the last run ended), then your applications, then suggested jobs.
+Each total appears once, in the filter chips; the bar is labelled "Submitted of tracked".
+A company that is a single letter or symbol is shown as "Company unclear" (the stored
+value is not changed).
+
 Buttons, filter chips and the row menu are at least 40 pixels tall, and the tabs
 scroll sideways with a fade on a narrow screen. A screen reader is told when the
 agent's status changes (for example to "Waiting for you") and how many applications

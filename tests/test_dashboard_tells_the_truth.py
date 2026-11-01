@@ -52,7 +52,7 @@ def test_the_header_promise_follows_the_auto_submit_setting(make_client):
     assert "every answer is verified" in on
 
 
-def test_the_resting_card_does_not_say_you_review_everything_when_auto_submit_is_on(make_client):
+def test_the_page_does_not_say_you_review_everything_when_auto_submit_is_on(make_client):
     on = make_client(auto_submit=True).get("/").get_data(as_text=True)
     assert "You review everything" not in on
     assert "every answer is verified" in on

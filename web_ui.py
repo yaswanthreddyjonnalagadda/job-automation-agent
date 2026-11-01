@@ -1500,8 +1500,17 @@ def index():
         more=min(show + PAGE_SIZE, MAX_SHOWN), can_show_more=show < min(len(apps), MAX_SHOWN),
         groups=ui_shell.group_counts(apps), runs=latest_run(runs), signals=signals, error=request.args.get("error"),
         working_url=working_url, is_running=bool(live), job_title=job_title, employer=employer, stage=stage,
-        discovered_jobs=discovered_jobs, last_scan=last_scan(),
+        discovered_jobs=discovered_jobs, last_scan=last_scan(), rest_line=_rest_line(runs),
     )
+
+
+def _rest_line(runs: dict) -> str:
+    """What the idle card says after "No application is running": how the last run ended."""
+    run = next(iter(latest_run(runs).values()), None)
+    if not run:
+        return "Nothing has run yet."
+    who = " at ".join(x for x in (run.get("title"), run.get("company")) if x)
+    return f"Last run: {run.get('state') or 'ended'}" + (f" · {who}" if who else "")
 
 
 def waiting_runs(data_dir: Path) -> list[dict]:
@@ -1973,10 +1982,6 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
   <header class="dash-head">
     <div>
       <h1>Applications</h1>
-      <p class="dash-summary" id="dash-summary">
-        {% if total %}<strong>{{ total }}</strong> tracked &middot; <strong>{{ groups.done }}</strong> submitted
-          &middot; <strong>{{ groups.skipped }}</strong> skipped{% else %}Nothing tracked yet{% endif %}
-      </p>
     </div>
     <form class="dash-start" method="post" action="/apply" aria-label="Start an application">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -1986,21 +1991,16 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
       <button type="submit">Start application</button>
     </form>
   </header>
-  <p class="dash-start-hint" id="job-url-hint">Workday, Greenhouse, Lever, iCIMS and other employer sites. Job boards and staffing agencies are refused.</p>
+  <p class="dash-start-hint" id="job-url-hint">Workday, Greenhouse, Lever, iCIMS and other employer sites. Job boards and staffing agencies are refused. {{ submit_promise() }}</p>
 
   {% if error %}<div class="err" role="alert" style="margin-top:16px">{{ error }}</div>{% endif %}
 
   {% if total %}
+  <p class="dash-bar-label"><b>Submitted of tracked:</b> {{ groups.done }} of {{ total }}</p>
   <div class="dash-bar" role="img"
-       aria-label="{{ groups.done }} submitted, {{ groups.needs }} need you, {{ groups.working }} in progress, {{ groups.skipped }} skipped">
+       aria-label="Submitted of tracked: {{ groups.done }} of {{ total }}">
     <i class="b-done" style="flex-grow:{{ groups.done }}"></i><i class="b-needs" style="flex-grow:{{ groups.needs }}"></i><i class="b-working" style="flex-grow:{{ groups.working }}"></i><i class="b-skipped" style="flex-grow:{{ groups.skipped }}"></i>
   </div>
-  <ul class="dash-legend">
-    <li style="--c:var(--ok)"><b>{{ groups.done }}</b> submitted</li>
-    <li style="--c:var(--warn)"><b>{{ groups.needs }}</b> need you</li>
-    <li style="--c:var(--accent)"><b>{{ groups.working }}</b> in progress</li>
-    <li style="--c:var(--muted)"><b>{{ groups.skipped }}</b> skipped</li>
-  </ul>
   {% endif %}
 
   {% set waiting = apps | selectattr('status', 'in', ['ready_to_submit', 'needs_user_review', 'BLOCKED_VALIDATION_LOOP']) | rejectattr('url', 'equalto', working_url or '-') | list %}
@@ -2037,7 +2037,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
       <div class="item">
         <div style="min-width:0">
           <a href="/application/{{ a.id }}"><b>{{ a.title }}</b></a>
-          <small>{{ a.company }} &middot; <span class="pill {{ status_class(a.status) }}">{{ status_label(a.status) }}</span></small>
+          <small>{{ company_label(a.company) }} &middot; <span class="pill {{ status_class(a.status) }}">{{ status_label(a.status) }}</span></small>
           {% if a.notes %}<small style="display:block;margin-top:2px">{{ a.notes[:180] }}</small>{% endif %}
         </div>
         <div class="dash-actions">
@@ -2071,66 +2071,6 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
     {% endif %}
   </div>
 
-  <section class="dash-section" aria-labelledby="jobs-h">
-    <header>
-      <div>
-        <h2 id="jobs-h">Suggested jobs <span class="count">{{ discovered_jobs | length }}</span></h2>
-        <p class="dash-sub">Roles found on employers' own job boards that fit your profile. Starting one prepares the application; you review it before anything is sent.</p>
-        <p class="dash-sub" id="scan-status" role="status" aria-live="polite">{% if last_scan %}Updated {{ last_scan.at|local('%I:%M %p') }} &middot; {{ last_scan.boards }} board{{ '' if last_scan.boards == 1 else 's' }} checked{% else %}Not checked yet{% endif %}</p>
-      </div>
-      <form method="post" action="/api/discovered/scan" data-busy="Checking job boards&hellip;">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="ghost" title="Look for new postings on the configured Greenhouse and Lever boards">Find new jobs</button>
-      </form>
-    </header>
-    {% if discovered_jobs %}
-      <div class="dash-chips" role="group" aria-label="Filter suggested jobs" style="margin-bottom:14px">
-        <button type="button" class="dash-chip" data-job-filter="all" aria-pressed="true">All</button>
-        <button type="button" class="dash-chip" data-job-filter="top" aria-pressed="false">Best matches</button>
-        <button type="button" class="dash-chip" data-job-filter="remote" aria-pressed="false">Remote</button>
-        <button type="button" class="dash-chip" data-job-filter="greenhouse" aria-pressed="false">Greenhouse</button>
-        <button type="button" class="dash-chip" data-job-filter="lever" aria-pressed="false">Lever</button>
-      </div>
-      <div class="dash-jobs" id="discovered-feed">
-        {% for dj in discovered_jobs %}
-          <article class="job-card{{ ' is-applied' if dj.already_applied }}" data-score="{{ dj.match_score }}" data-remote="{{ dj.is_remote }}" data-ats="{{ dj.ats_type }}">
-            <div class="job-top">
-              <div class="ring {% if dj.match_score >= 85 %}high{% elif dj.match_score >= 70 %}mid{% endif %}" style="--p:{{ dj.match_score }}"
-                   role="img" aria-label="Title match {{ dj.match_score }} percent"><b>{{ dj.match_score }}%</b></div>
-              <div style="min-width:0">
-                <p class="job-company">{{ dj.company_name }}</p>
-                <h3 class="job-title"><a href="{{ dj.url }}" target="_blank" rel="noopener">{{ dj.job_title }}<span class="sr-only"> (opens the posting in a new tab)</span></a></h3>
-              </div>
-            </div>
-            <div class="job-meta">
-              <span class="tag" title="Scored from the job title, location and seniority only; the posting's requirements are not read">Title match {{ dj.match_score }}%</span>
-              {% if dj.place %}<span title="{{ dj.location }}">{{ dj.place }}{% if dj.more_places %} <small>+{{ dj.more_places }} more</small>{% endif %}</span>
-              {% elif not dj.is_remote %}<span>Location not stated</span>{% endif %}
-              {% if dj.is_remote %}<span class="tag remote">Remote</span>{% endif %}
-              {% if dj.already_applied %}<span class="tag applied">Already applied</span>{% elif dj.is_new %}<span class="tag new">New</span>{% endif %}
-              {% if dj.age %}<span class="muted">{{ dj.age }}</span>{% endif %}
-              <span class="tag">{{ dj.ats_type | capitalize }}</span>
-            </div>
-            {% if dj.matched_skills %}<div class="job-meta">{% for m in dj.matched_skills[:3] %}<span class="tag">{{ m }}</span>{% endfor %}</div>{% endif %}
-            <div class="job-foot">
-              <form method="post" action="/api/discovered/{{ dj.id }}/apply">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="small{{ ' ghost' if dj.already_applied }}"{% if dj.already_applied %} title="You already applied to this one; start it only to apply again"{% endif %}>Start application</button>
-              </form>
-              <form method="post" action="/api/discovered/{{ dj.id }}/dismiss">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="linklike" aria-label="Not interested in {{ dj.job_title }} at {{ dj.company_name }}">Not interested</button>
-              </form>
-            </div>
-          </article>
-        {% endfor %}
-      </div>
-      <div class="dash-empty" id="jobs-none" hidden><b>No jobs match that filter</b>Try another one.</div>
-    {% else %}
-      <div class="dash-empty"><b>No suggestions yet</b>Press <b style="display:inline">Find new jobs</b> to check your configured job boards.</div>
-    {% endif %}
-  </section>
-
   <section class="dash-section" aria-labelledby="hist-h">
     <header>
       <h2 id="hist-h">Your applications <span class="count">{{ total }}</span></h2>
@@ -2157,7 +2097,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
         <tbody>
         {% for a in apps %}
         <tr class="app" data-group="{{ status_group(a.status) }}" data-text="{{ (a.company ~ ' ' ~ a.title ~ ' ' ~ (a.location or ''))|lower }}">
-          <td class="company"><strong>{{ a.company }}</strong></td>
+          <td class="company"><strong>{{ company_label(a.company) }}</strong></td>
           <td class="role">
             <a href="/application/{{ a.id }}">{{ a.title }}</a>
             <span class="loc">{{ a.location or 'Location not stated' }}</span>
@@ -2218,6 +2158,66 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
       </div>
     </div>
   </section>
+
+  <section class="dash-section" aria-labelledby="jobs-h">
+    <header>
+      <div>
+        <h2 id="jobs-h">Suggested jobs <span class="count">{{ discovered_jobs | length }}</span></h2>
+        <p class="dash-sub">Roles found on employers' own job boards that fit your profile. Starting one prepares the application; you review it before anything is sent.</p>
+        <p class="dash-sub" id="scan-status" role="status" aria-live="polite">{% if last_scan %}Updated {{ last_scan.at|local('%I:%M %p') }} &middot; {{ last_scan.boards }} board{{ '' if last_scan.boards == 1 else 's' }} checked{% else %}Not checked yet{% endif %}</p>
+      </div>
+      <form method="post" action="/api/discovered/scan" data-busy="Checking job boards&hellip;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="ghost" title="Look for new postings on the configured Greenhouse and Lever boards">Find new jobs</button>
+      </form>
+    </header>
+    {% if discovered_jobs %}
+      <div class="dash-chips" role="group" aria-label="Filter suggested jobs" style="margin-bottom:14px">
+        <button type="button" class="dash-chip" data-job-filter="all" aria-pressed="true">All</button>
+        <button type="button" class="dash-chip" data-job-filter="top" aria-pressed="false">Best matches</button>
+        <button type="button" class="dash-chip" data-job-filter="remote" aria-pressed="false">Remote</button>
+        <button type="button" class="dash-chip" data-job-filter="greenhouse" aria-pressed="false">Greenhouse</button>
+        <button type="button" class="dash-chip" data-job-filter="lever" aria-pressed="false">Lever</button>
+      </div>
+      <div class="dash-jobs" id="discovered-feed">
+        {% for dj in discovered_jobs %}
+          <article class="job-card{{ ' is-applied' if dj.already_applied }}" data-score="{{ dj.match_score }}" data-remote="{{ dj.is_remote }}" data-ats="{{ dj.ats_type }}">
+            <div class="job-top">
+              <div class="ring {% if dj.match_score >= 85 %}high{% elif dj.match_score >= 70 %}mid{% endif %}" style="--p:{{ dj.match_score }}"
+                   role="img" aria-label="Title match {{ dj.match_score }} percent"><b>{{ dj.match_score }}%</b></div>
+              <div style="min-width:0">
+                <p class="job-company">{{ dj.company_name }}</p>
+                <h3 class="job-title"><a href="{{ dj.url }}" target="_blank" rel="noopener">{{ dj.job_title }}<span class="sr-only"> (opens the posting in a new tab)</span></a></h3>
+              </div>
+            </div>
+            <div class="job-meta">
+              <span class="tag" title="Scored from the job title, location and seniority only; the posting's requirements are not read">Title match {{ dj.match_score }}%</span>
+              {% if dj.place %}<span title="{{ dj.location }}">{{ dj.place }}{% if dj.more_places %} <small>+{{ dj.more_places }} more</small>{% endif %}</span>
+              {% elif not dj.is_remote %}<span>Location not stated</span>{% endif %}
+              {% if dj.is_remote %}<span class="tag remote">Remote</span>{% endif %}
+              {% if dj.already_applied %}<span class="tag applied">Already applied</span>{% elif dj.is_new %}<span class="tag new">New</span>{% endif %}
+              {% if dj.age %}<span class="muted">{{ dj.age }}</span>{% endif %}
+              <span class="tag">{{ dj.ats_type | capitalize }}</span>
+            </div>
+            {% if dj.matched_skills %}<div class="job-meta">{% for m in dj.matched_skills[:3] %}<span class="tag">{{ m }}</span>{% endfor %}</div>{% endif %}
+            <div class="job-foot">
+              <form method="post" action="/api/discovered/{{ dj.id }}/apply">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="small{{ ' ghost' if dj.already_applied }}"{% if dj.already_applied %} title="You already applied to this one; start it only to apply again"{% endif %}>Start application</button>
+              </form>
+              <form method="post" action="/api/discovered/{{ dj.id }}/dismiss">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="linklike" aria-label="Not interested in {{ dj.job_title }} at {{ dj.company_name }}">Not interested</button>
+              </form>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+      <div class="dash-empty" id="jobs-none" hidden><b>No jobs match that filter</b>Try another one.</div>
+    {% else %}
+      <div class="dash-empty"><b>No suggestions yet</b>Press <b style="display:inline">Find new jobs</b> to check your configured job boards.</div>
+    {% endif %}
+  </section>
 </main>
 """)
 
@@ -2229,7 +2229,7 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
     <div style="min-width:0">
       <h1>{{ a.title }}</h1>
       <div class="head-facts">
-        <strong style="color:var(--ink)">{{ a.company }}</strong>
+        <strong style="color:var(--ink)">{{ company_label(a.company) }}</strong>
         {% if a.location %}<span>{{ a.location }}</span>{% endif %}
         <span class="pill {{ status_class(a.status) }}">{{ status_label(a.status) }}</span>
         <a href="{{ a.url }}" target="_blank" rel="noopener">Open posting &rarr;</a>
