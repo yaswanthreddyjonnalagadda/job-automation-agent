@@ -1262,6 +1262,17 @@ def _same_answer(a: str, b: str) -> bool:
     return False
 
 
+def _shows_the_answer(shown: str, want: str) -> bool:
+    """Whether a box already shows exactly the answer (spacing and case aside; a phone number by its digits). Stricter
+    than _fill_value_committed, which also accepts a part of the answer: a box holding "Yaswanth" is not done when the
+    answer is "Yaswanth Reddy"."""
+    norm = lambda text: " ".join((text or "").split()).casefold()
+    if norm(shown) == norm(want):
+        return True
+    digits_shown, digits_want = re.sub(r"\D", "", shown or ""), re.sub(r"\D", "", want or "")
+    return len(digits_want) >= 10 and re.fullmatch(r"[\d\s()+.\-]+", (shown or "").strip() or "x") is not None         and digits_shown[-10:] == digits_want[-10:]
+
+
 def _fill_value_committed(shown: str, want: str) -> bool:
     """Whether a text field's actual, committed value (`shown`, read back after the fill) is
     close enough to what was intended (`want`) to count as written (Phase 0-B4). The same
@@ -1798,6 +1809,7 @@ class PageAgent:
     def locate(self, page, ref: str):
         return self.tab(page).locator(f"aria-ref={ref}")
 
+    @field_timing.timed('wait', lambda self, page, ms=1_500: f'settle {ms} ms', min_seconds=1.0)
     def settle(self, page, ms: int = 1_500) -> None:
         tab = self.tab(page)
         try:
@@ -2019,6 +2031,7 @@ class PageAgent:
             return "blocked"
         return "ready"
 
+    @field_timing.timed('step', lambda *a, **k: 'sign in step')
     def sign_in_step(self, page, controls: list[Control]) -> bool:
         """Signs in where the page asks for it. True when something was done.
 
@@ -3084,6 +3097,16 @@ class PageAgent:
         return options[0] if len(options) == 1 else None
 
     # -- facts a profile or assisted planner may answer from --------------------------
+    @staticmethod
+    def _is_self_identification_date(label: str, control: Control) -> bool:
+        """The date under the name on a voluntary self-identification form (CC-305, veteran status): the day it is
+        filled in. Only that: a bare "Date" anywhere else may be a birth date or a start date."""
+        return bool(re.fullmatch(r"date\W*", (label or "").strip(), re.IGNORECASE)
+                    and (re.search(r"self-identif|disabilit|veteran", f"{control.container} {control.context}",
+                                   re.IGNORECASE)
+                         or re.search(r"self[- ]identif|voluntary.*(?:disabilit|veteran)|(?:disability|veteran)\s+(?:status|form)",
+                                      control.section, re.IGNORECASE)))
+
     def known_answer(self, control: Control) -> tuple[str, str]:
         """What the agent already knows for this box, and where it came from.
 
@@ -3169,7 +3192,13 @@ class PageAgent:
 
         if control.role == "spinbutton" and _plain(question) in {"month", "day", "year"}:
             # Repeated-entry dates were resolved above. A component label alone
-            # cannot identify today's date, a birth date, or any historical date.
+            # cannot identify today's date, a birth date, or any historical date -- except the date under the name
+            # on a self-identification form, which is the day it is filled in, however the page draws it (as one
+            # "Date" box, or as Month / Day / Year boxes in a group named Date).
+            if self._is_self_identification_date(control.container, control):
+                today = date.today()
+                return {"month": f"{today:%m}", "day": f"{today:%d}", "year": f"{today:%Y}"}[_plain(question)], \
+                    "profile.application_date"
             return "", ""
 
         # 1. Saved exact answer library (e.g. from data/profile_answers.json) takes priority
@@ -3328,10 +3357,7 @@ class PageAgent:
             return date.today().isoformat(), "profile.application_date"
         # The date under the name on a voluntary self-identification form (CC-305, veteran status) is the day it is
         # filled in. Only that: a bare "Date" anywhere else may be a birth date or a start date.
-        if re.fullmatch(r"date\W*", question.strip(), re.IGNORECASE) \
-                and (re.search(r"self-identif|disabilit|veteran", f"{control.container} {control.context}", re.IGNORECASE)
-                     or re.search(r"self[- ]identif|voluntary.*(?:disabilit|veteran)|(?:disability|veteran)\s+(?:status|form)",
-                                  control.section, re.IGNORECASE)):
+        if self._is_self_identification_date(question, control):
             return date.today().isoformat(), "profile.application_date"
         if re.search(r"highest level of education|education achieved|educational background|degrees?", question,
                      re.IGNORECASE):
@@ -4645,6 +4671,7 @@ class PageAgent:
                 done.append(question)
         return done
 
+    @field_timing.timed('step', lambda *a, **k: 'attach documents')
     def attach_documents(self, page, snapshot: str, controls: list[Control]) -> list[tuple[Answer, Control]]:
         """Attaches the resume and the cover letter where the form asks for them.
 
@@ -5495,9 +5522,20 @@ class PageAgent:
                 fill_value = written
             if self._fill_react_datepicker(tab, loc, fill_value):
                 return True
+            # A site's own resume autofill may have written the answer while the agent was reading: typing it again
+            # waited out a timeout on every such box (Rackspace, 2 November: eight boxes, 3 to 4 seconds each, each
+            # marked failed although every one held the right value).
+            try:
+                already = (loc.input_value(timeout=700) or "").strip()
+            except Exception:
+                already = ""
+            if already and _shows_the_answer(already, fill_value):
+                field_timing.why("already holds the answer")
+                return True
             try:
                 fill_and_dispatch(loc, fill_value, timeout=2_500)
-            except Exception:
+            except Exception as fill_error:
+                field_timing.why(f"fill: {type(fill_error).__name__}: {str(fill_error).splitlines()[0][:90] if str(fill_error) else ''}")
                 try:
                     is_inert = loc.evaluate("""(el) => {
                         return el.disabled || el.readOnly || el.getAttribute('aria-disabled') === 'true' ||
@@ -7053,6 +7091,7 @@ class PageAgent:
         if hasattr(self.assistant, "protect_submission"):
             self.assistant.protect_submission(self.tab(page))
 
+    @field_timing.timed('step', lambda self, page, plan, controls: f'press: {plan.next_label}')
     def _press_next_locked(self, page, plan: PagePlan, controls: list[Control]) -> tuple[str, object, str]:
         if getattr(self.assistant, "_submission_execution_state", "active") != "active":
             return "stop", page, "automation is parked for human handoff"

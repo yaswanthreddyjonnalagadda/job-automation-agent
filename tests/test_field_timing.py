@@ -90,3 +90,37 @@ def test_the_report_shows_the_slowest_steps_of_the_last_run(lines):
     assert text.index("Gemini") < text.index("--fieldOfStudy[0]") < text.index("First Name")
     assert "model" in text and "failed" in text
     assert "No timings" in field_timings.report([])
+
+
+def test_a_wait_shorter_than_its_minimum_is_not_recorded_and_a_long_one_is(lines):
+    import time as _time
+
+    @field_timing.timed("wait", lambda seconds: "settle", min_seconds=0.05)
+    def wait(seconds):
+        _time.sleep(seconds)
+    wait(0.0)
+    wait(0.08)
+    assert [row["label"] for row in lines()] == ["settle"]
+
+
+@pytest.mark.parametrize("module, name", [
+    ("browser_automation", "JobApplicationAssistant.autofill_from_resume"),
+    ("browser_automation", "JobApplicationAssistant.follow_application_entry"),
+    ("browser_automation", "JobApplicationAssistant.sign_in_from_header"),
+    ("browser_automation", "JobApplicationAssistant.sign_in_to_existing_account"),
+    ("browser_automation", "JobApplicationAssistant.sign_in_with_google_if_offered"),
+    ("page_agent", "PageAgent.settle"),
+    ("page_agent", "PageAgent.sign_in_step"),
+    ("page_agent", "PageAgent.attach_documents"),
+    ("page_agent", "PageAgent._press_next_locked"),
+    ("sites.workday", "WorkdayAdapter.fill_experience_section"),
+    ("sites.workday", "WorkdayAdapter.fill_education_section"),
+    ("apply_flow", "prepare_materials"),
+    ("apply_flow", "prepare_cover_letter"),
+])
+def test_every_step_between_fields_is_timed_too(module, name):
+    import importlib
+    target = importlib.import_module(module)
+    for part in name.split("."):
+        target = getattr(target, part)
+    assert hasattr(target, "__wrapped__"), f"{name} is not timed"

@@ -793,6 +793,13 @@ read is timed, and one line per step is added to `data/field_timings.jsonl` on y
 (run, kind of step, the field's label, seconds, ok/failed/error). A line never holds an answer
 or a value, and timing can never stop or slow an application. `python scripts/field_timings.py`
 shows the last run: time by kind of step, and its slowest steps.
+Steps between fields are timed too (sign-in, resume autofill, opening the application,
+writing the resume and cover letter, each Next press, the Workday sections, any wait of a second
+or more), and a failed step says why. A box that already shows the answer -- the site's own
+resume autofill wrote it -- is left alone instead of being typed into again.
+The Date under the name on a voluntary self-identification form (CC-305, veteran status) is
+today's date, whether the page draws it as one box or as Month / Day / Year boxes; a birth date
+or a start date is never filled that way.
 
 ## Job boards are not the employer's site
 

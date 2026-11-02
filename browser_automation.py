@@ -43,6 +43,7 @@ import option_match
 import safety
 from submission_guard import SubmissionGuardV0
 import visible_desktop
+import field_timing
 from config import AppConfig, UserProfile, get_user_profile, resume_to_attach
 from interaction import (
     CARD_COMMIT_TEXT_PATTERN,
@@ -3676,6 +3677,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             logger.warning("Could not open the login page: %s", exc)
             return False
 
+    @field_timing.timed('step', lambda *a, **k: 'sign in from header')
     def sign_in_from_header(self, page: Page, email: str) -> bool:
         """Signs in through a site-header 'Sign In' link (Eightfold/CBTS style)
         when the application form itself shows no login: click it, enter the
@@ -3852,6 +3854,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 continue
         return None
 
+    @field_timing.timed('step', lambda *a, **k: 'sign in with google')
     def sign_in_with_google_if_offered(self, page: Page, email: str) -> bool:
         """Takes the Google option on a page whose whole purpose is signing in.
 
@@ -4266,6 +4269,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         except Exception:
             return False
 
+    @field_timing.timed('step', lambda *a, **k: 'autofill from resume')
     def autofill_from_resume(self, page: Page, resume_path: Path) -> bool:
         """Hands the resume to the site's own 'Autofill from resume' box, when
         the form has one, BEFORE the agent fills anything. The ATS parses it
@@ -4870,6 +4874,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             return ""
         return href or ""
 
+    @field_timing.timed('step', lambda *a, **k: 'open the application')
     def follow_application_entry(self, page: Page, control) -> bool:
         """Follow a posting's real HTTP link with GET, without executing its
         click handlers or relaxing the submission guard. Button-only and
@@ -7180,6 +7185,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             logger.debug("_open_sign_in: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return False
 
+    @field_timing.timed('step', lambda *a, **k: 'sign in to existing account')
     def sign_in_to_existing_account(self, page: Page, email: str) -> bool:
         """The site says an account already exists for the owner's email.
 

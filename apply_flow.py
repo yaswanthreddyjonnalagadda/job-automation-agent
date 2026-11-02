@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import field_timing
 import importlib
 import inspect
 import json
@@ -393,6 +394,7 @@ def _resume_with_current_email(path: Path, profile, job, job_dir: Path) -> Path:
     return target
 
 
+@field_timing.timed("step", lambda *a, **k: "tailor resume")
 def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None, key: str = "") -> Path:
     """Returns the resume PDF to attach for THIS job.
 
@@ -477,6 +479,7 @@ def cover_letter_for(config, made: dict, write):
     return made["letter"]
 
 
+@field_timing.timed("step", lambda *a, **k: "cover letter")
 def prepare_cover_letter(claude, resume, job, profile, job_dir: Path, tracker=None, key: str = "") -> tuple[Path, Path] | None:
     """Writes the cover letter as text + PDF and returns (txt, pdf). Only
     called once the form has shown it has a cover-letter field, so no Claude

@@ -24,6 +24,12 @@ logger = logging.getLogger("field_timing")
 _LABEL_MAX = 80
 _lock = threading.Lock()
 _run = ""
+_reason = threading.local()
+
+
+def why(reason: str) -> None:
+    """Says why the step now being timed went the way it did (a short phrase; never a value)."""
+    _reason.text = " ".join(str(reason or "").split())[:_LABEL_MAX * 2]
 
 
 def begin(company: str = "", title: str = "") -> None:
@@ -40,6 +46,10 @@ def record(kind: str, label: str, seconds: float, result: str = "ok") -> None:
     try:
         line = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "run": _run, "kind": kind,
                 "label": " ".join(str(label or "").split())[:_LABEL_MAX], "seconds": round(seconds, 2), "result": result}
+        reason = getattr(_reason, "text", "")
+        _reason.text = ""
+        if reason:
+            line["why"] = reason
         target = path()
         with _lock:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -49,12 +59,13 @@ def record(kind: str, label: str, seconds: float, result: str = "ok") -> None:
         logger.debug("field_timing: could not record: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
 
 
-def timed(kind: str, label: Callable[..., str] = lambda *a, **k: "") -> Callable:
+def timed(kind: str, label: Callable[..., str] = lambda *a, **k: "", min_seconds: float = 0.0) -> Callable:
     """Times a method. `label(*args, **kwargs)` names the field (never its value); a False return is 'failed'."""
     def decorate(function: Callable) -> Callable:
         @functools.wraps(function)
         def inner(*args: Any, **kwargs: Any) -> Any:
             started, result = time.monotonic(), "error"
+            _reason.text = ""
             try:
                 answer = function(*args, **kwargs)
                 result = "failed" if answer is False else "ok"
@@ -64,6 +75,8 @@ def timed(kind: str, label: Callable[..., str] = lambda *a, **k: "") -> Callable
                     name = label(*args, **kwargs)
                 except Exception:
                     name = ""
-                record(kind, name, time.monotonic() - started, result)
+                took = time.monotonic() - started
+                if took >= min_seconds:
+                    record(kind, name, took, result)
         return inner
     return decorate
