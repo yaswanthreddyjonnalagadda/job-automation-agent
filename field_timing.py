@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 import os
 import threading
 import time
@@ -19,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 FILE = Path("data/field_timings.jsonl")
+logger = logging.getLogger("field_timing")
 _LABEL_MAX = 80
 _lock = threading.Lock()
 _run = ""
@@ -43,8 +45,8 @@ def record(kind: str, label: str, seconds: float, result: str = "ok") -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
             with target.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(line, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("field_timing: could not record: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
 
 
 def timed(kind: str, label: Callable[..., str] = lambda *a, **k: "") -> Callable:
