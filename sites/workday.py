@@ -233,6 +233,7 @@ class WorkdayAdapter(SiteAdapter):
     # Workday's own markup, and nothing outside Workday uses these.
     # Each takes the assistant so it can use the shared browser helpers.
     # ------------------------------------------------------------------
+    @field_timing.timed('step', lambda *a, **k: 'work experience section')
     def fill_experience_section(self, assistant, page: Page, experiences: list[dict]) -> None:
         """Deletes any existing Work Experience entries first (so a prior
         partial/buggy fill attempt can't leave stale or mismatched data
@@ -381,6 +382,7 @@ class WorkdayAdapter(SiteAdapter):
             except Exception as exc:
                 logger.debug("WORKDAY: Escape after the dropdown attempt failed: %s", str(exc).splitlines()[0][:100])
 
+    @field_timing.timed('step', lambda *a, **k: 'education section')
     def fill_education_section(self, assistant, page: Page, education: list[dict]) -> None:
         self.delete_all_entries(assistant, page, "Education", "Certifications")
         # The School box is a text box on some tenants (--schoolName) and a search-and-pick list on others (--school,

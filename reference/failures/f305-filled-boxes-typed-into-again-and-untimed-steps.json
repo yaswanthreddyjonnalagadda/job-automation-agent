@@ -1,0 +1,20 @@
+{
+  "id": "f305",
+  "date": "2026-11-02",
+  "class": "A write was attempted without first looking at what the box already held, so a box the site had filled was typed into again and marked failed; and most of the run's time was in steps nothing measured; and a required date drawn as three boxes was left blank because only the one-box spelling of the rule was written",
+  "symptom": "Rackspace (Workday): eight text boxes on My Information (name, address, city, postal code, e-mail, phone) were each marked failed after 3 to 4 seconds although every one held the right value, about 30 seconds lost. The run took 8.6 minutes, of which the per-field timings explained 74 seconds; the rest (writing the resume, opening the application, the gaps between pages) was not measured. The run then stopped at the Voluntary Self-Identification of Disability form: 'The field Date is required and must have a value' (Palantir stopped the same way earlier).",
+  "site": "rackspace.wd1.myworkdayjobs.com (Network Engineer IV - US), 2 November 2026",
+  "root_cause": "PageAgent.do typed into a box on the strength of the snapshot read before the site's own resume autofill had finished. The box had been redrawn, the typing waited out its 2.5 second timeout, the fallback timed out too, and the fill was reported failed. Separately, field_timing (f303) timed fields and model calls but not the steps between them, and a failure carried no reason. The agent's rule that the date under the name on a self-identification form is today's date matched only a box called Date; Workday draws it as Month, Day and Year boxes inside a group named Date, so each came back unanswered, was left blank as optional, and the form would not go on.",
+  "why_tests_missed": "Tests filled empty boxes and rejected wrong ones; none had a box that already held the answer when the agent got to it. Nothing measured the work between fields, so the slow parts could not be seen.",
+  "fix": "Before typing, the box's current value is read; one that already shows the answer (the same match the post-fill check uses) is left alone and the step records 'already holds the answer'. A failed fill records why (the exception's first line, never a value). Sign-in, autofill, opening the application, resume and cover-letter writing, document attaching, each Next press, the Workday experience and education sections, and any wait of a second or more are timed as steps. The same rule (PageAgent._is_self_identification_date, one place) now also answers the three boxes of that date with today's month, day and year; three boxes of any other date (a birth date) are still left open.",
+  "tests": [
+    "tests/test_a_filled_box_is_not_typed_into_again.py::test_a_box_that_already_holds_the_answer_is_left_alone_and_says_so",
+    "tests/test_a_filled_box_is_not_typed_into_again.py::test_a_box_holding_something_else_is_still_filled",
+    "tests/test_a_filled_box_is_not_typed_into_again.py::test_a_failed_fill_records_why_without_the_value",
+    "tests/test_field_timing.py::test_every_step_between_fields_is_timed_too",
+    "tests/test_field_timing.py::test_a_wait_shorter_than_its_minimum_is_not_recorded_and_a_long_one_is",
+    "tests/test_self_identification_date_in_three_boxes.py::test_the_three_boxes_of_the_date_on_a_self_identification_form_take_todays_date",
+    "tests/test_self_identification_date_in_three_boxes.py::test_three_boxes_of_any_other_date_are_still_left_open"
+  ],
+  "prevention": "Read what a box holds before writing to it, and measure every stage of a run, not only the parts expected to be slow: a figure that explains 17 percent of the time is a sign the rest is unmeasured."
+}

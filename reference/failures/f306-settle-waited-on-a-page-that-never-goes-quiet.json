@@ -1,0 +1,17 @@
+{
+  "id": "f306",
+  "date": "2026-11-02",
+  "class": "A wait for a condition that a site never meets was paid in full every time, and a box the site redrew was waited on and called failed even though it held the answer",
+  "symptom": "Rackspace (Workday): every Next, Apply and Apply Manually press took 10 to 12 seconds and settle(800 ms) took 8.8 s; each text box on My Information took 3 to 4 seconds and was marked failed while holding the right value. About 80 percent of an 8.6-minute run was waiting.",
+  "site": "rackspace.wd1.myworkdayjobs.com (Network Engineer IV - US), 2 November 2026; found with the step timings of f305",
+  "root_cause": "PageAgent.settle waited up to 8 s for the network to go quiet before its own short pause. Workday keeps polling, so the page never goes quiet and every settle of the run (dozens) paid the full 8 s. Separately, Workday draws a new box the moment one is typed into; the agent's locator was stale, its Tab press (2 s) and its readback (1.5 s) each timed out, and a readback that fails was counted as a failed fill.",
+  "why_tests_missed": "No test measured how long a settle takes on a page that never goes quiet, and the redrawn-box case was not in the fixtures; before f303 nothing timed the steps, so the cost could not be seen.",
+  "fix": "A host whose network has not gone quiet within the full wait is waited on for 700 ms from then on (a site that does go quiet keeps the full wait). Tab after a fill waits 800 ms, not 2 s. When the readback fails because the box was redrawn, the page is read again and the fill counts only if a box of that question now shows the answer.",
+  "tests": [
+    "tests/test_a_box_the_site_redraws_is_not_failed.py::test_a_site_that_never_goes_quiet_is_waited_on_once_not_every_time",
+    "tests/test_a_box_the_site_redraws_is_not_failed.py::test_a_site_that_does_go_quiet_keeps_its_full_wait",
+    "tests/test_a_box_the_site_redraws_is_not_failed.py::test_a_box_redrawn_while_typed_into_is_verified_by_a_fresh_read",
+    "tests/test_a_box_the_site_redraws_is_not_failed.py::test_a_redrawn_box_that_lost_the_value_is_still_failed"
+  ],
+  "prevention": "A wait for a condition needs a memory of whether this site ever meets it; time every wait (f305 does) and read the biggest figures first."
+}

@@ -43,6 +43,7 @@ import option_match
 import safety
 from submission_guard import SubmissionGuardV0
 import visible_desktop
+import field_timing
 from config import AppConfig, UserProfile, get_user_profile, resume_to_attach
 from interaction import (
     CARD_COMMIT_TEXT_PATTERN,
@@ -3676,6 +3677,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             logger.warning("Could not open the login page: %s", exc)
             return False
 
+    @field_timing.timed('step', lambda *a, **k: 'sign in from header')
     def sign_in_from_header(self, page: Page, email: str) -> bool:
         """Signs in through a site-header 'Sign In' link (Eightfold/CBTS style)
         when the application form itself shows no login: click it, enter the
@@ -3852,6 +3854,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 continue
         return None
 
+    @field_timing.timed('step', lambda *a, **k: 'sign in with google')
     def sign_in_with_google_if_offered(self, page: Page, email: str) -> bool:
         """Takes the Google option on a page whose whole purpose is signing in.
 
@@ -4266,6 +4269,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         except Exception:
             return False
 
+    @field_timing.timed('step', lambda *a, **k: 'autofill from resume')
     def autofill_from_resume(self, page: Page, resume_path: Path) -> bool:
         """Hands the resume to the site's own 'Autofill from resume' box, when
         the form has one, BEFORE the agent fills anything. The ATS parses it
@@ -4870,6 +4874,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             return ""
         return href or ""
 
+    @field_timing.timed('step', lambda *a, **k: 'open the application')
     def follow_application_entry(self, page: Page, control) -> bool:
         """Follow a posting's real HTTP link with GET, without executing its
         click handlers or relaxing the submission guard. Button-only and
@@ -6855,6 +6860,8 @@ class JobApplicationAssistant(EmailVerificationMixin):
         Submit button gone, or the site's own applications list shows THIS
         job as applied. Eightfold sites (CBTS) show no thank-you message --
         they jump straight to 'My applications'."""
+        if self._a_box_says_it_was_received(page):
+            return True
         if self.find_submit_button(page) is not None:
             return False  # still on the form
         try:
@@ -7180,6 +7187,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             logger.debug("_open_sign_in: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         return False
 
+    @field_timing.timed('step', lambda *a, **k: 'sign in to existing account')
     def sign_in_to_existing_account(self, page: Page, email: str) -> bool:
         """The site says an account already exists for the owner's email.
 
@@ -7241,6 +7249,38 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     "ATS password with the code emailed to you", domain)
         return self._reset_password_with_emailed_code(page, email, password)
 
+
+    _RECEIPT_BOX_JS = r"""() => {
+        const boxes = [...document.querySelectorAll('[role=dialog], [role=alertdialog], [aria-modal=true]')]
+            .filter(box => box.getClientRects().length && getComputedStyle(box).visibility !== 'hidden');
+        const typed = box => [...box.querySelectorAll('input,textarea,select,[contenteditable=true]')]
+            .filter(e => !e.disabled && e.getClientRects().length
+                && !['hidden','search','button','submit','reset'].includes(e.type || '')).length;
+        return boxes.filter(box => typed(box) < 3)
+            .flatMap(box => [...box.querySelectorAll('h1,h2,h3,h4,p,div,span')]
+                .filter(e => e.getClientRects().length)
+                .map(e => (e.innerText || '').replace(/\s+/g, ' ').trim()))
+            .filter(Boolean);
+    }"""
+
+    def _a_box_says_it_was_received(self, page: Page) -> bool:
+        """True when a box over the page (a dialog, a modal) says the application was received.
+
+        Rackspace's Workday goes back to the job posting, whose own Apply button is still there, and shows
+        "Congratulations! Your application has been successfully submitted." in a box over it: the agent saw the
+        Apply button, took the page for the form it had handed over, and never read the receipt (2 November). A box
+        that holds a form, or has something left to finish, is no receipt."""
+        try:
+            texts = page.evaluate(self._RECEIPT_BOX_JS)
+        except Exception as exc:
+            logger.debug("receipt box: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+            return False
+        if not isinstance(texts, list):
+            return False             # a page that cannot say what its boxes hold has no receipt in one
+        texts = [t for t in texts if isinstance(t, str)]
+        import confirmation_text
+        return not any(confirmation_text.STILL_TO_DO.search(t) for t in texts) \
+            and any(len(t) <= 400 and confirmation_text.says_received(t) for t in texts)
 
     def find_submit_button(self, page: Page):
         """Locates the application's own final Submit button so the agent knows

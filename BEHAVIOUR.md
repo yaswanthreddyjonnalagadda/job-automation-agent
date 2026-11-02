@@ -793,6 +793,19 @@ read is timed, and one line per step is added to `data/field_timings.jsonl` on y
 (run, kind of step, the field's label, seconds, ok/failed/error). A line never holds an answer
 or a value, and timing can never stop or slow an application. `python scripts/field_timings.py`
 shows the last run: time by kind of step, and its slowest steps.
+Steps between fields are timed too (sign-in, resume autofill, opening the application,
+writing the resume and cover letter, each Next press, the Workday sections, any wait of a second
+or more), and a failed step says why. A box that already shows the answer -- the site's own
+resume autofill wrote it -- is left alone instead of being typed into again.
+The Date under the name on a voluntary self-identification form (CC-305, veteran status) is
+today's date, whether the page draws it as one box or as Month / Day / Year boxes; a birth date
+or a start date is never filled that way.
+After a click the agent waits for the page's network to go quiet, but only briefly on a site
+that never does (Workday keeps polling), so a press of Next is not 10 seconds of waiting. A box
+the site redraws while it is typed into is checked by reading the page again.
+A receipt shown in a box over a page (Rackspace goes back to the job posting and shows
+"Congratulations! Your application has been successfully submitted." over it) counts as the
+receipt even though the page underneath still has an Apply button.
 
 ## Job boards are not the employer's site
 

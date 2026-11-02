@@ -53,7 +53,8 @@ def report(rows: list[dict], top: int = 15) -> str:
     lines += [f"  {kind:<8} {secs:7.1f} s" for kind, secs in sorted(by_kind.items(), key=lambda kv: -kv[1])]
     lines += ["", f"Slowest {top} steps:"]
     for r in sorted(rows, key=lambda r: -float(r["seconds"]))[:top]:
-        lines.append(f"  {float(r['seconds']):7.1f} s  {r['kind']:<8} {r['result']:<7} {r['label']}")
+        lines.append(f"  {float(r['seconds']):7.1f} s  {r['kind']:<8} {r['result']:<7} {r['label']}"
+                     + (f"   [{r['why']}]" if r.get("why") else ""))
     return "\n".join(lines)
 
 
