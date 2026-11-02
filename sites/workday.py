@@ -425,7 +425,8 @@ class WorkdayAdapter(SiteAdapter):
             field = edu.get("field", "")
             if field and page.locator("input[id$='--fieldOfStudy']").count() > i:
                 if not self.select_from_searchable_input(assistant, page, "--fieldOfStudy",
-                                                         self._field_names(assistant, field), i, keyboard=False):
+                                                         self._field_names(assistant, field), i, keyboard=False,
+                                                         replace_unsupported=True):
                     gave_up.add(i)
             if has_start_year:
                 start_month, start_year = _split_month_year(edu.get("start", ""))
@@ -447,9 +448,10 @@ class WorkdayAdapter(SiteAdapter):
                 if page.locator("input[id$='--schoolName']").count() > i:
                     self.fill_by_id_suffix(assistant, page, "--schoolName", i, edu.get("school", ""))
                 field = edu.get("field", "")
-                if field and i not in gave_up and page.locator("input[id$='--fieldOfStudy']").count() > i                         and not self._multiselect_selection(page, "--fieldOfStudy", index=i):
+                if field and i not in gave_up and page.locator("input[id$='--fieldOfStudy']").count() > i                         and not self._holds_one_of(page, "--fieldOfStudy", i, self._field_names(assistant, field)):
                     if not self.select_from_searchable_input(assistant, page, "--fieldOfStudy",
-                                                             self._field_names(assistant, field), i, keyboard=False):
+                                                             self._field_names(assistant, field), i, keyboard=False,
+                                                             replace_unsupported=True):
                         gave_up.add(i)
                 if has_start_year:
                     start_month, start_year = _split_month_year(edu.get("start", ""))
@@ -848,7 +850,7 @@ class WorkdayAdapter(SiteAdapter):
 
     def select_from_searchable_input(
         self, assistant, page: Page, id_suffix: str, candidates: list[str], index: int = 0,
-        keyboard: bool = True,
+        keyboard: bool = True, replace_unsupported: bool = False,
     ) -> bool:
         """Picks a value from a type-ahead combobox (an <input> that filters
         a list as you type, e.g. 'How Did You Hear About Us?'). Types the
@@ -876,8 +878,16 @@ class WorkdayAdapter(SiteAdapter):
             if existing:
                 import option_match
                 supported = any(option_match.plain(existing) == option_match.plain(candidate) for candidate in candidates)
-                logger.info("%s already holds %r; supported=%s, leaving it alone", id_suffix, existing, supported)
-                return supported
+                if supported or not replace_unsupported:
+                    logger.info("%s already holds %r; supported=%s, leaving it alone", id_suffix, existing, supported)
+                    return supported
+                # An education entry is the agent's own to fill, one subject per degree. A subject left in the box
+                # from another entry (Verizon: the Master's kept the Bachelor's "Electrical Engineering" because the
+                # box was "already filled", 2 November) is not the owner's answer for this one: taken out, then searched.
+                logger.info("%s holds %r, none of this entry's names -- clearing it to search again", id_suffix, existing)
+                self._clear_what_the_search_chose(page, field, id_suffix, multiselect_id, index, candidates)
+                if self._multiselect_selection(page, id_suffix, multiselect_id, index):
+                    return False
 
             deadline = time.monotonic() + SEARCH_BUDGET_SECONDS
             for cand in candidates:
@@ -1012,6 +1022,12 @@ class WorkdayAdapter(SiteAdapter):
         except Exception as exc:
             logger.warning("Searchable selection failed for %s: %s", id_suffix, exc)
             return False
+
+    def _holds_one_of(self, page: Page, id_suffix: str, index: int, names: list[str]) -> bool:
+        """True when the box holds one of these names (and nothing else)."""
+        import option_match
+        held = self._multiselect_selection(page, id_suffix, index=index)
+        return bool(held) and any(option_match.plain(held) == option_match.plain(n) for n in names)
 
     def _clear_what_the_search_chose(self, page: Page, field, id_suffix: str, multiselect_id: str, index: int,
                                      candidates: list[str]) -> None:

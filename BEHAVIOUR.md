@@ -782,6 +782,9 @@ found nothing is not run again by the later correction passes (Verizon, 2 Novemb
 step took up to 12 minutes and left the field blank). If the search itself left a row
 selected on the way (Verizon's "*Other" placeholder), it takes that back, so a box it could
 not fill is blank for the owner, never a near value.
+An education entry's Field of Study that holds a subject which is none of that entry's names
+(a Master's carrying the Bachelor's "Electrical Engineering") is taken out and searched
+for again; the agent no longer takes "already filled" for "filled correctly" there.
 
 ## Job boards are not the employer's site
 
