@@ -144,7 +144,7 @@ ALREADY_APPLIED_TEXT = re.compile(
     re.IGNORECASE)
 # The words that say, beyond doubt, the application has already arrived.
 RECEIVED_TEXT = re.compile(
-    r"we('ve| have) received your application|your application (has been|was) (received|submitted|sent)|"
+    r"we('ve| have) received your (job )?application|your (job )?application (has been|was) (received|submitted|sent)|"
     r"application (was |has been )?successfully submitted|successfully submitted your application", re.IGNORECASE)
 # ... and the ones that say it has not: something is left to do before it counts.
 STILL_TO_DO_TEXT = re.compile(

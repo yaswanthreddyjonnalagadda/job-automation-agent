@@ -441,6 +441,12 @@ names of its boxes, and the AI is asked to name every box your resume or profile
 has are ticked, "None of these" is never ticked together with another box, and if no box is named the group is left 
 for you.
 
+When you press Submit yourself, the agent recognises the employer's receipt in whatever words the site 
+uses ("Your job application has been received. A member of our team will be in touch."), records the application as 
+submitted and closes its browser. A page that only says "thank you for your interest", a policy line about 
+applications "received after 5pm", or a receipt that still tells you to do something ("Verify your email to finish 
+applying") is never taken for a receipt.
+
 ## An account that already exists
 
 When an employer's page says an account already exists for your email, the

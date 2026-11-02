@@ -6908,12 +6908,21 @@ class JobApplicationAssistant(EmailVerificationMixin):
             )
         except Exception:
             headings = []
-        if any(self._CONFIRMATION_HEADING_RE.match(text) for text in headings) and not page.evaluate(
+        looks_like_a_form = page.evaluate(
             """() => [...document.querySelectorAll('input,textarea,select,[contenteditable=true]')]
                 .filter(e => !e.disabled && e.getClientRects().length
                     && getComputedStyle(e).visibility !== 'hidden'
                     && !['hidden','search','button','submit','reset'].includes(e.type || '')).length >= 3"""
-        ):
+        )
+        if any(self._CONFIRMATION_HEADING_RE.match(text) for text in headings) and not looks_like_a_form:
+            return True
+        # A sentence that says the application was received, in whatever words the site uses: Fastly's "Your job
+        # application has been received." sat under "Thank you for your interest in working at Fastly!", which no
+        # fixed heading matched, and a submitted application stayed "ready to submit" (f297). One definition of the
+        # wording, shared with the other readers (confirmation_text); a page with something left to finish is no receipt.
+        import confirmation_text
+        if not looks_like_a_form and not any(confirmation_text.STILL_TO_DO.search(text) for text in headings) \
+                and any(len(text) <= 400 and confirmation_text.says_received(text) for text in headings):
             return True
         if not job_title:
             return False
