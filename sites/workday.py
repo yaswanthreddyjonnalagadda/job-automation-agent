@@ -57,6 +57,11 @@ def posting_state(url: str, timeout: float = 8.0) -> Optional[str]:
 
 logger = logging.getLogger("browser_automation")
 
+# The longest one search-and-pick list is worked on before the owner is told it is not in the list. Every name the owner
+# has (five for a school, four for a subject) is tried in turn, and each try may scroll a long list and open category
+# after category; with nothing to stop it, one list that held none of them took 4 to 12 minutes (Verizon, 2 November).
+SEARCH_BUDGET_SECONDS = 60.0
+
 # data-automation-id values used by the wizard helpers.
 SIGN_IN_SUBMIT = "button[data-automation-id='signInSubmitButton']"
 DELETE_FILE = "button[data-automation-id='delete-file']"
@@ -384,6 +389,7 @@ class WorkdayAdapter(SiteAdapter):
         school_probe = "input[id$='--schoolName'], [data-automation-id='formField-school']"
         has_start_year = False
         has_completion_year = False
+        gave_up: set[int] = set()       # entries whose Field of Study list held none of the owner's names
         for i, edu in enumerate(education):
             self._ensure_entry_slot(assistant, page, "Education", school_probe, i)
             if i == 0:
@@ -418,8 +424,10 @@ class WorkdayAdapter(SiteAdapter):
             # option from the tenant's list.
             field = edu.get("field", "")
             if field and page.locator("input[id$='--fieldOfStudy']").count() > i:
-                self.select_from_searchable_input(assistant, page, "--fieldOfStudy",
-                                                  self._field_names(assistant, field), i, keyboard=False)
+                if not self.select_from_searchable_input(assistant, page, "--fieldOfStudy",
+                                                         self._field_names(assistant, field), i, keyboard=False,
+                                                         replace_unsupported=True):
+                    gave_up.add(i)
             if has_start_year:
                 start_month, start_year = _split_month_year(edu.get("start", ""))
                 if start_year:
@@ -440,9 +448,11 @@ class WorkdayAdapter(SiteAdapter):
                 if page.locator("input[id$='--schoolName']").count() > i:
                     self.fill_by_id_suffix(assistant, page, "--schoolName", i, edu.get("school", ""))
                 field = edu.get("field", "")
-                if field and page.locator("input[id$='--fieldOfStudy']").count() > i and not self._multiselect_selection(page, "--fieldOfStudy", index=i):
-                    self.select_from_searchable_input(assistant, page, "--fieldOfStudy",
-                                                  self._field_names(assistant, field), i, keyboard=False)
+                if field and i not in gave_up and page.locator("input[id$='--fieldOfStudy']").count() > i                         and not self._holds_one_of(page, "--fieldOfStudy", i, self._field_names(assistant, field)):
+                    if not self.select_from_searchable_input(assistant, page, "--fieldOfStudy",
+                                                             self._field_names(assistant, field), i, keyboard=False,
+                                                             replace_unsupported=True):
+                        gave_up.add(i)
                 if has_start_year:
                     start_month, start_year = _split_month_year(edu.get("start", ""))
                     if start_year and not self._date_year_is(assistant, page, "education", "firstYearAttended", i, start_year):
@@ -840,7 +850,7 @@ class WorkdayAdapter(SiteAdapter):
 
     def select_from_searchable_input(
         self, assistant, page: Page, id_suffix: str, candidates: list[str], index: int = 0,
-        keyboard: bool = True,
+        keyboard: bool = True, replace_unsupported: bool = False,
     ) -> bool:
         """Picks a value from a type-ahead combobox (an <input> that filters
         a list as you type, e.g. 'How Did You Hear About Us?'). Types the
@@ -868,10 +878,23 @@ class WorkdayAdapter(SiteAdapter):
             if existing:
                 import option_match
                 supported = any(option_match.plain(existing) == option_match.plain(candidate) for candidate in candidates)
-                logger.info("%s already holds %r; supported=%s, leaving it alone", id_suffix, existing, supported)
-                return supported
+                if supported or not replace_unsupported:
+                    logger.info("%s already holds %r; supported=%s, leaving it alone", id_suffix, existing, supported)
+                    return supported
+                # An education entry is the agent's own to fill, one subject per degree. A subject left in the box
+                # from another entry (Verizon: the Master's kept the Bachelor's "Electrical Engineering" because the
+                # box was "already filled", 2 November) is not the owner's answer for this one: taken out, then searched.
+                logger.info("%s holds %r, none of this entry's names -- clearing it to search again", id_suffix, existing)
+                self._clear_what_the_search_chose(page, field, id_suffix, multiselect_id, index, candidates)
+                if self._multiselect_selection(page, id_suffix, multiselect_id, index):
+                    return False
 
+            deadline = time.monotonic() + SEARCH_BUDGET_SECONDS
             for cand in candidates:
+                if time.monotonic() > deadline:
+                    logger.warning("SEARCH_BUDGET: %s -- %.0f s spent on this list without a match; stopping", id_suffix,
+                                   SEARCH_BUDGET_SECONDS)
+                    break
                 # Keyboard first: typing already opens the list with the best
                 # match highlighted, so ArrowDown+Enter commits it. Clicking
                 # the option needs the list to still be open, and reopening it
@@ -926,9 +949,9 @@ class WorkdayAdapter(SiteAdapter):
                         if k is None or page.locator(
                                 f'[data-automation-id="responsiveMonikerPrompt"][data-associated-widget={json.dumps(multiselect_id)}] '
                                 '[data-uxi-multiselectlistitem-type="2"]').count():
-                            chosen = self._choose_scrolled_prompt(assistant, page, multiselect_id, cand)
+                            chosen = self._choose_scrolled_prompt(assistant, page, multiselect_id, cand, deadline)
                             if not chosen:
-                                chosen = self._choose_nested_prompt(assistant, page, multiselect_id, cand)
+                                chosen = self._choose_nested_prompt(assistant, page, multiselect_id, cand, deadline)
                             if chosen and self._searchable_value_committed(
                                     assistant, page, id_suffix, chosen, multiselect_id, index, exact=True):
                                 logger.info('FIELD_ACTION: application field handled')
@@ -973,6 +996,7 @@ class WorkdayAdapter(SiteAdapter):
                 except Exception as exc:
                     logger.debug("WORKDAY: clearing school field: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
                 page.keyboard.press("Escape")       # none of the owner's names is in the list: left for the owner
+                self._clear_what_the_search_chose(page, field, id_suffix, multiselect_id, index, candidates)
                 return False
             # None of our wordings matched this tenant's list. Read what it
             # actually offers and let Claude pick the equivalent, so a new
@@ -999,8 +1023,36 @@ class WorkdayAdapter(SiteAdapter):
             logger.warning("Searchable selection failed for %s: %s", id_suffix, exc)
             return False
 
+    def _holds_one_of(self, page: Page, id_suffix: str, index: int, names: list[str]) -> bool:
+        """True when the box holds one of these names (and nothing else)."""
+        import option_match
+        held = self._multiselect_selection(page, id_suffix, index=index)
+        return bool(held) and any(option_match.plain(held) == option_match.plain(n) for n in names)
+
+    def _clear_what_the_search_chose(self, page: Page, field, id_suffix: str, multiselect_id: str, index: int,
+                                     candidates: list[str]) -> None:
+        """Takes back a row the search itself clicked while looking, so the box is left empty for the owner.
+
+        The search starts only when the box is empty (a box that already holds a value returns early), so anything it
+        holds now was put there by the search's own exploration of the list's categories -- Verizon's Field of Study
+        ended on the placeholder row "*Other" while the owner's subject was never found (2 November). A placeholder
+        taken for the owner's subject is worse than a blank, which the owner sees and fills."""
+        import option_match
+        try:
+            for _ in range(4):
+                held = self._multiselect_selection(page, id_suffix, multiselect_id, index)
+                if not held or any(option_match.plain(held) == option_match.plain(c) for c in candidates):
+                    return
+                field.click(timeout=2_000)
+                page.keyboard.press("Backspace")        # a Workday multiselect drops its last pill on Backspace
+                page.wait_for_timeout(300)
+            logger.warning("WORKDAY: %s still holds %r, which is none of the owner's names",
+                           id_suffix, self._multiselect_selection(page, id_suffix, multiselect_id, index))
+        except Exception as exc:
+            logger.debug("WORKDAY: clearing the search's own pick: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+
     @staticmethod
-    def _choose_scrolled_prompt(assistant, page, multiselect_id: str, wanted: str):
+    def _choose_scrolled_prompt(assistant, page, multiselect_id: str, wanted: str, deadline: float | None = None):
         """Read virtualized rows by scrolling this input's own popup."""
         import option_match
         prompt = page.locator(
@@ -1015,6 +1067,8 @@ class WorkdayAdapter(SiteAdapter):
         # labels beyond the first viewport; never pick a partial page's first hit.
         offered = []
         for _ in range(80):
+            if deadline is not None and time.monotonic() > deadline:
+                break
             rows = prompt.locator('[data-automation-id="promptOption"]')
             for i in range(rows.count()):
                 row = rows.nth(i)
@@ -1050,7 +1104,7 @@ class WorkdayAdapter(SiteAdapter):
         return None
 
     @staticmethod
-    def _choose_nested_prompt(assistant, page, multiselect_id: str, wanted: str):
+    def _choose_nested_prompt(assistant, page, multiselect_id: str, wanted: str, deadline: float | None = None):
         """Explore marked category nodes; commit only a matching offered leaf."""
         import option_match
         prompt = page.locator(
@@ -1060,11 +1114,11 @@ class WorkdayAdapter(SiteAdapter):
         budget = [20]
 
         def visit(depth):
-            if depth > 4 or budget[0] <= 0:
+            if depth > 4 or budget[0] <= 0 or (deadline is not None and time.monotonic() > deadline):
                 return None
             # Each category has its own virtual list; matching only the rows
             # mounted immediately after opening it misses later leaf options.
-            chosen = WorkdayAdapter._choose_scrolled_prompt(assistant, page, multiselect_id, wanted)
+            chosen = WorkdayAdapter._choose_scrolled_prompt(assistant, page, multiselect_id, wanted, deadline)
             if chosen:
                 return chosen
             rows = prompt.locator('[data-automation-id="promptOption"]')
