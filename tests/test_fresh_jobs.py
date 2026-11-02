@@ -313,3 +313,22 @@ def test_workday_paging_has_a_limit(monkeypatch):
     monkeypatch.setattr(ds.requests, "get", lambda url, **kw: reply({}, status=404))
     ds.fetch_workday_feed(WORKDAY_ENTRY, ["Network Engineer"], now=NOW, max_details=1)
     assert len(asked) <= 5
+
+
+@pytest.mark.parametrize("titles,expected", [
+    (["Network Engineer", "Cloud Network Engineer", "Senior Network Engineer"], ["Network Engineer"]),
+    (["Cloud Network Engineer", "Site Reliability Engineer"], ["Cloud Network Engineer", "Site Reliability Engineer"]),
+    (["Network Engineer", "network engineer"], ["Network Engineer"]),
+    (["Senior Network Engineer", "Network Engineer"], ["Network Engineer"]),
+    ([], []),
+])
+def test_a_title_that_only_narrows_another_is_not_searched_separately(titles, expected):
+    """A search for "Network Engineer" already returns every "Senior Network Engineer": asking for both only repeats it."""
+    assert ds.minimal_titles(titles) == expected
+
+
+def test_workday_is_searched_once_per_distinct_title(monkeypatch):
+    searched = []
+    monkeypatch.setattr(ds.requests, "post", lambda url, json=None, **kw: searched.append(json["searchText"]) or reply({"jobPostings": []}))
+    ds.fetch_workday_feed(WORKDAY_ENTRY, ["Network Engineer", "Cloud Network Engineer", "Senior Network Engineer"], now=NOW)
+    assert searched == ["Network Engineer"]

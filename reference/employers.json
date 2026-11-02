@@ -1,0 +1,416 @@
+{
+  "_about": "Multinational employers (not consultancies, IT-services firms or government contractors) that publish their job list openly and have offices in India. Each address was tested live on 2 November 2026. The agent scans these with your own list (data/target_companies.json) and the employers you have applied through. Whether a company sponsors a visa is read from each posting, not assumed from this list.",
+  "employers": [
+    {
+      "company": "Snowflake",
+      "ats": "ashby",
+      "token": "snowflake"
+    },
+    {
+      "company": "Airbnb",
+      "ats": "greenhouse",
+      "token": "airbnb"
+    },
+    {
+      "company": "Commvault",
+      "ats": "greenhouse",
+      "token": "commvault"
+    },
+    {
+      "company": "Databricks",
+      "ats": "greenhouse",
+      "token": "databricks"
+    },
+    {
+      "company": "Elastic",
+      "ats": "greenhouse",
+      "token": "elastic"
+    },
+    {
+      "company": "GitLab",
+      "ats": "greenhouse",
+      "token": "gitlab"
+    },
+    {
+      "company": "JFrog",
+      "ats": "greenhouse",
+      "token": "jfrog"
+    },
+    {
+      "company": "Netskope",
+      "ats": "greenhouse",
+      "token": "netskope"
+    },
+    {
+      "company": "New Relic",
+      "ats": "greenhouse",
+      "token": "newrelic"
+    },
+    {
+      "company": "Pure Storage",
+      "ats": "greenhouse",
+      "token": "purestorage"
+    },
+    {
+      "company": "Qualtrics",
+      "ats": "greenhouse",
+      "token": "qualtrics"
+    },
+    {
+      "company": "Rubrik",
+      "ats": "greenhouse",
+      "token": "rubrik"
+    },
+    {
+      "company": "Twilio",
+      "ats": "greenhouse",
+      "token": "twilio"
+    },
+    {
+      "company": "Zscaler",
+      "ats": "greenhouse",
+      "token": "zscaler"
+    },
+    {
+      "company": "Coupa",
+      "ats": "lever",
+      "token": "coupa"
+    },
+    {
+      "company": "3M",
+      "ats": "workday",
+      "host": "3m.wd1.myworkdayjobs.com",
+      "tenant": "3m",
+      "site": "Search"
+    },
+    {
+      "company": "Abbott",
+      "ats": "workday",
+      "host": "abbott.wd5.myworkdayjobs.com",
+      "tenant": "abbott",
+      "site": "abbottcareers"
+    },
+    {
+      "company": "Adobe",
+      "ats": "workday",
+      "host": "adobe.wd5.myworkdayjobs.com",
+      "tenant": "adobe",
+      "site": "external_experienced"
+    },
+    {
+      "company": "Analog Devices",
+      "ats": "workday",
+      "host": "analogdevices.wd1.myworkdayjobs.com",
+      "tenant": "analogdevices",
+      "site": "External"
+    },
+    {
+      "company": "Applied Materials",
+      "ats": "workday",
+      "host": "amat.wd1.myworkdayjobs.com",
+      "tenant": "amat",
+      "site": "External"
+    },
+    {
+      "company": "AT&T",
+      "ats": "workday",
+      "host": "att.wd1.myworkdayjobs.com",
+      "tenant": "att",
+      "site": "ATTGeneral"
+    },
+    {
+      "company": "Autodesk",
+      "ats": "workday",
+      "host": "autodesk.wd1.myworkdayjobs.com",
+      "tenant": "autodesk",
+      "site": "Ext"
+    },
+    {
+      "company": "Baker Hughes",
+      "ats": "workday",
+      "host": "bakerhughes.wd5.myworkdayjobs.com",
+      "tenant": "bakerhughes",
+      "site": "BakerHughes"
+    },
+    {
+      "company": "Boeing",
+      "ats": "workday",
+      "host": "boeing.wd1.myworkdayjobs.com",
+      "tenant": "boeing",
+      "site": "EXTERNAL_CAREERS"
+    },
+    {
+      "company": "Broadcom",
+      "ats": "workday",
+      "host": "broadcom.wd1.myworkdayjobs.com",
+      "tenant": "broadcom",
+      "site": "External_Career"
+    },
+    {
+      "company": "Capital One",
+      "ats": "workday",
+      "host": "capitalone.wd12.myworkdayjobs.com",
+      "tenant": "capitalone",
+      "site": "Capital_One"
+    },
+    {
+      "company": "Caterpillar",
+      "ats": "workday",
+      "host": "cat.wd5.myworkdayjobs.com",
+      "tenant": "cat",
+      "site": "CaterpillarCareers"
+    },
+    {
+      "company": "Chevron",
+      "ats": "workday",
+      "host": "chevron.wd5.myworkdayjobs.com",
+      "tenant": "chevron",
+      "site": "jobs"
+    },
+    {
+      "company": "Cisco",
+      "ats": "workday",
+      "host": "cisco.wd5.myworkdayjobs.com",
+      "tenant": "cisco",
+      "site": "Cisco_Careers"
+    },
+    {
+      "company": "Coca-Cola",
+      "ats": "workday",
+      "host": "coke.wd1.myworkdayjobs.com",
+      "tenant": "coke",
+      "site": "coca-cola-careers"
+    },
+    {
+      "company": "Comcast",
+      "ats": "workday",
+      "host": "comcast.wd115.myworkdayjobs.com",
+      "tenant": "comcast",
+      "site": "Comcast_Careers"
+    },
+    {
+      "company": "CrowdStrike",
+      "ats": "workday",
+      "host": "crowdstrike.wd5.myworkdayjobs.com",
+      "tenant": "crowdstrike",
+      "site": "crowdstrikecareers"
+    },
+    {
+      "company": "Equinix",
+      "ats": "workday",
+      "host": "equinix.wd1.myworkdayjobs.com",
+      "tenant": "equinix",
+      "site": "External"
+    },
+    {
+      "company": "Fidelity Investments",
+      "ats": "workday",
+      "host": "fmr.wd1.myworkdayjobs.com",
+      "tenant": "fmr",
+      "site": "FidelityCareers"
+    },
+    {
+      "company": "General Motors",
+      "ats": "workday",
+      "host": "generalmotors.wd5.myworkdayjobs.com",
+      "tenant": "generalmotors",
+      "site": "Careers_GM"
+    },
+    {
+      "company": "Genesys",
+      "ats": "workday",
+      "host": "genesys.wd1.myworkdayjobs.com",
+      "tenant": "genesys",
+      "site": "Genesys"
+    },
+    {
+      "company": "Hewlett Packard Enterprise",
+      "ats": "workday",
+      "host": "hpe.wd5.myworkdayjobs.com",
+      "tenant": "hpe",
+      "site": "Jobsathpe"
+    },
+    {
+      "company": "HP Inc.",
+      "ats": "workday",
+      "host": "hp.wd5.myworkdayjobs.com",
+      "tenant": "hp",
+      "site": "ExternalCareerSite"
+    },
+    {
+      "company": "Intel",
+      "ats": "workday",
+      "host": "intel.wd1.myworkdayjobs.com",
+      "tenant": "intel",
+      "site": "External"
+    },
+    {
+      "company": "Johnson & Johnson",
+      "ats": "workday",
+      "host": "jj.wd5.myworkdayjobs.com",
+      "tenant": "jj",
+      "site": "JJ"
+    },
+    {
+      "company": "KLA",
+      "ats": "workday",
+      "host": "kla.wd1.myworkdayjobs.com",
+      "tenant": "kla",
+      "site": "Search"
+    },
+    {
+      "company": "Marvell",
+      "ats": "workday",
+      "host": "marvell.wd1.myworkdayjobs.com",
+      "tenant": "marvell",
+      "site": "MarvellCareers"
+    },
+    {
+      "company": "Mastercard",
+      "ats": "workday",
+      "host": "mastercard.wd1.myworkdayjobs.com",
+      "tenant": "mastercard",
+      "site": "CorporateCareers"
+    },
+    {
+      "company": "Medtronic",
+      "ats": "workday",
+      "host": "medtronic.wd1.myworkdayjobs.com",
+      "tenant": "medtronic",
+      "site": "MedtronicCareers"
+    },
+    {
+      "company": "Merck",
+      "ats": "workday",
+      "host": "msd.wd5.myworkdayjobs.com",
+      "tenant": "msd",
+      "site": "SearchJobs"
+    },
+    {
+      "company": "Micron",
+      "ats": "workday",
+      "host": "micron.wd1.myworkdayjobs.com",
+      "tenant": "micron",
+      "site": "External"
+    },
+    {
+      "company": "Nike",
+      "ats": "workday",
+      "host": "nike.wd1.myworkdayjobs.com",
+      "tenant": "nike",
+      "site": "nke"
+    },
+    {
+      "company": "NVIDIA",
+      "ats": "workday",
+      "host": "nvidia.wd5.myworkdayjobs.com",
+      "tenant": "nvidia",
+      "site": "NVIDIAExternalCareerSite"
+    },
+    {
+      "company": "Palo Alto Networks",
+      "ats": "workday",
+      "host": "paloaltonetworks.wd5.myworkdayjobs.com",
+      "tenant": "paloaltonetworks",
+      "site": "panwexternalcareers"
+    },
+    {
+      "company": "PayPal",
+      "ats": "workday",
+      "host": "paypal.wd1.myworkdayjobs.com",
+      "tenant": "paypal",
+      "site": "jobs"
+    },
+    {
+      "company": "Pfizer",
+      "ats": "workday",
+      "host": "pfizer.wd1.myworkdayjobs.com",
+      "tenant": "pfizer",
+      "site": "PfizerCareers"
+    },
+    {
+      "company": "Philips",
+      "ats": "workday",
+      "host": "philips.wd3.myworkdayjobs.com",
+      "tenant": "philips",
+      "site": "jobs-and-careers"
+    },
+    {
+      "company": "Procter & Gamble",
+      "ats": "workday",
+      "host": "pg.wd5.myworkdayjobs.com",
+      "tenant": "pg",
+      "site": "1000"
+    },
+    {
+      "company": "Qualcomm",
+      "ats": "workday",
+      "host": "qualcomm.wd12.myworkdayjobs.com",
+      "tenant": "qualcomm",
+      "site": "External"
+    },
+    {
+      "company": "Salesforce",
+      "ats": "workday",
+      "host": "salesforce.wd12.myworkdayjobs.com",
+      "tenant": "salesforce",
+      "site": "External_Career_Site"
+    },
+    {
+      "company": "Shell",
+      "ats": "workday",
+      "host": "shell.wd3.myworkdayjobs.com",
+      "tenant": "shell",
+      "site": "ShellCareers"
+    },
+    {
+      "company": "Siemens Healthineers",
+      "ats": "workday",
+      "host": "onehealthineers.wd3.myworkdayjobs.com",
+      "tenant": "onehealthineers",
+      "site": "SHSJB"
+    },
+    {
+      "company": "T-Mobile",
+      "ats": "workday",
+      "host": "tmobile.wd1.myworkdayjobs.com",
+      "tenant": "tmobile",
+      "site": "External"
+    },
+    {
+      "company": "Target",
+      "ats": "workday",
+      "host": "target.wd5.myworkdayjobs.com",
+      "tenant": "target",
+      "site": "targetcareers"
+    },
+    {
+      "company": "Thermo Fisher",
+      "ats": "workday",
+      "host": "thermofisher.wd5.myworkdayjobs.com",
+      "tenant": "thermofisher",
+      "site": "ThermoFisherCareers"
+    },
+    {
+      "company": "Visa",
+      "ats": "workday",
+      "host": "visa.wd5.myworkdayjobs.com",
+      "tenant": "visa",
+      "site": "Visa"
+    },
+    {
+      "company": "Workday",
+      "ats": "workday",
+      "host": "workday.wd5.myworkdayjobs.com",
+      "tenant": "workday",
+      "site": "Workday"
+    },
+    {
+      "company": "Zoom",
+      "ats": "workday",
+      "host": "zoom.wd5.myworkdayjobs.com",
+      "tenant": "zoom",
+      "site": "Zoom"
+    }
+  ]
+}

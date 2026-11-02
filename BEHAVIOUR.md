@@ -122,6 +122,10 @@ the page never guesses. A job you have already applied to, skipped, been turned 
 dismissed is left out (the tracker is only read). ADP employers are not read yet: ADP's list has no link
 to a single job. When your profile says you are open to relocation, a job with a wanted title elsewhere in your
 country counts (a little below one in your own place or remote); a job in another country does not.
+The scan also reads the job lists of about sixty large multinational employers with offices in India
+(Cisco, Intel, NVIDIA, Salesforce, Adobe, Capital One, Visa and others; the list is `reference/employers.json`) and
+never a consultancy, IT-services firm or government contractor. Whether one of them sponsors a visa is read from
+each posting, not assumed.
 
 Each card shows how long ago the job was posted (or found, when the site gives no date),
 a "New" badge for the last three days, the first place with "+N more",
