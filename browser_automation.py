@@ -4581,6 +4581,10 @@ class JobApplicationAssistant(EmailVerificationMixin):
                         if (!visible(el) || el.disabled) continue;
                         const l = labelOf(el);
                         let value = (el.value || '').trim();
+                        // A select whose chosen option shows no text has nothing chosen, whatever its value is:
+                        // Angular's unknown option is <option value="?"></option> (Bitdeer, f287).
+                        if (el.tagName === 'SELECT' && el.selectedOptions.length
+                            && !(el.selectedOptions[0].text || '').trim()) value = '';
                         if (!value) {
                             // A react-select combobox clears its search input
                             // once you choose; the choice sits beside it.
@@ -6831,6 +6835,10 @@ class JobApplicationAssistant(EmailVerificationMixin):
         r"submission\s+received",
         r"(?:your\s+)?application\s+was\s+successfully\s+submitted",
         r"successfully\s+submitted\s+your\s+application",
+        # The receipt followed by the employer's own closing sentence ("We'll contact you if there are next steps."):
+        # only the employer speaking in the first person future, never advice to the visitor (f286).
+        r"your\s+application\s+(?:has\s+been|was)\s+(?:successfully\s+)?(?:submitted|sent|received)(?:\s+successfully)?[.!]\s+"
+        r"we(?:['’]ll|\s+will)\s+[^.!?]{0,80}[.!]?",
     )
     _CONFIRMATION_HEADING_RE = re.compile(
         r"^\s*(?:" + "|".join(_CONFIRMATION_HEADING_PHRASES) + r")\s*[!.✔✓]{0,3}\s*$",

@@ -226,9 +226,10 @@ CONCEPTS: dict[str, dict[str, Any]] = {
     "VISA_SPONSORSHIP": {
         "patterns": [
             r"\b(?:visa\s+sponsorship|require\s+sponsorship|need\s+sponsorship|future\s+sponsorship|sponsorship\s+now\s+or\s+in\s+the\s+future|sponsor\s+you\s+for\s+a\s+visa|sponsor\s+for\s+employment)\b",
-            r"\bsponsor\b",
+            r"\b(?:require|need|seek)\b.{0,50}\bsponsorship\b",
+            r"\bsponsor(?:ship)?\b",
         ],
-        "negative": r"legally\s+authori[sz]ed|eligible\s+to\s+work",
+        "negative": r"legally\s+authori[sz]ed|eligible\s+to\s+work|\b(?:what|which)\s+type\b|\bwhich\s+visa\b|\bspecify\s+(?:the\s+)?type\b",
     },
     "CITIZENSHIP": {
         "patterns": [

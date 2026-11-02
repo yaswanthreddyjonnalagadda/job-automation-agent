@@ -591,8 +591,11 @@ def parse_snapshot(snapshot: str) -> list[Control]:
             # rather than in it ("Yes." next to "Would you relocate to London?",
             # "+1" next to "Country"). The text right beside it, at the same
             # level, is that choice -- unless it is the question's own label.
+            # An unnamed list under a heading that reads as a question is that question's list: the heading is its
+            # label, never what it holds (Bitdeer's "Which location are you applying for *", f287).
             if not shown and role in ("combobox", "listbox") and last_text and last_text_indent == indent \
-                    and not _same_question(last_text, name):
+                    and not _same_question(last_text, name) \
+                    and not (not name and _INTRODUCES_CHOICES.search(last_text)):
                 shown = last_text
             # If previous combobox tentatively adopted an upcoming field label as value, revert it
             if controls and controls[-1].role in ("combobox", "listbox") and controls[-1].value \
@@ -848,6 +851,15 @@ def _detail_field(question: str) -> str:
         if pattern.search(question):
             return field
     return ""
+
+
+_ASKS_FOR_DETAIL = re.compile(r"\b(?:specify|describe|explain|elaborate|list)\b|\bwhat\s+type\b", re.IGNORECASE)
+
+
+def _asks_for_detail_in_text(control, question: str) -> bool:
+    """A free-text box (no choices) whose question asks to specify, describe or explain: Yes or No is not its answer."""
+    return not control.options and control.role in ("textbox", "textarea", "searchbox") \
+        and bool(_ASKS_FOR_DETAIL.search(question or ""))
 
 
 # Answers the owner has settled once and for all, and the profile field that
@@ -3174,6 +3186,8 @@ class PageAgent:
         )
         # The options on offer settle what a location question asks.
         concept = concept_matcher.confirm_concept(concept, control.options)
+        if concept == "VISA_SPONSORSHIP" and _asks_for_detail_in_text(control, question):
+            concept = None      # "please specify the type" wants the type, not Yes or No (f285)
         if concept:
             val, src = concept_matcher.resolve_profile_value(
                 concept=concept,
@@ -3231,6 +3245,10 @@ class PageAgent:
                 continue
             held = getattr(self.profile, standing, None)
             if isinstance(held, bool):
+                # A settled Yes/No answers a yes/no question. A free-text box that asks to specify, describe or
+                # explain is not one: Color Health's "please specify the type (H-1B, TN ...)" held "Yes" (f285).
+                if _asks_for_detail_in_text(control, question):
+                    continue
                 if control.options and standing == "open_to_relocation" and held:
                     # "No, but willing to relocate" -- never "No, and not willing to relocate",
                     # which also has "relocate" in it.
@@ -6909,6 +6927,32 @@ class PageAgent:
             logger.debug("reload of an undrawn page: %s", str(exc).splitlines()[0][:100])
             return False
 
+    def _start_from_inline_email_box(self, page, tab, refused_label: str) -> str:
+        """The posting's own 'Email address' + 'Start application' pair, used when its Apply button was refused (f284).
+
+        Color Health on CareerPuck: the posting shows an Apply button and beside it an email box with a 'Start
+        application' button -- the site's way in. The guard refuses Apply while an input is on the page, so the
+        agent stopped. Only a button reading 'Start/Begin application' qualifies, and only beside exactly one
+        email box; a job-alert box ('Subscribe', 'Submit') is never filled or pressed."""
+        if not re.match(r"^\s*apply\b", refused_label or "", re.IGNORECASE):
+            return ""
+        try:
+            go = tab.get_by_role("button", name=re.compile(r"^\s*(start|begin) (your )?application\b", re.IGNORECASE))
+            boxes = tab.get_by_role("textbox", name=re.compile(r"e-?mail", re.IGNORECASE)).filter(visible=True)
+            if go.count() != 1 or boxes.count() != 1 or not go.first.is_visible():
+                return ""
+            email = str(getattr(self.profile, "email", "") or getattr(self.config, "ats_email", "") or "")
+            if not email:
+                return ""
+            fill_and_dispatch(boxes.first, email)
+            go.first.click(timeout=10_000)
+            logger.info("The posting's Apply was refused -- started the application from its email box instead")
+            self.settle(page, 2_500)
+            return "the application was started from the posting's own email box"
+        except Exception as exc:
+            logger.debug("inline email start: %s", str(exc).splitlines()[0][:100])
+            return ""
+
     def press_next(self, page, plan: PagePlan, controls: list[Control]) -> tuple[str, object, str]:
         """("moved" | "submitted" | "retry" | "stop", page, what happened)."""
         lock_factory = getattr(self.assistant, "_execution_lock", None)
@@ -7176,6 +7220,9 @@ class PageAgent:
         else:
             self.locate(page, control.ref).click(timeout=10_000)
         if guard is not None and denials_before is not None and guard.denial_count(tab) > denials_before:
+            started = self._start_from_inline_email_box(page, tab, label)
+            if started:
+                return "moved", page, started
             logger.error("SUBMISSION_GUARD_V0_DENIED: PageAgent stopped after an intercepted submit attempt")
             return "stop", page, "final submission is only available through the verified gateway or human handoff"
         if submit_word:

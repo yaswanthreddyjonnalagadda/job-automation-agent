@@ -160,6 +160,25 @@ def available_locations(ask: Ask, q: str):
     return ("; ".join(chosen), "profile.available_work_locations") if chosen else None
 
 
+def office_applying_for(ask: Ask, q: str):
+    """'Which location are you applying for?' with a list of offices: the one office in a state the owner can work (f287).
+
+    Offices read 'City, ST'. The owner's available places and locations are matched by US state through
+    geo_reference, so no state is named here. Two fitting offices, or none, leave the choice to the owner."""
+    if not ask.options or not re.search(r"\b(?:what|which)\b[^?]{0,20}\blocations?\b[^?]{0,30}\bapplying\b", q):
+        return None
+    places = [p.strip() for p in re.split(r"[,;]", _say(ask.profile, "available_work_locations")) if p.strip()]
+    places += [str(p).strip() for p in (getattr(ask.profile, "locations", ()) or ())]
+    states = {code for code in (geo_reference.us_state_code(p) for p in places) if code}
+    fitting = []
+    for option in ask.options:
+        region = re.split(r"[,(]", option)[1:2]
+        code = geo_reference.us_state_code(region[0].strip()) if region else None
+        if code and code in states:
+            fitting.append(option)
+    return (fitting[0], "profile.available_work_locations") if len(fitting) == 1 else None
+
+
 _FLUENCY = re.compile(r"\b(?:fluen\w*|proficien\w*|speak|spoken|native|conversational|business[- ]level|advanced (?:level )?of?|english level)\b")
 
 
@@ -485,7 +504,7 @@ def acknowledgement(ask: Ask, q: str):
     return acks[0], "profile.accept_application_privacy_prompts"
 
 
-FAMILIES = (employer_name, names, current_location, available_locations, language_fluency, country_eligibility, ties_to_the_company, degree,
+FAMILIES = (employer_name, names, current_location, available_locations, office_applying_for, language_fluency, country_eligibility, ties_to_the_company, degree,
             how_heard, communication, work_arrangement, marketing_alerts, optional_name_extra, clearance, programming_language,
             years_bins, experience, acknowledgement)
 
