@@ -15,6 +15,7 @@ from typing import Any, Optional
 
 import anthropic
 
+import field_timing
 from config import AppConfig, UserProfile
 from jd_analyzer import JobDescription
 from resume_parser import ResumeData
@@ -167,6 +168,7 @@ class ClaudeClient:
     def _model(self) -> str:
         return self._config.anthropic_model
 
+    @field_timing.timed("model", lambda self, *a, **k: self.PROVIDER)
     def _call(self, *, system: str, user_message: str, max_tokens: int = 2000) -> str:
         last_error: Exception | None = None
         max_retries = getattr(self._config, "claude_max_retries", 3)
