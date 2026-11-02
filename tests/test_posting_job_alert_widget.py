@@ -241,14 +241,13 @@ def test_how_did_you_hear_matches_job_site_or_social_media_and_repeated_entries(
     )
     assert val == "Managed routers"
 
-    # Field of study equivalent: Computer Science -> Computer and Information Science
-    assert (
-        option_match.best_option(
-            ["Please Select", "Electrical Engineering", "Computer and Information Science"],
-            "Computer Science",
-        )
-        == 2
-    )
+    # A field of study is never swapped for a near one on the agent's own say-so (the built-in equivalents were removed
+    # in PR #48): Computer Science is not "Computer and Information Science" unless the owner lists it as a substitute
+    # (answer_alternatives, read by sites.workday._field_names).
+    assert option_match.best_option(
+        ["Please Select", "Electrical Engineering", "Computer and Information Science"],
+        "Computer Science",
+    ) is None
 
 
 def test_profile_forward_prefers_submit_over_progress_bar_review_tab():

@@ -1,0 +1,17 @@
+{
+  "id": "f304",
+  "date": "2026-11-02",
+  "class": "Changes were merged while the full test run was pending or red, so four failures reached main and stayed: a Windows-only assumption, a stale test, a lint the author did not run, and a guard that was off for a moment after a page change",
+  "symptom": "CI on main and on every branch after it failed with the same four tests: test_a_relative_artifact_reference_resolves_inside_the_project_only, test_how_did_you_hear_matches_job_site_or_social_media_and_repeated_entries, test_no_new_exception_is_swallowed_without_a_trace, and test_page_agent_application_entry_uses_the_verified_navigation_path[/application].",
+  "site": "main and every branch after PR #61 (CI, Linux), 2 November 2026; found when the owner pasted the failing run",
+  "root_cause": "(1) web_ui._artifact_ref used pathlib on a Windows drive path; on Linux that is a relative path, so a file outside the project got a reference. (2) PR #48 removed the built-in field-of-study equivalents (a near subject is never taken on the agent's own say-so) but the test still expected Computer Science to match Computer and Information Science. (3) A bare `except: pass` in page_agent's captcha probe, and in the new timing module, tripped the no-silent-swallow audit. (4) f288 switched the submission guard off while on a job posting; the agent followed the posting's Apply link to the application page and the guard stayed off until the next pass of the loop, so a Submit pressed in between was not denied.",
+  "why_tests_missed": "The tests existed and failed; they were not run before the merge. The local pre-commit hook runs only the replay guard, and the full suite is too slow to run by hand, so red results were seen after merging.",
+  "fix": "The reference check treats a drive path as outside the project on a host without drives. The stale test now states the rule. The probe logs instead of passing. After following a posting's Apply link the guard is switched on for the new page at once (PageAgent._guard_the_new_page). A fast set of the repository's own audits runs in the pre-commit hook.",
+  "tests": [
+    "tests/test_windows_path_outside_a_posix_project.py::test_a_windows_drive_path_has_no_reference_in_a_project_without_drives",
+    "tests/test_posting_job_alert_widget.py::test_how_did_you_hear_matches_job_site_or_social_media_and_repeated_entries",
+    "tests/test_no_silent_swallow.py::test_no_new_exception_is_swallowed_without_a_trace",
+    "tests/test_run_recovery_regressions.py::test_page_agent_application_entry_uses_the_verified_navigation_path"
+  ],
+  "prevention": "A change is not merged until the full run is green; the pre-commit hook runs the audits that fail for style (silent swallows, place literals, failure catalogue) so they are caught before the commit, not after the merge. Code that runs on the owner's Windows machine and in Linux CI is tested for both."
+}
