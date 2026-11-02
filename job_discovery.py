@@ -68,6 +68,9 @@ NEGATIVE_TITLE_PATTERNS = [
     r"\bdesigner\b",
 ]
 
+# What a place other than the owner's is worth when the owner is open to relocating (their own place or remote: 30).
+RELOCATION_CREDIT = 15
+
 # A tech word in a title only counts when the title is an engineering-type role.
 ENGINEERING_ROLE = re.compile(r"\b(engineer|architect|administrator|analyst|sre|developer|technician|specialist)\b")
 
@@ -188,6 +191,8 @@ def load_profile() -> dict[str, Any]:
             "requires_visa_sponsorship": getattr(user_prof, "requires_visa_sponsorship", True),
             # Where the owner lives, from the profile: "Remote - India" is not remote work for someone living elsewhere.
             "country_code": _home_country(getattr(user_prof, "country", "")),
+            # Whether the owner will move for a job: a place other than theirs then still counts, a little less.
+            "open_to_relocation": bool(getattr(user_prof, "open_to_relocation", False)),
         }
     except Exception:
         return {
@@ -264,6 +269,7 @@ def calculate_match_score(
         score += 30
         matched_skills.append("Remote")
     else:
+        placed = False
         for pref_loc in profile.get("locations", []):
             pref_clean = pref_loc.lower().split(",")[0].strip()
             if re.fullmatch(r"remote|anywhere|virtual", pref_clean):
@@ -271,7 +277,14 @@ def calculate_match_score(
             if pref_clean and pref_clean in loc_lower:
                 score += 30
                 matched_skills.append(pref_loc)
+                placed = True
                 break
+        if not placed and profile.get("open_to_relocation"):
+            # Place is a bonus, not a gate, for someone who will move: a wanted title in another place in their own
+            # country counts (a partial title match, 50, reaches the 60 cut-off), though less than their own place or
+            # remote. A loose match (a tech word alone, 20) still does not.
+            score += RELOCATION_CREDIT
+            matched_skills.append("Open to relocation")
 
     # 3. Seniority alignment (up to 10 points)
     if re.search(r"\bsenior\b|\bsr\b|\blead\b|\bprincipal\b|\bstaff\b", title_lower):
