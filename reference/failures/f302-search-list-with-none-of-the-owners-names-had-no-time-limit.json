@@ -2,15 +2,17 @@
   "id": "f302",
   "date": "2026-11-02",
   "class": "A search that can fail was written to try every wording on every pass with no time limit, so a list that held none of them cost minutes, again on each repeat",
-  "symptom": "Verizon (Workday): filling the Education step took 4, 1 and then 12 minutes, and the Master's Field of Study was still blank afterwards. No model warnings appeared in those gaps, so the time was spent on the page.",
+  "symptom": "Verizon (Workday): filling the Education step took 4, 1 and then 12 minutes, and the Master's Field of Study was still blank afterwards. No model warnings appeared in those gaps, so the time was spent on the page. The Master's Field of Study then held the placeholder row '*Other' instead of Computer Science.",
   "site": "verizon.wd12.myworkdayjobs.com (Network Cyber Security Engineer), 2 November 2026",
-  "root_cause": "select_from_searchable_input tried every name the owner has (five for a school, four for a subject). Each try typed, waited, scrolled the whole virtual list up to 80 times and then opened up to 20 category nodes, each scrolled again, with no limit on the total. fill_education_section then ran three correction passes (12 seconds of waiting plus the search again) for every entry whose Field of Study was still blank, so a list that never held the subject was searched four times over.",
-  "why_tests_missed": "Tests pinned what is chosen when a name is in the list and that an empty school list is skipped. None held a list that offers none of the names, and none measured how long the search may take or how often it may repeat.",
-  "fix": "One list is worked on for at most SEARCH_BUDGET_SECONDS (60); the scroll and category exploration stop at the same deadline. An entry whose Field of Study search found nothing is not searched again by the correction passes; a field that was chosen is still left alone. The owner is left to pick it, as before.",
+  "root_cause": "select_from_searchable_input tried every name the owner has (five for a school, four for a subject). Each try typed, waited, scrolled the whole virtual list up to 80 times and then opened up to 20 category nodes, each scrolled again, with no limit on the total. fill_education_section then ran three correction passes (12 seconds of waiting plus the search again) for every entry whose Field of Study was still blank, so a list that never held the subject was searched four times over. While looking for the owner's names the search explored the list's categories by clicking them, and a row it clicked ('*Other') stayed selected; later passes saw a filled box and left it alone.",
+  "why_tests_missed": "Tests pinned what is chosen when a name is in the list and that an empty school list is skipped. None held a list that offers none of the names, and none measured how long the search may take or how often it may repeat. Nothing checked what the box held after a search that found nothing.",
+  "fix": "One list is worked on for at most SEARCH_BUDGET_SECONDS (60); the scroll and category exploration stop at the same deadline. An entry whose Field of Study search found nothing is not searched again by the correction passes; a field that was chosen is still left alone. The owner is left to pick it, as before. A row the search itself left selected, when none of the owner's names was found, is taken back (Backspace on the pill) so the box is blank for the owner; a value that was in the box before the search is never touched.",
   "tests": [
     "tests/test_education_list_search_budget.py::test_one_list_is_not_worked_on_past_its_budget",
     "tests/test_education_list_search_budget.py::test_a_field_of_study_search_that_found_nothing_is_not_repeated_by_the_correction_passes",
-    "tests/test_education_list_search_budget.py::test_a_field_that_was_chosen_is_still_left_alone_by_the_correction_passes"
+    "tests/test_education_list_search_budget.py::test_a_field_that_was_chosen_is_still_left_alone_by_the_correction_passes",
+    "tests/test_education_list_search_budget.py::test_a_placeholder_the_search_clicked_while_looking_is_taken_back",
+    "tests/test_education_list_search_budget.py::test_a_value_already_in_the_box_is_not_touched"
   ],
   "prevention": "Any search over a list the site controls needs a time budget and a memory that it found nothing; a retry or correction pass may repeat a check, never a whole search. Log which question a wait is for so the next gap can be explained from the log."
 }

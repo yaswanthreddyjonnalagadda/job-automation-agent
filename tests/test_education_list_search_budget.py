@@ -70,3 +70,41 @@ def test_a_field_that_was_chosen_is_still_left_alone_by_the_correction_passes(pa
     adapter.fill_education_section(agent().assistant, page, [
         {"school": "", "degree": "Master of Science", "field": "Computer Science"}])
     assert asked == [1]
+
+
+PICKED = """<div data-automation-id="multiSelectContainer">
+  <div role="listbox" aria-label="items selected">{pill}</div>
+  <input id="row--fieldOfStudy" data-uxi-widget-type="selectinput" data-uxi-multiselect-id="f">
+</div>
+<script>
+  document.getElementById('row--fieldOfStudy').addEventListener('keydown', e => {{
+    if (e.key === 'Backspace') document.querySelector('[role=listbox]').innerHTML = '';
+  }});
+</script>"""
+OTHER = '<div role="option">*Other, press delete to clear value.</div>'
+
+
+def search_that_clicks_other(adapter, monkeypatch, page):
+    """A search of a list with categories: it finds none of the names, but its exploration has clicked '*Other'."""
+    monkeypatch.setattr(adapter, "_open_prompt", lambda *a, **k: None)
+    monkeypatch.setattr(adapter, "_choose_scrolled_prompt", lambda *a, **k: None)
+
+    def explore(*a, **k):
+        page.evaluate("h => document.querySelector('[role=listbox]').innerHTML = h", OTHER)
+        return None
+    monkeypatch.setattr(adapter, "_choose_nested_prompt", explore)
+
+
+def test_a_placeholder_the_search_clicked_while_looking_is_taken_back(page, monkeypatch):
+    page.set_content(PICKED.format(pill=""))
+    adapter = WorkdayAdapter()
+    search_that_clicks_other(adapter, monkeypatch, page)
+    assert adapter.select_from_searchable_input(agent().assistant, page, "--fieldOfStudy", NAMES, 0, keyboard=False) is False
+    assert adapter._multiselect_selection(page, "--fieldOfStudy", "f", 0) == "", "the box was left on '*Other'"
+
+
+def test_a_value_already_in_the_box_is_not_touched(page, monkeypatch):
+    page.set_content(PICKED.format(pill='<div role="option">Computer Science, press delete to clear value.</div>'))
+    adapter = WorkdayAdapter()
+    adapter._clear_what_the_search_chose(page, page.locator("#row--fieldOfStudy"), "--fieldOfStudy", "f", 0, NAMES)
+    assert adapter._multiselect_selection(page, "--fieldOfStudy", "f", 0) == "Computer Science"

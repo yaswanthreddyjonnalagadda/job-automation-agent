@@ -986,6 +986,7 @@ class WorkdayAdapter(SiteAdapter):
                 except Exception as exc:
                     logger.debug("WORKDAY: clearing school field: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
                 page.keyboard.press("Escape")       # none of the owner's names is in the list: left for the owner
+                self._clear_what_the_search_chose(page, field, id_suffix, multiselect_id, index, candidates)
                 return False
             # None of our wordings matched this tenant's list. Read what it
             # actually offers and let Claude pick the equivalent, so a new
@@ -1011,6 +1012,28 @@ class WorkdayAdapter(SiteAdapter):
         except Exception as exc:
             logger.warning("Searchable selection failed for %s: %s", id_suffix, exc)
             return False
+
+    def _clear_what_the_search_chose(self, page: Page, field, id_suffix: str, multiselect_id: str, index: int,
+                                     candidates: list[str]) -> None:
+        """Takes back a row the search itself clicked while looking, so the box is left empty for the owner.
+
+        The search starts only when the box is empty (a box that already holds a value returns early), so anything it
+        holds now was put there by the search's own exploration of the list's categories -- Verizon's Field of Study
+        ended on the placeholder row "*Other" while the owner's subject was never found (2 November). A placeholder
+        taken for the owner's subject is worse than a blank, which the owner sees and fills."""
+        import option_match
+        try:
+            for _ in range(4):
+                held = self._multiselect_selection(page, id_suffix, multiselect_id, index)
+                if not held or any(option_match.plain(held) == option_match.plain(c) for c in candidates):
+                    return
+                field.click(timeout=2_000)
+                page.keyboard.press("Backspace")        # a Workday multiselect drops its last pill on Backspace
+                page.wait_for_timeout(300)
+            logger.warning("WORKDAY: %s still holds %r, which is none of the owner's names",
+                           id_suffix, self._multiselect_selection(page, id_suffix, multiselect_id, index))
+        except Exception as exc:
+            logger.debug("WORKDAY: clearing the search's own pick: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
 
     @staticmethod
     def _choose_scrolled_prompt(assistant, page, multiselect_id: str, wanted: str, deadline: float | None = None):

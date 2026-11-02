@@ -779,7 +779,9 @@ A Workday search-and-pick list (School, Field of Study) is worked on for at most
 minute. The agent tries each name the owner has for it, in turn; if none is in the list
 within that time it stops and leaves the box for the owner. A Field of Study search that
 found nothing is not run again by the later correction passes (Verizon, 2 November: the
-step took up to 12 minutes and left the field blank).
+step took up to 12 minutes and left the field blank). If the search itself left a row
+selected on the way (Verizon's "*Other" placeholder), it takes that back, so a box it could
+not fill is blank for the owner, never a near value.
 
 ## Job boards are not the employer's site
 
