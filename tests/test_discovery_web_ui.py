@@ -86,6 +86,7 @@ def test_scan_discovered_jobs_endpoint(client):
     with patch("job_discovery.JobDiscoveryEngine.scan_all", return_value={"companies_scanned": 1}) as mock_scan:
         resp = c.post("/api/discovered/scan", data={"csrf_token": web_ui.web_guard.TOKEN})
         assert resp.status_code == 302
+        web_ui.wait_for_scan(10)                      # the scan runs in the background: wait for it
         assert mock_scan.called
 
 

@@ -140,3 +140,75 @@ def test_the_scan_reads_the_employers_from_the_applications_already_made(monkeyp
     client = web_ui.app.test_client()
     client.post("/api/discovered/scan", data={"csrf_token": web_ui.web_guard.TOKEN})
     assert seen["history"] == [("Rackspace", app_record.url)]
+
+
+# -- a scan takes minutes: the button must not hang the page -----------------------------------------------------
+
+@pytest.fixture
+def scanning(monkeypatch):
+    import threading
+    import job_discovery
+    import profile_setup
+    import web_ui
+
+    gate, calls, saved = threading.Event(), [], []
+    monkeypatch.setattr(web_ui, "get_tracker", lambda: SimpleNamespace(
+        list_all=lambda: [], documents_for=lambda _i: [], answers_for=lambda _i: [], events=lambda *_a, **_k: []))
+    monkeypatch.setattr(web_ui, "_current_runs", lambda: {})
+    monkeypatch.setattr(web_ui, "waiting_runs", lambda _d: [])
+    monkeypatch.setattr(web_ui, "last_scan", lambda: {})
+    monkeypatch.setattr(web_ui, "_remember_scan", lambda stats: saved.append(stats))
+    monkeypatch.setattr(profile_setup, "needs_setup", lambda: False)
+    monkeypatch.setattr(job_discovery.JobDiscoveryEngine, "__init__", lambda self, *a, **k: None)
+    monkeypatch.setattr(job_discovery.JobDiscoveryEngine, "get_discovered_jobs", lambda self, **k: [])
+
+    def scan_all(self, **kw):
+        calls.append(1)
+        gate.wait(10)
+        return {"companies_scanned": 111}
+    monkeypatch.setattr(job_discovery.JobDiscoveryEngine, "scan_all", scan_all)
+    web_ui.app.config["TESTING"] = True
+    yield SimpleNamespace(client=web_ui.app.test_client(), gate=gate, calls=calls, saved=saved, web_ui=web_ui)
+    gate.set()
+    web_ui.wait_for_scan(10)
+
+
+def press(env):
+    return env.client.post("/api/discovered/scan", data={"csrf_token": env.web_ui.web_guard.TOKEN})
+
+
+def test_pressing_find_new_jobs_returns_at_once_and_the_page_says_it_is_checking(scanning):
+    import time
+    started = time.time()
+    response = press(scanning)
+    assert response.status_code == 302 and time.time() - started < 3          # not seven minutes
+    assert scanning.web_ui.scan_running() is True
+    html = scanning.client.get("/").get_data(as_text=True).split('id="jobs-h"')[1]
+    assert "Checking job boards since" in html and "This takes a few minutes" in html
+
+
+def test_a_second_press_while_one_scan_runs_starts_no_second_scan(scanning):
+    press(scanning)
+    press(scanning)
+    press(scanning)
+    assert len(scanning.calls) == 1
+
+
+def test_when_the_scan_ends_it_is_remembered_and_the_page_stops_saying_it_is_checking(scanning):
+    press(scanning)
+    scanning.gate.set()
+    scanning.web_ui.wait_for_scan(10)
+    assert scanning.saved == [{"companies_scanned": 111}]
+    assert scanning.web_ui.scan_running() is False
+    assert "This takes a few minutes" not in scanning.client.get("/").get_data(as_text=True).split('id="jobs-h"')[1]
+
+
+def test_a_scan_that_fails_ends_cleanly_and_a_new_one_can_start(scanning, monkeypatch):
+    import job_discovery
+
+    def broken(self, **kw):
+        raise RuntimeError("the network dropped")
+    monkeypatch.setattr(job_discovery.JobDiscoveryEngine, "scan_all", broken)
+    press(scanning)
+    scanning.web_ui.wait_for_scan(10)
+    assert scanning.web_ui.scan_running() is False and scanning.saved == []

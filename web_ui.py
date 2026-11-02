@@ -296,17 +296,46 @@ def _kill_tree(proc: subprocess.Popen) -> None:
             logger.debug("_kill_tree: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
 
+_SCAN = {"thread": None, "started": None}
+_SCAN_LOCK = threading.Lock()
+
+
+def scan_running() -> bool:
+    thread = _SCAN["thread"]
+    return bool(thread and thread.is_alive())
+
+
+def wait_for_scan(seconds: float = 600) -> None:
+    """Waits for a scan that is running (used by tests and by anything that must see its result)."""
+    thread = _SCAN["thread"]
+    if thread is not None:
+        thread.join(seconds)
+
+
+def _run_scan(engine) -> None:
+    try:
+        _remember_scan(engine.scan_all(min_match_threshold=60))
+    except Exception as exc:
+        logger.warning("The job scan failed: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+    finally:
+        _SCAN["started"] = None
+
+
 @app.post("/api/discovered/scan")
 def scan_discovered():
+    """Starts a scan and returns at once: reading a hundred employers takes minutes, so it runs in the background."""
     from job_discovery import JobDiscoveryEngine
-    engine = JobDiscoveryEngine()
-    # Besides the owner's own list, every employer an application was already made through is scanned.
-    try:
-        engine.history = [(a.company, a.url) for a in get_tracker().list_all() if getattr(a, "url", "")]
-    except Exception as exc:
-        logger.warning("Could not read the applications to find employers: %s", str(exc).splitlines()[0][:100])
-    stats = engine.scan_all(min_match_threshold=60)
-    _remember_scan(stats)
+    with _SCAN_LOCK:
+        if not scan_running():
+            engine = JobDiscoveryEngine()
+            # Besides the owner's own list, every employer an application was already made through is scanned.
+            try:
+                engine.history = [(a.company, a.url) for a in get_tracker().list_all() if getattr(a, "url", "")]
+            except Exception as exc:
+                logger.warning("Could not read the applications to find employers: %s", str(exc).splitlines()[0][:100])
+            _SCAN["started"] = datetime.now(timezone.utc)
+            _SCAN["thread"] = threading.Thread(target=_run_scan, args=(engine,), daemon=True, name="job-scan")
+            _SCAN["thread"].start()
     return redirect(url_for("index"))
 
 
@@ -1528,7 +1557,7 @@ def index():
         groups=ui_shell.group_counts(apps), runs=latest_run(runs), signals=signals, error=request.args.get("error"),
         working_url=working_url, is_running=bool(live), job_title=job_title, employer=employer, stage=stage,
         discovered_jobs=discovered_jobs, last_scan=last_scan(), rest_line=_rest_line(runs),
-        job_windows=JOB_WINDOWS, job_window=window,
+        job_windows=JOB_WINDOWS, job_window=window, scanning=scan_running(), scan_started=_SCAN["started"],
     )
 
 
@@ -2192,7 +2221,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
       <div>
         <h2 id="jobs-h">Suggested jobs <span class="count">{{ discovered_jobs | length }}</span></h2>
         <p class="dash-sub">Roles found on employers' own job boards that fit your profile. Starting one prepares the application; you review it before anything is sent.</p>
-        <p class="dash-sub" id="scan-status" role="status" aria-live="polite">{% if last_scan %}Updated {{ last_scan.at|local('%I:%M %p') }} &middot; {{ last_scan.boards }} board{{ '' if last_scan.boards == 1 else 's' }} checked{% else %}Not checked yet{% endif %}</p>
+        <p class="dash-sub" id="scan-status" role="status" aria-live="polite">{% if scanning %}Checking job boards{% if scan_started %} since {{ scan_started|local('%I:%M %p') }}{% endif %}. This takes a few minutes; reload this page to see the result.{% elif last_scan %}Updated {{ last_scan.at|local('%I:%M %p') }} &middot; {{ last_scan.boards }} board{{ '' if last_scan.boards == 1 else 's' }} checked{% else %}Not checked yet{% endif %}</p>
       </div>
       <form method="post" action="/api/discovered/scan" data-busy="Checking job boards&hellip;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
