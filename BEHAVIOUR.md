@@ -103,6 +103,14 @@ scroll sideways with a fade on a narrow screen. A screen reader is told when the
 agent's status changes (for example to "Waiting for you") and how many applications
 need you; the first status read on a page is not announced.
 
+Each suggested job is scored against your resume: the scan reads the job's own description
+(Greenhouse boards now send it), compares the skills it names with your resume, and shows
+"Resume match NN%" with what your resume has and what the posting also asks for. The score
+uses no AI service and costs nothing. A job whose description could not be read, or any job
+when no resume can be read, shows no resume match and says so; it is never given a made-up
+number. Jobs with a resume match are listed first, best first. The same role listed for
+several places is one card with "+N other locations".
+
 Suggested jobs you have already applied to stay in the list, marked "Already applied"
 and placed after the rest (the tracker is only read). Each card shows how long ago the
 job was found, a "New" badge for the last three days, the first place with "+N more",

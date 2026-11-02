@@ -90,6 +90,11 @@ def ensure_discovery_schema(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL
         )
     """)
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(discovered_jobs)")}
+    for column, kind in (("resume_score", "INTEGER"), ("resume_matched", "TEXT DEFAULT '[]'"),
+                         ("resume_missing", "TEXT DEFAULT '[]'")):
+        if column not in existing:
+            conn.execute(f"ALTER TABLE discovered_jobs ADD COLUMN {column} {kind}")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_discovered_status ON discovered_jobs(status)"
     )
@@ -97,6 +102,43 @@ def ensure_discovery_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_discovered_score ON discovered_jobs(match_score DESC)"
     )
     conn.commit()
+
+
+def html_to_text(raw: str) -> str:
+    """A board's posting text as plain words. Greenhouse sends its HTML escaped, so it is unescaped first."""
+    import html as _html
+    text = _html.unescape(str(raw or ""))
+    text = re.sub(r"(?is)<(script|style)\b.*?</\1>", " ", text)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    return " ".join(_html.unescape(text).split())
+
+
+_RESUME_CACHE: dict = {}
+
+
+def load_resume_text(path=None) -> str:
+    """The owner's resume as text, for scoring a posting against it. Empty when there is no readable resume."""
+    try:
+        if path is None:
+            import config
+            path = config.get_app_config().resume_path
+        target = Path(path)
+        stat = target.stat()
+        key = (str(target), stat.st_mtime, stat.st_size)
+        if key in _RESUME_CACHE:
+            return _RESUME_CACHE[key]
+        if target.suffix.lower() == ".pdf":
+            import pypdf
+            text = " ".join((page.extract_text() or "") for page in pypdf.PdfReader(str(target)).pages)
+        else:
+            text = target.read_text(encoding="utf-8", errors="ignore")
+        text = " ".join(text.split())
+        _RESUME_CACHE.clear()
+        _RESUME_CACHE[key] = text
+        return text
+    except Exception as _swallowed:
+        logger.debug("load_resume_text: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+        return ""
 
 
 def compute_job_hash(company: str, title: str, location: str, url: str) -> str:
@@ -242,7 +284,7 @@ def calculate_match_score(
 
 def fetch_greenhouse_feed(token: str, company: str, timeout: float = 8.0) -> list[dict[str, Any]]:
     """Fetches active jobs from Greenhouse public JSON API."""
-    url = f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs"
+    url = f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true"
     try:
         resp = requests.get(url, headers=DEFAULT_HEADERS, timeout=timeout)
         if resp.status_code != 200:
@@ -263,6 +305,7 @@ def fetch_greenhouse_feed(token: str, company: str, timeout: float = 8.0) -> lis
                 "location": loc_name,
                 "is_remote": is_remote,
                 "url": job_url,
+                "description": html_to_text(raw.get("content") or ""),
                 "updated_at": raw.get("updated_at") or datetime.now(timezone.utc).isoformat(),
             })
         return jobs
@@ -323,10 +366,13 @@ def fetch_jobs_for_company(company_entry: dict[str, str], timeout: float = 8.0) 
 class JobDiscoveryEngine:
     """Manages periodic scraping, filtering, and database persistence."""
 
+    resume_text = ""      # the owner's resume as text, for scoring postings against it; __init__ reads it
+
     def __init__(self, db_path: Optional[Path] = None, config_path: Optional[Path] = None):
         self.db_path = db_path or DB_PATH
         self.config_path = config_path or COMPANIES_CONFIG_PATH
         self.profile = load_profile()
+        self.resume_text = load_resume_text()
 
     def _get_connection(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -379,6 +425,15 @@ class JobDiscoveryEngine:
                         if not eligible:
                             continue
 
+                    resume_score, resume_matched, resume_missing = None, [], []
+                    if job.get("description") and self.resume_text:
+                        import matching_engine
+                        fit = matching_engine.evaluate(job["description"], self.profile, self.resume_text,
+                                                       job_location=job["location"])
+                        if fit.is_eligible:
+                            resume_score = fit.overall_score
+                            resume_matched, resume_missing = list(fit.matched_skills), list(fit.missing_skills)
+
                     dedup_key = compute_job_hash(
                         job["company_name"], job["job_title"], job["location"], job["url"]
                     )
@@ -401,11 +456,15 @@ class JobDiscoveryEngine:
                         INSERT INTO discovered_jobs (
                             dedup_key, company_name, company_token, ats_type,
                             job_title, location, is_remote, url, match_score,
-                            matched_skills, status, discovered_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            matched_skills, status, discovered_at, updated_at,
+                            resume_score, resume_matched, resume_missing
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(dedup_key) DO UPDATE SET
                             match_score = excluded.match_score,
                             matched_skills = excluded.matched_skills,
+                            resume_score = excluded.resume_score,
+                            resume_matched = excluded.resume_matched,
+                            resume_missing = excluded.resume_missing,
                             status = CASE 
                                 WHEN discovered_jobs.status IN ('submitted', 'queued', 'dismissed') THEN discovered_jobs.status
                                 ELSE excluded.status
@@ -415,7 +474,8 @@ class JobDiscoveryEngine:
                     """, (
                         dedup_key, job["company_name"], job["company_token"], job["ats_type"],
                         job["job_title"], job["location"], job["is_remote"], job["url"],
-                        score, json.dumps(matched_skills), init_status, now_iso, now_iso
+                        score, json.dumps(matched_skills), init_status, now_iso, now_iso,
+                        resume_score, json.dumps(resume_matched), json.dumps(resume_missing)
                     ))
                     if init_status != 'submitted':
                         stats["relevant_jobs_saved"] += 1
@@ -475,11 +535,12 @@ class JobDiscoveryEngine:
                 """
             rows = conn.execute(f"""
                 SELECT id, dedup_key, company_name, ats_type, job_title, location,
-                       is_remote, url, match_score, matched_skills, status, discovered_at
+                       is_remote, url, match_score, matched_skills, status, discovered_at,
+                       resume_score, resume_matched, resume_missing
                 FROM discovered_jobs
                 WHERE match_score >= ? AND status = ?
                 {sub_filter}
-                ORDER BY match_score DESC, discovered_at DESC
+                ORDER BY (resume_score IS NULL), resume_score DESC, match_score DESC, discovered_at DESC
                 LIMIT ?
             """, (min_score, status, limit)).fetchall()
 
@@ -490,6 +551,11 @@ class JobDiscoveryEngine:
                     item["matched_skills"] = json.loads(item.get("matched_skills") or "[]")
                 except Exception:
                     item["matched_skills"] = []
+                for key in ("resume_matched", "resume_missing"):
+                    try:
+                        item[key] = json.loads(item.get(key) or "[]")
+                    except Exception:
+                        item[key] = []
                 results.append(item)
             return results
         finally:

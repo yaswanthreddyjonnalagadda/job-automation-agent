@@ -73,10 +73,31 @@ def short_location(location, is_remote=False) -> tuple[str, int]:
     return places[0].strip(), max(0, len(places) - 1)
 
 
+def _one_per_role(jobs: Iterable[dict]) -> list[dict]:
+    """The same role open in several places is one card (the best scored opening) with a count of the others."""
+    best: dict = {}
+    counts: dict = {}
+    for job in jobs:
+        key = (_key(job.get("company_name")), _key(job.get("job_title")))
+        counts[key] = counts.get(key, 0) + 1
+        rank = (job.get("resume_score") if job.get("resume_score") is not None else -1, job.get("match_score") or 0)
+        if key not in best or rank > best[key][0]:
+            best[key] = (rank, job)
+    out = []
+    for key, (_rank, job) in best.items():
+        job = dict(job)
+        job["other_openings"] = counts[key] - 1
+        out.append(job)
+    return out
+
+
 def prepare(jobs: Iterable[dict], applications: Iterable, now: Optional[datetime] = None) -> list[dict]:
     """The suggested jobs as the page shows them: applied ones marked (and last), newest first within a score."""
     shown = []
-    for job in mark_applied(jobs, applications):
+    for job in _one_per_role(mark_applied(jobs, applications)):
+        job.setdefault("resume_score", None)
+        job.setdefault("resume_matched", [])
+        job.setdefault("resume_missing", [])
         job["age"], job["is_new"] = posting_age(job.get("discovered_at"), now)
         job["place"], job["more_places"] = short_location(job.get("location"), job.get("is_remote"))
         shown.append(job)

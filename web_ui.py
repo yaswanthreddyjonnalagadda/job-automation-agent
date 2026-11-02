@@ -2191,25 +2191,34 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
       </div>
       <div class="dash-jobs" id="discovered-feed">
         {% for dj in discovered_jobs %}
-          <article class="job-card{{ ' is-applied' if dj.already_applied }}" data-score="{{ dj.match_score }}" data-remote="{{ dj.is_remote }}" data-ats="{{ dj.ats_type }}">
+          {% set fit = dj.resume_score if dj.resume_score is not none else dj.match_score %}
+          <article class="job-card{{ ' is-applied' if dj.already_applied }}" data-score="{{ fit }}" data-remote="{{ dj.is_remote }}" data-ats="{{ dj.ats_type }}">
             <div class="job-top">
-              <div class="ring {% if dj.match_score >= 85 %}high{% elif dj.match_score >= 70 %}mid{% endif %}" style="--p:{{ dj.match_score }}"
-                   role="img" aria-label="Title match {{ dj.match_score }} percent"><b>{{ dj.match_score }}%</b></div>
+              <div class="ring {% if fit >= 85 %}high{% elif fit >= 70 %}mid{% endif %}" style="--p:{{ fit }}"
+                   role="img" aria-label="{{ 'Resume match' if dj.resume_score is not none else 'Title match' }} {{ fit }} percent"><b>{{ fit }}%</b></div>
               <div style="min-width:0">
                 <p class="job-company">{{ dj.company_name }}</p>
                 <h3 class="job-title"><a href="{{ dj.url }}" target="_blank" rel="noopener">{{ dj.job_title }}<span class="sr-only"> (opens the posting in a new tab)</span></a></h3>
               </div>
             </div>
             <div class="job-meta">
-              <span class="tag" title="Scored from the job title, location and seniority only; the posting's requirements are not read">Title match {{ dj.match_score }}%</span>
+              {% if dj.resume_score is not none %}<span class="tag" title="Your resume compared with the skills this posting asks for">Resume match {{ dj.resume_score }}%</span>{% endif %}
+              <span class="tag" title="Scored from the job title, location and seniority only">Title match {{ dj.match_score }}%</span>
               {% if dj.place %}<span title="{{ dj.location }}">{{ dj.place }}{% if dj.more_places %} <small>+{{ dj.more_places }} more</small>{% endif %}</span>
               {% elif not dj.is_remote %}<span>Location not stated</span>{% endif %}
               {% if dj.is_remote %}<span class="tag remote">Remote</span>{% endif %}
               {% if dj.already_applied %}<span class="tag applied">Already applied</span>{% elif dj.is_new %}<span class="tag new">New</span>{% endif %}
               {% if dj.age %}<span class="muted">{{ dj.age }}</span>{% endif %}
+              {% if dj.other_openings %}<span class="muted" title="The same role is listed for other places; this is the best match">+{{ dj.other_openings }} other location{{ '' if dj.other_openings == 1 else 's' }}</span>{% endif %}
               <span class="tag">{{ dj.ats_type | capitalize }}</span>
             </div>
-            {% if dj.matched_skills %}<div class="job-meta">{% for m in dj.matched_skills[:3] %}<span class="tag">{{ m }}</span>{% endfor %}</div>{% endif %}
+            {% if dj.resume_score is not none %}
+              {% if dj.resume_matched %}<div class="job-meta"><span class="muted">Your resume has:</span>{% for m in dj.resume_matched[:4] %}<span class="tag">{{ m }}</span>{% endfor %}</div>{% endif %}
+              {% if dj.resume_missing %}<div class="job-meta"><span class="muted">Posting also asks for:</span>{% for m in dj.resume_missing[:3] %}<span class="tag applied">{{ m }}</span>{% endfor %}</div>{% endif %}
+            {% else %}
+              <div class="job-meta"><span class="muted">No resume match: the posting's text was not read.</span></div>
+              {% if dj.matched_skills %}<div class="job-meta">{% for m in dj.matched_skills[:3] %}<span class="tag">{{ m }}</span>{% endfor %}</div>{% endif %}
+            {% endif %}
             <div class="job-foot">
               <form method="post" action="/api/discovered/{{ dj.id }}/apply">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

@@ -180,3 +180,26 @@ def test_the_scan_line_says_when_and_how_many_boards(page):
     shown = page([_recent()], scan={"at": at, "boards": 12, "saved": 3})
     assert "12 boards checked" in shown and "Updated" in shown
     assert "Not checked yet" in page([_recent()])
+
+
+# -- one role open in several places is one card -----------------------------------------------------------------
+
+def test_the_same_role_listed_for_several_places_is_one_card_with_a_count():
+    jobs = [job(id=1, url="https://x/a", location="Austin, TX", match_score=65),
+            job(id=2, url="https://x/b", location="Denver, CO", match_score=65),
+            job(id=3, url="https://x/c", location="Boston, MA", match_score=65),
+            job(id=4, company_name="Other", url="https://x/d")]
+    shown = dv.prepare(jobs, [], NOW)
+    assert len(shown) == 2
+    merged = next(j for j in shown if j["company_name"] == "Acme")
+    assert merged["other_openings"] == 2 and merged["id"] == 1
+
+
+def test_the_best_scored_opening_is_the_one_kept():
+    jobs = [job(id=1, url="https://x/a", resume_score=40), job(id=2, url="https://x/b", resume_score=80)]
+    assert dv.prepare(jobs, [], NOW)[0]["id"] == 2
+
+
+def test_roles_that_differ_in_title_or_company_are_not_merged():
+    jobs = [job(id=1), job(id=2, job_title="Staff Network Engineer", url="https://x/2")]
+    assert len(dv.prepare(jobs, [], NOW)) == 2
