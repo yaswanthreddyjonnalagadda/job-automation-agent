@@ -83,6 +83,15 @@ answers** on the dashboard; answer it once there and it is used on every form th
 asks it. Resumes and cover letters are named after you (`Jane_Doe_Resume_Acme.pdf`).
 Everything stays on your computer, in `data/`.
 
+On an application's page, History uses plain words ("Stopped for you", "Auto-submit check")
+and shows a repeated event once with a count; the "By" column says who gave each answer
+("From profile", "You", "AI"); the auto-submit decision gives its date, its reasons if any
+were stored, and says when you submitted it yourself; "Change status" sits in the "..."
+menu. Progress says what it counts, hides percentages that are 100% at every step, and
+tells you how to fill the Replied and Interviews tiles. System Health shows "Checking"
+for the browser test and fills it in when it answers, and calls a worker that reports
+nothing (no CPU, no memory, no version) "Stale" instead of healthy.
+
 The Applications page lists what needs you first, then the current run (one line when
 nothing runs, with how the last run ended), then your applications, then suggested jobs.
 Each total appears once, in the filter chips; the bar is labelled "Submitted of tracked".

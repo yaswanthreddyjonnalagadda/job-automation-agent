@@ -257,6 +257,8 @@ details.menu .menu-items hr { border:0; border-top:1px solid var(--line-2); marg
 .shot { display:block; border:1px solid var(--line); border-radius:var(--radius-sm); overflow:hidden; max-height:400px; }
 .shot img { display:block; width:100%; height:400px; object-fit:cover; object-position:top; }
 .nav a[data-count]::after { content:attr(data-count); display:inline-block; min-width:20px; margin-left:6px; padding:0 6px; border-radius:99px; background:var(--warn); color:#fff; font-size:12px; font-weight:700; line-height:20px; text-align:center; }
+.by { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+.by-icon { flex:none; color:var(--muted); }
 .grid-2 { display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:16px; }
 ul.plain { margin:6px 0 0 18px; padding:0; }
 

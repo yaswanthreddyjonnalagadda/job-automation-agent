@@ -33,7 +33,9 @@ from pathlib import Path
 from flask import Flask, Response, abort, g, redirect, render_template_string, request, send_file, url_for
 
 import diagnostics
+import detail_view
 import discovered_view
+import health_view
 diagnostics.install_log_privacy()
 import application_status
 import ui_shell
@@ -121,6 +123,8 @@ def needs_you_count() -> int:
 
 
 app.jinja_env.filters["aref"] = _artifact_ref
+app.jinja_env.globals.update(decision_view=detail_view.decision_view, answered_by=detail_view.answered_by,
+                             history_rows=detail_view.group_events, worker_state=health_view.worker_state)
 app.jinja_env.globals.update(artifact_ok=lambda p: artifact_ok(p), needs_you_count=lambda: needs_you_count())
 
 
@@ -1268,29 +1272,35 @@ def api_application_answers(app_id: int):
     return {"ok": True, "answers": answers}
 
 
+def _browser_check() -> dict:
+    """Whether the browser the agent drives can be found (slow: it starts Playwright's driver)."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            return {"title": "Playwright Chromium", "ok": True, "message": f"Browser located: {Path(p.chromium.executable_path).name}"}
+    except Exception as exc:
+        return {"title": "Playwright Chromium", "ok": False,
+                "message": f"Chromium not runnable: {str(exc).splitlines()[0][:100]}",
+                "hint": "Run `python -m playwright install chromium`"}
+
+
+@app.get("/health/browser")
+def health_browser():
+    return _browser_check()
+
+
 @app.get("/health")
 def health_check():
     import config as cfg_mod
 
     checks = {}
 
-    # 1. Playwright Chromium
-    try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            exec_path = p.chromium.executable_path
-            checks["playwright"] = {
-                "title": "Playwright Chromium",
-                "ok": True,
-                "message": f"Browser located: {Path(exec_path).name}",
-            }
-    except Exception as exc:
-        checks["playwright"] = {
-            "title": "Playwright Chromium",
-            "ok": False,
-            "message": f"Chromium not runnable: {str(exc).splitlines()[0][:100]}",
-            "hint": "Run `python -m playwright install chromium`",
-        }
+    # 1. Playwright Chromium: starting its driver takes seconds, so the page asks for it afterwards.
+    wants_html = request.accept_mimetypes.accept_html and not request.is_json
+    if wants_html:
+        checks["playwright"] = {"title": "Playwright Chromium", "ok": None, "pending": True, "message": "Checking\u2026"}
+    else:
+        checks["playwright"] = _browser_check()
 
     # 2. User profile
     try:
@@ -1422,7 +1432,7 @@ def health_check():
             "message": f"Worker manager error: {exc}",
         }
 
-    all_ok = all(c["ok"] for c in checks.values())
+    all_ok = all(c["ok"] for c in checks.values() if not c.get("pending"))
     status_str = "ok" if all_ok else "warning"
 
     if request.accept_mimetypes.accept_html and not request.is_json:
@@ -2224,7 +2234,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
 
 DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
 <main class="wrap">
-  <p class="crumbs"><a href="/">Applications</a> / {{ a.company }}</p>
+  <p class="crumbs"><a href="/">Applications</a> / {{ company_label(a.company) }}</p>
   <div class="page-head">
     <div style="min-width:0">
       <h1>{{ a.title }}</h1>
@@ -2236,9 +2246,12 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
         {% if run_log and artifact_ok(run_log) %}<a href="/log?path={{ run_log|aref|urlencode }}" target="_blank">View log</a>{% endif %}
       </div>
     </div>
-    <form method="post" action="/application/{{ a.id }}/status" style="display:flex; align-items:center; gap:8px; margin:0">
+    <details class="menu">
+      <summary aria-label="More actions">&#8943;</summary>
+      <div class="menu-items" style="padding:10px; min-width:260px">
+    <form method="post" action="/application/{{ a.id }}/status" style="display:flex; flex-direction:column; align-items:stretch; gap:8px; margin:0">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label for="status-select" class="muted" style="font-size:13px; white-space:nowrap">Change status</label>
+      <label for="status-select" class="muted" style="font-size:13px">Change status</label>
       <select id="status-select" name="status" style="width:auto; padding:7px 10px">
         <option value="needs_user_review" {% if a.status == 'needs_user_review' %}selected{% endif %}>Needs you</option>
         <option value="submitted" {% if a.status == 'submitted' %}selected{% endif %}>Submitted</option>
@@ -2254,6 +2267,8 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
       </select>
       <button type="submit" class="small">Update</button>
     </form>
+      </div>
+    </details>
   </div>
 
   <div class="card">
@@ -2326,11 +2341,13 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
         <p class="hint" style="margin-top:0">Setting: <strong>{{ 'on' if auto_submit_on else 'off' }}</strong>
            (AUTO_SUBMIT_VERIFIED_ONLY). The agent submits once every mandatory field is filled and the form shows no error.</p>
         {% if decision %}
-          <p><span class="pill {{ 'submitted' if decision.eligible else 'needs_user_review' }}">{{ 'Eligible' if decision.eligible else 'Not eligible' }}</span>
-             <span class="muted">decided {{ decision.decided_at }}</span></p>
-          {% if decision.reasons %}
-            <ul class="plain">{% for r in decision.reasons %}<li>{{ r }}</li>{% endfor %}</ul>
-          {% endif %}
+          {% set dv = decision_view(decision, status_group(a.status)) %}
+          <p><span class="pill {{ 'submitted' if dv.eligible else 'needs_user_review' }}">{{ dv.verdict }}</span>
+             {% if dv.when %}<span class="muted">decided {{ dv.when|local('%d %b %Y %I:%M %p') }}</span>{% endif %}</p>
+          <p class="hint">{{ dv.note }}</p>
+          {% if dv.reasons %}
+            <ul class="plain">{% for r in dv.reasons %}<li>{{ r }}</li>{% endfor %}</ul>
+          {% elif dv.no_reasons %}<p class="hint">{{ dv.no_reasons }}</p>{% endif %}
           {% if decision.evidence_paths %}
             <p class="hint">Evidence:
               {% for name, path in decision.evidence_paths.items() %}
@@ -2368,7 +2385,7 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
     <table>
       <thead><tr><th style="width:45%">Question</th><th>Answer</th><th class="label">By</th></tr></thead>
       {% for q in answers %}
-      <tr><td>{{ q.question }}</td><td>{{ q.answer }}</td><td class="label">{{ q.answered_by }}</td></tr>
+      <tr><td>{{ q.question }}</td><td>{{ q.answer }}</td><td class="label">{{ answered_by(q.answered_by) }}</td></tr>
       {% else %}
       <tr><td colspan="3" class="muted">No answers recorded for this application.</td></tr>
       {% endfor %}
@@ -2379,11 +2396,11 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
   <div class="card flush">
     <table>
       <thead><tr><th class="when">When</th><th class="label">Kind</th><th>What happened</th><th class="actions">Evidence</th></tr></thead>
-      {% for e in events %}
+      {% for e in history_rows(events) %}
         <tr>
           <td class="when">{{ e.created_at|local }}</td>
-          <td class="muted">{{ e.kind }}</td>
-          <td>{{ (e.message or '')[:160] }}</td>
+          <td class="muted">{{ e.label }}</td>
+          <td>{{ (e.message or '')[:160] }}{% if e.count > 1 %} <span class="muted">&times;{{ e.count }}</span>{% endif %}</td>
           <td class="actions">
             {%- if e.screenshot_path and artifact_ok(e.screenshot_path) %}<a href="/evidence?path={{ e.screenshot_path|aref|urlencode }}" target="_blank">screenshot</a>{% endif -%}
             {%- if e.screenshot_path and artifact_ok(e.screenshot_path) and e.html_path and artifact_ok(e.html_path) %} &middot; {% endif -%}
