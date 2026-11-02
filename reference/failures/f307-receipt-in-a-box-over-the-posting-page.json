@@ -1,0 +1,18 @@
+{
+  "id": "f307",
+  "date": "2026-11-02",
+  "class": "A check that stops at the first sign the page is still the form (a visible Apply or Submit button) never reads a receipt that appears on a page which also has such a button",
+  "symptom": "Rackspace (Workday): after the owner clicked Submit the page showed 'Congratulations! Your application has been successfully submitted.' but the agent kept waiting: the browser did not close and the status stayed 'ready to submit'.",
+  "site": "rackspace.wd1.myworkdayjobs.com (Network Engineer IV - US), 2 November 2026; the owner's screenshot",
+  "root_cause": "Rackspace goes back to the job posting after Submit and shows the receipt in a dialog over it. submission_confirmed returned False first thing when find_submit_button found a button, and the posting's own Apply button matches the submit label. Verizon shows a separate receipt page with no such button, so it worked.",
+  "why_tests_missed": "The receipt tests (f286, f297) used pages with the receipt and no Apply button, and wording variations; none put the receipt in a dialog over a page that still has an Apply button.",
+  "fix": "Before the 'still on the form' test, a visible dialog (role dialog, alertdialog or aria-modal) that holds fewer than three typed boxes is read with the shared receipt wording (confirmation_text): a receipt in it, with nothing left to do, counts. A dialog asking 'Are you sure you want to submit?', a verification prompt, a cookie notice, a hidden dialog or one holding a form does not.",
+  "tests": [
+    "tests/test_receipt_in_a_box_over_the_posting.py::test_a_receipt_in_a_dialog_over_the_posting_is_a_receipt",
+    "tests/test_receipt_in_a_box_over_the_posting.py::test_the_posting_alone_is_not_a_receipt",
+    "tests/test_receipt_in_a_box_over_the_posting.py::test_a_dialog_that_is_not_a_receipt_is_not_one",
+    "tests/test_receipt_in_a_box_over_the_posting.py::test_a_dialog_holding_a_form_is_not_a_receipt",
+    "tests/test_receipt_in_a_box_over_the_posting.py::test_a_hidden_dialog_is_not_a_receipt"
+  ],
+  "prevention": "A check that decides 'still on the form' from a button must also look for a receipt; test each way a site can show one (own page, banner, dialog over another page)."
+}

@@ -1809,6 +1809,12 @@ class PageAgent:
     def locate(self, page, ref: str):
         return self.tab(page).locator(f"aria-ref={ref}")
 
+    # How long a page's network is waited on to go quiet. A site that has not gone quiet in this long, on this
+    # host, is not waited on for that long again (Workday keeps polling, so every settle of a run paid all of it:
+    # settle(800 ms) took 8.8 s, Rackspace, 2 November).
+    NETWORK_QUIET_WAIT_MS = 8_000
+    NEVER_QUIET_WAIT_MS = 700
+
     @field_timing.timed('wait', lambda self, page, ms=1_500: f'settle {ms} ms', min_seconds=1.0)
     def settle(self, page, ms: int = 1_500) -> None:
         tab = self.tab(page)
@@ -1816,9 +1822,16 @@ class PageAgent:
             tab.wait_for_load_state("domcontentloaded", timeout=15_000)
         except Exception as _swallowed:
             logger.debug("settle: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+        host = urlparse(getattr(tab, "url", "") or "").netloc.lower()
+        never_quiet = self.__dict__.setdefault("_never_quiet_hosts", set())
         try:
-            tab.wait_for_load_state("networkidle", timeout=8_000)
+            tab.wait_for_load_state(
+                "networkidle", timeout=self.NEVER_QUIET_WAIT_MS if host in never_quiet else self.NETWORK_QUIET_WAIT_MS)
         except Exception as _swallowed:
+            if host and host not in never_quiet:
+                never_quiet.add(host)
+                logger.info("SETTLE: %s does not go quiet within %d ms; waited on briefly from now on",
+                            "this site", self.NETWORK_QUIET_WAIT_MS)
             logger.debug("settle: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         tab.wait_for_timeout(ms)
 
@@ -5383,6 +5396,16 @@ class PageAgent:
             logger.debug("_fill_react_datepicker: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
         return False
 
+    def _shows_after_a_fresh_read(self, page, control: Control, want: str) -> bool:
+        """Whether the page, read again, shows `want` in a box of this question."""
+        try:
+            return any(c.role in ("textbox", "searchbox") and _same_question(c.question, control.question)
+                       and bool(c.answer) and _fill_value_committed(c.answer, want)
+                       for c in parse_snapshot(self.snapshot(page)))
+        except Exception as exc:
+            logger.debug("fresh read after a fill: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+            return False
+
     @field_timing.timed("field", lambda self, page, answer, control: f"{answer.action}: {control.question}")
     def do(self, page, answer: Answer, control: Control) -> bool:
         tab = self.tab(page)
@@ -5597,7 +5620,7 @@ class PageAgent:
                     except Exception:
                         return False
             try:
-                loc.press("Tab", timeout=2_000)
+                loc.press("Tab", timeout=800)
             except Exception as _swallowed:
                 logger.debug("do: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
             if is_phone_box and not fill_value.isdigit():
@@ -5634,7 +5657,13 @@ class PageAgent:
                 # show it"), so this does not fight that existing, deterministic handling;
                 # it only stops a transient/stale readback from being silently counted as
                 # success before that later check ever runs.
-                return False
+                #
+                # But a box the site redraws the moment it is typed into (Workday's) leaves the agent holding a
+                # locator for the old box: the readback fails although the new box shows the answer. A fresh read of
+                # the page says what the box now shows (Rackspace, 2 November: every text box on My Information took
+                # 3 s and was marked failed while holding the right value).
+                field_timing.why("the box was redrawn; checked by a fresh read")
+                return self._shows_after_a_fresh_read(page, control, fill_value)
             if _fill_value_committed(shown, fill_value):
                 return True
             # One deterministic retry via the same native-setter fallback already used when

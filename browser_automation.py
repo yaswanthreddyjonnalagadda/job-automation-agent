@@ -6860,6 +6860,8 @@ class JobApplicationAssistant(EmailVerificationMixin):
         Submit button gone, or the site's own applications list shows THIS
         job as applied. Eightfold sites (CBTS) show no thank-you message --
         they jump straight to 'My applications'."""
+        if self._a_box_says_it_was_received(page):
+            return True
         if self.find_submit_button(page) is not None:
             return False  # still on the form
         try:
@@ -7247,6 +7249,35 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     "ATS password with the code emailed to you", domain)
         return self._reset_password_with_emailed_code(page, email, password)
 
+
+    _RECEIPT_BOX_JS = r"""() => {
+        const boxes = [...document.querySelectorAll('[role=dialog], [role=alertdialog], [aria-modal=true]')]
+            .filter(box => box.getClientRects().length && getComputedStyle(box).visibility !== 'hidden');
+        const typed = box => [...box.querySelectorAll('input,textarea,select,[contenteditable=true]')]
+            .filter(e => !e.disabled && e.getClientRects().length
+                && !['hidden','search','button','submit','reset'].includes(e.type || '')).length;
+        return boxes.filter(box => typed(box) < 3)
+            .flatMap(box => [...box.querySelectorAll('h1,h2,h3,h4,p,div,span')]
+                .filter(e => e.getClientRects().length)
+                .map(e => (e.innerText || '').replace(/\s+/g, ' ').trim()))
+            .filter(Boolean);
+    }"""
+
+    def _a_box_says_it_was_received(self, page: Page) -> bool:
+        """True when a box over the page (a dialog, a modal) says the application was received.
+
+        Rackspace's Workday goes back to the job posting, whose own Apply button is still there, and shows
+        "Congratulations! Your application has been successfully submitted." in a box over it: the agent saw the
+        Apply button, took the page for the form it had handed over, and never read the receipt (2 November). A box
+        that holds a form, or has something left to finish, is no receipt."""
+        try:
+            texts = page.evaluate(self._RECEIPT_BOX_JS)
+        except Exception as exc:
+            logger.debug("receipt box: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+            return False
+        import confirmation_text
+        return not any(confirmation_text.STILL_TO_DO.search(t) for t in texts) \
+            and any(len(t) <= 400 and confirmation_text.says_received(t) for t in texts)
 
     def find_submit_button(self, page: Page):
         """Locates the application's own final Submit button so the agent knows
