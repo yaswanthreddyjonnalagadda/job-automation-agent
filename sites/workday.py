@@ -21,6 +21,7 @@ from urllib.parse import urlsplit
 
 from playwright.sync_api import Page
 
+import field_timing
 from .base import SiteAdapter
 
 
@@ -475,6 +476,7 @@ class WorkdayAdapter(SiteAdapter):
             return False
         return (got or "").strip() == year
 
+    @field_timing.timed("fill", lambda self, assistant, page, id_suffix, index=0, *a, **k: f"{id_suffix}[{index}]")
     def fill_by_id_suffix(self, assistant, page: Page, id_suffix: str, index: int, value: str, retries: int = 2) -> bool:
         """Fills the Nth field whose id ends with the given suffix (e.g.
         '--schoolName'). These custom widgets don't associate their visible
@@ -561,6 +563,8 @@ class WorkdayAdapter(SiteAdapter):
                 return True
         return False
 
+    @field_timing.timed("date", lambda self, assistant, page, section_key, date_key, index=0, *a, **k:
+                        f"{section_key}.{date_key}[{index}]")
     def fill_date_spinner(self, assistant, page: Page, section_key: str, date_key: str, index: int, month: str = "", year: str = ""
     ) -> bool:
         """Fills a Workday-style split-spinbutton date widget -- NOT a
@@ -848,6 +852,8 @@ class WorkdayAdapter(SiteAdapter):
                 page.wait_for_timeout(400)  # let the widget settle before the next search, rather than hammering it
         return selected(), missing
 
+    @field_timing.timed("search", lambda self, assistant, page, id_suffix, candidates=(), index=0, *a, **k:
+                        f"{id_suffix}[{index}]")
     def select_from_searchable_input(
         self, assistant, page: Page, id_suffix: str, candidates: list[str], index: int = 0,
         keyboard: bool = True, replace_unsupported: bool = False,
@@ -1462,6 +1468,7 @@ class WorkdayAdapter(SiteAdapter):
                 break
         return texts
 
+    @field_timing.timed("choose", lambda self, assistant, page, id_suffix, index=0, *a, **k: f"{id_suffix}[{index}]")
     def select_from_button_dropdown(self, assistant, page: Page, id_suffix: str, index: int, candidates: list[str], locator=None
     ) -> bool:
         """Picks an option from a button-triggered dropdown (a <button>

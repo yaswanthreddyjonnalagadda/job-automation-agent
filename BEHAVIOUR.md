@@ -786,6 +786,14 @@ An education entry's Field of Study that holds a subject which is none of that e
 (a Master's carrying the Bachelor's "Electrical Engineering") is taken out and searched
 for again; the agent no longer takes "already filled" for "filled correctly" there.
 
+## Where an application's time goes
+
+Every field the agent fills, every list search, every call to a language model and every page
+read is timed, and one line per step is added to `data/field_timings.jsonl` on your computer
+(run, kind of step, the field's label, seconds, ok/failed/error). A line never holds an answer
+or a value, and timing can never stop or slow an application. `python scripts/field_timings.py`
+shows the last run: time by kind of step, and its slowest steps.
+
 ## Job boards are not the employer's site
 
 A link to a job board (Adzuna, ZipRecruiter, Glassdoor, Monster and the like, as well

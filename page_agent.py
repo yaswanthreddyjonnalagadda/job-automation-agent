@@ -61,6 +61,7 @@ except ImportError:
         RuntimeEvent = None
 import answer_engine
 import employment_history
+import field_timing
 import form_fields
 from field_requirements import account_password_fields
 import location_choice
@@ -1613,6 +1614,7 @@ class PageAgent:
                  cover_letter: Optional[Callable[[], Optional[tuple[Path, Path]]]] = None):
         self.assistant, self.claude, self.config, self.profile = assistant, claude, config, profile
         self.resume, self.job, self.tracker, self.key = resume, job, tracker, key
+        field_timing.begin(getattr(job, "company", ""), getattr(job, "title", ""))
         self.job_dir = Path(job_dir) if job_dir else None
         self.resume_file = resume_to_attach(resume_file, config)
         self.cover_letter = cover_letter
@@ -5354,6 +5356,7 @@ class PageAgent:
             logger.debug("_fill_react_datepicker: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
         return False
 
+    @field_timing.timed("field", lambda self, page, answer, control: f"{answer.action}: {control.question}")
     def do(self, page, answer: Answer, control: Control) -> bool:
         tab = self.tab(page)
         if control.role == "group" and not control.name and not control.holds_choices:
@@ -7652,6 +7655,7 @@ class PageAgent:
         entries = adapter_for(getattr(self.tab(page), 'url', '')).entry_map(snapshot)
         return repeated_entries.entry_map(snapshot) if entries is None else entries
 
+    @field_timing.timed("read", lambda *a, **k: "page")
     def read_when_loaded(self, page, wait_seconds: float = 15.0) -> str:
         """The page's snapshot once the frames on it have content.
 

@@ -18,6 +18,7 @@ data/profile_answers.json
 data/profile.json
 # The questions the agent could not answer: which employers you applied to, and why.
 data/unanswered_questions.json
+data/field_timings.jsonl
 # The same questions and the failure notes as one file for the next project (next_project_knowledge.py).
 data/next_project_knowledge.json
 
