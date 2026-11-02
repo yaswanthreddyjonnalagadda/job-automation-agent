@@ -280,3 +280,36 @@ def test_the_employers_the_owner_applied_through_are_scanned_with_the_wanted_tit
     assert ("workday", "rackspace") in scanned and ("ashby", "notion") in scanned and ("icims", "jobs-mutualofenumclaw.icims.com") in scanned
     assert ("greenhouse", "acme") in scanned                           # the owner's own list is still scanned
     assert all(titles == PROFILE["target_titles"] for _e, titles in engine.seen)
+
+
+def test_workday_is_read_page_by_page_until_the_list_ends(monkeypatch):
+    """Workday sorts a search by relevance, not date, so fresh jobs sit on later pages: Rackspace's second page held as
+    many posted this week as its first."""
+    asked = []
+
+    def post(url, json=None, **kw):
+        asked.append(json["offset"])
+        count = 20 if json["offset"] < 40 else 4                     # 44 results: two full pages, then 4
+        items = [{"title": f"Network Engineer {json['offset'] + i}", "locationsText": "Remote",
+                  "externalPath": f"/job/Remote/Network-Engineer-{json['offset'] + i}_R", "postedOn": "Posted 2 Days Ago"}
+                 for i in range(count)]
+        return reply({"total": 44, "jobPostings": items})
+    monkeypatch.setattr(ds.requests, "post", post)
+    monkeypatch.setattr(ds.requests, "get", lambda url, **kw: reply({"jobPostingInfo": {"jobDescription": "x"}}))
+    jobs = ds.fetch_workday_feed(WORKDAY_ENTRY, ["Network Engineer"], now=NOW, max_age_days=7, max_details=100)
+    assert asked == [0, 20, 40]                                        # stops at the short page
+    assert len(jobs) == 44
+
+
+def test_workday_paging_has_a_limit(monkeypatch):
+    asked = []
+
+    def post(url, json=None, **kw):
+        asked.append(json["offset"])
+        return reply({"total": 10000, "jobPostings": [
+            {"title": f"T{json['offset'] + i}", "externalPath": f"/job/x/{json['offset'] + i}", "postedOn": "Posted Today"}
+            for i in range(20)]})
+    monkeypatch.setattr(ds.requests, "post", post)
+    monkeypatch.setattr(ds.requests, "get", lambda url, **kw: reply({}, status=404))
+    ds.fetch_workday_feed(WORKDAY_ENTRY, ["Network Engineer"], now=NOW, max_details=1)
+    assert len(asked) <= 5

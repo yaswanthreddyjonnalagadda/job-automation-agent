@@ -126,8 +126,12 @@ def fetch_ashby_feed(token: str, company: str, timeout: float = 8.0) -> list[dic
         return []
 
 
+WORKDAY_PAGE = 20          # the most Workday returns for one request
+WORKDAY_MAX_PAGES = 5      # so a title is read to its first hundred results at most
+
+
 def fetch_workday_feed(entry: dict, titles: Iterable[str], timeout: float = 15.0, now: Optional[datetime] = None,
-                       max_age_days: int = 7, max_details: int = 12) -> list[dict]:
+                       max_age_days: int = 7, max_details: int = 40) -> list[dict]:
     """A Workday employer's jobs, searched by each wanted title the way its careers page searches.
 
     Workday's list says only "Posted N Days Ago", so only jobs inside `max_age_days` are opened (for their text,
@@ -139,20 +143,28 @@ def fetch_workday_feed(entry: dict, titles: Iterable[str], timeout: float = 15.0
     company = entry.get("company") or tenant
     found: dict[str, dict] = {}
     for title in titles:
-        try:
-            resp = requests.post(f"https://{host}/wday/cxs/{tenant}/{site}/jobs",
-                                 headers={**HEADERS, "Content-Type": "application/json"},
-                                 json={"appliedFacets": {}, "limit": 20, "offset": 0, "searchText": title},
-                                 timeout=timeout)
-            if resp.status_code != 200:
-                continue
-            for item in resp.json().get("jobPostings", []):
-                path = item.get("externalPath") or ""
-                posted = parse_posted(item.get("postedOn"), now)
-                if path and posted and within(posted, max_age_days * 24 + 24, now):
-                    found.setdefault(path, {"item": item, "posted": posted})
-        except Exception as exc:
-            logger.warning("Could not search %s: %s", host, str(exc).splitlines()[0][:100])
+        # Workday sorts a search by relevance, not by date, so a fresh job can sit on any page: read page by page until
+        # a short page says the list has ended (Rackspace's second page held as many posted this week as its first).
+        for offset in range(0, WORKDAY_PAGE * WORKDAY_MAX_PAGES, WORKDAY_PAGE):
+            try:
+                resp = requests.post(f"https://{host}/wday/cxs/{tenant}/{site}/jobs",
+                                     headers={**HEADERS, "Content-Type": "application/json"},
+                                     json={"appliedFacets": {}, "limit": WORKDAY_PAGE, "offset": offset,
+                                           "searchText": title},
+                                     timeout=timeout)
+                if resp.status_code != 200:
+                    break
+                postings = resp.json().get("jobPostings", [])
+                for item in postings:
+                    path = item.get("externalPath") or ""
+                    posted = parse_posted(item.get("postedOn"), now)
+                    if path and posted and within(posted, max_age_days * 24 + 24, now):
+                        found.setdefault(path, {"item": item, "posted": posted})
+                if len(postings) < WORKDAY_PAGE:
+                    break
+            except Exception as exc:
+                logger.warning("Could not search %s: %s", host, str(exc).splitlines()[0][:100])
+                break
     jobs = []
     for path, hit in list(found.items())[:max_details]:
         item, description, url = hit["item"], "", f"https://{host}/{site}{path}"
