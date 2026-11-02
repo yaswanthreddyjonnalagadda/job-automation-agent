@@ -5385,7 +5385,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         site's own values stand. Returns the labels of any box that could not be cleared, so the form is held for
         the owner and never sent with one ticked."""
         from config import site_prefill_policy
-        if site_prefill_policy() != "correct":
+        if not safety.may_overrule(provenance.SITE, site_prefill_policy()):
             return []
         stuck: list[str] = []
         boxes = page.locator("input[type='checkbox']")

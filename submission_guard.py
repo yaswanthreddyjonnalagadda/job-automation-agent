@@ -46,8 +46,15 @@ def _guard_script(capability: str) -> str:
       const greenhousePostingEntry = GREENHOUSE_POSTING_ENTRY;
       const bankofamericaPostingEntry = BANKOFAMERICA_POSTING_ENTRY;
       const structuralPostingEntry = STRUCTURAL_POSTING_ENTRY;
-      const postingEntry = candidate => adpPostingEntry(candidate) || greenhousePostingEntry(candidate) || bankofamericaPostingEntry(candidate)
-        || structuralPostingEntry(candidate);
+      const postingEntry = candidate => {
+        if (adpPostingEntry(candidate) || greenhousePostingEntry(candidate) || bankofamericaPostingEntry(candidate)) {
+          return true;
+        }
+        if (location.hostname === 'careers.bankofamerica.com' || candidate.hasAttribute('data-bactmln') || candidate.getAttribute('data-popup-target') === 'apply-popup') {
+          return false;
+        }
+        return structuralPostingEntry(candidate);
+      };
       const state = {active: false, authorization: null, denials: [], sequence: 0};
       const selector = 'button, input[type="submit"], input[type="image"], [role="button"], a';
       const normalize = value => String(value || "").replace(/\s+/g, " ").trim();

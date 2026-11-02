@@ -314,8 +314,8 @@ class WorkdayAdapter(SiteAdapter):
                     re.I,
                 ):
                     names.append("Other")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("WORKDAY: school Other prompt detection: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
         return [n for n in dict.fromkeys(n.strip() for n in names) if n]
 
     @staticmethod
@@ -368,8 +368,8 @@ class WorkdayAdapter(SiteAdapter):
             if typed_probe:
                 try:
                     field.fill("")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("WORKDAY: clearing probe field: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
             try:
                 page.keyboard.press("Escape")
             except Exception as exc:
@@ -826,8 +826,8 @@ class WorkdayAdapter(SiteAdapter):
                 missing.append(value)
             try:
                 field.fill("")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("WORKDAY: school Other prompt detection: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
             page.keyboard.press("Escape")
             if popup.count() and popup.is_visible():
                 heading = page.get_by_role("heading", name="Skills", exact=True)
@@ -970,8 +970,8 @@ class WorkdayAdapter(SiteAdapter):
             if not keyboard:
                 try:
                     field.fill("")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("WORKDAY: clearing school field: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
                 page.keyboard.press("Escape")       # none of the owner's names is in the list: left for the owner
                 return False
             # None of our wordings matched this tenant's list. Read what it
