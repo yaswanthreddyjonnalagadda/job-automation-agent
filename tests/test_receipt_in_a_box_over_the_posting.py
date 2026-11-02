@@ -68,3 +68,11 @@ def test_a_dialog_holding_a_form_is_not_a_receipt(page):
 def test_a_hidden_dialog_is_not_a_receipt(page):
     page.set_content(POSTING + CONGRATULATIONS.replace('role="dialog"', 'role="dialog" style="display:none"'))
     assert assistant().submission_confirmed(page, "Network Engineer IV - US") is False
+
+
+@pytest.mark.parametrize("reply", [True, False, None, "text", [1, 2]])
+def test_a_page_that_does_not_answer_with_a_list_of_texts_has_no_receipt_in_a_box(reply):
+    class Page:
+        def evaluate(self, script, *args):
+            return reply
+    assert assistant()._a_box_says_it_was_received(Page()) is False

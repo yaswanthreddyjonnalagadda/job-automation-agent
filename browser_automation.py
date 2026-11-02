@@ -7275,6 +7275,9 @@ class JobApplicationAssistant(EmailVerificationMixin):
         except Exception as exc:
             logger.debug("receipt box: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
             return False
+        if not isinstance(texts, list):
+            return False             # a page that cannot say what its boxes hold has no receipt in one
+        texts = [t for t in texts if isinstance(t, str)]
         import confirmation_text
         return not any(confirmation_text.STILL_TO_DO.search(t) for t in texts) \
             and any(len(t) <= 400 and confirmation_text.says_received(t) for t in texts)
