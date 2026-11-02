@@ -447,6 +447,10 @@ submitted and closes its browser. A page that only says "thank you for your inte
 applications "received after 5pm", or a receipt that still tells you to do something ("Verify your email to finish 
 applying") is never taken for a receipt.
 
+**Cover letters.** With GENERATE_COVER_LETTERS on (it is, in your setup), the agent writes a cover letter for the 
+job and attaches it wherever the form offers a place for one, whether the form requires it or not. A form with no 
+place for a cover letter gets none, and nothing is written for it. A place that already holds a letter is left alone.
+
 ## An account that already exists
 
 When an employer's page says an account already exists for your email, the

@@ -4681,15 +4681,10 @@ class PageAgent:
                               Control(ref="", role="button", name="resume")))
                 continue
             if action == "upload_cover_letter":
-                # Task 4.3: Ensure cover letter generation is strictly lazy-loaded:
-                # only trigger if an explicit, required cover letter target or text area is actively detected
-                is_required = any(
-                    matches.search(f"{c.container} {c.name}")
-                    and ("*" in (c.name or "") or "*" in (c.container or "") or "*" in (c.question or "") or "required" in (c.context or "").lower())
-                    for c in controls
-                )
-                if not is_required:
-                    continue
+                # Wherever the form offers a place for a cover letter, one is written and attached -- required or
+                # not (the owner, 2 November 2026: Fastly's optional "Cover Letter" went out empty, f298). Still
+                # lazy: the letter is written below, only once an upload control for it has been found, so no model
+                # call is spent on a form that has no place for one.
                 if self._letter_attached or self.cover_letter is None:
                     continue
             control = _upload_control(controls, matches) or self._file_input_for(page, controls, matches)

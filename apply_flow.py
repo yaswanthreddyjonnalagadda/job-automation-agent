@@ -466,6 +466,17 @@ def prepare_materials(claude, resume, job, profile, job_dir: Path, tracker=None,
     return _resume_with_current_email(generic, profile, job, job_dir)
 
 
+def cover_letter_for(config, made: dict, write):
+    """The cover letter for this job: written the first time a form shows a place for one, then reused, and only when
+    the owner has switched cover letters on (GENERATE_COVER_LETTERS). Whether the form requires it does not matter --
+    wherever it offers a place, the letter goes in (f298). `write` makes it; `made` keeps it for the rest of the run."""
+    if not getattr(config, "generate_cover_letters", False):
+        return None
+    if "letter" not in made:
+        made["letter"] = write()
+    return made["letter"]
+
+
 def prepare_cover_letter(claude, resume, job, profile, job_dir: Path, tracker=None, key: str = "") -> tuple[Path, Path] | None:
     """Writes the cover letter as text + PDF and returns (txt, pdf). Only
     called once the form has shown it has a cover-letter field, so no Claude
@@ -1119,19 +1130,15 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
     made: dict = {}
     experience_data = experience_data or {}
 
+    def write_cover_letter():
+        letter = prepare_cover_letter(claude, resume, job, profile, job_dir, tracker, key)
+        if letter:
+            tracker.update_materials(key, str(resume_file), str(letter[1]))
+            store_materials(tracker, key, None, letter[1])
+        return letter
+
     def cover_letter():
-        if not getattr(config, "generate_cover_letters", False):
-            return None
-        # Task 4.3: Strict lazy compilation - only if explicit required cover letter field detected
-        has_req = getattr(assistant, "has_required_cover_letter_field", None)
-        if has_req and not has_req(page):
-            return None
-        if "letter" not in made:
-            made["letter"] = prepare_cover_letter(claude, resume, job, profile, job_dir, tracker, key)
-            if made["letter"]:
-                tracker.update_materials(key, str(resume_file), str(made["letter"][1]))
-                store_materials(tracker, key, None, made["letter"][1])
-        return made["letter"]
+        return cover_letter_for(config, made, write_cover_letter)
 
     store_materials(tracker, key, resume_file, None)
     agent = page_agent.PageAgent(assistant, claude, config, profile, resume, job, tracker, key,
@@ -2302,9 +2309,12 @@ def main() -> None:
                 store_materials(tracker, key, attach_resume, None)
                 materials_stored = True
 
-            # Task 4.3: Strict lazy compilation - only when this page has an explicit, required field for one
-            has_req_cl = getattr(assistant, "has_required_cover_letter_field", getattr(assistant, "has_cover_letter_field", None))
-            if has_req_cl and has_req_cl(page):
+            # Written only when this page has a place for one: any place when the owner has switched cover letters
+            # on, a required one always (f298).
+            offers_cl = getattr(assistant, "has_cover_letter_field", None)
+            requires_cl = getattr(assistant, "has_required_cover_letter_field", None)
+            if (offers_cl and offers_cl(page) and getattr(config, "generate_cover_letters", False)) \
+                    or (requires_cl and requires_cl(page)):
                 if letter is None:
                     letter = prepare_cover_letter(claude, resume, job, profile, job_dir, tracker, key)
                     if letter:
