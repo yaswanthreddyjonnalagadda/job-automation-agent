@@ -118,7 +118,8 @@ each card says how long ago it was posted. A site that dates a job only by its d
 Ago") is never shown under "Last hour", and a job whose site gives no posting date is not shown at all:
 the page never guesses. A job you have already applied to, skipped, been turned down for, started or
 dismissed is left out (the tracker is only read). ADP employers are not read yet: ADP's list has no link
-to a single job.
+to a single job. When your profile says you are open to relocation, a job with a wanted title elsewhere in your
+country counts (a little below one in your own place or remote); a job in another country does not.
 
 Each card shows how long ago the job was posted (or found, when the site gives no date),
 a "New" badge for the last three days, the first place with "+N more",
