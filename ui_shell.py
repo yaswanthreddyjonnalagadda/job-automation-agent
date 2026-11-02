@@ -6,6 +6,32 @@ loaded from the internet: the dashboard works offline.
 """
 from __future__ import annotations
 
+import re
+
+def submit_promise() -> str:
+    """What the dashboard may tell the owner about submitting. It follows the setting, so the copy is never a promise
+    the agent will not keep (verified auto-submit can send an application without the owner pressing Submit)."""
+    import config
+    if config.auto_submit_verified_only_enabled():
+        return "Submits only when every answer is verified; otherwise stops for you."
+    return "You review everything, and you submit it yourself."
+
+
+def company_label(company) -> str:
+    """The company as shown. A value that cannot be a name (nothing, or a single letter or symbol) is shown as unclear
+    rather than as if it were one; the stored value is untouched. A longer company that also appears in the title is
+    kept, because that is often right ("Acme" in "Acme Network Engineer")."""
+    text = str(company or "").strip()
+    return text if len(re.findall(r"[^\W_]", text)) >= 2 else "Company unclear"
+
+
+def brand_tagline() -> str:
+    import config
+    if config.auto_submit_verified_only_enabled():
+        return "submits only what is verified"
+    return "applies for you, you submit"
+
+
 # A briefcase with a tick, drawn inline: the tab icon and the header mark.
 LOGO_SVG = ('<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">'
             '<rect x="2" y="8" width="28" height="20" rx="5" fill="#2f5bd3"/>'
@@ -132,9 +158,9 @@ input:focus, select:focus, textarea:focus { outline:none; border-color:var(--acc
 main:focus { outline:none; }
 button:disabled { opacity:.5; cursor:not-allowed; filter:none; }
 .button:hover { text-decoration:none; }
-button, .button { min-height:38px; transition:background-color .15s, border-color .15s, box-shadow .15s, transform .15s; }
+button, .button { min-height:40px; transition:background-color .15s, border-color .15s, box-shadow .15s, transform .15s; }
 button:active:not(:disabled) { transform:translateY(1px); }
-button.ghost.small, button.small, .button.small { min-height:32px; }
+button.ghost.small, button.small, .button.small { min-height:40px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration:.001ms !important; animation-iteration-count:1 !important;
                            transition-duration:.001ms !important; scroll-behavior:auto !important; }
@@ -180,7 +206,8 @@ td.label, th.label { width:150px; white-space:nowrap; color:var(--muted); font-s
 /* --- an overflow menu for row actions -------------------------------------------------------------- */
 details.menu { position:relative; display:inline-block; }
 details.menu > summary { list-style:none; cursor:pointer; border:1px solid var(--line); border-radius:var(--radius-sm);
-  padding:5px 10px; background:var(--surface); color:var(--ink-2); font-weight:700; line-height:1.2; }
+  padding:5px 10px; background:var(--surface); color:var(--ink-2); font-weight:700; line-height:1.2;
+  min-height:40px; min-width:40px; display:inline-flex; align-items:center; justify-content:center; }
 details.menu > summary::-webkit-details-marker { display:none; }
 details.menu[open] > summary { background:var(--surface-2); }
 details.menu .menu-items { position:absolute; right:0; top:calc(100% + 6px); z-index:30; min-width:200px;
@@ -188,7 +215,7 @@ details.menu .menu-items { position:absolute; right:0; top:calc(100% + 6px); z-i
   padding:6px; display:flex; flex-direction:column; gap:2px; }
 details.menu .menu-items form { margin:0; }
 details.menu .menu-items button { width:100%; justify-content:flex-start; background:transparent; color:var(--ink-2);
-  border:0; padding:8px 10px; font-weight:500; border-radius:6px; }
+  border:0; padding:8px 10px; font-weight:500; border-radius:6px; min-height:40px; }
 details.menu .menu-items button:hover { background:var(--surface-2); }
 details.menu .menu-items button.danger { color:var(--bad); }
 tr.app:nth-last-child(-n+2):not(:nth-child(-n+3)) details.menu .menu-items { top:auto; bottom:calc(100% + 6px); }
@@ -227,8 +254,11 @@ details.menu .menu-items hr { border:0; border-top:1px solid var(--line-2); marg
 .stepper li.done::before { background:var(--accent); border-color:var(--accent); }
 .stepper li.done::after { background:var(--accent); }
 .stepper li.blocked::before { background:var(--warn); border-color:var(--warn); }
-.shot { display:block; border:1px solid var(--line); border-radius:var(--radius-sm); overflow:hidden; }
-.shot img { display:block; width:100%; height:auto; }
+.shot { display:block; border:1px solid var(--line); border-radius:var(--radius-sm); overflow:hidden; max-height:400px; }
+.shot img { display:block; width:100%; height:400px; object-fit:cover; object-position:top; }
+.nav a[data-count]::after { content:attr(data-count); display:inline-block; min-width:20px; margin-left:6px; padding:0 6px; border-radius:99px; background:var(--warn); color:#fff; font-size:12px; font-weight:700; line-height:20px; text-align:center; }
+.by { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+.by-icon { flex:none; color:var(--muted); }
 .grid-2 { display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:16px; }
 ul.plain { margin:6px 0 0 18px; padding:0; }
 
@@ -265,9 +295,9 @@ HEAD = """<!doctype html>
 HEADER = """
 <a class="skip-link" href="#main">Skip to main content</a>
 <header class="topbar"><div class="topbar-inner">
-  <a class="brand" href="/">""" + LOGO_SVG + """<span>Job Agent<small>applies for you, you submit</small></span></a>
+  <a class="brand" href="/">""" + LOGO_SVG + """<span>Job Agent<small>{{ brand_tagline() }}</small></span></a>
   <nav class="nav" aria-label="Main">
-    <a href="/" {% if request.path == '/' or request.path.startswith('/application/') %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/' or request.path.startswith('/application/') }}">Applications</a>
+    {% set _n = needs_you_count() %}<a href="/" {% if _n %}data-count="{{ _n }}" aria-label="Applications, {{ _n }} need you" {% endif %}{% if request.path == '/' or request.path.startswith('/application/') %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/' or request.path.startswith('/application/') }}">Applications</a>
     <a href="/progress" {% if request.path == '/progress' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/progress' }}">Progress</a>
     <a href="/profile" {% if request.path in ('/profile', '/setup') %}aria-current="page" {% endif %}class="{{ 'active' if request.path in ('/profile', '/setup') }}">Profile</a>
     <a href="/answers" {% if request.path == '/answers' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/answers' }}">Saved answers</a>
@@ -326,4 +356,4 @@ def group_counts(records) -> dict:
 
 def install(app) -> None:
     """Make the helpers above available to every template."""
-    app.jinja_env.globals.update(status_label=status_label, status_class=status_class, status_group=status_group)
+    app.jinja_env.globals.update(company_label=company_label, submit_promise=submit_promise, brand_tagline=brand_tagline, status_label=status_label, status_class=status_class, status_group=status_group)

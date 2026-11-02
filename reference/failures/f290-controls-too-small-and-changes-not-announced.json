@@ -1,0 +1,19 @@
+{
+  "id": "f290",
+  "date": "2026-11-01",
+  "class": "Interactive controls were sized one rule at a time and below the touch minimum, and a status change was shown only visually",
+  "symptom": "87 controls on the dashboard were under 44px tall (buttons 32-38px, filter chips 30-32px, the row menu button 30px). When the agent changed from Working to Waiting for you, the badge changed but nothing was spoken to a screen reader, and the number of applications needing the owner was not in a live region.",
+  "site": "Flask dashboard (ui_shell.py, static/cockpit.css, static/cockpit.js, web_ui.py), 1 November 2026 UI review",
+  "root_cause": "Each control kind carried its own hard-coded min-height with no shared floor, so new controls copied the small sizes; and dynamic status was written into the DOM as visible text only, with no live region, so assistive technology had nothing to announce.",
+  "why_tests_missed": "No test looked at control sizes (CSS or rendered), and no test asked whether a changing status was exposed to assistive technology. Layout tests checked markup, not geometry.",
+  "fix": "Every button, chip, filter and row-menu control has a min-height of 40px or more (a 40px floor), checked by a test that reads every rule in the shared and cockpit stylesheets. The cockpit speaks status changes through one persistent polite live region (the first read is silent), and the Applications page carries a live region with the number of applications that need the owner. The narrow-screen nav already scrolled with an edge fade; a test now keeps it so.",
+  "tests": [
+    "tests/test_touch_nav_announce.py::test_no_control_is_given_a_height_under_the_touch_minimum",
+    "tests/test_touch_nav_announce.py::test_each_kind_of_control_states_a_minimum_height",
+    "tests/test_touch_nav_announce.py::test_the_nav_scrolls_sideways_and_fades_at_the_edge_on_a_narrow_screen",
+    "tests/test_touch_nav_announce.py::test_a_status_change_is_put_in_a_live_region",
+    "tests/test_touch_nav_announce.py::test_the_first_status_read_is_not_announced",
+    "tests/test_touch_nav_announce.py::test_the_number_needing_the_owner_is_in_a_live_region"
+  ],
+  "prevention": "Give interactive controls one shared size floor and test every stylesheet rule against it. Anything that changes after load (status, counts) is written to a live region, and its first value is not announced."
+}

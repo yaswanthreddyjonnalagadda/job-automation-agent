@@ -1,0 +1,23 @@
+{
+  "id": "f292",
+  "date": "2026-11-01",
+  "class": "A page showed machine names and unchecked numbers as if they were findings, and made the owner wait for its slowest check",
+  "symptom": "Application history read 'event: note' and 'auto_submit' repeated row after row. 'Not eligible ... decided' gave no date, no reasons and no hint that the owner had submitted it. The answers 'By' column showed raw codes. Change status sat one dropdown away from a finished application. The Progress funnel printed 100% at every step with no note of what it counted, and empty Replied and Interviews tiles gave no way to fill them. A worker reporting 0% CPU, 0% RAM and an unknown version was shown as healthy, and System Health stalled about five seconds before showing anything.",
+  "site": "Flask dashboard detail, Progress and System Health pages (web_ui.py, detail_view.py, health_view.py, web_progress.py, templates/health.html), 1 November 2026 UI review",
+  "root_cause": "Stored values (event kinds, answer sources, a decision payload, worker metrics) were printed as stored, and a derived figure was shown without asking whether it carried information; the health page ran its slowest probe inside the request instead of after the page was drawn.",
+  "why_tests_missed": "Page tests asserted that sections rendered, not what a reader would see in them; no test fed a worker that has not reported, a funnel that is 100% everywhere, or a log of repeated events; and nothing timed a page against its slowest dependency.",
+  "fix": "detail_view maps event kinds to plain labels and collapses consecutive repeats into one row with a count, shows who answered as an icon and words, and explains a decision in words with its date, stored reasons, and whether the owner submitted it. Change status moved into the more-actions menu. The Progress funnel says what it counts, hides percentages that are 100% at every step, and tells the owner how to fill the outcome tiles. health_view.worker_state calls a worker with no CPU, no memory and no known version Stale. The browser probe moved to /health/browser and the page shows Checking and fills the row when it answers.",
+  "tests": [
+    "tests/test_detail_progress_health.py::test_an_event_kind_reads_as_words",
+    "tests/test_detail_progress_health.py::test_repeated_rows_become_one_row_with_a_count",
+    "tests/test_detail_progress_health.py::test_who_answered_is_an_icon_and_words",
+    "tests/test_detail_progress_health.py::test_an_unknown_source_cannot_inject_markup",
+    "tests/test_detail_progress_health.py::test_not_eligible_on_something_you_submitted_says_so",
+    "tests/test_detail_progress_health.py::test_change_status_lives_in_the_more_menu_not_loose_on_the_page",
+    "tests/test_detail_progress_health.py::test_a_percentage_that_is_100_at_every_step_is_not_shown",
+    "tests/test_detail_progress_health.py::test_empty_outcome_tiles_say_how_to_fill_them",
+    "tests/test_detail_progress_health.py::test_a_worker_that_has_not_really_reported_is_stale_not_healthy",
+    "tests/test_detail_progress_health.py::test_the_health_page_does_not_wait_for_the_browser_check"
+  ],
+  "prevention": "Show stored values in words, collapse repeats, and never print a derived figure that carries no information. Report a component as healthy only on evidence it reported, and run slow probes after the page is drawn."
+}

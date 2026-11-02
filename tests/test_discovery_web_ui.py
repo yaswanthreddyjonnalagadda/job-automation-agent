@@ -30,15 +30,17 @@ def client(monkeypatch, tmp_path):
     """)
     ensure_discovery_schema(conn)
     # Insert test discovered job
+    from datetime import datetime, timedelta, timezone
+    posted = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()      # posted today: inside the page's window
     conn.execute("""
         INSERT INTO discovered_jobs (
             id, dedup_key, company_name, company_token, ats_type, job_title,
             location, is_remote, url, match_score, matched_skills, status,
-            discovered_at, updated_at
+            discovered_at, updated_at, posted_at, posted_precision
         ) VALUES (1, 'k1', 'Cloudflare', 'cloudflare', 'greenhouse', 'Senior Network Engineer',
                   'Remote', 1, 'https://boards.greenhouse.io/cloudflare/jobs/123', 95, '[\"Network\"]',
-                  'discovered', '2026-10-22T00:00:00Z', '2026-10-22T00:00:00Z')
-    """)
+                  'discovered', '2026-10-22T00:00:00Z', '2026-10-22T00:00:00Z', ?, 'minute')
+    """, (posted,))
     conn.commit()
     conn.close()
 
@@ -65,7 +67,7 @@ def test_index_renders_discovered_jobs(client):
     assert "Suggested jobs" in html
     assert "Cloudflare" in html
     assert "Senior Network Engineer" in html
-    assert "95 percent match" in html and "Start application" in html
+    assert "Title match" in html and "95%" in html and "Start application" in html
 
 
 def test_dismiss_discovered_job(client):

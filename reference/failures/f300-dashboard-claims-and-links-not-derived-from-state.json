@@ -1,0 +1,20 @@
+{
+  "id": "f300",
+  "date": "2026-11-01",
+  "class": "The dashboard promised something that was not true, or linked to something it could not serve",
+  "symptom": "The header said 'you submit' and the resting card 'You review everything before anything is submitted' while verified auto-submit was on. 'View log' on every run answered 404. Links carried the owner's full Windows user-folder path. A submitted or skipped application still showed 'What to do'. Suggested jobs showed a match percentage that read as fit but measured only the title, location and seniority. 'Needs you' looked the same at 0 and above 0.",
+  "site": "Flask dashboard (web_ui.py, ui_shell.py, templates/cockpit_card.html), 1 November 2026 UI review",
+  "root_cause": "Display text and links were written once, as fixed strings and fixed URLs, instead of being computed from the thing they describe: the copy did not read the auto-submit setting, a link was drawn without asking whether the viewer would serve the file (the viewer requires a manifest beside it, which run logs never have), a link carried the absolute path instead of a reference, an instruction was shown regardless of the application's state, and a number was shown without naming what it measures.",
+  "why_tests_missed": "Dashboard tests checked that a link was present and shaped as the code built it (one even asserted the absolute path), never that the link could be opened or that the copy matched the setting. No test rendered the page with auto-submit on, and none followed a link.",
+  "fix": "ui_shell.submit_promise and brand_tagline read the one auto-submit reader (config.auto_submit_verified_only_enabled), so the copy follows the setting. Links to logs and captures are drawn only when web_ui.artifact_ok says the viewer will serve them, and carry a project-relative reference (web_ui._artifact_ref and _artifact_path), never the owner's path. 'What to do' is hidden for done and skipped statuses. The score is labelled 'Title match' with what it measures. The 'Needs you' chip is dimmed at 0 and highlighted above 0, with a count on the Applications tab. The screenshot is a 400px thumbnail.",
+  "tests": [
+    "tests/test_dashboard_tells_the_truth.py::test_the_header_promise_follows_the_auto_submit_setting",
+    "tests/test_dashboard_tells_the_truth.py::test_the_page_does_not_say_you_review_everything_when_auto_submit_is_on",
+    "tests/test_dashboard_tells_the_truth.py::test_an_unservable_log_or_screenshot_is_not_linked",
+    "tests/test_dashboard_tells_the_truth.py::test_artifact_links_never_carry_the_owners_absolute_path",
+    "tests/test_dashboard_tells_the_truth.py::test_finished_applications_are_not_told_what_to_do",
+    "tests/test_dashboard_tells_the_truth.py::test_the_match_percentage_says_what_it_measures",
+    "tests/test_dashboard_tells_the_truth.py::test_needs_you_is_quiet_at_zero_and_loud_above_zero"
+  ],
+  "prevention": "Compute every claim and every link from the state it describes: copy from the setting, a link from whether the target can be served, an instruction from the application's status. Never put an absolute path in a URL, and render the page under each setting in a test."
+}

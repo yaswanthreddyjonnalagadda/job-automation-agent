@@ -39,6 +39,12 @@ PROFILE_PATH = Path(os.getenv("PROFILE_PATH", str(DATA_DIR / "profile.json")))
 MASTER_RESUME_PATH = BASE_DIR / "assets" / "master_resume.pdf"
 
 
+def auto_submit_verified_only_enabled() -> bool:
+    """Whether the owner turned verified auto-submit on: the one reader of the setting (the dashboard's copy asks
+    this too, so what it promises is what the agent will do)."""
+    return os.getenv("AUTO_SUBMIT_VERIFIED_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class UserProfile:
     """The client's job-search profile.
@@ -278,10 +284,7 @@ class AppConfig:
     # uploaded documents match the tracked application, and nothing uncertain
     # (CAPTCHA, attestation, ambiguous choice, warning) is on the page --
     # see safety.evaluate_auto_submit().
-    auto_submit_verified_only: bool = field(
-        default_factory=lambda: os.getenv("AUTO_SUBMIT_VERIFIED_ONLY", "").strip().lower()
-        in {"1", "true", "yes", "on"}
-    )
+    auto_submit_verified_only: bool = field(default_factory=lambda: auto_submit_verified_only_enabled())
     # Deprecated compatibility flag. Automatic submission is authorized only
     # by auto_submit_verified_only; keeping this field avoids breaking callers
     # that still read AUTO_SUBMIT from older configuration files.

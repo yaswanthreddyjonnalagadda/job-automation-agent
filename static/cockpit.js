@@ -14,6 +14,24 @@
   let polling = false;
   let failures = 0;
   let lastState = null;
+  let announced = null;     // the status last spoken; null until the first read, which is not announced
+
+  // Put a change in a live region so a screen reader speaks it; the sighted owner sees the badge change.
+  function announce(message) {
+    let el = $('sr-announce');
+    if (!el) {
+      el = make('div', { id: 'sr-announce', class: 'sr-only', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' });
+      document.body.append(el);
+    }
+    el.textContent = '';
+    setTimeout(() => { el.textContent = message; }, 50);
+  }
+  function noteStatus(label, detail) {
+    const first = announced === null;
+    const changed = label !== announced;
+    announced = label;
+    if (!first && changed) announce(`Application status: ${label}${detail ? ' – ' + detail : ''}`);
+  }
 
   const $ = (id) => document.getElementById(id);
   const make = (tag, props = {}, ...kids) => {
@@ -224,6 +242,7 @@
     if (!running && !handoff) {
       card.classList.remove('is-active', 'is-stalled', 'is-handoff');
       if (dot) dot.className = 'cockpit-status-dot';
+      noteStatus('Idle');
       if (status) status.textContent = 'Idle';
       ['btn-continue', 'btn-raise', 'btn-stop'].forEach((id) => setVisible(id, false));
       renderBanner(null);
@@ -236,6 +255,7 @@
     const warning = data.loop_status === 'warning';
     const waiting = !!data.is_waiting;
     card.classList.toggle('is-stalled', stalled);
+    noteStatus(handoff ? 'Needs you' : waiting ? 'Waiting for you' : (data.stage || 'Working'), data.job_title);
     if (status) status.textContent = waiting ? 'Waiting for you' : (data.stage || 'Working');
     if (dot) dot.className = stalled ? 'cockpit-status-dot danger'
       : (warning || handoff || waiting) ? 'cockpit-status-dot warning' : 'cockpit-status-dot pulsing';
@@ -304,16 +324,26 @@
       confirmText: 'Stop application', danger: true });
     if (!yes) return;
     const res = await postJson('/api/cockpit/stop');
-    toast(res.ok === false ? (res.error || 'Could not stop it.') : 'Stopped.', res.ok === false);
+    if (res.ok === false) toast(res.error || 'Could not stop it.', true);
+    else if (res.status === 'not_running') toast('Nothing was running.');
+    else toast('Stopped.');
     fetchState();
   }
   async function raiseBrowser() {
     const res = await postJson('/api/cockpit/raise-browser');
     toast(!res.ok ? (res.error || 'Could not reach the browser window.') : (res.raised ? 'Browser brought to the front.' : 'No agent browser window was found.'), !res.ok || !res.raised);
   }
-  async function solveHandoff(id) {
-    const res = await postJson('/api/handoff/resolve', { handoff_id: id, action: 'check_and_resume' });
-    toast(res.ok ? 'Checked. The agent is carrying on.' : (res.error || 'It still shows on the page. Finish it in the browser window first.'), !res.ok);
+  async function solveHandoff(id, button) {
+    // Only the next status refresh can say whether the agent carried on, so this says "Checking" and no more.
+    const label = button ? button.textContent : '';
+    if (button) { button.disabled = true; button.textContent = 'Checking…'; }
+    try {
+      const res = await postJson('/api/handoff/resolve', { handoff_id: id, action: 'check_and_resume' });
+      toast(res.ok ? 'Checking the page… the status above updates when the agent has looked.'
+                   : (res.error || 'It still shows on the page. Finish it in the browser window first.'), !res.ok);
+    } finally {
+      if (button) { button.disabled = false; button.textContent = label; }
+    }
     fetchState();
   }
   async function editAnswer(id, question, current) {
@@ -358,7 +388,7 @@
     if (act === 'continue') resumeRun();
     else if (act === 'stop') stopRun();
     else if (act === 'raise-browser') raiseBrowser();
-    else if (act === 'solve') solveHandoff(t.dataset.handoff);
+    else if (act === 'solve') solveHandoff(t.dataset.handoff, t);
     else if (act === 'edit-answer') editAnswer(t.dataset.id, t.dataset.question, t.dataset.value);
   });
 

@@ -15,6 +15,7 @@ launch a browser that is signed into their employer ATS accounts.
 
 from __future__ import annotations
 
+import functools
 import io
 import logging
 import json
@@ -29,9 +30,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, Response, abort, redirect, render_template_string, request, send_file, url_for
+from flask import Flask, Response, abort, g, redirect, render_template_string, request, send_file, url_for
 
 import diagnostics
+import detail_view
+import discovered_view
+import health_view
 diagnostics.install_log_privacy()
 import application_status
 import ui_shell
@@ -67,6 +71,62 @@ import web_guard  # noqa: E402
 
 web_guard.install(app)
 ui_shell.install(app)
+
+
+# ----------------------------------------------------------------------
+# Links to files the agent wrote (logs, screenshots, page captures)
+# ----------------------------------------------------------------------
+def _artifact_ref(path) -> str:
+    """The reference a link carries for a file: its place inside the project, never the owner's own folders.
+    A file outside the project has no reference."""
+    try:
+        return Path(path).resolve().relative_to(BASE_DIR.resolve()).as_posix()
+    except (ValueError, OSError):
+        return ""
+
+
+def _artifact_path(ref) -> Path:
+    """The file a link's reference names (a project-relative reference; an absolute path from an old link still works).
+    Whether it may be served is the route's decision, not this one's."""
+    candidate = Path(str(ref or ""))
+    return (candidate if candidate.is_absolute() else BASE_DIR / candidate).resolve()
+
+
+@functools.lru_cache(maxsize=512)
+def _servable_at(path: str, mtime: float, size: int) -> bool:
+    return diagnostics.read_safe_artifact(Path(path)) is not None
+
+
+def _artifact_servable(path) -> bool:
+    """Whether the viewer will really serve this file. A link that answers 404 is worse than none."""
+    try:
+        target = Path(path)
+        stat = target.stat()
+        return _servable_at(str(target), stat.st_mtime, stat.st_size)
+    except OSError:
+        return False
+
+
+def artifact_ok(path) -> bool:
+    return bool(path) and bool(_artifact_ref(path)) and _artifact_servable(path)
+
+
+def needs_you_count() -> int:
+    """How many applications are waiting for the owner (the badge on the Applications tab). Never breaks a page."""
+    if "needs_you" in g:
+        return g.needs_you
+    try:
+        g.needs_you = ui_shell.group_counts(get_tracker().list_all())["needs"]
+    except Exception:
+        g.needs_you = 0
+    return g.needs_you
+
+
+app.jinja_env.filters["aref"] = _artifact_ref
+app.jinja_env.globals.update(decision_view=detail_view.decision_view, answered_by=detail_view.answered_by,
+                             history_rows=detail_view.group_events, worker_state=health_view.worker_state)
+app.jinja_env.globals.update(artifact_ok=lambda p: artifact_ok(p), needs_you_count=lambda: needs_you_count())
+
 
 from web_setup import setup_pages  # noqa: E402  (the pages import web_ui back, lazily)
 
@@ -240,8 +300,37 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 def scan_discovered():
     from job_discovery import JobDiscoveryEngine
     engine = JobDiscoveryEngine()
-    engine.scan_all(min_match_threshold=60)
+    # Besides the owner's own list, every employer an application was already made through is scanned.
+    try:
+        engine.history = [(a.company, a.url) for a in get_tracker().list_all() if getattr(a, "url", "")]
+    except Exception as exc:
+        logger.warning("Could not read the applications to find employers: %s", str(exc).splitlines()[0][:100])
+    stats = engine.scan_all(min_match_threshold=60)
+    _remember_scan(stats)
     return redirect(url_for("index"))
+
+
+_LAST_SCAN = BASE_DIR / "data" / "_last_scan.json"
+
+
+def _remember_scan(stats) -> None:
+    """What the last scan did, so the page can say so after it reloads (when, and how many boards)."""
+    try:
+        record = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                  "boards": int((stats or {}).get("companies_scanned") or 0),
+                  "saved": int((stats or {}).get("relevant_jobs_saved") or 0)}
+        _LAST_SCAN.write_text(json.dumps(record), encoding="utf-8")
+    except (OSError, TypeError, ValueError) as _swallowed:
+        logger.debug("_remember_scan: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+
+
+def last_scan() -> dict:
+    try:
+        record = json.loads(_LAST_SCAN.read_text(encoding="utf-8"))
+        record["at"] = datetime.fromisoformat(record["at"])
+        return record
+    except (OSError, ValueError, KeyError):
+        return {}
 
 
 @app.post("/api/discovered/<int:job_id>/apply")
@@ -1188,29 +1277,35 @@ def api_application_answers(app_id: int):
     return {"ok": True, "answers": answers}
 
 
+def _browser_check() -> dict:
+    """Whether the browser the agent drives can be found (slow: it starts Playwright's driver)."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            return {"title": "Playwright Chromium", "ok": True, "message": f"Browser located: {Path(p.chromium.executable_path).name}"}
+    except Exception as exc:
+        return {"title": "Playwright Chromium", "ok": False,
+                "message": f"Chromium not runnable: {str(exc).splitlines()[0][:100]}",
+                "hint": "Run `python -m playwright install chromium`"}
+
+
+@app.get("/health/browser")
+def health_browser():
+    return _browser_check()
+
+
 @app.get("/health")
 def health_check():
     import config as cfg_mod
 
     checks = {}
 
-    # 1. Playwright Chromium
-    try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            exec_path = p.chromium.executable_path
-            checks["playwright"] = {
-                "title": "Playwright Chromium",
-                "ok": True,
-                "message": f"Browser located: {Path(exec_path).name}",
-            }
-    except Exception as exc:
-        checks["playwright"] = {
-            "title": "Playwright Chromium",
-            "ok": False,
-            "message": f"Chromium not runnable: {str(exc).splitlines()[0][:100]}",
-            "hint": "Run `python -m playwright install chromium`",
-        }
+    # 1. Playwright Chromium: starting its driver takes seconds, so the page asks for it afterwards.
+    wants_html = request.accept_mimetypes.accept_html and not request.is_json
+    if wants_html:
+        checks["playwright"] = {"title": "Playwright Chromium", "ok": None, "pending": True, "message": "Checking\u2026"}
+    else:
+        checks["playwright"] = _browser_check()
 
     # 2. User profile
     try:
@@ -1342,7 +1437,7 @@ def health_check():
             "message": f"Worker manager error: {exc}",
         }
 
-    all_ok = all(c["ok"] for c in checks.values())
+    all_ok = all(c["ok"] for c in checks.values() if not c.get("pending"))
     status_str = "ok" if all_ok else "warning"
 
     if request.accept_mimetypes.accept_html and not request.is_json:
@@ -1363,6 +1458,15 @@ def health_check():
 # ----------------------------------------------------------------------
 PAGE_SIZE = 10        # applications shown at first, and added by "Show 10 more"
 MAX_SHOWN = 300       # as far as the list grows
+
+# How recently a suggested job was posted, from the last hour to the last week (the owner's choice on the page).
+JOB_WINDOWS = {
+    "1h": {"hours": 1, "label": "Last hour", "phrase": "in the last hour"},
+    "24h": {"hours": 24, "label": "Last 24 hours", "phrase": "in the last 24 hours"},
+    "3d": {"hours": 72, "label": "Last 3 days", "phrase": "in the last 3 days"},
+    "7d": {"hours": 168, "label": "Last week", "phrase": "in the last week"},
+}
+DEFAULT_JOB_WINDOW = "7d"
 
 
 @app.get("/")
@@ -1406,10 +1510,15 @@ def index():
         stage = "Handoff"
 
     discovered_jobs = []
+    window = JOB_WINDOWS.get(request.args.get("within", ""), JOB_WINDOWS[DEFAULT_JOB_WINDOW])
     try:
         from job_discovery import JobDiscoveryEngine
         discovery_engine = JobDiscoveryEngine()
-        discovered_jobs = discovery_engine.get_discovered_jobs(min_score=60, limit=12)
+        # Posted inside the chosen window, newest first, and nothing the owner has already applied to, skipped or
+        # been turned down for: those never come back as suggestions.
+        discovered_jobs = discovered_view.prepare(
+            discovery_engine.get_discovered_jobs(min_score=60, limit=40, hide_applied=False,
+                                                 within_hours=window["hours"]), apps, newest_first=True)
     except Exception:
         discovered_jobs = []
 
@@ -1418,8 +1527,18 @@ def index():
         more=min(show + PAGE_SIZE, MAX_SHOWN), can_show_more=show < min(len(apps), MAX_SHOWN),
         groups=ui_shell.group_counts(apps), runs=latest_run(runs), signals=signals, error=request.args.get("error"),
         working_url=working_url, is_running=bool(live), job_title=job_title, employer=employer, stage=stage,
-        discovered_jobs=discovered_jobs,
+        discovered_jobs=discovered_jobs, last_scan=last_scan(), rest_line=_rest_line(runs),
+        job_windows=JOB_WINDOWS, job_window=window,
     )
+
+
+def _rest_line(runs: dict) -> str:
+    """What the idle card says after "No application is running": how the last run ended."""
+    run = next(iter(latest_run(runs).values()), None)
+    if not run:
+        return "Nothing has run yet."
+    who = " at ".join(x for x in (run.get("title"), run.get("company")) if x)
+    return f"Last run: {run.get('state') or 'ended'}" + (f" · {who}" if who else "")
 
 
 def waiting_runs(data_dir: Path) -> list[dict]:
@@ -1600,7 +1719,7 @@ def progress_of(record, validation: dict) -> dict:
 @app.get("/evidence")
 def evidence():
     """Serve only B5-marked artifacts within the existing resolved output root."""
-    target = Path(request.args.get("path", "")).resolve()
+    target = _artifact_path(request.args.get("path", ""))
     root = (BASE_DIR / "output").resolve()
     if target != root and root not in target.parents:
         abort(404)
@@ -1628,8 +1747,7 @@ def document(doc_id: int):
 
 @app.get("/log")
 def log():
-    path = request.args.get("path", "")
-    target = Path(path).resolve()
+    target = _artifact_path(request.args.get("path", ""))
     root = (BASE_DIR / "logs").resolve()
     if (target != root and root not in target.parents) or target.suffix not in {".log", ".jsonl", ".txt"}:
         abort(404)
@@ -1888,13 +2006,10 @@ SETTINGS_HTML = ui_shell.page("Settings", """
 
 INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
 <main id="main" class="dash" tabindex="-1">
+  <p class="sr-only" id="needs-live" role="status" aria-live="polite">{% if groups.needs %}{{ groups.needs }} application{{ '' if groups.needs == 1 else 's' }} need{{ 's' if groups.needs == 1 else '' }} you{% else %}Nothing needs you{% endif %}</p>
   <header class="dash-head">
     <div>
       <h1>Applications</h1>
-      <p class="dash-summary" id="dash-summary">
-        {% if total %}<strong>{{ total }}</strong> tracked &middot; <strong>{{ groups.done }}</strong> submitted
-          &middot; <strong>{{ groups.skipped }}</strong> skipped{% else %}Nothing tracked yet{% endif %}
-      </p>
     </div>
     <form class="dash-start" method="post" action="/apply" aria-label="Start an application">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -1904,21 +2019,16 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
       <button type="submit">Start application</button>
     </form>
   </header>
-  <p class="dash-start-hint" id="job-url-hint">Workday, Greenhouse, Lever, iCIMS and other employer sites. Job boards and staffing agencies are refused.</p>
+  <p class="dash-start-hint" id="job-url-hint">Workday, Greenhouse, Lever, iCIMS and other employer sites. Job boards and staffing agencies are refused. {{ submit_promise() }}</p>
 
   {% if error %}<div class="err" role="alert" style="margin-top:16px">{{ error }}</div>{% endif %}
 
   {% if total %}
+  <p class="dash-bar-label"><b>Submitted of tracked:</b> {{ groups.done }} of {{ total }}</p>
   <div class="dash-bar" role="img"
-       aria-label="{{ groups.done }} submitted, {{ groups.needs }} need you, {{ groups.working }} in progress, {{ groups.skipped }} skipped">
+       aria-label="Submitted of tracked: {{ groups.done }} of {{ total }}">
     <i class="b-done" style="flex-grow:{{ groups.done }}"></i><i class="b-needs" style="flex-grow:{{ groups.needs }}"></i><i class="b-working" style="flex-grow:{{ groups.working }}"></i><i class="b-skipped" style="flex-grow:{{ groups.skipped }}"></i>
   </div>
-  <ul class="dash-legend">
-    <li style="--c:var(--ok)"><b>{{ groups.done }}</b> submitted</li>
-    <li style="--c:var(--warn)"><b>{{ groups.needs }}</b> need you</li>
-    <li style="--c:var(--accent)"><b>{{ groups.working }}</b> in progress</li>
-    <li style="--c:var(--muted)"><b>{{ groups.skipped }}</b> skipped</li>
-  </ul>
   {% endif %}
 
   {% set waiting = apps | selectattr('status', 'in', ['ready_to_submit', 'needs_user_review', 'BLOCKED_VALIDATION_LOOP']) | rejectattr('url', 'equalto', working_url or '-') | list %}
@@ -1955,7 +2065,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
       <div class="item">
         <div style="min-width:0">
           <a href="/application/{{ a.id }}"><b>{{ a.title }}</b></a>
-          <small>{{ a.company }} &middot; <span class="pill {{ status_class(a.status) }}">{{ status_label(a.status) }}</span></small>
+          <small>{{ company_label(a.company) }} &middot; <span class="pill {{ status_class(a.status) }}">{{ status_label(a.status) }}</span></small>
           {% if a.notes %}<small style="display:block;margin-top:2px">{{ a.notes[:180] }}</small>{% endif %}
         </div>
         <div class="dash-actions">
@@ -1976,8 +2086,8 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
           {% if r.title %}&middot; {{ r.title }}{% endif %}{% if r.company %} at {{ r.company }}{% endif %}
           {% if not r.title %}&middot; <a href="{{ url }}" target="_blank" rel="noopener">{{ url|truncate(70) }}</a>{% endif %}
           {% if r.started %}&middot; started {{ r.started|local }}{% endif %}
-          {% if r.log %}&middot; <a href="/log?path={{ r.log }}" target="_blank" rel="noopener">View log</a>{% endif %}
-          {% if r.screenshot %}&middot; <a href="/evidence?path={{ r.screenshot }}" target="_blank" rel="noopener">Last screenshot</a>{% endif %}
+          {% if r.log and artifact_ok(r.log) %}&middot; <a href="/log?path={{ r.log|aref|urlencode }}" target="_blank" rel="noopener">View log</a>{% endif %}
+          {% if r.screenshot and artifact_ok(r.screenshot) %}&middot; <a href="/evidence?path={{ r.screenshot|aref|urlencode }}" target="_blank" rel="noopener">Last screenshot</a>{% endif %}
           {% if r.app_id %}&middot; <a href="/application/{{ r.app_id }}">Details</a>{% endif %}
           {% if r.state == 'running' %}
             &middot; <form method="post" action="/reload-agent" style="display:inline">
@@ -1989,61 +2099,6 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
     {% endif %}
   </div>
 
-  <section class="dash-section" aria-labelledby="jobs-h">
-    <header>
-      <div>
-        <h2 id="jobs-h">Suggested jobs <span class="count">{{ discovered_jobs | length }}</span></h2>
-        <p class="dash-sub">Roles found on employers' own job boards that fit your profile. Starting one prepares the application; you review it before anything is sent.</p>
-      </div>
-      <form method="post" action="/api/discovered/scan" data-busy="Checking job boards&hellip;">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="ghost" title="Look for new postings on the configured Greenhouse and Lever boards">Find new jobs</button>
-      </form>
-    </header>
-    {% if discovered_jobs %}
-      <div class="dash-chips" role="group" aria-label="Filter suggested jobs" style="margin-bottom:14px">
-        <button type="button" class="dash-chip" data-job-filter="all" aria-pressed="true">All</button>
-        <button type="button" class="dash-chip" data-job-filter="top" aria-pressed="false">Best matches</button>
-        <button type="button" class="dash-chip" data-job-filter="remote" aria-pressed="false">Remote</button>
-        <button type="button" class="dash-chip" data-job-filter="greenhouse" aria-pressed="false">Greenhouse</button>
-        <button type="button" class="dash-chip" data-job-filter="lever" aria-pressed="false">Lever</button>
-      </div>
-      <div class="dash-jobs" id="discovered-feed">
-        {% for dj in discovered_jobs %}
-          <article class="job-card" data-score="{{ dj.match_score }}" data-remote="{{ dj.is_remote }}" data-ats="{{ dj.ats_type }}">
-            <div class="job-top">
-              <div class="ring {% if dj.match_score >= 85 %}high{% elif dj.match_score >= 70 %}mid{% endif %}" style="--p:{{ dj.match_score }}"
-                   role="img" aria-label="{{ dj.match_score }} percent match"><b>{{ dj.match_score }}%</b></div>
-              <div style="min-width:0">
-                <p class="job-company">{{ dj.company_name }}</p>
-                <h3 class="job-title"><a href="{{ dj.url }}" target="_blank" rel="noopener">{{ dj.job_title }}<span class="sr-only"> (opens the posting in a new tab)</span></a></h3>
-              </div>
-            </div>
-            <div class="job-meta">
-              <span>{{ dj.location or 'Location not stated' }}</span>
-              {% if dj.is_remote %}<span class="tag remote">Remote</span>{% endif %}
-              <span class="tag">{{ dj.ats_type | capitalize }}</span>
-            </div>
-            {% if dj.matched_skills %}<div class="job-meta">{% for m in dj.matched_skills[:3] %}<span class="tag">{{ m }}</span>{% endfor %}</div>{% endif %}
-            <div class="job-foot">
-              <form method="post" action="/api/discovered/{{ dj.id }}/apply">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="small">Start application</button>
-              </form>
-              <form method="post" action="/api/discovered/{{ dj.id }}/dismiss">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="ghost small" aria-label="Not interested in {{ dj.job_title }} at {{ dj.company_name }}">Not interested</button>
-              </form>
-            </div>
-          </article>
-        {% endfor %}
-      </div>
-      <div class="dash-empty" id="jobs-none" hidden><b>No jobs match that filter</b>Try another one.</div>
-    {% else %}
-      <div class="dash-empty"><b>No suggestions yet</b>Press <b style="display:inline">Find new jobs</b> to check your configured job boards.</div>
-    {% endif %}
-  </section>
-
   <section class="dash-section" aria-labelledby="hist-h">
     <header>
       <h2 id="hist-h">Your applications <span class="count">{{ total }}</span></h2>
@@ -2053,7 +2108,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
         <div class="toolbar">
           <div class="dash-chips" role="group" aria-label="Filter by status">
             <button type="button" class="dash-chip" data-filter="all" aria-pressed="true">All</button>
-            <button type="button" class="dash-chip" data-filter="needs" aria-pressed="false">Needs you<span class="n">{{ groups.needs }}</span></button>
+            <button type="button" class="dash-chip {{ 'has-items' if groups.needs else 'is-zero' }}" data-filter="needs" aria-pressed="false">Needs you<span class="n">{{ groups.needs }}</span></button>
             <button type="button" class="dash-chip" data-filter="working" aria-pressed="false">In progress<span class="n">{{ groups.working }}</span></button>
             <button type="button" class="dash-chip" data-filter="done" aria-pressed="false">Submitted<span class="n">{{ groups.done }}</span></button>
             <button type="button" class="dash-chip" data-filter="skipped" aria-pressed="false">Skipped<span class="n">{{ groups.skipped }}</span></button>
@@ -2070,7 +2125,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
         <tbody>
         {% for a in apps %}
         <tr class="app" data-group="{{ status_group(a.status) }}" data-text="{{ (a.company ~ ' ' ~ a.title ~ ' ' ~ (a.location or ''))|lower }}">
-          <td class="company"><strong>{{ a.company }}</strong></td>
+          <td class="company"><strong>{{ company_label(a.company) }}</strong></td>
           <td class="role">
             <a href="/application/{{ a.id }}">{{ a.title }}</a>
             <span class="loc">{{ a.location or 'Location not stated' }}</span>
@@ -2131,27 +2186,108 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
       </div>
     </div>
   </section>
+
+  <section class="dash-section" aria-labelledby="jobs-h">
+    <header>
+      <div>
+        <h2 id="jobs-h">Suggested jobs <span class="count">{{ discovered_jobs | length }}</span></h2>
+        <p class="dash-sub">Roles found on employers' own job boards that fit your profile. Starting one prepares the application; you review it before anything is sent.</p>
+        <p class="dash-sub" id="scan-status" role="status" aria-live="polite">{% if last_scan %}Updated {{ last_scan.at|local('%I:%M %p') }} &middot; {{ last_scan.boards }} board{{ '' if last_scan.boards == 1 else 's' }} checked{% else %}Not checked yet{% endif %}</p>
+      </div>
+      <form method="post" action="/api/discovered/scan" data-busy="Checking job boards&hellip;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="ghost" title="Look for new postings on your job boards and on the employers you have already applied through">Find new jobs</button>
+      </form>
+    </header>
+    <nav class="dash-chips" aria-label="How recently the job was posted" style="margin-bottom:10px">
+      {% for key, w in job_windows.items() %}
+        <a class="dash-chip" href="/?within={{ key }}#jobs-h"{% if w.hours == job_window.hours %} aria-current="true"{% endif %}>{{ w.label }}</a>
+      {% endfor %}
+    </nav>
+    <p class="dash-sub">Newest first. Jobs you have already applied to, skipped or been turned down for are not listed. A job whose site gives no posting date is not listed either; a site that dates a job only by its day (Workday) appears from "Last 24 hours" on, never under "Last hour".</p>
+    {% if discovered_jobs %}
+      <div class="dash-chips" role="group" aria-label="Filter suggested jobs" style="margin-bottom:14px">
+        <button type="button" class="dash-chip" data-job-filter="all" aria-pressed="true">All</button>
+        <button type="button" class="dash-chip" data-job-filter="top" aria-pressed="false">Best matches</button>
+        <button type="button" class="dash-chip" data-job-filter="remote" aria-pressed="false">Remote</button>
+        <button type="button" class="dash-chip" data-job-filter="greenhouse" aria-pressed="false">Greenhouse</button>
+        <button type="button" class="dash-chip" data-job-filter="lever" aria-pressed="false">Lever</button>
+        <button type="button" class="dash-chip" data-job-filter="workday" aria-pressed="false">Workday</button>
+        <button type="button" class="dash-chip" data-job-filter="ashby" aria-pressed="false">Ashby</button>
+        <button type="button" class="dash-chip" data-job-filter="icims" aria-pressed="false">iCIMS</button>
+      </div>
+      <div class="dash-jobs" id="discovered-feed">
+        {% for dj in discovered_jobs %}
+          {% set fit = dj.resume_score if dj.resume_score is not none else dj.match_score %}
+          <article class="job-card" data-score="{{ fit }}" data-remote="{{ dj.is_remote }}" data-ats="{{ dj.ats_type }}">
+            <div class="job-top">
+              <div class="ring {% if fit >= 85 %}high{% elif fit >= 70 %}mid{% endif %}" style="--p:{{ fit }}"
+                   role="img" aria-label="{{ 'Resume match' if dj.resume_score is not none else 'Title match' }} {{ fit }} percent"><b>{{ fit }}%</b></div>
+              <div style="min-width:0">
+                <p class="job-company">{{ dj.company_name }}</p>
+                <h3 class="job-title"><a href="{{ dj.url }}" target="_blank" rel="noopener">{{ dj.job_title }}<span class="sr-only"> (opens the posting in a new tab)</span></a></h3>
+              </div>
+            </div>
+            <div class="job-meta">
+              {% if dj.resume_score is not none %}<span class="tag" title="Your resume compared with the skills this posting asks for">Resume match {{ dj.resume_score }}%</span>{% endif %}
+              <span class="tag" title="Scored from the job title, location and seniority only">Title match {{ dj.match_score }}%</span>
+              {% if dj.place %}<span title="{{ dj.location }}">{{ dj.place }}{% if dj.more_places %} <small>+{{ dj.more_places }} more</small>{% endif %}</span>
+              {% elif not dj.is_remote %}<span>Location not stated</span>{% endif %}
+              {% if dj.is_remote %}<span class="tag remote">Remote</span>{% endif %}
+              {% if dj.is_new %}<span class="tag new">New</span>{% endif %}
+              {% if dj.age %}<span class="muted">{{ dj.age }}</span>{% endif %}
+              {% if dj.other_openings %}<span class="muted" title="The same role is listed for other places; this is the best match">+{{ dj.other_openings }} other location{{ '' if dj.other_openings == 1 else 's' }}</span>{% endif %}
+              <span class="tag">{{ dj.ats_type | capitalize }}</span>
+            </div>
+            {% if dj.resume_score is not none %}
+              {% if dj.resume_matched %}<div class="job-meta"><span class="muted">Your resume has:</span>{% for m in dj.resume_matched[:4] %}<span class="tag">{{ m }}</span>{% endfor %}</div>{% endif %}
+              {% if dj.resume_missing %}<div class="job-meta"><span class="muted">Posting also asks for:</span>{% for m in dj.resume_missing[:3] %}<span class="tag applied">{{ m }}</span>{% endfor %}</div>{% endif %}
+            {% else %}
+              <div class="job-meta"><span class="muted">No resume match: the posting's text was not read.</span></div>
+              {% if dj.matched_skills %}<div class="job-meta">{% for m in dj.matched_skills[:3] %}<span class="tag">{{ m }}</span>{% endfor %}</div>{% endif %}
+            {% endif %}
+            <div class="job-foot">
+              <form method="post" action="/api/discovered/{{ dj.id }}/apply">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="small">Start application</button>
+              </form>
+              <form method="post" action="/api/discovered/{{ dj.id }}/dismiss">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="linklike" aria-label="Not interested in {{ dj.job_title }} at {{ dj.company_name }}">Not interested</button>
+              </form>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+      <div class="dash-empty" id="jobs-none" hidden><b>No jobs match that filter</b>Try another one.</div>
+    {% else %}
+      <div class="dash-empty"><b>No jobs posted {{ job_window.phrase }}</b>{% if last_scan %}Try a longer time, or press <b style="display:inline">Find new jobs</b> to check again.{% else %}Press <b style="display:inline">Find new jobs</b> to check your job boards and the employers you have applied through.{% endif %}</div>
+    {% endif %}
+  </section>
 </main>
 """)
 
 
 DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
 <main class="wrap">
-  <p class="crumbs"><a href="/">Applications</a> / {{ a.company }}</p>
+  <p class="crumbs"><a href="/">Applications</a> / {{ company_label(a.company) }}</p>
   <div class="page-head">
     <div style="min-width:0">
       <h1>{{ a.title }}</h1>
       <div class="head-facts">
-        <strong style="color:var(--ink)">{{ a.company }}</strong>
+        <strong style="color:var(--ink)">{{ company_label(a.company) }}</strong>
         {% if a.location %}<span>{{ a.location }}</span>{% endif %}
         <span class="pill {{ status_class(a.status) }}">{{ status_label(a.status) }}</span>
         <a href="{{ a.url }}" target="_blank" rel="noopener">Open posting &rarr;</a>
-        {% if run_log %}<a href="/log?path={{ run_log }}" target="_blank">View log</a>{% endif %}
+        {% if run_log and artifact_ok(run_log) %}<a href="/log?path={{ run_log|aref|urlencode }}" target="_blank">View log</a>{% endif %}
       </div>
     </div>
-    <form method="post" action="/application/{{ a.id }}/status" style="display:flex; align-items:center; gap:8px; margin:0">
+    <details class="menu">
+      <summary aria-label="More actions">&#8943;</summary>
+      <div class="menu-items" style="padding:10px; min-width:260px">
+    <form method="post" action="/application/{{ a.id }}/status" style="display:flex; flex-direction:column; align-items:stretch; gap:8px; margin:0">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label for="status-select" class="muted" style="font-size:13px; white-space:nowrap">Change status</label>
+      <label for="status-select" class="muted" style="font-size:13px">Change status</label>
       <select id="status-select" name="status" style="width:auto; padding:7px 10px">
         <option value="needs_user_review" {% if a.status == 'needs_user_review' %}selected{% endif %}>Needs you</option>
         <option value="submitted" {% if a.status == 'submitted' %}selected{% endif %}>Submitted</option>
@@ -2167,6 +2303,8 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
       </select>
       <button type="submit" class="small">Update</button>
     </form>
+      </div>
+    </details>
   </div>
 
   <div class="card">
@@ -2178,7 +2316,7 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
     <p style="margin:0"><strong>Step {{ progress.step }} of {{ progress.of }}</strong>
        {% if progress.blocked %}<span class="pill needs_user_review" style="margin-left:6px">Needs you</span>{% endif %}</p>
     {% if a.notes %}<p class="muted" style="margin:6px 0 0">{{ a.notes }}</p>{% endif %}
-    {% if handoff and handoff.category %}
+    {% if handoff and handoff.category and status_group(a.status) not in ('done', 'skipped') %}
       <p class="section-title">What to do ({{ handoff.category.replace('_', ' ').title() }})</p>
       <ul class="plain">
         {% if handoff.required_action %}<li>{{ handoff.required_action }}</li>{% endif %}
@@ -2200,13 +2338,13 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
 
   <div class="grid-2">
     <div>
-      {% if latest_screenshot %}
+      {% if latest_screenshot and artifact_ok(latest_screenshot) %}
       <h2 style="margin-top:8px">What the agent sees</h2>
-      <a class="shot" href="/evidence?path={{ latest_screenshot }}" target="_blank" title="Open the full image">
-        <img src="/evidence?path={{ latest_screenshot }}" alt="The latest page the agent captured">
+      <a class="shot" href="/evidence?path={{ latest_screenshot|aref|urlencode }}" target="_blank" title="Open the full image">
+        <img src="/evidence?path={{ latest_screenshot|aref|urlencode }}" alt="The latest page the agent captured">
       </a>
       {% endif %}
-      <h2{% if not latest_screenshot %} style="margin-top:8px"{% endif %}>About</h2>
+      <h2{% if not (latest_screenshot and artifact_ok(latest_screenshot)) %} style="margin-top:8px"{% endif %}>About</h2>
       <div class="card flush">
         <table>
           <tr><th class="label">Applied via</th><td><a class="truncate" style="display:block" href="{{ a.url }}" target="_blank" rel="noopener" title="{{ a.url }}">{{ a.url }}</a></td></tr>
@@ -2239,15 +2377,17 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
         <p class="hint" style="margin-top:0">Setting: <strong>{{ 'on' if auto_submit_on else 'off' }}</strong>
            (AUTO_SUBMIT_VERIFIED_ONLY). The agent submits once every mandatory field is filled and the form shows no error.</p>
         {% if decision %}
-          <p><span class="pill {{ 'submitted' if decision.eligible else 'needs_user_review' }}">{{ 'Eligible' if decision.eligible else 'Not eligible' }}</span>
-             <span class="muted">decided {{ decision.decided_at }}</span></p>
-          {% if decision.reasons %}
-            <ul class="plain">{% for r in decision.reasons %}<li>{{ r }}</li>{% endfor %}</ul>
-          {% endif %}
+          {% set dv = decision_view(decision, status_group(a.status)) %}
+          <p><span class="pill {{ 'submitted' if dv.eligible else 'needs_user_review' }}">{{ dv.verdict }}</span>
+             {% if dv.when %}<span class="muted">decided {{ dv.when|local('%d %b %Y %I:%M %p') }}</span>{% endif %}</p>
+          <p class="hint">{{ dv.note }}</p>
+          {% if dv.reasons %}
+            <ul class="plain">{% for r in dv.reasons %}<li>{{ r }}</li>{% endfor %}</ul>
+          {% elif dv.no_reasons %}<p class="hint">{{ dv.no_reasons }}</p>{% endif %}
           {% if decision.evidence_paths %}
             <p class="hint">Evidence:
               {% for name, path in decision.evidence_paths.items() %}
-                <a href="/evidence?path={{ path }}" target="_blank">{{ name }}</a>{{ ", " if not loop.last }}
+                {% if artifact_ok(path) %}<a href="/evidence?path={{ path|aref|urlencode }}" target="_blank">{{ name }}</a>{{ ", " if not loop.last }}{% endif %}
               {% endfor %}
             </p>
           {% endif %}
@@ -2281,7 +2421,7 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
     <table>
       <thead><tr><th style="width:45%">Question</th><th>Answer</th><th class="label">By</th></tr></thead>
       {% for q in answers %}
-      <tr><td>{{ q.question }}</td><td>{{ q.answer }}</td><td class="label">{{ q.answered_by }}</td></tr>
+      <tr><td>{{ q.question }}</td><td>{{ q.answer }}</td><td class="label">{{ answered_by(q.answered_by) }}</td></tr>
       {% else %}
       <tr><td colspan="3" class="muted">No answers recorded for this application.</td></tr>
       {% endfor %}
@@ -2292,15 +2432,15 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
   <div class="card flush">
     <table>
       <thead><tr><th class="when">When</th><th class="label">Kind</th><th>What happened</th><th class="actions">Evidence</th></tr></thead>
-      {% for e in events %}
+      {% for e in history_rows(events) %}
         <tr>
           <td class="when">{{ e.created_at|local }}</td>
-          <td class="muted">{{ e.kind }}</td>
-          <td>{{ (e.message or '')[:160] }}</td>
+          <td class="muted">{{ e.label }}</td>
+          <td>{{ (e.message or '')[:160] }}{% if e.count > 1 %} <span class="muted">&times;{{ e.count }}</span>{% endif %}</td>
           <td class="actions">
-            {%- if e.screenshot_path %}<a href="/evidence?path={{ e.screenshot_path }}" target="_blank">screenshot</a>{% endif -%}
-            {%- if e.screenshot_path and e.html_path %} &middot; {% endif -%}
-            {%- if e.html_path %}<a href="/evidence?path={{ e.html_path }}" target="_blank">html</a>{% endif -%}
+            {%- if e.screenshot_path and artifact_ok(e.screenshot_path) %}<a href="/evidence?path={{ e.screenshot_path|aref|urlencode }}" target="_blank">screenshot</a>{% endif -%}
+            {%- if e.screenshot_path and artifact_ok(e.screenshot_path) and e.html_path and artifact_ok(e.html_path) %} &middot; {% endif -%}
+            {%- if e.html_path and artifact_ok(e.html_path) %}<a href="/evidence?path={{ e.html_path|aref|urlencode }}" target="_blank">html</a>{% endif -%}
           </td>
         </tr>
       {% else %}

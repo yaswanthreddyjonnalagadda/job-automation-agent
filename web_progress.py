@@ -37,14 +37,15 @@ PROGRESS_HTML = ui_shell.page("Progress", """
     <p class="sub">How far applications get. Mark what happened after you submit (Interviewing, Rejected, Offer) on
       each application's page, and the last steps fill in.</p>
   </div></div>
+  {% set all_full = f.started and f.reached_review == f.started and f.submitted == f.started %}
   <div class="funnel">
     <div class="stat tone-info"><b>{{ f.started }}</b><span>Started</span></div>
-    <div class="stat tone-info"><b>{{ f.reached_review }}</b><span>Reached Review</span><small>{{ f.rate(f.reached_review, f.started) }} of started</small></div>
-    <div class="stat tone-ok"><b>{{ f.submitted }}</b><span>Submitted</span><small>{{ f.rate(f.submitted, f.started) }} of started</small></div>
-    <div class="stat tone-violet"><b>{{ f.replied }}</b><span>Replied</span><small>{{ f.rate(f.replied, f.submitted) }} of submitted</small></div>
-    <div class="stat tone-violet"><b>{{ f.interviews }}</b><span>Reached interviews</span></div>
+    <div class="stat tone-info"><b>{{ f.reached_review }}</b><span>Reached Review</span>{% if not all_full %}<small>{{ f.rate(f.reached_review, f.started) }} of started</small>{% endif %}</div>
+    <div class="stat tone-ok"><b>{{ f.submitted }}</b><span>Submitted</span>{% if not all_full %}<small>{{ f.rate(f.submitted, f.started) }} of started</small>{% endif %}</div>
+    <div class="stat tone-violet"><b>{{ f.replied }}</b><span>Replied</span>{% if f.replied %}<small>{{ f.rate(f.replied, f.submitted) }} of submitted</small>{% else %}<small>Mark outcomes on each application to fill these in.</small>{% endif %}</div>
+    <div class="stat tone-violet"><b>{{ f.interviews }}</b><span>Reached interviews</span>{% if not f.interviews %}<small>Mark outcomes on each application to fill these in.</small>{% endif %}</div>
   </div>
-  <p class="hint">{{ f.skipped }} skipped (for example, the job does not sponsor); {{ f.stuck }} stopped before Review.</p>
+  <p class="hint">Counts applications that reached the tracker; failed starts aren't included. {{ f.skipped }} skipped (for example, the job does not sponsor); {{ f.stuck }} stopped before Review.</p>
 
   <div class="grid-2">
     <div>
@@ -54,7 +55,7 @@ PROGRESS_HTML = ui_shell.page("Progress", """
           <thead><tr><th>Site</th><th class="num">Started</th><th class="num">Reached Review</th><th class="num">Submitted</th></tr></thead>
           {% for site, n in f.by_site.items() %}
           <tr><td>{{ site }}</td><td class="num">{{ n.started }}</td>
-              <td class="num">{{ n.reached_review }} <span class="muted">({{ f.rate(n.reached_review, n.started) }})</span></td>
+              <td class="num">{{ n.reached_review }} {% if not all_full %}<span class="muted">({{ f.rate(n.reached_review, n.started) }})</span>{% endif %}</td>
               <td class="num">{{ n.submitted }}</td></tr>
           {% else %}<tr><td colspan="4" class="muted">No applications yet.</td></tr>
           {% endfor %}

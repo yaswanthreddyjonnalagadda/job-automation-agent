@@ -63,10 +63,14 @@ def test_every_status_on_the_list_is_a_pill_with_words(client):
 
 
 def test_an_application_page_links_its_runs_log(client, monkeypatch, tmp_path):
+    # The link names the log by its place in the project (never the owner's own folders), and only when the viewer
+    # can serve it -- a log without its manifest answered 404 behind a link that looked fine.
     log = tmp_path / "ui_run_x.log"
     log.write_text("READ: application form")
+    monkeypatch.setattr(web_ui, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(web_ui, "_artifact_servable", lambda _p: True)
     monkeypatch.setitem(web_ui._RUNS, "https://jobs.example.com/0", {"state": "ended", "log": str(log)})
-    assert f'href="/log?path={log}"' in client.get("/application/1").get_data(as_text=True)
+    assert 'href="/log?path=ui_run_x.log"' in client.get("/application/1").get_data(as_text=True)
     assert "View log" not in client.get("/application/2").get_data(as_text=True)     # no run, no link
 
 

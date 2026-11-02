@@ -85,6 +85,60 @@ answers** on the dashboard; answer it once there and it is used on every form th
 asks it. Resumes and cover letters are named after you (`Jane_Doe_Resume_Acme.pdf`).
 Everything stays on your computer, in `data/`.
 
+On an application's page, History uses plain words ("Stopped for you", "Auto-submit check")
+and shows a repeated event once with a count; the "By" column says who gave each answer
+("From profile", "You", "AI"); the auto-submit decision gives its date, its reasons if any
+were stored, and says when you submitted it yourself; "Change status" sits in the "..."
+menu. Progress says what it counts, hides percentages that are 100% at every step, and
+tells you how to fill the Replied and Interviews tiles. System Health shows "Checking"
+for the browser test and fills it in when it answers, and calls a worker that reports
+nothing (no CPU, no memory, no version) "Stale" instead of healthy.
+
+The Applications page lists what needs you first, then the current run (one line when
+nothing runs, with how the last run ended), then your applications, then suggested jobs.
+Each total appears once, in the filter chips; the bar is labelled "Submitted of tracked".
+A company that is a single letter or symbol is shown as "Company unclear" (the stored
+value is not changed).
+
+Buttons, filter chips and the row menu are at least 40 pixels tall, and the tabs
+scroll sideways with a fade on a narrow screen. A screen reader is told when the
+agent's status changes (for example to "Waiting for you") and how many applications
+need you; the first status read on a page is not announced.
+
+Each suggested job is scored against your resume: the scan reads the job's own description
+(Greenhouse boards now send it), compares the skills it names with your resume, and shows
+"Resume match NN%" with what your resume has and what the posting also asks for. The score
+uses no AI service and costs nothing. A job whose description could not be read, or any job
+when no resume can be read, shows no resume match and says so; it is never given a made-up
+number. Jobs with a resume match are listed first, best first. The same role listed for
+several places is one card with "+N other locations".
+
+**Fresh jobs.** "Find new jobs" reads the job lists of Workday, Ashby, iCIMS, Greenhouse and Lever. It scans
+your own list of employers and every employer you have already applied through (taken from your
+applications). The page shows the jobs posted in the last hour, 24 hours, 3 days or week, newest first;
+each card says how long ago it was posted. A site that dates a job only by its day (Workday: "Posted 3 Days
+Ago") is never shown under "Last hour", and a job whose site gives no posting date is not shown at all:
+the page never guesses. A job you have already applied to, skipped, been turned down for, started or
+dismissed is left out (the tracker is only read). ADP employers are not read yet: ADP's list has no link
+to a single job.
+
+Each card shows how long ago the job was posted (or found, when the site gives no date),
+a "New" badge for the last three days, the first place with "+N more",
+and "Remote" once. "Not interested" is a plain link. After "Find new jobs" the page
+says when it last checked and how many boards. In the live panel, Stop says
+"Nothing was running" when nothing was, and "Check and continue" shows "Checking" until
+the next status update shows whether the agent carried on. There is no Pause.
+
+What the dashboard says about submitting follows your setting: with verified
+auto-submit off it says you review and submit everything yourself; with it on it
+says "Submits only when every answer is verified; otherwise stops for you." Links to
+a run's log or a page capture appear only when the dashboard can open them, and name
+the file by its place in the project, never your own folders. An application that is
+submitted or skipped no longer shows "What to do". A suggested job's percentage is
+labelled "Title match" (it is scored from the title, location and seniority only). The
+"Needs you" filter is dimmed when nothing needs you and highlighted, with a count on
+the Applications tab, when something does.
+
 The Applications dashboard renders its live cockpit whether there are no
 applications, the agent is idle, a run is active, or an owner handoff is waiting.
 System Health reports an available application database as connected in both
@@ -1715,6 +1769,7 @@ On ADP career sites (such as `myjobs.adp.com`), completing an application submis
 
 The local web UI and runtime agent feature a 3-column unified command cockpit (`web_ui.py`):
 1. **Discovered Feed & Fast Apply (Left)**: Continuous background crawler (`job_discovery.py`) discovers newly posted roles directly from Greenhouse and Lever JSON APIs without browser overhead. Pre-filters against candidate target titles, locations, and visa criteria, assigning match scores (0-100%). Users can 1-Click Apply, dismiss, or paste direct URLs.
+   **How the feed is ranked and kept fresh.** A title you target (`target_titles`) scores 50-60, an engineering role that only contains a technical word scores 20, and a role that is not engineering never scores: sales, management (manager, director, VP, head of), customer success, design, recruiting, legal and the like are left out. A posting that names only countries other than your profile country ("Remote - India", "Bengaluru, India") is not suggested at all; one that names no country, or names yours, is fine. About 35 company job boards are checked (`data/target_companies.json`, Greenhouse and Lever). Each scan also expires suggestions the board no longer lists or that the rules no longer pass; ones you queued, submitted or dismissed are never touched, and a board that fails to load expires nothing.
 2. **Active Application Cockpit (Center)**: Real-time visual stepper, live action display, last verified operation, inline handoff review cards, and direct pause/resume/reload controls during active runs. When idle, shows clear standby status and safety guarantees.
 3. **Application Tracker & History (Right)**: Searchable and filterable history with live status pills, relative timestamps, and one-click access to application details and receipts.
 4. **Remote 1-Tap Notifications (`notifications.py`)**: Webhook dispatcher supporting Telegram, Discord, Slack, and generic HTTP endpoints. Automatically alerts the owner when high-fit opportunities (>=85% match) are discovered, with 1-tap `/apply <id>` or `/dismiss <id>` command processing via `/api/webhook/command` and `/api/webhook/telegram`. All final submit gates (`SubmissionGuardV0`) remain active without exception.
