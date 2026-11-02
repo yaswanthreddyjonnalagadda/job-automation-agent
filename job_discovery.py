@@ -22,6 +22,8 @@ from typing import Any, Optional
 
 import requests
 
+import discovery_sources as sources
+
 logger = logging.getLogger("job_discovery")
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "data" / "applications.db"
@@ -92,7 +94,8 @@ def ensure_discovery_schema(conn: sqlite3.Connection) -> None:
     """)
     existing = {row[1] for row in conn.execute("PRAGMA table_info(discovered_jobs)")}
     for column, kind in (("resume_score", "INTEGER"), ("resume_matched", "TEXT DEFAULT '[]'"),
-                         ("resume_missing", "TEXT DEFAULT '[]'")):
+                         ("resume_missing", "TEXT DEFAULT '[]'"),
+                         ("posted_at", "TEXT"), ("posted_precision", "TEXT")):
         if column not in existing:
             conn.execute(f"ALTER TABLE discovered_jobs ADD COLUMN {column} {kind}")
     conn.execute(
@@ -307,6 +310,9 @@ def fetch_greenhouse_feed(token: str, company: str, timeout: float = 8.0) -> lis
                 "url": job_url,
                 "description": html_to_text(raw.get("content") or ""),
                 "updated_at": raw.get("updated_at") or datetime.now(timezone.utc).isoformat(),
+                # When it was first published, not when it was last edited: an old posting touched up yesterday
+                # is not a new job.
+                **sources._stamp({}, sources.parse_posted(raw.get("first_published"))),
             })
         return jobs
     except Exception as exc:
@@ -340,6 +346,7 @@ def fetch_lever_feed(token: str, company: str, timeout: float = 8.0) -> list[dic
                 "url": job_url,
                 "description": (raw.get("descriptionPlain") or "").strip(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
+                **sources._stamp({}, sources.parse_posted(raw.get("createdAt"))),
             })
         return jobs
     except Exception as exc:
@@ -348,14 +355,22 @@ def fetch_lever_feed(token: str, company: str, timeout: float = 8.0) -> list[dic
 
 
 def fetch_jobs_for_company(company_entry: dict[str, str], timeout: float = 8.0) -> list[dict[str, Any]]:
-    """Dispatches to the matching ATS fetcher."""
+    """Dispatches to the matching ATS fetcher. The entry's "titles" are the roles wanted: the systems that search by
+    title (Workday, iCIMS) are asked for each."""
     ats = company_entry.get("ats", "").lower()
     token = company_entry.get("token", "")
     name = company_entry.get("company", token)
+    wanted = list(company_entry.get("titles") or ["Network Engineer"])
     if ats == "greenhouse":
         return fetch_greenhouse_feed(token, name, timeout=timeout)
     elif ats == "lever":
         return fetch_lever_feed(token, name, timeout=timeout)
+    elif ats == "ashby":
+        return sources.fetch_ashby_feed(token, name, timeout=timeout)
+    elif ats == "workday":
+        return sources.fetch_workday_feed(company_entry, wanted)
+    elif ats == "icims":
+        return sources.fetch_icims_feed(company_entry, wanted)
     return []
 
 
@@ -367,6 +382,7 @@ class JobDiscoveryEngine:
     """Manages periodic scraping, filtering, and database persistence."""
 
     resume_text = ""      # the owner's resume as text, for scoring postings against it; __init__ reads it
+    history: tuple = ()   # (company, address) of each application already made: those employers are scanned too
 
     def __init__(self, db_path: Optional[Path] = None, config_path: Optional[Path] = None):
         self.db_path = db_path or DB_PATH
@@ -382,16 +398,19 @@ class JobDiscoveryEngine:
         return conn
 
     def get_target_companies(self) -> list[dict[str, str]]:
-        if self.config_path.exists():
-            try:
-                return json.loads(self.config_path.read_text(encoding="utf-8"))
-            except Exception as exc:
-                logger.warning("Could not read %s: %s", self.config_path, exc)
-        return [
+        """The owner's own list, then every employer an application was already made through (Workday, Ashby,
+        iCIMS, Greenhouse and Lever ones: the systems whose lists can be read), each once."""
+        listed = [
             {"company": "Cloudflare", "token": "cloudflare", "ats": "greenhouse"},
             {"company": "Datadog", "token": "datadog", "ats": "greenhouse"},
             {"company": "Stripe", "token": "stripe", "ats": "greenhouse"},
         ]
+        if self.config_path.exists():
+            try:
+                listed = json.loads(self.config_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                logger.warning("Could not read %s: %s", self.config_path, exc)
+        return sources.merge_companies(listed, sources.companies_from_history(self.history))
 
     def scan_all(self, min_match_threshold: int = 50) -> dict[str, int]:
         """Scans all configured target companies and ingests matching roles."""
@@ -401,13 +420,25 @@ class JobDiscoveryEngine:
         stats = {"companies_scanned": 0, "total_jobs_seen": 0, "relevant_jobs_saved": 0, "expired": 0}
         still_listed: dict[str, set[str]] = {}      # board token -> keys that listed and qualified in this scan
 
+        titles = list(self.profile.get("target_titles") or [])
+        # Every employer's list is read at the same time (each is a separate site); the rows are then saved one by one.
+        from concurrent.futures import ThreadPoolExecutor
+
+        def read(entry):
+            try:
+                return fetch_jobs_for_company({**entry, "titles": titles})
+            except Exception as exc:
+                logger.warning("Could not read %s: %s", entry.get("company"), str(exc).splitlines()[0][:100])
+                return []
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            listings = list(pool.map(read, companies))
+
         try:
-            for entry in companies:
+            for entry, jobs in zip(companies, listings):
                 stats["companies_scanned"] += 1
-                jobs = fetch_jobs_for_company(entry)
                 stats["total_jobs_seen"] += len(jobs)
                 if jobs:        # a board that failed to load (empty list) says nothing about its old rows
-                    still_listed.setdefault(entry.get("token", ""), set())
+                    still_listed.setdefault(entry.get("token") or entry.get("tenant") or entry.get("host") or "", set())
 
                 for job in jobs:
                     score, matched_skills = calculate_match_score(
@@ -457,14 +488,18 @@ class JobDiscoveryEngine:
                             dedup_key, company_name, company_token, ats_type,
                             job_title, location, is_remote, url, match_score,
                             matched_skills, status, discovered_at, updated_at,
-                            resume_score, resume_matched, resume_missing
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            resume_score, resume_matched, resume_missing, posted_at, posted_precision
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(dedup_key) DO UPDATE SET
                             match_score = excluded.match_score,
                             matched_skills = excluded.matched_skills,
                             resume_score = excluded.resume_score,
                             resume_matched = excluded.resume_matched,
                             resume_missing = excluded.resume_missing,
+                            posted_at = CASE WHEN excluded.posted_at != '' THEN excluded.posted_at
+                                             ELSE discovered_jobs.posted_at END,
+                            posted_precision = CASE WHEN excluded.posted_at != '' THEN excluded.posted_precision
+                                                    ELSE discovered_jobs.posted_precision END,
                             status = CASE 
                                 WHEN discovered_jobs.status IN ('submitted', 'queued', 'dismissed') THEN discovered_jobs.status
                                 ELSE excluded.status
@@ -475,7 +510,8 @@ class JobDiscoveryEngine:
                         dedup_key, job["company_name"], job["company_token"], job["ats_type"],
                         job["job_title"], job["location"], job["is_remote"], job["url"],
                         score, json.dumps(matched_skills), init_status, now_iso, now_iso,
-                        resume_score, json.dumps(resume_matched), json.dumps(resume_missing)
+                        resume_score, json.dumps(resume_matched), json.dumps(resume_missing),
+                        job.get("posted_at") or "", job.get("posted_precision") or ""
                     ))
                     if init_status != 'submitted':
                         stats["relevant_jobs_saved"] += 1
@@ -515,9 +551,12 @@ class JobDiscoveryEngine:
         return stats
 
     def get_discovered_jobs(
-        self, min_score: int = 50, status: str = "discovered", limit: int = 50, hide_applied: bool = True
+        self, min_score: int = 50, status: str = "discovered", limit: int = 50, hide_applied: bool = True,
+        within_hours: Optional[float] = None,
     ) -> list[dict[str, Any]]:
-        """Returns discovered jobs matching filters, ordered by highest match score."""
+        """Returns discovered jobs matching filters, ordered by highest match score -- or, with `within_hours`, only
+        the jobs certainly posted inside that window (a job with no known posting date is never inside it), newest
+        first."""
         conn = self._get_connection()
         try:
             # Exclude positions that are already submitted or already applied in applications
@@ -536,13 +575,25 @@ class JobDiscoveryEngine:
             rows = conn.execute(f"""
                 SELECT id, dedup_key, company_name, ats_type, job_title, location,
                        is_remote, url, match_score, matched_skills, status, discovered_at,
-                       resume_score, resume_matched, resume_missing
+                       resume_score, resume_matched, resume_missing, posted_at, posted_precision
                 FROM discovered_jobs
                 WHERE match_score >= ? AND status = ?
                 {sub_filter}
                 ORDER BY (resume_score IS NULL), resume_score DESC, match_score DESC, discovered_at DESC
                 LIMIT ?
-            """, (min_score, status, limit)).fetchall()
+            """, (min_score, status, -1 if within_hours is not None else limit)).fetchall()
+
+            if within_hours is not None:
+                # Only jobs certainly posted inside the window, newest first: a job with no known date is never in it.
+                kept = []
+                for r in rows:
+                    posted = sources.parse_posted(r["posted_at"])
+                    if posted is not None and r["posted_precision"] == "day":
+                        posted = sources.Posted(posted.at, "day")
+                    if sources.within(posted, within_hours):
+                        kept.append((posted.at, r))
+                kept.sort(key=lambda pair: pair[0], reverse=True)
+                rows = [r for _at, r in kept][:limit]
 
             results = []
             for r in rows:

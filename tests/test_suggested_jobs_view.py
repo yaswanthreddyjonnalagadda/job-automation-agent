@@ -1,6 +1,6 @@
 """Suggested jobs are shown honestly (UI review of 1 November 2026, PR B).
 
-Classes: a job the owner already applied to is marked, not hidden; age comes from when it was found; a long list of
+Classes: a job already in the owner's history is left out; age comes from when it was found; a long list of
 places is cut to the first; the tracker is only read; the cockpit reports what it knows (stop, check and resume).
 """
 from datetime import datetime, timedelta, timezone
@@ -28,40 +28,43 @@ def app(status="submitted", **kw):
     return SimpleNamespace(**base)
 
 
-# -- already applied ---------------------------------------------------------------------------------------------
+# -- jobs already in the owner's history are not suggested -------------------------------------------------------
+# (1 November: marked, not hidden. 2 November, the owner: "if they are already applied or rejected they should not
+# show in the page" -- so a job with ANY record in the history, whatever its status, is left out.)
 
-def test_a_job_with_a_sent_application_for_the_same_company_and_title_is_marked_not_dropped():
-    shown = dv.prepare([job()], [app("submitted")], NOW)
-    assert len(shown) == 1 and shown[0]["already_applied"] is True
+@pytest.mark.parametrize("status", ["submitted", "already_applied", "skipped", "needs_user_review", "form_filled",
+                                    "failed", "prepared", "ready_to_submit", "DISQUALIFIED_POLICY_MISMATCH",
+                                    "job_not_found"])
+def test_a_job_with_any_record_in_the_history_is_not_suggested(status):
+    assert dv.prepare([job()], [app(status)], NOW) == []
 
 
 def test_the_same_posting_address_is_matched_whatever_the_tracking_noise():
     sent = app("submitted", company="Other", title="Other",
                url="https://www.boards.example.com/acme/1/?gh_src=abc#apply")
-    assert dv.prepare([job()], [sent], NOW)[0]["already_applied"] is True
-
-
-@pytest.mark.parametrize("status", ["skipped", "needs_user_review", "form_filled", "failed", "prepared"])
-def test_an_application_that_was_not_sent_does_not_mark_the_job(status):
-    assert dv.prepare([job()], [app(status)], NOW)[0]["already_applied"] is False
+    assert dv.prepare([job()], [sent], NOW) == []
 
 
 def test_company_and_title_match_ignores_case_and_punctuation():
-    sent = app("submitted", company="ACME,  Inc", title="network engineer")
-    assert dv.prepare([job(company_name="Acme Inc")], [sent], NOW)[0]["already_applied"] is True
+    sent = app("skipped", company="ACME,  Inc", title="network engineer")
+    assert dv.prepare([job(company_name="Acme Inc")], [sent], NOW) == []
 
 
-def test_marking_reads_the_tracker_and_changes_nothing_in_it():
+def test_a_job_not_in_the_history_is_suggested():
+    other = app("submitted", company="Other Co", title="Other Role", url="https://elsewhere.example.com/y")
+    assert [j["id"] for j in dv.prepare([job()], [other], NOW)] == [1]
+
+
+def test_hiding_reads_the_tracker_and_changes_nothing_in_it():
     records = [app("submitted")]
     before = [vars(r).copy() for r in records]
     dv.prepare([job()], records, NOW)
     assert [vars(r) for r in records] == before
 
 
-def test_applied_jobs_come_after_the_rest_without_being_removed():
+def test_the_others_stay_when_one_is_hidden():
     jobs = [job(id=1, match_score=90), job(id=2, company_name="Other", match_score=60)]
-    shown = dv.prepare(jobs, [app("submitted")], NOW)
-    assert [j["id"] for j in shown] == [2, 1] and shown[1]["already_applied"]
+    assert [j["id"] for j in dv.prepare(jobs, [app("submitted")], NOW)] == [2]
 
 
 # -- age and order -----------------------------------------------------------------------------------------------
@@ -154,9 +157,14 @@ def _recent(**kw):
     return job(**kw)
 
 
-def test_an_applied_job_is_shown_marked_and_not_hidden(page):
+def test_a_job_already_in_the_history_is_not_on_the_page(page):
     html = page([_recent()], [app("submitted")])
-    assert "Already applied" in html and "Network Engineer" in html
+    assert "Network Engineer" not in html.split('id="jobs-h"')[1].split("</section>")[0]
+
+
+def test_a_job_that_is_new_to_the_owner_is_on_the_page(page):
+    html = page([_recent()], [app("submitted", company="Other Co", title="Other Role", url="https://e.example.com/z")])
+    assert "Network Engineer" in html
 
 
 def test_a_new_job_is_badged_and_an_old_one_is_not(page):

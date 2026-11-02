@@ -300,6 +300,11 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 def scan_discovered():
     from job_discovery import JobDiscoveryEngine
     engine = JobDiscoveryEngine()
+    # Besides the owner's own list, every employer an application was already made through is scanned.
+    try:
+        engine.history = [(a.company, a.url) for a in get_tracker().list_all() if getattr(a, "url", "")]
+    except Exception as exc:
+        logger.warning("Could not read the applications to find employers: %s", str(exc).splitlines()[0][:100])
     stats = engine.scan_all(min_match_threshold=60)
     _remember_scan(stats)
     return redirect(url_for("index"))
@@ -1454,6 +1459,15 @@ def health_check():
 PAGE_SIZE = 10        # applications shown at first, and added by "Show 10 more"
 MAX_SHOWN = 300       # as far as the list grows
 
+# How recently a suggested job was posted, from the last hour to the last week (the owner's choice on the page).
+JOB_WINDOWS = {
+    "1h": {"hours": 1, "label": "Last hour", "phrase": "in the last hour"},
+    "24h": {"hours": 24, "label": "Last 24 hours", "phrase": "in the last 24 hours"},
+    "3d": {"hours": 72, "label": "Last 3 days", "phrase": "in the last 3 days"},
+    "7d": {"hours": 168, "label": "Last week", "phrase": "in the last week"},
+}
+DEFAULT_JOB_WINDOW = "7d"
+
 
 @app.get("/")
 def index():
@@ -1496,12 +1510,15 @@ def index():
         stage = "Handoff"
 
     discovered_jobs = []
+    window = JOB_WINDOWS.get(request.args.get("within", ""), JOB_WINDOWS[DEFAULT_JOB_WINDOW])
     try:
         from job_discovery import JobDiscoveryEngine
         discovery_engine = JobDiscoveryEngine()
-        # Jobs already applied to are shown and marked, not dropped without a word.
+        # Posted inside the chosen window, newest first, and nothing the owner has already applied to, skipped or
+        # been turned down for: those never come back as suggestions.
         discovered_jobs = discovered_view.prepare(
-            discovery_engine.get_discovered_jobs(min_score=60, limit=12, hide_applied=False), apps)
+            discovery_engine.get_discovered_jobs(min_score=60, limit=40, hide_applied=False,
+                                                 within_hours=window["hours"]), apps, newest_first=True)
     except Exception:
         discovered_jobs = []
 
@@ -1511,6 +1528,7 @@ def index():
         groups=ui_shell.group_counts(apps), runs=latest_run(runs), signals=signals, error=request.args.get("error"),
         working_url=working_url, is_running=bool(live), job_title=job_title, employer=employer, stage=stage,
         discovered_jobs=discovered_jobs, last_scan=last_scan(), rest_line=_rest_line(runs),
+        job_windows=JOB_WINDOWS, job_window=window,
     )
 
 
@@ -2178,9 +2196,15 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
       </div>
       <form method="post" action="/api/discovered/scan" data-busy="Checking job boards&hellip;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="ghost" title="Look for new postings on the configured Greenhouse and Lever boards">Find new jobs</button>
+        <button type="submit" class="ghost" title="Look for new postings on your job boards and on the employers you have already applied through">Find new jobs</button>
       </form>
     </header>
+    <nav class="dash-chips" aria-label="How recently the job was posted" style="margin-bottom:10px">
+      {% for key, w in job_windows.items() %}
+        <a class="dash-chip" href="/?within={{ key }}#jobs-h"{% if w.hours == job_window.hours %} aria-current="true"{% endif %}>{{ w.label }}</a>
+      {% endfor %}
+    </nav>
+    <p class="dash-sub">Newest first. Jobs you have already applied to, skipped or been turned down for are not listed. A job whose site gives no posting date is not listed either; a site that dates a job only by its day (Workday) appears from "Last 24 hours" on, never under "Last hour".</p>
     {% if discovered_jobs %}
       <div class="dash-chips" role="group" aria-label="Filter suggested jobs" style="margin-bottom:14px">
         <button type="button" class="dash-chip" data-job-filter="all" aria-pressed="true">All</button>
@@ -2188,11 +2212,14 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
         <button type="button" class="dash-chip" data-job-filter="remote" aria-pressed="false">Remote</button>
         <button type="button" class="dash-chip" data-job-filter="greenhouse" aria-pressed="false">Greenhouse</button>
         <button type="button" class="dash-chip" data-job-filter="lever" aria-pressed="false">Lever</button>
+        <button type="button" class="dash-chip" data-job-filter="workday" aria-pressed="false">Workday</button>
+        <button type="button" class="dash-chip" data-job-filter="ashby" aria-pressed="false">Ashby</button>
+        <button type="button" class="dash-chip" data-job-filter="icims" aria-pressed="false">iCIMS</button>
       </div>
       <div class="dash-jobs" id="discovered-feed">
         {% for dj in discovered_jobs %}
           {% set fit = dj.resume_score if dj.resume_score is not none else dj.match_score %}
-          <article class="job-card{{ ' is-applied' if dj.already_applied }}" data-score="{{ fit }}" data-remote="{{ dj.is_remote }}" data-ats="{{ dj.ats_type }}">
+          <article class="job-card" data-score="{{ fit }}" data-remote="{{ dj.is_remote }}" data-ats="{{ dj.ats_type }}">
             <div class="job-top">
               <div class="ring {% if fit >= 85 %}high{% elif fit >= 70 %}mid{% endif %}" style="--p:{{ fit }}"
                    role="img" aria-label="{{ 'Resume match' if dj.resume_score is not none else 'Title match' }} {{ fit }} percent"><b>{{ fit }}%</b></div>
@@ -2207,7 +2234,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
               {% if dj.place %}<span title="{{ dj.location }}">{{ dj.place }}{% if dj.more_places %} <small>+{{ dj.more_places }} more</small>{% endif %}</span>
               {% elif not dj.is_remote %}<span>Location not stated</span>{% endif %}
               {% if dj.is_remote %}<span class="tag remote">Remote</span>{% endif %}
-              {% if dj.already_applied %}<span class="tag applied">Already applied</span>{% elif dj.is_new %}<span class="tag new">New</span>{% endif %}
+              {% if dj.is_new %}<span class="tag new">New</span>{% endif %}
               {% if dj.age %}<span class="muted">{{ dj.age }}</span>{% endif %}
               {% if dj.other_openings %}<span class="muted" title="The same role is listed for other places; this is the best match">+{{ dj.other_openings }} other location{{ '' if dj.other_openings == 1 else 's' }}</span>{% endif %}
               <span class="tag">{{ dj.ats_type | capitalize }}</span>
@@ -2222,7 +2249,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
             <div class="job-foot">
               <form method="post" action="/api/discovered/{{ dj.id }}/apply">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="small{{ ' ghost' if dj.already_applied }}"{% if dj.already_applied %} title="You already applied to this one; start it only to apply again"{% endif %}>Start application</button>
+                <button type="submit" class="small">Start application</button>
               </form>
               <form method="post" action="/api/discovered/{{ dj.id }}/dismiss">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -2234,7 +2261,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
       </div>
       <div class="dash-empty" id="jobs-none" hidden><b>No jobs match that filter</b>Try another one.</div>
     {% else %}
-      <div class="dash-empty"><b>No suggestions yet</b>Press <b style="display:inline">Find new jobs</b> to check your configured job boards.</div>
+      <div class="dash-empty"><b>No jobs posted {{ job_window.phrase }}</b>{% if last_scan %}Try a longer time, or press <b style="display:inline">Find new jobs</b> to check again.{% else %}Press <b style="display:inline">Find new jobs</b> to check your job boards and the employers you have applied through.{% endif %}</div>
     {% endif %}
   </section>
 </main>

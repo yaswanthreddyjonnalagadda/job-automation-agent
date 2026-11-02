@@ -111,9 +111,17 @@ when no resume can be read, shows no resume match and says so; it is never given
 number. Jobs with a resume match are listed first, best first. The same role listed for
 several places is one card with "+N other locations".
 
-Suggested jobs you have already applied to stay in the list, marked "Already applied"
-and placed after the rest (the tracker is only read). Each card shows how long ago the
-job was found, a "New" badge for the last three days, the first place with "+N more",
+**Fresh jobs.** "Find new jobs" reads the job lists of Workday, Ashby, iCIMS, Greenhouse and Lever. It scans
+your own list of employers and every employer you have already applied through (taken from your
+applications). The page shows the jobs posted in the last hour, 24 hours, 3 days or week, newest first;
+each card says how long ago it was posted. A site that dates a job only by its day (Workday: "Posted 3 Days
+Ago") is never shown under "Last hour", and a job whose site gives no posting date is not shown at all:
+the page never guesses. A job you have already applied to, skipped, been turned down for, started or
+dismissed is left out (the tracker is only read). ADP employers are not read yet: ADP's list has no link
+to a single job.
+
+Each card shows how long ago the job was posted (or found, when the site gives no date),
+a "New" badge for the last three days, the first place with "+N more",
 and "Remote" once. "Not interested" is a plain link. After "Find new jobs" the page
 says when it last checked and how many boards. In the live panel, Stop says
 "Nothing was running" when nothing was, and "Check and continue" shows "Checking" until

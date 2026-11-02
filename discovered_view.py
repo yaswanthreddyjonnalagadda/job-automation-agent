@@ -4,6 +4,7 @@ Display only: nothing here changes a job, a tracker record or a decision. The tr
 """
 from __future__ import annotations
 
+import math
 import re
 from datetime import datetime, timezone
 from typing import Iterable, Optional
@@ -23,23 +24,16 @@ def _url_key(url) -> str:
     return re.split(r"[?#]", text, maxsplit=1)[0].rstrip("/")
 
 
-def mark_applied(jobs: Iterable[dict], applications: Iterable) -> list[dict]:
-    """Flag each job the owner already applied to, by posting address or by company and title.
-
-    `applications` are tracker records; only those that were really sent count (status group 'done').
-    """
-    import ui_shell
-    sent = [a for a in applications if ui_shell.status_group(getattr(a, "status", "")) == "done"]
-    urls = {_url_key(a.url) for a in sent if getattr(a, "url", "")}
-    pairs = {(_key(a.company), _key(a.title)) for a in sent if getattr(a, "company", "") and getattr(a, "title", "")}
-    out = []
-    for job in jobs:
-        item = dict(job)
-        item["already_applied"] = bool(
-            _url_key(item.get("url")) in urls
-            or (_key(item.get("company_name")), _key(item.get("job_title"))) in pairs)
-        out.append(item)
-    return out
+def drop_handled(jobs: Iterable[dict], applications: Iterable) -> list[dict]:
+    """The jobs the owner has not dealt with: any job with a record in the history -- sent, skipped, disqualified, in
+    progress or failed -- is left out, matched by posting address or by company and title (2 November 2026: "if they
+    are already applied or rejected they should not show"). The tracker is only read."""
+    records = list(applications)
+    urls = {_url_key(getattr(a, "url", "")) for a in records if getattr(a, "url", "")}
+    pairs = {(_key(a.company), _key(a.title)) for a in records if getattr(a, "company", "") and getattr(a, "title", "")}
+    return [dict(job) for job in jobs
+            if _url_key(job.get("url")) not in urls
+            and (_key(job.get("company_name")), _key(job.get("job_title"))) not in pairs]
 
 
 def _parsed(value) -> Optional[datetime]:
@@ -61,6 +55,29 @@ def posting_age(discovered_at, now: Optional[datetime] = None) -> tuple[str, boo
     days = max(0, ((now or datetime.now(timezone.utc)) - moment).days)
     label = "today" if days == 0 else "yesterday" if days == 1 else f"{days} days ago"
     return f"found {label}", days < NEW_WITHIN_DAYS
+
+
+def posted_label(posted_at, precision, now: Optional[datetime] = None) -> str:
+    """How long ago a job was posted, saying only as much as the system dated it: an exact time reads "posted 5 hours
+    ago"; a day-level date ("Posted 3 Days Ago") reads "posted within the last 4 days" and never claims an hour."""
+    moment = _parsed(posted_at) if posted_at else None
+    if moment is None:
+        return ""
+    hours = max(0.0, ((now or datetime.now(timezone.utc)) - moment).total_seconds() / 3600)
+    if precision == "day":
+        days = max(1, math.ceil(hours / 24))
+        return "posted within the last day" if days == 1 else f"posted within the last {days} days"
+    if hours < 0.05:
+        return "posted just now"
+    if hours < 1:
+        return f"posted {round(hours * 60)} minutes ago"
+    if hours < 2:
+        return "posted 1 hour ago"
+    if hours < 24:
+        return f"posted {int(hours)} hours ago"
+    if hours < 48:
+        return "posted yesterday"
+    return f"posted {int(hours // 24)} days ago"
 
 
 def short_location(location, is_remote=False) -> tuple[str, int]:
@@ -91,17 +108,22 @@ def _one_per_role(jobs: Iterable[dict]) -> list[dict]:
     return out
 
 
-def prepare(jobs: Iterable[dict], applications: Iterable, now: Optional[datetime] = None) -> list[dict]:
-    """The suggested jobs as the page shows them: applied ones marked (and last), newest first within a score."""
+def prepare(jobs: Iterable[dict], applications: Iterable, now: Optional[datetime] = None,
+            newest_first: bool = False) -> list[dict]:
+    """The suggested jobs as the page shows them: nothing the owner has already dealt with, one card per role, the best
+    match first -- or, with `newest_first`, the most recently posted first."""
     shown = []
-    for job in _one_per_role(mark_applied(jobs, applications)):
+    for job in _one_per_role(drop_handled(jobs, applications)):
         job.setdefault("resume_score", None)
         job.setdefault("resume_matched", [])
         job.setdefault("resume_missing", [])
-        job["age"], job["is_new"] = posting_age(job.get("discovered_at"), now)
+        found, job["is_new"] = posting_age(job.get("discovered_at"), now)
+        job["age"] = posted_label(job.get("posted_at"), job.get("posted_precision"), now) or found
         job["place"], job["more_places"] = short_location(job.get("location"), job.get("is_remote"))
         shown.append(job)
-    shown.sort(key=lambda j: str(j.get("discovered_at") or ""), reverse=True)
-    shown.sort(key=lambda j: -(j.get("match_score") or 0))
-    shown.sort(key=lambda j: j["already_applied"])                     # stable: applied ones after the rest
+    if newest_first:
+        shown.sort(key=lambda j: str(j.get("posted_at") or ""), reverse=True)
+    else:
+        shown.sort(key=lambda j: str(j.get("discovered_at") or ""), reverse=True)
+        shown.sort(key=lambda j: -(j.get("match_score") or 0))
     return shown
