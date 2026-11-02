@@ -3820,8 +3820,8 @@ class PageAgent:
                 has_form = False
                 try:
                     has_form = tab.locator('input:not([type="hidden"]), select, textarea').count() > 3
-                except Exception:
-                    pass
+                except Exception as _swallowed:
+                    logger.debug("captcha form probe: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
                 if not has_form or getattr(self, "_captcha_passes", 0) >= 3:
                     if RuntimeEvent is not None:
                         RuntimeEvent.emit(
@@ -7046,6 +7046,13 @@ class PageAgent:
                 return self._press_next_locked(page, plan, controls)
         return self._press_next_locked(page, plan, controls)
 
+    def _guard_the_new_page(self, page) -> None:
+        """The posting's Apply has led to the application: the submission guard, off on the posting, goes on at once --
+        not at the next pass of the loop, when a Submit pressed in between would find it off (f288 disarms it on a
+        posting; this test, test_page_agent_application_entry_uses_the_verified_navigation_path, failed from then on)."""
+        if hasattr(self.assistant, "protect_submission"):
+            self.assistant.protect_submission(self.tab(page))
+
     def _press_next_locked(self, page, plan: PagePlan, controls: list[Control]) -> tuple[str, object, str]:
         if getattr(self.assistant, "_submission_execution_state", "active") != "active":
             return "stop", page, "automation is parked for human handoff"
@@ -7183,6 +7190,7 @@ class PageAgent:
                      or _is_opening_apply_label(control.name, control.value)):
             if self.assistant.follow_application_entry(tab, self.locate(page, control.ref)):
                 self.settle(page, 2_500)
+                self._guard_the_new_page(page)
                 return "moved", page, "followed the posting's application link"
         if final:
             gate = self.submit_gate(page, controls)
@@ -7209,6 +7217,7 @@ class PageAgent:
         if plan.next_kind == "open_application" and hasattr(self.assistant, "follow_application_entry"):
             if self.assistant.follow_application_entry(tab, locator):
                 self.settle(page, 2_500)
+                self._guard_the_new_page(page)
                 return "moved", page, "followed the posting's application link"
 
         # Task 4.1: Deploy the State Fingerprint Circuit Breaker

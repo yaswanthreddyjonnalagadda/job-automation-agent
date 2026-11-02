@@ -17,4 +17,12 @@ py=python; [ -x venv/Scripts/python.exe ] && py=venv/Scripts/python.exe; [ -x ve
 # for one portal kept breaking another). Replays every saved page with the last commit and with what is staged;
 # a difference blocks the commit until it is confirmed a correction:  REPLAY_OK=1 git commit ...
 "$py" replay_guard.py || exit 1
+# The repository's own audits fail a change that CI would fail for style, not behaviour: a swallowed exception, a
+# place literal in logic, an incomplete failure note (2 November: main went red on three of these, found after the
+# merge). They take about 20 seconds; skipped, with a notice, only where pytest is not installed.
+if "$py" -c "import pytest" 2>/dev/null; then
+  "$py" -m pytest -q -p no:cacheprovider tests/test_no_silent_swallow.py tests/test_no_place_literals.py     tests/test_failures_catalogue.py tests/test_next_project_knowledge.py || exit 1
+else
+  echo "pre-commit: pytest is not installed here, the audits were not run" >&2
+fi
 exit 0
