@@ -377,12 +377,16 @@ def document_name(profile, kind: str, company: str) -> str:
 
 def _resume_with_current_email(path: Path, profile, job, job_dir: Path) -> Path:
     """Keep source PDFs intact; refresh a stale generic attachment locally."""
+    doc_file_name = f"{document_name(profile, 'Resume', getattr(job, 'company', 'Job'))}.pdf"
+    target = job_dir / doc_file_name
     text = parse_resume(path).raw_text
     emails = re.findall(r"[\w.+-]+@[\w-]+\.[\w.]+", text)
     if not profile.email or not any(email.casefold() != profile.email.casefold() for email in emails):
-        return path
+        if not target.exists() and path.exists():
+            import shutil
+            shutil.copy2(path, target)
+        return target if target.exists() else path
     updated = re.sub(r"[\w.+-]+@[\w-]+\.[\w.]+", profile.email, text)
-    target = job_dir / "current_contact_resume.pdf"
     text_path = target.with_suffix(".txt")
     text_path.write_text(ensure_resume_header(updated, profile, job), encoding="utf-8")
     build_resume_pdf(text_path, target)
@@ -1785,12 +1789,26 @@ def load_latest_code(agent, assistant, job, experience_data):
     Every stop where the run waits calls this one routine (the review stop once treated Resume as Continue)."""
     import page_agent
     assistant = reload_browser_automation(assistant)
+    import concept_matcher
+    importlib.reload(concept_matcher)
+    import safety
+    importlib.reload(safety)
+    import form_fields
+    importlib.reload(form_fields)
     importlib.reload(page_agent)
     agent.__class__ = page_agent.PageAgent
     agent.assistant = assistant
     # The resume bookkeeping above ran on the old code: run the new code's
     # (a loop guard that had tripped is re-armed, new state starts empty).
     agent._ensure_state()
+    try:
+        doc_file_name = f"{document_name(agent.profile, 'Resume', getattr(job, 'company', 'Job'))}.pdf"
+        proper_resume = getattr(agent, "job_dir", None) and (agent.job_dir / doc_file_name)
+        if proper_resume and proper_resume.exists():
+            agent.resume_file = proper_resume
+            agent.resume_uploaded = False
+    except Exception as _r_exc:
+        logger.debug("Resume file name update: %s", _r_exc)
     agent.forget_sign_in_attempts(owner_acted=False)
     # The profile, application settings and Claude's instructions too:
     # a corrected name or new authorization must reach the live run.

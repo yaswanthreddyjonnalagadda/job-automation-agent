@@ -216,6 +216,13 @@ CONCEPTS: dict[str, dict[str, Any]] = {
         "negative": r"high\s*school",
         "container_boost": r"education|academic",
     },
+    "WORK_AUTHORIZATION_WITHOUT_SPONSORSHIP": {
+        "patterns": [
+            r"\b(?:authori[sz]ed|eligible)\s+to\s+work\b.{0,60}\bwithout\s+(?:the\s+need\s+for\s+)?(?:visa\s+or\s+)?sponsorship\b",
+            r"\bwork\s+authori[sz]ation\b.{0,60}\bwithout\s+(?:the\s+need\s+for\s+)?(?:visa\s+or\s+)?sponsorship\b",
+        ],
+        "negative": r"with\s+or\s+without",
+    },
     "WORK_AUTHORIZATION": {
         "patterns": [
             r"\b(?:legally\s+(?:eligible|authori[sz]ed)|authori[sz]ed\s+to\s+work|right\s+to\s+work|eligible\s+to\s+work|work\s+authori[sz]ation|lawfully\s+authori[sz]ed)\b",
@@ -771,6 +778,14 @@ def resolve_profile_value(
         if education and len(education[0]) > 3:
             val = education[0][3]
             src = "profile.education.graduation_year"
+    elif concept == "WORK_AUTHORIZATION_WITHOUT_SPONSORSHIP":
+        val = "No" if bool(getattr(profile, "requires_visa_sponsorship", False)) else "Yes"
+        src = "profile.requires_visa_sponsorship"
+        if options:
+            import option_match
+            idx = option_match.best_option(list(options), val)
+            if idx is not None:
+                val = options[idx]
     elif concept == "WORK_AUTHORIZATION":
         val = str(getattr(profile, "authorized_for_any_employer", "") or getattr(profile, "legally_eligible_to_work", "Yes")).strip()
         src = "profile.authorized_for_any_employer"

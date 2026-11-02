@@ -1763,6 +1763,7 @@ class PageAgent:
             self.history = repeated_entries.with_profile(self.history, self.profile)
         self._circuit_breaker = None
         self._posting_reloads = 0
+        self._captcha_passes = 0
 
     # -- the page --------------------------------------------------------------
     @staticmethod
@@ -3801,17 +3802,24 @@ class PageAgent:
             except Exception as _swallowed:
                 logger.debug("_run_locked: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
             if safety.captcha_visible(page):
-                if RuntimeEvent is not None:
-                    RuntimeEvent.emit(
-                        event_name=EventName.CAPTCHA_DETECTED,
-                        component="page_agent",
-                        stage="form_filling",
-                        reason_code=ReasonCode.CAPTCHA_REQUIRED,
-                        display_message="CAPTCHA challenge detected on page",
-                        application_key=getattr(self, "key", ""),
-                        safe_metadata={"url": page.url},
-                    )
-                return Outcome("captcha", page, ["a CAPTCHA is showing -- only you can complete it"])
+                has_form = False
+                try:
+                    has_form = tab.locator('input:not([type="hidden"]), select, textarea').count() > 3
+                except Exception:
+                    pass
+                if not has_form or getattr(self, "_captcha_passes", 0) >= 3:
+                    if RuntimeEvent is not None:
+                        RuntimeEvent.emit(
+                            event_name=EventName.CAPTCHA_DETECTED,
+                            component="page_agent",
+                            stage="form_filling",
+                            reason_code=ReasonCode.CAPTCHA_REQUIRED,
+                            display_message="CAPTCHA challenge detected on page",
+                            application_key=getattr(self, "key", ""),
+                            safe_metadata={"url": page.url},
+                        )
+                    return Outcome("captcha", page, ["a CAPTCHA is showing -- only you can complete it"])
+                self._captcha_passes = getattr(self, "_captcha_passes", 0) + 1
             if getattr(self.profile, "requires_visa_sponsorship", False):
                 disqualified, clause, shot = safety.check_visa_sponsorship_shield(
                     tab, self.profile, job_dir=self.job_dir
@@ -4221,7 +4229,8 @@ class PageAgent:
                     logger.debug("Field inventory at the last step failed: %s", exc)
                 blockers += [f"required field is still blank: {question}" for question in missing_required]
             if blockers:
-                return Outcome("owner_needed", page, blockers)
+                kind = "captcha" if any("captcha" in str(b).lower() for b in blockers) else "owner_needed"
+                return Outcome(kind, page, blockers)
 
             rejected = self.rejected_by_the_page(self.snapshot(page), after)
             if rejected:
@@ -4616,9 +4625,25 @@ class PageAgent:
         given: list[tuple[Answer, Control]] = []
         wanted = (("resume", re.compile(r"resume|\bcv\b", re.IGNORECASE), "upload_resume"),
                   ("cover letter", re.compile(r"cover letter", re.IGNORECASE), "upload_cover_letter"))
-        if self.resume_file and (self.resume_file.name in (snapshot or "") or
-                                 _section_holds_a_file(snapshot, "resume")):
+        attached_resume_name = self.resume_file.name if self.resume_file else ""
+        if self.resume_file and attached_resume_name in (snapshot or ""):
             self.resume_uploaded = True
+        elif self.resume_file and _section_holds_a_file(snapshot, "resume"):
+            if "current_contact_resume.pdf" in (snapshot or ""):
+                try:
+                    tab = self.tab(page)
+                    remove_btn = tab.locator('button:has-text("remove file"), [aria-label*="remove file" i]').first
+                    if remove_btn.count() and remove_btn.is_visible():
+                        remove_btn.click(timeout=3000)
+                        tab.wait_for_timeout(800)
+                        self.resume_uploaded = False
+                    else:
+                        self.resume_uploaded = True
+                except Exception as _r_exc:
+                    logger.debug("Failed to remove old resume: %s", _r_exc)
+                    self.resume_uploaded = True
+            else:
+                self.resume_uploaded = True
 
         for what, matches, action in wanted:
             if action == "upload_resume" and (self.resume_uploaded or not self.resume_file):
@@ -4947,8 +4972,18 @@ class PageAgent:
                 needs = bool(getattr(self.profile, "requires_visa_sponsorship", False))
                 fixes.append((question, "Yes" if needs else "No", "profile.requires_visa_sponsorship", False))
             elif safety._AUTHORIZED_Q.search(question):
+                without_sponsorship = bool(re.search(r"\bwithout\s+(?:the\s+need\s+for\s+)?(?:visa\s+or\s+)?sponsorship\b", question, re.IGNORECASE)) \
+                    and not bool(re.search(r"\bwith\s+or\s+without\b", question, re.IGNORECASE))
+                if without_sponsorship:
+                    needs = bool(getattr(self.profile, "requires_visa_sponsorship", False))
+                    fixes.append((question, "No" if needs else "Yes", "profile.requires_visa_sponsorship", False))
+                    continue
                 allowed = str(getattr(self.profile, "legally_eligible_to_work", "") or "").lower().startswith("y")
                 fixes.append((question, "Yes" if allowed else "No", "profile.legally_eligible_to_work", False))
+            elif (getattr(safety, "_AGE_18_Q", None) and safety._AGE_18_Q.search(question)) \
+                    or concept_matcher.match_concept(question) == "LEGAL_AGE_18":
+                over_18 = bool(getattr(self.profile, "at_least_18", True))
+                fixes.append((question, "Yes" if over_18 else "No", "profile.at_least_18", False))
         for mismatch in plan.mismatches:
             question = " ".join(str(mismatch.get("question") or "").split())
             value = str(mismatch.get("correct_value") or "").strip()

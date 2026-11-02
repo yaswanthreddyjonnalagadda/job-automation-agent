@@ -1,0 +1,15 @@
+{
+  "id": "f289",
+  "date": "2026-11-01",
+  "class": "Embedded reCAPTCHA on single-page form caused premature agent abort, and work authorization without sponsorship was falsely flagged as legal conflict",
+  "symptom": "Tri-City Group (BambooHR): form filling halted prematurely at step 10 because a reCAPTCHA iframe at the bottom of the single-page application caused PageAgent to immediately abort with captcha before questions were answered. In addition, questions asking for authorization 'without visa or sponsorship' were incorrectly matched by _AUTHORIZED_Q causing false legal conflicts and forcing 'Yes' when candidate requires visa sponsorship.",
+  "site": "tricitygroup.bamboohr.com/careers/185, 1 November 2026",
+  "root_cause": "PageAgent._run_locked returned Outcome('captcha') immediately upon detecting any CAPTCHA on the page even when an unfilled application form with >3 input fields was present. Furthermore, safety._AUTHORIZED_Q matched 'authorized to work without sponsorship', where answering 'No' (for candidates needing visa sponsorship) was flagged by safety.legal_answer_conflicts as a conflict with profile.legally_eligible_to_work ('Yes'), and page_agent.py correct_from_profile did not handle without_sponsorship qualifications or verify legal age 18.",
+  "why_tests_missed": "Tests tested CAPTCHA detection and legal authorization separately, but did not test single-page embedded forms where CAPTCHA is co-located with active form fields, nor the compound 'without sponsorship' question nuance.",
+  "fix": "Allowed up to 3 passes on embedded forms with active inputs before halting for CAPTCHA at the review/submit gate; added without_sponsorship qualification in safety.legal_answer_conflicts and page_agent.py correct_from_profile; added _AGE_18_Q verification; updated apply_flow._resume_with_current_email to use company-tailored document naming.",
+  "tests": [
+    "tests/test_safety_rules.py"
+  ],
+  "prevention": "Never halt prematurely on a multi-field form due to passive CAPTCHA badges before filling candidate questions, and distinguish general work authorization from authorization without sponsorship."
+}
+

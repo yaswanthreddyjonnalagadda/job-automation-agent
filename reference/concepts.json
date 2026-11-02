@@ -170,7 +170,8 @@
   },
   "more_wordings": {
     "DEGREE_LEVEL": [
-      "\\bhighest\\s+level\\s+of\\s+(?:completed|attained|achieved)\\s+education\\b"
+      "\\bhighest\\s+level\\s+of\\s+(?:completed|attained|achieved)\\s+education\\b",
+      "\\bhighest\\s+education\\s+(?:obtained|completed|attained|achieved)\\b"
     ],
     "HOW_DID_YOU_HEAR": [
       "^(?:candidate|application)\\s+source$"
@@ -184,6 +185,7 @@
     ],
     "NOTICE_PERIOD": [
       "\\bdate\\s+available\\s+to\\s+start\\b",
+      "\\bdate\\s+available\\b",
       "\\bavailable\\s+start\\s+date\\b",
       "\\bearliest\\s+(?:possible\\s+)?start(?:\\s+date)?\\b",
       "\\bwhen\\s+can\\s+you\\s+start\\b"

@@ -428,6 +428,10 @@ def unsupported_claims(source_text: str, generated_text: str, extra_allowed: Ite
 _SPONSORSHIP_Q = re.compile(r"\b(require|need)\w*\b.{0,80}\bsponsor|\bsponsor\w*\b.{0,40}\b(require|need)", re.IGNORECASE)
 _AUTHORIZED_Q = re.compile(
     r"\b(authori[sz]ed|eligible|legally (permitted|able|allowed))\b.{0,30}\bto work\b", re.IGNORECASE)
+_AGE_18_Q = re.compile(
+    r"\b(?:at\s*least\s*18|over\s*18|eighteen\s*years|18\s*years\s*of\s*age|18\s*or\s*older)\b",
+    re.IGNORECASE,
+)
 _CONDITIONAL_Q = re.compile(r"^\W*if\b", re.IGNORECASE)
 _NO_ANSWER = re.compile(r"^\W*(no|n)\b|\b(do not|don't|does not|will not|won't) (now or in the future )?(need|require)|"
                         r"\bnot (need|require)", re.IGNORECASE)
@@ -468,6 +472,17 @@ def legal_answer_conflicts(form_fields: list[dict], profile) -> list[str]:
             elif not needs_sponsorship and said_yes and not said_no:
                 conflicts.append(f"{question[:90]} -- the form says {value[:30]!r}, but you do not need sponsorship")
         elif _AUTHORIZED_Q.search(question):
+            without_sponsorship = bool(re.search(r"\bwithout\s+(?:the\s+need\s+for\s+)?(?:visa\s+or\s+)?sponsorship\b", question, re.IGNORECASE)) \
+                and not bool(re.search(r"\bwith\s+or\s+without\b", question, re.IGNORECASE))
+            if without_sponsorship:
+                said_yes, said_no = bool(_YES_ANSWER.search(value)), bool(_NO_ANSWER.search(value))
+                if not value:
+                    conflicts.append(f"{question[:90]} -- not answered")
+                elif needs_sponsorship and (said_yes and not said_no):
+                    conflicts.append(f"{question[:90]} -- the form says {value[:30]!r}, but you need sponsorship")
+                elif not needs_sponsorship and (said_no or not said_yes):
+                    conflicts.append(f"{question[:90]} -- the form says {value[:30]!r}, but you do not need sponsorship")
+                continue
             said_no = bool(re.match(r"^\W*(no|n)\b", value, re.IGNORECASE))
             # "No, I need sponsorship now" answers what the applicant needs, not whether they may work: it is checked
             # against the sponsorship the profile says (Datadog, 18 October; f191). A bare "No" is still a denial.
@@ -481,6 +496,15 @@ def legal_answer_conflicts(form_fields: list[dict], profile) -> list[str]:
                                      f"{'need' if needs_sponsorship else 'do not need'} sponsorship")
             elif authorized and said_no:
                 conflicts.append(f"{question[:90]} -- the form says {value[:30]!r}, but you are authorized to work")
+        elif _AGE_18_Q.search(question):
+            over_18 = bool(getattr(profile, "at_least_18", True))
+            said_yes, said_no = bool(_YES_ANSWER.search(value)), bool(_NO_ANSWER.search(value))
+            if not value:
+                conflicts.append(f"{question[:90]} -- not answered")
+            elif over_18 and (said_no or not said_yes):
+                conflicts.append(f"{question[:90]} -- the form says {value[:30]!r}, but you are at least 18")
+            elif not over_18 and (said_yes or not said_no):
+                conflicts.append(f"{question[:90]} -- the form says {value[:30]!r}, but you are under 18")
     return conflicts
 
 
