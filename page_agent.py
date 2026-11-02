@@ -685,6 +685,11 @@ def _group_tick_boxes(controls: list[Control], runs: dict[int, tuple[int, str]])
     asked: dict[str, int] = {}
     for run, boxes in members.items():
         question = runs[id(boxes[0])][1]
+        # A dropdown's placeholder ("Select...") above the boxes is not what introduces them: it passes for words that
+        # introduce a choice ("select"), and Fastly's eleven boxes were all named by it while the named group around
+        # them held the real question. Left alone here, the named-group pass below names them (f296).
+        if option_match.is_placeholder(question) or PLACEHOLDER.match(question.strip()):
+            continue
         # Boxes that each say something the owner agrees to ("I agree to ...", "I consent to ...") are separate
         # questions even under one heading: grouped, only the first would be ticked.
         # And a box named by the same words is labelled by them, so they are not a question over the others
@@ -3987,12 +3992,15 @@ class PageAgent:
                         resume_text = self._answer_resume_text()
 
                         newly_answered = 0
+                        asked_groups: set[str] = set()
                         for ctrl in list(controls):
                             if not ctrl.question or ctrl.answer or ctrl.disabled \
                                     or ctrl.ref in getattr(self, "_entry_blank", ()):
                                 continue
                             if not any(_same_question(ctrl.question, q) for q in still_open):
                                 continue
+                            if ctrl.role in ("group", "radiogroup", "region"):
+                                continue            # the box around a question's choices holds its name, not an answer
                             if safety.is_attestation(ctrl.question) or safety.is_legal_status_question(ctrl.question):
                                 continue
                             if concept_matcher.is_self_identification(
@@ -4023,6 +4031,17 @@ class PageAgent:
                                 # question as "a personal preference" (Orion, 31 October 2026, f282).
                                 if not ctrl.options and is_workday_choice_button(ctrl):
                                     ctrl.options = self._read_button_choices(page, ctrl)
+                                # A group of tick boxes is one question with several answers drawn from its boxes: asked
+                                # once, with the boxes' names, for every one that applies -- not once per box with
+                                # nothing to choose from (Fastly's eleven boxes, f296).
+                                several = {}
+                                if ctrl.role == "checkbox" and ctrl.group:
+                                    if ctrl.group in asked_groups:
+                                        continue
+                                    asked_groups.add(ctrl.group)
+                                    ctrl.options = [c.name for c in controls
+                                                    if c.role == "checkbox" and c.group == ctrl.group and c.name]
+                                    several = {"several": True}
                                 val = self.claude.answer_single_question(
                                     question=self._question_for(ctrl),
                                     options=ctrl.options,
@@ -4032,6 +4051,7 @@ class PageAgent:
                                     company=getattr(self.job, "company", ""),
                                     job_text=getattr(self.job, "raw_text", "") or "",
                                     box=box,
+                                    **several,
                                 )
                                 if val:
                                     action = "fill" if ctrl.role in ("textbox", "searchbox", "spinbutton") else "choose"

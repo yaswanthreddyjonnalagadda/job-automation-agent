@@ -443,8 +443,12 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
         company: str = "",
         job_text: str = "",
         box: Optional[dict] = None,
+        several: bool = False,
     ) -> str:
         """Answers ONE specific unanswered question on behalf of the candidate.
+
+        `several`: a group of tick boxes ("which of the following do you have experience with?"): every option the
+        resume or profile shows, as the option texts joined by "; ", and only options that were offered.
         Extremely fast, token-efficient (< 300 tokens), and strictly grounded in
         the candidate's resume and profile facts.
 
@@ -485,6 +489,13 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
             "concise, professional 1-3 sentence response grounded in their background. "
             "Respond with ONLY JSON: {\"answer\": \"<your concise answer>\"}"
         )
+        if several and options:
+            system += (
+                " THIS QUESTION ALLOWS SEVERAL ANSWERS (a group of tick boxes): answer with every option the resume "
+                "or profile genuinely shows, as a JSON list of exact option strings -- {\"answer\": [\"<option>\", ...]}"
+                " -- and never an option they do not support. A 'none of these' option is only for when no other "
+                "option applies, and is never combined with another."
+            )
 
         facts_lines = []
         if profile:
@@ -508,12 +519,19 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
             + (f"JOB POSTING:\n{job_text.strip()[:JOB_POSTING_CHARS]}\n\n" if (job_text or "").strip() else "")
             + f"QUESTION: {question}\n"
         )
-        if options:
+        if options and several:
+            user_message += (f"\nAVAILABLE OPTIONS (choose EVERY one that applies; answer with a JSON list of them):\n"
+                             f"{json.dumps(options, indent=2)}")
+        elif options:
             user_message += f"\nAVAILABLE OPTIONS (choose exactly one):\n{json.dumps(options, indent=2)}"
 
         try:
             raw = self._call(system=system, user_message=user_message, max_tokens=600)
             data = self._extract_json(raw)
+            if several and options:
+                import option_match
+                # Only boxes the page has, joined as the box-ticking step reads them; nothing real means no answer.
+                return "; ".join(option_match.several_offered(list(options), data.get("answer")))
             ans = str(data.get("answer") or "").strip()
             if is_non_answer(ans):
                 # "Not provided in the resume" is the model saying it does not know; typed into Steelcase's

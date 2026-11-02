@@ -435,6 +435,12 @@ ability to be employed in this position ...?") is put to the AI like a short one
 optional. A dropdown the form has scrolled past is still read: the agent opens it, reads its choices and 
 gives the AI those choices to pick from, wherever the window is scrolled.
 
+A group of tick boxes under one question ("With which of the following do you have professional experience?") 
+is named by its own question, never by the "Select..." of the dropdown above it. It is put to the AI once, with the 
+names of its boxes, and the AI is asked to name every box your resume or profile supports; only boxes the page really 
+has are ticked, "None of these" is never ticked together with another box, and if no box is named the group is left 
+for you.
+
 ## An account that already exists
 
 When an employer's page says an account already exists for your email, the

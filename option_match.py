@@ -157,6 +157,33 @@ def matching_choices(options: list[str], answer: str) -> Optional[list[int]]:
             if all(match is not None for match in matches) else None)
 
 
+_NONE_OF_THEM = re.compile(r"^(?:none|n/?a|not applicable|nothing|no experience)\b", re.IGNORECASE)
+
+
+def several_offered(options: list[str], answer) -> list[str]:
+    """The offered labels a model's answer to a "tick all that apply" group names -- each part that is one of the
+    boxes, in the page's order; a part that is not one of them is dropped, never matched to a box that is only like
+    it. A "none of these" box is kept only when it is all that is named. `answer` is the model's list, or one string
+    with its parts joined by ";" (or ", " when no ";" is used: a box's own wording may hold a bare comma)."""
+    if isinstance(answer, (list, tuple)):
+        parts = [str(part).strip() for part in answer]
+    else:
+        text = str(answer or "").strip()
+        whole = best_option(options, text)
+        if whole is not None:
+            return [options[whole]]
+        separator = r"\s*[;\n|]\s*" if re.search(r"[;\n|]", text) else r"\s*,\s+"
+        parts = [part.strip() for part in re.split(separator, text)]
+    picked = []
+    for part in parts:
+        index = best_option(options, part) if part else None
+        if index is not None and index not in picked:
+            picked.append(index)
+    if len(picked) > 1:
+        picked = [i for i in picked if not _NONE_OF_THEM.match(options[i].strip())]
+    return [options[i] for i in sorted(picked)]
+
+
 def _best_option(options: list[str], answer: str) -> Optional[int]:
     want = plain(answer)
     if not want:
