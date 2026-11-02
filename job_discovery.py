@@ -54,7 +54,20 @@ NEGATIVE_TITLE_PATTERNS = [
     r"\bmarketing\b",
     r"\bexecutive assistant\b",
     r"\boffice manager\b",
+    # Sales and management are not what the owner applies for: "Senior Security Sales Engineer" and "Sr Manager,
+    # Infrastructure Sales" scored 70 on a tech word, "remote" and "senior" alone (26 October 2026).
+    r"\bsales\b",
+    r"\bmanager\b",
+    r"\bdirector\b",
+    r"\bvice president\b",
+    r"\bvp\b",
+    r"\bhead of\b",
+    r"\bcustomer success\b",
+    r"\bdesigner\b",
 ]
+
+# A tech word in a title only counts when the title is an engineering-type role.
+ENGINEERING_ROLE = re.compile(r"\b(engineer|architect|administrator|analyst|sre|developer|technician|specialist)\b")
 
 
 def ensure_discovery_schema(conn: sqlite3.Connection) -> None:
@@ -93,6 +106,27 @@ def compute_job_hash(company: str, title: str, location: str, url: str) -> str:
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()
 
 
+def _home_country(name: str) -> str:
+    """The country code of the owner's country as the profile spells it, or "" when it is not known."""
+    try:
+        import geo_reference
+        return geo_reference.country_code(name or "") or ""
+    except Exception as _swallowed:
+        logger.debug("_home_country: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+        return ""
+
+
+def _in_reach(location: str, home: str) -> bool:
+    """False when the location names countries and the owner's is not among them ("Remote - India", "Bengaluru, India"
+    for someone living elsewhere); True when it names none ("Remote", "Palo Alto") or no home country is known."""
+    if not home:
+        return True
+    import geo_reference
+    named = {geo_reference.country_code(part) for part in re.split(r"[;,/|]|\s-\s", location or "") if part.strip()}
+    named.discard(None)
+    return not named or home in named
+
+
 def load_profile() -> dict[str, Any]:
     """Loads candidate profile preferences and targets."""
     import config
@@ -107,6 +141,8 @@ def load_profile() -> dict[str, Any]:
                 "Dallas, TX", "Austin, TX", "Irving, TX", "Plano, TX", "Ashburn, VA", "Remote"
             ],
             "requires_visa_sponsorship": getattr(user_prof, "requires_visa_sponsorship", True),
+            # Where the owner lives, from the profile: "Remote - India" is not remote work for someone living elsewhere.
+            "country_code": _home_country(getattr(user_prof, "country", "")),
         }
     except Exception:
         return {
@@ -162,12 +198,13 @@ def calculate_match_score(
             break
 
     # If no title alignment, score remains low
-    if score == 0:
-        # Check general technical keywords
+    if score == 0 and ENGINEERING_ROLE.search(title_lower):
+        # No targeted title, but an engineering role with a technical word in it: a weaker match, so that a title the
+        # owner targets always ranks above it (a dozen jobs tied at 70 made the list the same on every refresh).
         tech_keywords = ["network", "cloud", "infrastructure", "devops", "sre", "systems", "security"]
         for kw in tech_keywords:
-            if kw in title_lower:
-                score += 30
+            if re.search(rf"\b{kw}\b", title_lower):
+                score += 20
                 matched_skills.append(kw.capitalize())
                 break
 
@@ -176,12 +213,16 @@ def calculate_match_score(
 
     # 2. Location match (up to 30 points)
     is_remote = bool(re.search(r"\bremote\b|\banywhere\b|\bvirtual\b|\bwork from home\b", f"{loc_lower} {title_lower}"))
+    if not _in_reach(location, profile.get("country_code", "")):
+        return 0, []            # a posting in another country is not a suggestion, remote or not
     if is_remote:
         score += 30
         matched_skills.append("Remote")
     else:
         for pref_loc in profile.get("locations", []):
             pref_clean = pref_loc.lower().split(",")[0].strip()
+            if re.fullmatch(r"remote|anywhere|virtual", pref_clean):
+                continue            # "Remote" is the remote rule above, which knows which country it is remote in
             if pref_clean and pref_clean in loc_lower:
                 score += 30
                 matched_skills.append(pref_loc)
@@ -311,13 +352,16 @@ class JobDiscoveryEngine:
         companies = self.get_target_companies()
         conn = self._get_connection()
         now_iso = datetime.now(timezone.utc).isoformat()
-        stats = {"companies_scanned": 0, "total_jobs_seen": 0, "relevant_jobs_saved": 0}
+        stats = {"companies_scanned": 0, "total_jobs_seen": 0, "relevant_jobs_saved": 0, "expired": 0}
+        still_listed: dict[str, set[str]] = {}      # board token -> keys that listed and qualified in this scan
 
         try:
             for entry in companies:
                 stats["companies_scanned"] += 1
                 jobs = fetch_jobs_for_company(entry)
                 stats["total_jobs_seen"] += len(jobs)
+                if jobs:        # a board that failed to load (empty list) says nothing about its old rows
+                    still_listed.setdefault(entry.get("token", ""), set())
 
                 for job in jobs:
                     score, matched_skills = calculate_match_score(
@@ -338,6 +382,7 @@ class JobDiscoveryEngine:
                     dedup_key = compute_job_hash(
                         job["company_name"], job["job_title"], job["location"], job["url"]
                     )
+                    still_listed.setdefault(job["company_token"], set()).add(dedup_key)
 
                     # Check if already submitted or applied
                     has_apps = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='applications'").fetchone() is not None
@@ -387,6 +432,17 @@ class JobDiscoveryEngine:
                             notifications.notify_discovered_job(job_payload)
                         except Exception as _swallowed:
                             logger.debug("scan_all: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            # A suggestion the board no longer lists, or that the rules no longer pass, would keep its old score and be
+            # shown on every refresh. Only suggestions still waiting for the owner expire; queued, submitted and
+            # dismissed ones are theirs.
+            for token, keys in still_listed.items():
+                if not token:
+                    continue
+                marks = ",".join("?" * len(keys)) or "''"
+                cur = conn.execute(
+                    f"UPDATE discovered_jobs SET status = 'expired' WHERE company_token = ? AND status = 'discovered' "
+                    f"AND dedup_key NOT IN ({marks})", (token, *keys))
+                stats["expired"] += cur.rowcount
             conn.commit()
         finally:
             conn.close()
