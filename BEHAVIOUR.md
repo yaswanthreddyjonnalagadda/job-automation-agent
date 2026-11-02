@@ -124,6 +124,8 @@ The scan also reads the job lists of about sixty large multinational employers w
 (Cisco, Intel, NVIDIA, Salesforce, Adobe, Capital One, Visa and others; the list is `reference/employers.json`) and
 never a consultancy, IT-services firm or government contractor. Whether one of them sponsors a visa is read from
 each posting, not assumed.
+"Find new jobs" starts the check in the background and returns at once: reading all those employers takes about
+seven minutes. While it runs the page says so and a second press starts nothing; reload the page to see the result.
 
 Each card shows how long ago the job was posted (or found, when the site gives no date),
 a "New" badge for the last three days, the first place with "+N more",
