@@ -411,8 +411,9 @@ class JobDiscoveryEngine:
         return conn
 
     def get_target_companies(self) -> list[dict[str, str]]:
-        """The owner's own list, then every employer an application was already made through (Workday, Ashby,
-        iCIMS, Greenhouse and Lever ones: the systems whose lists can be read), each once."""
+        """The owner's own list, then the multinational employers the project ships with (reference/employers.json),
+        then every employer an application was already made through (Workday, Ashby, iCIMS, Greenhouse and Lever
+        ones: the systems whose lists can be read), each once."""
         listed = [
             {"company": "Cloudflare", "token": "cloudflare", "ats": "greenhouse"},
             {"company": "Datadog", "token": "datadog", "ats": "greenhouse"},
@@ -423,7 +424,8 @@ class JobDiscoveryEngine:
                 listed = json.loads(self.config_path.read_text(encoding="utf-8"))
             except Exception as exc:
                 logger.warning("Could not read %s: %s", self.config_path, exc)
-        return sources.merge_companies(listed, sources.companies_from_history(self.history))
+        return sources.merge_companies(listed, sources.reference_employers(),
+                                       sources.companies_from_history(self.history))
 
     def scan_all(self, min_match_threshold: int = 50) -> dict[str, int]:
         """Scans all configured target companies and ingests matching roles."""
@@ -443,7 +445,7 @@ class JobDiscoveryEngine:
             except Exception as exc:
                 logger.warning("Could not read %s: %s", entry.get("company"), str(exc).splitlines()[0][:100])
                 return []
-        with ThreadPoolExecutor(max_workers=8) as pool:
+        with ThreadPoolExecutor(max_workers=16) as pool:
             listings = list(pool.map(read, companies))
 
         try:

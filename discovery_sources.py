@@ -15,6 +15,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 from urllib.parse import quote, urlparse
@@ -126,6 +127,17 @@ def fetch_ashby_feed(token: str, company: str, timeout: float = 8.0) -> list[dic
         return []
 
 
+def minimal_titles(titles: Iterable[str]) -> list[str]:
+    """The titles worth searching for: one that only narrows another ("Senior Network Engineer" is inside "Network
+    Engineer"; every word of the shorter is in the longer) is dropped, since the shorter search returns it already."""
+    seen: dict[frozenset, str] = {}
+    for title in titles:
+        words = frozenset(re.findall(r"\w+", (title or "").lower()))
+        if words and words not in seen:
+            seen[words] = title
+    return [title for words, title in seen.items() if not any(other < words for other in seen)]
+
+
 WORKDAY_PAGE = 20          # the most Workday returns for one request
 WORKDAY_MAX_PAGES = 5      # so a title is read to its first hundred results at most
 
@@ -142,7 +154,7 @@ def fetch_workday_feed(entry: dict, titles: Iterable[str], timeout: float = 15.0
         return []
     company = entry.get("company") or tenant
     found: dict[str, dict] = {}
-    for title in titles:
+    for title in minimal_titles(titles):
         # Workday sorts a search by relevance, not by date, so a fresh job can sit on any page: read page by page until
         # a short page says the list has ended (Rackspace's second page held as many posted this week as its first).
         for offset in range(0, WORKDAY_PAGE * WORKDAY_MAX_PAGES, WORKDAY_PAGE):
@@ -194,7 +206,7 @@ def fetch_icims_feed(entry: dict, titles: Iterable[str], timeout: float = 15.0, 
         return []
     company = entry.get("company") or host
     cards: dict[str, tuple[str, str]] = {}
-    for title in titles:
+    for title in minimal_titles(titles):
         try:
             resp = requests.get(f"https://{host}/jobs/search", headers=HEADERS, timeout=timeout,
                                 params={"ss": 1, "searchKeyword": title, "in_iframe": 1})
@@ -270,9 +282,23 @@ def companies_from_history(history: Iterable[tuple[str, str]]) -> list[dict]:
     return list(seen.values())
 
 
-def merge_companies(listed: Iterable[dict], from_history: Iterable[dict]) -> list[dict]:
-    """The owner's own list first, then the employers from history that are not already on it."""
+REFERENCE_EMPLOYERS = Path(__file__).resolve().parent / "reference" / "employers.json"
+
+
+def reference_employers(path: Optional[Path] = None) -> list[dict]:
+    """The multinational employers the project ships with (reference/employers.json): data, tested live when written."""
+    try:
+        return list(json.loads((path or REFERENCE_EMPLOYERS).read_text(encoding="utf-8")).get("employers", []))
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not read the reference employers: %s", str(exc).splitlines()[0][:100])
+        return []
+
+
+def merge_companies(*groups: Iterable[dict]) -> list[dict]:
+    """Each employer once, the first group to name it winning: the owner's own list, then the reference employers, then
+    the employers from the applications already made."""
     merged: dict[tuple, dict] = {}
-    for entry in [*listed, *from_history]:
-        merged.setdefault(_identity(entry), entry)
+    for group in groups:
+        for entry in group:
+            merged.setdefault(_identity(entry), entry)
     return list(merged.values())
