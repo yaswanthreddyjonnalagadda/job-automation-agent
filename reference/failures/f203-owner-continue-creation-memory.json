@@ -1,0 +1,14 @@
+{
+  "id": "f203",
+  "date": "2026-10-19",
+  "site": "iCIMS / Mutual of Enumclaw; shared authentication and handoff paths",
+  "class": "Durable and in-memory creation holds diverge after owner review",
+  "symptom": "After owner Continue clears account_creation_dispatched, an unchanged account form can immediately return FOR_OWNER again.",
+  "root_cause": "_created_at records an attempted creation before dispatch. f201 clears the durable pending marker but leaves this host in _created_at; account_state next_step still treats the form as an unresolved prior attempt.",
+  "why_tests_missed": "f201 tests inspect checkpoint aliases without checking the next account-state decision using the existing in-memory history.",
+  "fix": "After explicit owner Continue successfully clears a previously pending creation marker, discard only that host from the matching memory hold. Keep holds on automatic refresh or storage failure, and preserve already resolved creation history for verification recovery.",
+  "tests": [
+    "tests/test_account_creation_resume_memory.py"
+  ],
+  "prevention": "Assert the next allowed action after resuming, not merely that a persisted marker was erased."
+}

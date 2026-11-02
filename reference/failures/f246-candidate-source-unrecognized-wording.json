@@ -1,0 +1,14 @@
+{
+  "id": "f246",
+  "date": "2026-10-25",
+  "class": "A required application-source label is not mapped to an existing saved fact",
+  "symptom": "After Contact Information progressed, ADP reported Candidate Source is required although the profile already supplies how_did_you_hear.",
+  "site": "ADP Church Mutual Select Source; output/Churchmutual_Looking_to_join_a_vibrant_organization_that_makes_a_difference/pages/20261025_145923/page_02.txt",
+  "root_cause": "HOW_DID_YOU_HEAR recognized referral-source questions but not the exact labels Candidate Source or Application source, so a supported local answer fell through to model interpretation.",
+  "why_tests_missed": "Referral-source tests covered matching provider-specific offered labels but not these field-label variants in concept resolution.",
+  "fix": "Add anchored Candidate Source and Application source wordings to the canonical concept data and reuse the saved profile answer. Source-code questions remain outside the concept.",
+  "tests": [
+    "tests/test_labeled_dropdown_placeholders.py::test_candidate_source_uses_the_approved_profile_source"
+  ],
+  "prevention": "Cover question recognition as well as option matching for recurring field families. Expand canonical wording data instead of asking for a fact already in the profile."
+}

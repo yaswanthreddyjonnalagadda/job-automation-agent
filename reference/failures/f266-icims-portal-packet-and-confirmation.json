@@ -1,0 +1,18 @@
+{
+  "id": "f266",
+  "date": "2026-10-27",
+  "class": "iCIMS profile and portal packets are mistaken for final application submission",
+  "symptom": "Panasonic application 569 repeatedly stopped at Update Profile and Submit-labelled intermediate steps. After its first signed portal packet, the site showed the application was submitted, but the runtime handed off on an optional disability form and reported the resume absent.",
+  "site": "Panasonic Automotive iCIMS, Network Engineering Lead, 27 October 2026",
+  "root_cause": "The generic review check read a Submit label without the iCIMS step marker in its application iframe; a second PageAgent finality condition overrode the verified NON_FINAL marker. The browser guard did not recognize Update Profile as a candidate-profile action. The portal packet was in a second frame and the generic confirmation check rejected the outer submitted-job status because the optional follow-up form still had inputs.",
+  "why_tests_missed": "Fixtures did not combine an outer iCIMS wrapper, named application and packet frames, Update Profile, and a post-submission optional form.",
+  "fix": "Read finality from the iCIMS application frame; give its verified intermediate marker precedence and use a one-click guarded intermediate authorization. Route Update Profile through the candidate-profile gateway. Advance the first signed portal packet only when the saved veteran answer, signature policy, and 1/2 packet marker agree. Recognize the portal's two exact submitted-job status sentences beside an optional form.",
+  "tests": [
+    "tests/test_submission_firewall.py::test_icims_step_finality_reads_named_application_frame",
+    "tests/test_submission_firewall.py::test_icims_submit_only_advances_with_remaining_steps",
+    "tests/test_submission_firewall.py::test_icims_signed_portal_packet_requires_another_packet",
+    "tests/test_candidate_profile_gateway_and_step_finality.py::test_candidate_profile_gateway_authorizes_update_profile",
+    "tests/test_icims_optional_passkey.py::test_submitted_job_status_wins_over_optional_followup_form"
+  ],
+  "prevention": "Exercise iCIMS actions with both wrapper and nested form frames, and verify post-submission outcome even when voluntary forms remain."
+}

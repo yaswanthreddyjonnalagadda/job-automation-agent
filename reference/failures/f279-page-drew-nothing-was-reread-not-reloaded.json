@@ -1,0 +1,17 @@
+{
+  "id": "f279",
+  "date": "2026-10-31",
+  "class": "A half-drawn page was read again for ever instead of being loaded again",
+  "symptom": "Post Consumer Brands' posting (Jibe) showed the agent only the site's header and footer: no job text and no Apply button. The agent re-read the same snapshot until the tries ran out and stopped with 'the page did not move on after several tries', while a fresh browser drew the whole posting and its Apply link.",
+  "site": "jobs.postholdings.com/postconsumerbrands-home/jobs/32946 on 31 October 2026; output/Post_Consumer_Brands_Sr._Network_Engineer/pages/20261031_145406/page_01.txt to page_07.txt",
+  "root_cause": "The site hides the job and its Apply button from a visitor who declined optional cookies (Decline All sets notice_gdpr_prefs=0:); the agent declines them, and no later step revisited that choice. Also: read_when_loaded waited only for pages that said they were still loading. A page whose script had failed to draw its content looked finished, so reading it again returned the same empty page, and the 'refresh' hand-over signal only re-read it too. Nothing ever loaded the page again.",
+  "why_tests_missed": "Every test served a page that was either complete or announced it was loading. None served a page that was silently missing its body and drew correctly on a second load.",
+  "fix": "read_when_loaded loads a page again when it holds no heading or field at all (a 'Skip to content' button does not count as a page); if it is still empty the site's cookie choice is cleared and the banner accepted. Each address gets two such attempts.",
+  "tests": [
+    "tests/test_undrawn_page_is_loaded_again.py::test_a_page_with_no_heading_or_field_is_loaded_again_once",
+    "tests/test_undrawn_page_is_loaded_again.py::test_a_page_that_stays_empty_is_loaded_again_only_twice",
+    "tests/test_undrawn_page_is_loaded_again.py::test_a_page_that_drew_a_heading_is_not_loaded_again",
+    "tests/test_undrawn_page_is_loaded_again.py::test_a_site_that_hides_its_job_from_declined_cookies_is_shown_it_once_cookies_are_accepted"
+  ],
+  "prevention": "A read that finds nothing to act on should distinguish 'this page has no way forward' from 'this page has not drawn', and load the page again before counting a try. Never rely on a page announcing that it is incomplete."
+}

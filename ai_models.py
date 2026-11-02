@@ -105,6 +105,6 @@ def catalogue(config: Any, refresh: bool = False) -> dict[str, dict]:
         try:
             CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
             CACHE_FILE.write_text(json.dumps(cached, indent=1), encoding="utf-8")
-        except OSError:
-            pass
+        except OSError as _swallowed:
+            logger.debug("catalogue: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
     return result

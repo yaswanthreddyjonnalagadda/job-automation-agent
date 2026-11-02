@@ -1,0 +1,19 @@
+{
+  "id": "f291",
+  "date": "2026-11-01",
+  "class": "A page led with what was added last, repeated the same number in three places, and showed a value that cannot be a name as if it were one",
+  "symptom": "Twelve suggested-job cards pushed the owner's 83 applications about 1,500px down the page. The totals appeared as a summary line, a progress bar with a legend and the filter chips. The idle card was a large panel with an illustration. A company stored as 'P' (from 'Cloud Network / SDN Engineer at Bitdeer') was shown as 'P'.",
+  "site": "Flask dashboard Applications page (web_ui.py INDEX_HTML, templates/cockpit_card.html, ui_shell.py), 1 November 2026 UI review",
+  "root_cause": "The page grew by appending sections in the order they were built, each carrying its own copy of the totals, and display fields were printed as stored with no check that they could be what they claimed to be.",
+  "why_tests_missed": "Layout tests checked that sections and filters existed, never their order, never that a number appeared once, and no test fed the page a stored value that is not a plausible name.",
+  "fix": "Sections are ordered by what the owner must do: Needs you, current run, Your applications, Suggested jobs. The summary line and the legend are gone; the filter chips keep the counts and the bar is captioned 'Submitted of tracked: N of M'. The idle card is one line with how the last run ended. ui_shell.company_label shows 'Company unclear' for a value with fewer than two letters or digits (display only; the stored value is untouched), and keeps a longer company even when it also appears in the title.",
+  "tests": [
+    "tests/test_applications_page_layout.py::test_the_owners_work_comes_before_the_suggestions",
+    "tests/test_applications_page_layout.py::test_a_count_is_shown_once_not_in_a_summary_a_legend_and_chips",
+    "tests/test_applications_page_layout.py::test_the_progress_bar_says_what_it_measures",
+    "tests/test_applications_page_layout.py::test_the_idle_card_is_one_line_with_the_last_result",
+    "tests/test_applications_page_layout.py::test_a_company_that_cannot_be_a_name_is_flagged",
+    "tests/test_applications_page_layout.py::test_the_table_shows_company_unclear_for_a_one_letter_company"
+  ],
+  "prevention": "Order a page by the owner's next action, state each number once, and run every displayed field through a check that it can be what its label says. Flag, never silently repair, a value that fails the check."
+}

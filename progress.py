@@ -15,7 +15,7 @@ SUBMITTED_OR_LATER = {"submitted", "interviewing", "rejected", "offer"}
 REPLIED = {"interviewing", "rejected", "offer"}
 INTERVIEWS = {"interviewing", "offer"}
 REACHED_REVIEW = {"ready_to_submit"} | SUBMITTED_OR_LATER
-SKIPPED = {"skipped", "DISQUALIFIED_POLICY_MISMATCH", "job_not_found"}
+SKIPPED = {"skipped", "DISQUALIFIED_POLICY_MISMATCH", "job_not_found", "already_applied"}
 
 # Job sites, told apart by their hosts; anything else is shown by its own domain.
 SITES = (("myworkdayjobs", "Workday"), ("greenhouse", "Greenhouse"), ("lever.co", "Lever"), ("ashbyhq", "Ashby"),

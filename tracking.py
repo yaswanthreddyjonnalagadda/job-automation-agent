@@ -8,15 +8,16 @@ Postgres was the only full one, so anyone running the agent needed a database se
   (not set)          Postgres when POSTGRES_PASSWORD is set in .env (an existing setup keeps its data),
                      otherwise SQLite
 
-A configured Postgres that is down for a moment falls back to SQLite for that run, as before; one that refuses
-the password or has no database fails loudly, so tracking never splits between two databases unnoticed.
+A configured Postgres that is down fails loudly, like one that refuses the password or has no database: a quiet
+fall-back to SQLite split the history between two databases (21-23 October 2026: about 1,800 fall-backs, and the
+answer bank rebuilt from the smaller one). Set TRACKER=sqlite to use SQLite on purpose.
 """
 from __future__ import annotations
 
-import logging
 import os
+import logging
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('tracking')
 
 
 def chosen() -> str:
@@ -24,8 +25,8 @@ def chosen() -> str:
     try:
         from dotenv import load_dotenv
         load_dotenv()
-    except Exception:
-        pass
+    except Exception as _swallowed:
+        logger.debug("chosen: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
     wanted = (os.getenv("TRACKER") or "").strip().lower()
     if wanted in ("postgres", "sqlite"):
         return wanted
@@ -46,8 +47,8 @@ def open_tracker(db_path=None):
     try:
         return db.get_tracker()
     except Exception as exc:
-        if not db.is_transient_connection_error(exc):
-            raise RuntimeError(f"Postgres tracking failed; refusing to fall back to SQLite: {exc}") from exc
-        logger.warning("Postgres unavailable (%s) -- using SQLite at %s for this run. "
-                       "Start it with `docker compose up -d`.", str(exc).splitlines()[0][:120], path)
-        return JobTracker(path)
+        if db.is_transient_connection_error(exc):
+            raise RuntimeError(f"Postgres is configured but not reachable: {str(exc).splitlines()[0][:120]}. "
+                               "Start it with `docker compose up -d`, or set TRACKER=sqlite to use SQLite "
+                               "on purpose.") from exc
+        raise RuntimeError(f"Postgres tracking failed; refusing to fall back to SQLite: {exc}") from exc

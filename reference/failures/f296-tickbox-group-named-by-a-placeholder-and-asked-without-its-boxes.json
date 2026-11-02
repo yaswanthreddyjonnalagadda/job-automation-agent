@@ -1,0 +1,20 @@
+{
+  "id": "f296",
+  "date": "2026-11-02",
+  "class": "Text near a control was taken for its question when it was only a placeholder, and a many-answer question was put to the model as a pick-one question with nothing to pick from",
+  "symptom": "Fastly (Greenhouse): the required group 'With which of the following do you have professional experience? *' (eleven tick boxes) stayed unticked and the model was never given the question or its boxes. All eleven boxes were read as the question 'Select...'.",
+  "site": "job-boards.greenhouse.io (Fastly, Senior Engineer - Network Management Platform), 1 November 2026",
+  "root_cause": "(1) _group_tick_boxes took the text just before a run of tick boxes as their question when it passed the 'introduces a choice' test. The placeholder 'Select...' of the dropdown above passes it (it contains 'select'), so the boxes were all named by it and the named group around them, which held the real question, was never consulted. (2) Once the group was named correctly, the per-question model step still asked once per node (the group's own container and every box) with an empty options list, and answer_single_question told the model to 'choose exactly one' of nothing; a group of tick boxes is several answers drawn from its boxes.",
+  "why_tests_missed": "Tick-box tests used a plain sentence ('Please select any certifications') as the introduction and never put a dropdown's placeholder in front of a group. The per-question step was only tested with single controls, so asking once per box and giving no choices went unnoticed.",
+  "fix": "A placeholder is never taken for the question that introduces boxes, so the named-group pass names them. The per-question step skips a group's container node, asks a tick-box group once with its boxes' names as the options and several=True; answer_single_question then asks for every option the resume or profile shows, and option_match.several_offered keeps only boxes that exist (a 'none of these' box only when nothing else is named). No real box named means no answer.",
+  "tests": [
+    "tests/test_tickbox_group_after_placeholder.py::test_the_fastly_group_is_named_by_its_own_question",
+    "tests/test_tickbox_group_after_placeholder.py::test_no_placeholder_text_before_a_group_is_taken_for_its_question",
+    "tests/test_tickbox_group_after_placeholder.py::test_a_real_introduction_still_names_boxes_that_have_no_group_of_their_own",
+    "tests/test_tickbox_group_is_asked_once_with_its_boxes.py::test_the_model_is_told_to_pick_every_box_that_applies_from_the_boxes_shown",
+    "tests/test_tickbox_group_is_asked_once_with_its_boxes.py::test_the_answer_names_only_boxes_that_exist",
+    "tests/test_tickbox_group_is_asked_once_with_its_boxes.py::test_a_pick_one_question_is_still_asked_for_exactly_one",
+    "tests/test_tickbox_group_is_asked_once_with_its_boxes.py::test_the_group_is_asked_once_with_its_boxes_and_the_answer_ticks_them"
+  ],
+  "prevention": "Words near a control name it only when they are words: a placeholder, a hint or a button label is never a question. A question that takes several answers is put to the model with the choices it may pick from and the instruction to pick every one that applies, and its answer is checked against those choices before anything is ticked."
+}

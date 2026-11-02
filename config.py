@@ -39,6 +39,12 @@ PROFILE_PATH = Path(os.getenv("PROFILE_PATH", str(DATA_DIR / "profile.json")))
 MASTER_RESUME_PATH = BASE_DIR / "assets" / "master_resume.pdf"
 
 
+def auto_submit_verified_only_enabled() -> bool:
+    """Whether the owner turned verified auto-submit on: the one reader of the setting (the dashboard's copy asks
+    this too, so what it promises is what the agent will do)."""
+    return os.getenv("AUTO_SUBMIT_VERIFIED_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class UserProfile:
     """The client's job-search profile.
@@ -108,6 +114,8 @@ class UserProfile:
     # Why each job ended, in your own words. A work-history entry takes the
     # reason for its own employer, not the current one's.
     reasons_for_leaving: tuple[tuple[str, str], ...] = ()
+    # Explicit permission for each named employer; absence never means Yes.
+    employer_contact_permissions: tuple[tuple[str, str], ...] = ()
     current_employer_location: str = ""
     employment_statuses: tuple[str, ...] = ()  # Text field or checkboxes: select all that apply
     how_did_you_hear: str = ""
@@ -126,6 +134,7 @@ class UserProfile:
     preferred_language: str = ""
     people_managed: str = ""
     outside_business_interests_with_competitors: str = ""
+    received_government_assistance: str = ""
     # Asked by many forms, and only yours to answer (30 September: with none of these in the profile the AI
     # guessed them). Empty = the question comes to you once, and your answer is kept.
     preferred_name: str = ""           # empty = you have none: the box is left blank
@@ -134,6 +143,20 @@ class UserProfile:
     transgender: str = ""
     pronouns: str = ""
     gpa: str = ""
+    # The owner's standing decisions on consent, given once and applied on every form that asks, in any wording
+    # (reference/concepts.json: AI_NOTETAKER_CONSENT, SHARE_DATA_WITH_PARTNERS, MARKETING_OPT_IN). "Yes" or "No";
+    # empty = the question comes to the owner, never guessed.
+    ai_notetaker_consent: str = ""
+    share_data_with_partners: str = ""
+    marketing_opt_in: str = ""
+    # Places the owner is available to work, as they gave them (answers "In what cities are you available to work?").
+    available_work_locations: str = ""
+    # What the answer engine says to "do you have N years of X?" when the resume does not show X: "No" (the default;
+    # the resume does not support a Yes) or "ask" (leave it for the owner). It never says Yes without evidence.
+    unproven_experience_answer: str = ""
+    # An optional question the profile cannot answer is left blank when the page says which questions are required:
+    # no model call and no stop (answer_engine.py and page_agent's OPTIONAL_LEFT_BLANK).
+    skip_optional_questions: bool = True
     certifications: tuple[str, ...] = ()
     languages: tuple[str, ...] = ()
     # "Skill: level" on a 1-5 scale, for "rate your skill with ..." questions: ("Cisco: 5", "Palo Alto: 4").
@@ -142,6 +165,8 @@ class UserProfile:
     education: tuple[tuple[str, str, str, str], ...] = ()
     # The same degrees with the dates forms ask for: (school, started, finished).
     education_dates: tuple[tuple[str, str, str], ...] = ()
+    # Explicit school facts: dictionaries keyed by school, with city/state/country/graduated.
+    education_details: tuple[dict, ...] = ()
     # What the break between jobs was, for forms that ask about gaps.
     work_history_gap: str = ""
     # Substitutes the OWNER has approved for a value a list may not offer, tried in order after the
@@ -259,10 +284,7 @@ class AppConfig:
     # uploaded documents match the tracked application, and nothing uncertain
     # (CAPTCHA, attestation, ambiguous choice, warning) is on the page --
     # see safety.evaluate_auto_submit().
-    auto_submit_verified_only: bool = field(
-        default_factory=lambda: os.getenv("AUTO_SUBMIT_VERIFIED_ONLY", "").strip().lower()
-        in {"1", "true", "yes", "on"}
-    )
+    auto_submit_verified_only: bool = field(default_factory=lambda: auto_submit_verified_only_enabled())
     # Deprecated compatibility flag. Automatic submission is authorized only
     # by auto_submit_verified_only; keeping this field avoids breaking callers
     # that still read AUTO_SUBMIT from older configuration files.
@@ -312,6 +334,9 @@ class AppConfig:
 # A form's box for one of these is left blank; any other empty field is a question for the owner.
 BLANK_MEANS_NONE = frozenset({"middle_name", "preferred_name", "prefix", "security_clearance_level",
                               "phone_home", "phone_work", "portfolio_url", "address_line2"})
+# When a form REQUIRES one of those, the profile field that truthfully stands in for "none" (f192: a person with no
+# preferred name is called by their first name). A required box with no stand-in here stays for the owner.
+REQUIRED_STAND_IN = {"preferred_name": "first_name"}
 
 
 def get_user_profile() -> UserProfile:

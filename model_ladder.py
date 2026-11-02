@@ -188,7 +188,8 @@ def _rest_for(skip: Skip) -> float:
 
 
 def climb(ladder: list[str], send: Callable[[str], Any], *, label: str, tier: str,
-          all_spent: Callable[[], Exception], all_paused: Callable[[], Exception]) -> Any:
+          all_spent: Callable[[], Exception], all_paused: Callable[[], Exception],
+          wait_on_pause: bool = True) -> Any:
     """The first answer from the ladder. `send(model)` returns an answer or raises a Skip."""
     paused: dict[str, float] = {}
     spent, failure = False, None
@@ -221,6 +222,8 @@ def climb(ladder: list[str], send: Callable[[str], Any], *, label: str, tier: st
         return answer
 
     if paused:
+        if not wait_on_pause:
+            raise all_paused()
         time.sleep(min(min(paused.values()), MAX_WAIT))
         for model in paused:
             wake(model)

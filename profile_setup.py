@@ -260,8 +260,8 @@ def draft_from_resume(text: str, ask: Optional[Callable[[str, str, int], str]] =
         elif key == "years_experience":
             try:
                 draft[key] = int(value)
-            except (TypeError, ValueError):
-                pass
+            except (TypeError, ValueError) as _swallowed:
+                logger.debug("draft_from_resume: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         else:
             draft.setdefault(key, str(value).strip())        # what the resume plainly says comes first
     return draft

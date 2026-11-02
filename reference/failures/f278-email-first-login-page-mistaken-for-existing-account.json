@@ -1,0 +1,17 @@
+{
+  "id": "f278",
+  "date": "2026-10-28",
+  "class": "An email-first gateway's password page was treated as proof that a new employer account existed",
+  "symptom": "Post Consumer Brands iCIMS accepted the candidate email, showed a login-only page, and the agent tried the ATS password despite no account with this employer. The site refused it. The subsequent reset request produced no mail; the page offered no registration control.",
+  "site": "Post Consumer Brands Sr. Network Engineer, iCIMS job 32946; output/Post_Consumer_Brands_Sr._Network_Engineer/pages/20261028_162804/page_03.txt and page_04.txt, account/20261028_163958_wrong_password.txt, and live login.icims.com password page on 28 October 2026",
+  "root_cause": "account_state._knows_account counted email_given as evidence of an account even when the tracker and owner said this employer had no account. next_step selected SIGN_IN on a one-password login page with no Create Account control. Separately, browser_automation.handle_auth_gate and attempt_auto_login could submit the password without consulting the decision table. An email-first login gateway can ask any email for a password, so neither transition establishes an account.",
+  "why_tests_missed": "The email-first reset tests assumed the site had recognized an existing account, and the no-account tests covered only sign-in pages that offered Create Account. None covered a new employer whose gateway showed only a password form or the direct browser helper path.",
+  "fix": "For an employer confirmed new, email_given alone no longer establishes an account. A login-only password page without Create Account now stops with a specific registration-path handoff; the browser helper also refuses to type a password on that path. A rejected password on that page does not start another reset. Existing accounts and explicit account-exists messages retain their sign-in and reset paths.",
+  "tests": [
+    "tests/test_account_state.py::test_login_only_gateway_does_not_prove_new_employer_has_an_account",
+    "tests/test_account_state.py::test_refused_login_only_gateway_does_not_reset_a_nonexistent_account",
+    "tests/test_account_dialog_scope.py::test_auth_helper_holds_login_only_page_for_new_employer",
+    "tests/test_account_dialog_scope.py::test_direct_login_helper_does_not_type_for_new_employer_without_registration"
+  ],
+  "prevention": "Test every email-first authentication flow with both known and confirmed new employers, including a gateway that offers no registration control. Do not infer account existence solely from a password prompt."
+}

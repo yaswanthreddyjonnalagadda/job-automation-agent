@@ -1,0 +1,14 @@
+{
+  "id": "f259",
+  "date": "2026-10-26",
+  "class": "Personal-profile correction overrides a repeated entry",
+  "symptom": "The generic correction loop repeatedly replaced the saved school city Charleston with the home city Fairfax.",
+  "site": "Church Mutual ADP Senior Network Engineer application 548, supervised continuation 26 October 2026",
+  "root_cause": "The initial detail-field correction and planner mismatch correction did not exclude controls already mapped to a job or degree. Normal residence resolution was entry-aware, but these earlier correction paths were not.",
+  "why_tests_missed": "A synthetic test without a successful open-answer review hid the write; reproducing the reviewed correction path exposed it.",
+  "fix": "Exclude mapped repeated-entry controls from personal-profile correction; keep scoped repeated-history corrections.",
+  "tests": [
+    "tests/test_repeated_location_correction.py::test_home_city_does_not_replace_a_school_city"
+  ],
+  "prevention": "Cover complete portal-shaped workflows and verify committed answers against the correct personal, employer or school scope; preserve owner values and final-submission gates."
+}

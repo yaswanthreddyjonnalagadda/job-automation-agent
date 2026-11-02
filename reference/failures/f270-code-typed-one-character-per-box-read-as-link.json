@@ -1,0 +1,16 @@
+{
+  "id": "f270",
+  "date": "2026-10-27",
+  "class": "A code-entry page was recognised only by a box named 'code', so a code typed one character per box read as a link to click",
+  "symptom": "Walmart (careers.walmart.com): after the posting page the site asked for a six-digit code emailed to the owner ('Check your email for the verification code', six boxes 'Digit 1 of 6' ... 'Digit 6 of 6'). The run handed over to the owner with 'the site sent a verification email: open it, click its link, then press Continue'.",
+  "site": "Walmart careers site, 27 October 2026 (saved pages output/Walmart_(USA)_Senior_Network_Engineer/pages/20261027_224914)",
+  "root_cause": "account_state.read_state treats a page as a code step only when a textbox's own name contains 'code', 'passcode' or 'otp'. Segmented entries name their boxes by position, so the page fell through to the wording rule 'check your email / verification' and was read as VERIFY_EMAIL, which asks the owner to click a link. The step that types a code per box (PageAgent.complete_account_code, built for R+L Carriers) already handled the boxes; only the classifier ahead of it did not see them.",
+  "why_tests_missed": "The code-step fixtures all had a box whose name carried the word code (or R+L Carriers' 'Enter verification code digit 1 of six'); none named the boxes by position alone.",
+  "fix": "account_state treats four or more textboxes named like 'Digit 1 of 6' (digit / character / number / box / field, n of m) as a code box, so a page that says 'verification code' beside them is CODE_ENTRY and the next step is ENTER_CODE. Fewer than four such boxes, and a link page with no boxes, read as before.",
+  "tests": [
+    "tests/test_account_state.py::test_a_code_typed_one_character_per_box_is_a_code_step_not_a_link_to_click",
+    "tests/test_account_state.py::test_fewer_than_four_position_named_boxes_are_not_a_code_entry",
+    "tests/test_account_state.py::test_a_link_page_with_no_boxes_is_still_a_link_to_click"
+  ],
+  "prevention": "Recognise a code entry by what the page asks for (its wording plus any run of input boxes that spell a code), not by one box's name; test a code step with the boxes named by position, by label text outside the box, and as a single box."
+}

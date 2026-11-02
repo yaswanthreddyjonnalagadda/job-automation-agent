@@ -7,6 +7,9 @@
     ["Doctorate", "Ph.D.", "PhD", "Doctoral Degree", "Doctor of Philosophy"],
     ["High School", "High School Diploma", "GED", "Secondary School"]
   ],
+  "phone_type": [
+    ["Mobile", "Cell", "Cellular", "Cell phone", "Mobile phone"]
+  ],
   "language_level": [
     ["Native", "Native Speaker", "Native or Bilingual", "Mother Tongue", "Bilingual"],
     ["Fluent", "Advanced", "Full Professional Proficiency", "Professional Working Proficiency", "Proficient"],
@@ -57,5 +60,9 @@
   },
   "decline_to_answer": [
     ["I prefer not to answer", "Prefer not to answer", "I prefer not to answer this question", "I prefer not to say", "Prefer not to say", "I don't wish to answer", "I do not wish to answer", "I don't want to answer", "Decline to answer", "I decline to answer", "Decline to self-identify", "I decline to self-identify", "Decline to self identify", "Decline to state", "I choose not to disclose", "Choose not to disclose", "I choose not to answer", "Not specified", "I'd rather not say", "Rather not say"]
+  ],
+  "contact_method": [
+    ["Email", "E-mail", "Continue with email", "Send Email"],
+    ["Phone", "SMS", "Text", "Text Message", "Continue with phone number", "Send Phone SMS"]
   ]
 }

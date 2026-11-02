@@ -124,6 +124,16 @@ def test_an_account_on_record_is_signed_in_to_not_made_again(page, tmp_path):
     assert assistant.calls == [("login_page",)]
 
 
+def test_guard_refusal_does_not_count_as_a_password_attempt(page, tmp_path):
+    serve(page, SIGN_IN)
+    assistant = Assistant()
+    assistant._submission_guard = SimpleNamespace(last_credential_click="not_performed")
+    a = agent(assistant, tmp_path)
+    assert step(page, a) is False
+    assert "no password attempt was made" in a.account_blocker
+    assert "jobs.example.com" not in a._signed_in_at
+
+
 def test_a_held_account_is_not_tried_and_the_reason_is_given(page, tmp_path):
     serve(page, SIGN_IN)
     assistant = Assistant(held="an account was already tried 2 times in the last 24 hours")

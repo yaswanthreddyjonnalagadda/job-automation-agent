@@ -1,0 +1,18 @@
+{
+  "id": "f218",
+  "date": "2026-10-22",
+  "site": "ADP, Workday, and web-component comboboxes with lazy-mounted option lists",
+  "class": "Concept option resolution against empty initial snapshot produces uncalibrated values that fail at pick time",
+  "symptom": "When a dropdown has options=() in the initial ARIA snapshot, answer_what_is_known resolved concepts like WORK_AUTHORIZATION to generic 'Yes' and ETHNICITY_RACE to 'Asian'. When the menu opened at choose() time, option_match.best_option failed to match 'Yes' against sponsorship-qualified options ('Yes, with sponsorship' / 'Yes, without restrictions') or 'Asian' against Hispanic/Latino choices ('Not Hispanic or Latino'), causing form filling to fail and stalling the run.",
+  "root_cause": "known_answer() evaluated confirm_concept() and resolve_profile_value() before dropdown choices were read. Without options, sponsorship and demographic disambiguation fell back to uncalibrated defaults. Furthermore, ADP's <sdf-select-simple> and <sdf-card> web components lacked dedicated adapter picker and inline card save hooks.",
+  "why_tests_missed": "Existing blank dropdown tests only verified handing over choices to the LLM planner feedback loop, and did not test the deterministic zero-cost answer_what_is_known path resolving against live choices.",
+  "fix": "In page_agent.py answer_what_is_known, pre-read closed combobox options for option-sensitive concepts before known_answer so resolve_profile_value receives the live option vocabulary. In _choose_exact, re-resolve against live options using confirm_concept and sponsorship_option when initial lookup misses. In sites/adp.py, implement open_picker, select_option, and commit_card hooks for ADP custom elements.",
+  "tests": [
+    "tests/test_p03_dropdown_preopening.py::test_concept_resolution_with_sponsorship_options",
+    "tests/test_p03_dropdown_preopening.py::test_ethnicity_concept_confirmed_to_hispanic_when_options_known",
+    "tests/test_p03_dropdown_preopening.py::test_page_agent_answer_what_is_known_prereads_closed_dropdown",
+    "tests/test_p03_dropdown_preopening.py::test_adp_adapter_custom_widgets"
+  ],
+  "prevention": "Ensure option-dependent concepts always receive real option vocabularies before committing form answers, and re-resolve against live dropdown rows when initial matching fails."
+}
+

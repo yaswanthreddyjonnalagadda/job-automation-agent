@@ -7,7 +7,8 @@ import page_agent
 
 @pytest.mark.parametrize('review', [True, False])
 @pytest.mark.parametrize('decision', ['continue', 'reload_code', 'refresh', 'quit'])
-def test_handoff_resumes_only_nonterminal_actions(monkeypatch, tmp_path, review, decision):
+@pytest.mark.parametrize('captcha', [False, True])
+def test_handoff_resumes_only_nonterminal_actions(monkeypatch, tmp_path, review, decision, captcha):
     page = SimpleNamespace(url='https://jobs.example.invalid/application', is_closed=lambda: False)
     state = {'parked': False, 'calls': 0, 'resumes': 0}
     def park(*args, **kwargs):
@@ -15,13 +16,19 @@ def test_handoff_resumes_only_nonterminal_actions(monkeypatch, tmp_path, review,
     def resume(*args):
         state['resumes'] += 1
         state['parked'] = False
+    def wait(*args, **kwargs):
+        assert kwargs.get('for_captcha', False) == (captcha and not review)
+        return decision
     assistant = SimpleNamespace(save_progress=lambda *args: None, is_review_step=lambda p: review,
-        human_handoff=park, raise_window=lambda *args: None, wait_for_signal=lambda *args, **kw: decision,
+        submission_step_finality=lambda p: "FINAL" if review else "NON_FINAL",
+        human_handoff=park, raise_window=lambda *args: None, wait_for_signal=wait,
         resume_automation=resume)
     def run(p):
         state['calls'] += 1
         if state['calls'] == 1:
-            return page_agent.Outcome('owner_needed', page, ['review step' if review else 'inspect this control'])
+            reason = ('Create Account was not completed: a CAPTCHA is on the form' if captcha
+                      else 'inspect this control')
+            return page_agent.Outcome('owner_needed', page, ['review step' if review else reason])
         assert not state['parked'], 'flow resumed the agent while automation remained parked'
         return page_agent.Outcome('submitted', page, ['the site confirmed the application'])
     fake = SimpleNamespace(run=run, tab=lambda p: p, uncertain_action_labels=lambda: [], notes=[], pages_read=1,

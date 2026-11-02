@@ -1,0 +1,18 @@
+{
+  "id": "f187",
+  "date": "2026-10-17",
+  "site": "Workday (Invesco, Altera Digital Health; cross-portal salary & sponsorship-qualified radio/select inputs)",
+  "class": "Compensation questions phrased as expected earnings or desired annual compensation missed DESIRED_SALARY and fell through to open-ended AI paragraphs, while sponsorship-qualified Yes choices on radio groups and native selects bypassed sponsorship_choice",
+  "symptom": "On Invesco Step 3 ('What would you expect to earn per year in the position for which you have applied? Please provide a numerical value.*'), match_concept returned None and the AI typed a 45-word paragraph instead of '125000'. On Altera Digital Health ('What is your desired annual compensation?*'), match_concept also returned None. Additionally, radio groups, cached native_select recipes, and _choose_inside called _best_option directly without option_match.sponsorship_choice.",
+  "root_cause": "DESIRED_SALARY patterns only matched 'desired salary/pay/compensation' without intervening words like 'annual'/'base' and had no pattern for 'expect to earn' or 'expected annual earnings'; DESIRED_SALARY also formatted a '$min - $max' range even when the prompt explicitly requested a numerical value. For option selection, f184 wired sponsorship_choice into PageAgent._pick but left _control_for, cached native_select, radio/checkbox groups in do(), and _choose_inside calling _best_option directly.",
+  "why_tests_missed": "Existing salary tests used 'Desired Salary' or pay-band dropdowns rather than 'expect to earn ... numerical value' or 'desired annual compensation', and f184 unit tests called PageAgent._pick directly rather than _control_for or radio/select paths.",
+  "fix": "Add expected-earnings and desired-annual/base-compensation patterns to DESIRED_SALARY in reference/concepts.json; return plain numeric str(int(float(minimum))) in concept_matcher.resolve_profile_value when the question requests a numerical value; and route _control_for, cached native_select, radio/checkbox group selection, and _choose_inside through PageAgent._sponsorship_option / _match_option.",
+  "tests": [
+    "tests/test_numerical_salary_and_option_paths.py::test_expected_earnings_and_desired_annual_compensation_match_desired_salary",
+    "tests/test_numerical_salary_and_option_paths.py::test_numerical_salary_question_returns_plain_minimum_number",
+    "tests/test_numerical_salary_and_option_paths.py::test_non_numerical_salary_question_retains_formatted_range",
+    "tests/test_numerical_salary_and_option_paths.py::test_radio_control_for_and_match_option_respect_sponsorship_profile"
+  ],
+  "prevention": "Scan all saved production snapshots when expanding concept patterns, format numeric-only salary prompts as plain numbers, and route all option-picking paths through shared profile-aware helpers."
+}
+

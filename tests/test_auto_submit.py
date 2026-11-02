@@ -139,11 +139,17 @@ def test_disabled_setting_alone_blocks_it():
     assert any("AUTO_SUBMIT_VERIFIED_ONLY" in r for r in result.reasons)
 
 
-def test_the_setting_is_off_by_default():
+def test_the_setting_is_off_by_default(monkeypatch):
     from config import AppConfig
-    import os
-    assert os.getenv("AUTO_SUBMIT_VERIFIED_ONLY") in (None, "", "false", "False")
+    monkeypatch.delenv("AUTO_SUBMIT_VERIFIED_ONLY", raising=False)
     assert AppConfig().auto_submit_verified_only is False
+
+
+@pytest.mark.parametrize("value,expected", [("true", True), ("false", False)])
+def test_auto_submit_setting_respects_explicit_configuration(monkeypatch, value, expected):
+    from config import AppConfig
+    monkeypatch.setenv("AUTO_SUBMIT_VERIFIED_ONLY", value)
+    assert AppConfig().auto_submit_verified_only is expected
 
 
 # ---------------------------------------------------------------- exact matching only

@@ -1,0 +1,20 @@
+{
+  "id": "f297",
+  "date": "2026-11-02",
+  "class": "A fact several readers need (the employer has received the application) was defined separately by each, so a receipt in wording only some of them knew was seen by some and missed by others",
+  "symptom": "Fastly (Greenhouse): the owner pressed Submit, the application was accepted and the employer's email arrived, but the run kept waiting and the tracker stayed 'ready to submit'. The browser stayed open.",
+  "site": "job-boards.greenhouse.io (Fastly, Senior Engineer - Network Management Platform), 2 November 2026",
+  "root_cause": "The check that runs while the owner reviews and presses Submit (browser_automation.submission_confirmed) accepts a receipt only when a whole block of text matches one of a few fixed phrases. Fastly's receipt reads 'Thank you for your interest in working at Fastly!' and 'Your job application has been received. A member of our team will be in touch with you soon.': the word 'job' sits inside a phrase the list spells without it, and the closing sentence is in the third person where the list allows only 'We'll ...'. The agent kept several lists of receipt wording (this check, the page reader, each job-site module, the submission guard's probe) and they had drifted apart: the page reader knew this page, the waiting check did not.",
+  "why_tests_missed": "Receipt tests were written one site's wording at a time, each beside a fix, so each list grew by the last site's phrase. No test fed the same set of receipt wordings to every reader, or fed the same set of pages that must not count.",
+  "fix": "One shared definition, confirmation_text.says_received: the receipt must be a past-tense statement that starts its sentence (after at most a thank-you), may say 'job application', and may be followed only by the employer's own words about what they will do or a sign-off. Conditional, future and policy wording, 'thank you for your interest' alone, and any closing instruction to the visitor ('Verify your email address to finish applying', f286) still do not count, and a page with a form still to fill (three or more fields) or a Submit button is never a receipt. The waiting check uses it, and the page reader now accepts 'job application'. The remaining lists (job-site modules, the submission guard's read-only probe) are noted in docs/AGENT_SYNC.md to move onto it.",
+  "tests": [
+    "tests/test_receipt_wording.py::test_the_waiting_check_sees_the_receipt",
+    "tests/test_receipt_wording.py::test_the_page_reader_sees_the_receipt",
+    "tests/test_receipt_wording.py::test_the_waiting_check_is_not_fooled",
+    "tests/test_receipt_wording.py::test_the_page_reader_is_not_fooled",
+    "tests/test_receipt_wording.py::test_one_shared_definition_of_a_receipt",
+    "tests/test_receipt_with_a_closing_sentence.py::test_a_receipt_with_a_closing_sentence_is_a_receipt",
+    "tests/test_receipt_with_a_closing_sentence.py::test_advice_hidden_text_and_unfinished_forms_are_still_not_receipts"
+  ],
+  "prevention": "A fact several readers need is defined once, in one module, and every reader is tested against the same list of wordings that must count and the same list that must not. Add a new site's wording to that list, never to a list of its own."
+}

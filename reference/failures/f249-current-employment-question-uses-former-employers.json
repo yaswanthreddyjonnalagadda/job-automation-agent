@@ -1,0 +1,15 @@
+{
+  "id": "f249",
+  "date": "2026-10-25",
+  "class": "Current-employee questions lack dedicated temporal scope",
+  "symptom": "ADP's current employee of this employer or its affiliates question remained unanswered. Related regression cases also answered Yes for a former employer when asked about current employment.",
+  "site": "Church Mutual ADP Preliminary Questions; output/Churchmutual_Looking_to_join_a_vibrant_organization_that_makes_a_difference/pages/20261025_150804/page_11.txt",
+  "root_cause": "The employment question recognizer misses current employee of an organisation, while its named-current-employee fallback asks a past-work-history question. Thus known current-employer evidence is unused or former employment is substituted for current employment.",
+  "why_tests_missed": "Employment-history tests primarily ask about ever/former employment and do not contrast current employment against a former employer or a missing current-employer fact.",
+  "fix": "Recognize current/active employee questions in the shared employment module and resolve them only from the stated current employer. The answer engine handles that scope before historical ties; missing current-employer evidence remains unanswered and relative-employment questions are separate.",
+  "tests": [
+    "tests/test_current_employee_answer.py::test_current_employee_question_uses_current_employer_only",
+    "tests/test_current_employee_answer.py::test_a_relative_employment_question_is_not_current_self_employment"
+  ],
+  "prevention": "Represent the temporal scope of personal-history questions explicitly. Include current, former, missing-evidence and third-person cases in every employment-answer regression set."
+}

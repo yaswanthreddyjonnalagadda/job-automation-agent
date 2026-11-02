@@ -1,0 +1,16 @@
+{
+  "id": "f194",
+  "date": "2026-10-18",
+  "site": "Any form; seen on the OPT / STEM-OPT question",
+  "class": "The first saved answer whose pattern matched answered the question, not the most specific one",
+  "symptom": "'Are you currently in a pre or post completion OPT ...?' was answered 'Graduated' (from re:status) although the owner saved 'No' for exactly that question.",
+  "root_cause": "library_answer returned the first key in data/profile_answers.json that matched; the broad re:status came before the OPT pattern.",
+  "why_tests_missed": "Saved-answer tests each had one matching key; none had two keys matching the same question.",
+  "fix": "library_answer ranks every match: an exact saved question first, then the pattern whose match covers the most of the question.",
+  "tests": [
+    "tests/test_saved_answer_most_specific_wins.py::test_the_specific_answer_wins_whatever_the_order",
+    "tests/test_saved_answer_most_specific_wins.py::test_a_broad_pattern_still_answers_what_only_it_matches",
+    "tests/test_saved_answer_most_specific_wins.py::test_exact_only_still_ignores_patterns"
+  ],
+  "prevention": "Never let file order decide between matches; rank by specificity and test with competing keys."
+}

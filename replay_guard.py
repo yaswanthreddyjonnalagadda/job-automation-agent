@@ -52,6 +52,14 @@ def page_text(path: Path) -> str:
     return text
 
 
+def page_kind_entry(text: str) -> dict:
+    """What the page's words say it is -- a job posting or not -- read by the code under test (f174)."""
+    import browser_automation
+    verdict = "posting" if browser_automation.looks_like_posting_text(text) else "not a posting"
+    return {"kind": "page", "question": "is this a job posting", "choices": [], "concept": "", "answer": verdict,
+            "source": "page words", "chose": ""}
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # Reading every page with one version of the code (run in a process of its own, with that version first on the path)
 # ---------------------------------------------------------------------------------------------------------------
@@ -86,6 +94,10 @@ def read_all(tree: Path) -> dict:
         except Exception as exc:
             readings[str(path.relative_to(ROOT))] = {"folder": folder, "error": f"{type(exc).__name__}: {exc}"}
             continue
+        try:
+            entries.append(page_kind_entry(text))
+        except Exception as exc:
+            entries.append({"kind": "page", "question": "is this a job posting", "error": type(exc).__name__})
         groups = defaultdict(list)
         for c in controls:
             if c.role in ("radio", "checkbox") and c.group:

@@ -1,0 +1,12 @@
+{
+  "id": "f236",
+  "date": "2026-10-23",
+  "site": "Shared account and document reuse",
+  "class": "Owner email changes leave stale account expectations and attachments",
+  "symptom": "Owner explicitly changed the email for future applications after a rejected Workday sign-in; a previously prepared resume still contained a different contact address.",
+  "root_cause": "Account presence was checked only by employer, the account upsert did not update its email, and document reuse validated claims but not current profile contact identity.",
+  "why_tests_missed": "Retry tests kept the same profile email throughout; account tests did not change identity after a previous successful account record.",
+  "fix": "Update private profile and ATS email settings; distinguish a recorded account under another configured email, update the account identity on observed success, regenerate stale cached documents, and locally refresh generic fallback contact email without rewriting the source PDF. Preserve submitted application records and duplicate-submission checks.",
+  "tests": ["tests/test_application_email_change.py"],
+  "prevention": "Exercise explicit identity changes across persistent account records and attachment reuse. A configured email change is not proof of authenticated access or mailbox availability."
+}

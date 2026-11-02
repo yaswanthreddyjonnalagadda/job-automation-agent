@@ -110,7 +110,7 @@ CONCEPTS: dict[str, dict[str, Any]] = {
             r"\b(?:mobile|cell|cellphone|primary\s*phone|contact\s*number|phone\s*number|telephone)\b",
             r"^\W*phone\W*$",
         ],
-        "negative": r"home\s*phone|work\s*phone|employer\s*phone|office\s*phone|supervisor|emergency|fax|\bconsent\b|\bsms\b|text\s+(?:message|communication)",
+        "negative": r"home\s*phone|work\s*phone|employer\s*phone|office\s*phone|supervisor|emergency|fax|\bconsent\b|\bsms\b|text\s+(?:message|communication)|verify.*identity|identity.*verif|receive.*(?:verification|security|one[- ]?time)\s+code",
     },
     "PHONE_COUNTRY_CODE": {
         "patterns": [
@@ -143,7 +143,7 @@ CONCEPTS: dict[str, dict[str, Any]] = {
             r"\b(?:do|are)\s+you\s+(?:currently\s+)?(?:reside|residing|live|living|located|based)\s+(?:in|within)\b",
             r"\bare\s+you\s+(?:currently\s+)?(?:a\s+)?(?:legal\s+)?resident\s+of\b",
         ],
-        "negative": r"willing|relocat|commut|miles|distance|near",
+        "negative": r"^\W*(?:which|what|where)\b|willing|relocat|commut|miles|distance|near",
     },
     "CITY": {
         "patterns": [
@@ -216,6 +216,13 @@ CONCEPTS: dict[str, dict[str, Any]] = {
         "negative": r"high\s*school",
         "container_boost": r"education|academic",
     },
+    "WORK_AUTHORIZATION_WITHOUT_SPONSORSHIP": {
+        "patterns": [
+            r"\b(?:authori[sz]ed|eligible)\s+to\s+work\b.{0,60}\bwithout\s+(?:the\s+need\s+for\s+)?(?:visa\s+or\s+)?sponsorship\b",
+            r"\bwork\s+authori[sz]ation\b.{0,60}\bwithout\s+(?:the\s+need\s+for\s+)?(?:visa\s+or\s+)?sponsorship\b",
+        ],
+        "negative": r"with\s+or\s+without",
+    },
     "WORK_AUTHORIZATION": {
         "patterns": [
             r"\b(?:legally\s+(?:eligible|authori[sz]ed)|authori[sz]ed\s+to\s+work|right\s+to\s+work|eligible\s+to\s+work|work\s+authori[sz]ation|lawfully\s+authori[sz]ed)\b",
@@ -226,9 +233,10 @@ CONCEPTS: dict[str, dict[str, Any]] = {
     "VISA_SPONSORSHIP": {
         "patterns": [
             r"\b(?:visa\s+sponsorship|require\s+sponsorship|need\s+sponsorship|future\s+sponsorship|sponsorship\s+now\s+or\s+in\s+the\s+future|sponsor\s+you\s+for\s+a\s+visa|sponsor\s+for\s+employment)\b",
-            r"\bsponsor\b",
+            r"\b(?:require|need|seek)\b.{0,50}\bsponsorship\b",
+            r"\bsponsor(?:ship)?\b",
         ],
-        "negative": r"legally\s+authori[sz]ed|eligible\s+to\s+work",
+        "negative": r"legally\s+authori[sz]ed|eligible\s+to\s+work|\b(?:what|which)\s+type\b|\bwhich\s+visa\b|\bspecify\s+(?:the\s+)?type\b",
     },
     "CITIZENSHIP": {
         "patterns": [
@@ -445,6 +453,10 @@ def match_concept(
     clean_c = clean_text(container)
     clean_ctx = clean_text(context)
     clean_n = clean_text(name)
+    if clean_q and clean_n.startswith(clean_q + " "):
+        # A dropdown's accessible name may append its current selection to
+        # the actual question. Do not reintroduce that answer as label context.
+        clean_n = clean_q
     combined = f"{clean_q} {clean_c} {clean_ctx} {clean_n}".strip()
 
     if not combined:
@@ -550,7 +562,9 @@ def confirm_concept(concept: Optional[str], options: Optional[list[str]]) -> Opt
     Citizenship" is a citizenship question, and it is left as the label said.
     """
     real = [o for o in (options or []) if o and not re.match(r"^\s*(choose|select|--)", o, re.IGNORECASE)]
-    if concept == "ETHNICITY_RACE" and real and all(re.search(r"hispanic|latin", o, re.IGNORECASE) for o in real):
+    if concept == "ETHNICITY_RACE" and real and all(re.search(
+            r"^(?:(?:yes|no)[,\s:;-]+)?(?:not\s+(?:of\s+)?|non[-\s]*)?(?:hispanic|latin[oax]?)\b",
+            re.sub(r"\([^)]*\)", "", o).strip(), re.IGNORECASE) for o in real):
         # "Ethnic Origin" offering only Hispanic/Latino and Not Hispanic/Latino (UKG, 30 September).
         return "HISPANIC_OR_LATINO"
     if concept not in RESIDENCE_CONCEPTS or not options:
@@ -764,9 +778,24 @@ def resolve_profile_value(
         if education and len(education[0]) > 3:
             val = education[0][3]
             src = "profile.education.graduation_year"
+    elif concept == "WORK_AUTHORIZATION_WITHOUT_SPONSORSHIP":
+        val = "No" if bool(getattr(profile, "requires_visa_sponsorship", False)) else "Yes"
+        src = "profile.requires_visa_sponsorship"
+        if options:
+            import option_match
+            idx = option_match.best_option(list(options), val)
+            if idx is not None:
+                val = options[idx]
     elif concept == "WORK_AUTHORIZATION":
         val = str(getattr(profile, "authorized_for_any_employer", "") or getattr(profile, "legally_eligible_to_work", "Yes")).strip()
         src = "profile.authorized_for_any_employer"
+        if options:
+            import option_match
+            needs = getattr(profile, "requires_visa_sponsorship", None)
+            decided, index = option_match.sponsorship_choice(
+                list(options), val, None if needs is None else _is_yes(needs))
+            if decided:
+                return (options[index] if index is not None else ""), src
     elif concept == "VISA_SPONSORSHIP":
         sponsorship = getattr(profile, "requires_visa_sponsorship", False)
         val = "Yes" if sponsorship else "No"
@@ -829,7 +858,13 @@ def resolve_profile_value(
     elif concept == "DESIRED_SALARY":
         minimum = str(getattr(profile, "salary_min", "") or "").strip()
         maximum = str(getattr(profile, "salary_max", "") or "").strip()
-        if minimum and maximum:
+        if minimum and re.search(
+            r"\b(?:numerical\s+value|numbers?\s+only|numeric\s+value|in\s+numbers|whole\s+number|single\s+number)\b",
+            question or "",
+            re.IGNORECASE,
+        ):
+            val = str(int(float(minimum)))
+        elif minimum and maximum:
             val = f"${int(float(minimum)):,} - ${int(float(maximum)):,}"
         elif minimum:
             val = str(minimum)
@@ -862,6 +897,8 @@ def resolve_profile_value(
         val = "Yes"
         src = "profile.current_job"
     elif concept == "WORK_START_DATE":
+        if question and re.fullmatch(r'\s*from\s+date\s*', question, re.I):
+            return "", ""
         dates = str(getattr(profile, "current_employment_dates", "") or "").strip()
         val = dates.split("-")[0].strip() if "-" in dates else dates
         src = "profile.current_employment_dates"
@@ -887,7 +924,19 @@ def resolve_profile_value(
                 and re.fullmatch(r"(?:do you have|have you obtained|do you hold) (?:any )?(?:professional )?certifications?[?*\s]*", question.strip(), re.I) \
                 and {clean_text(option) for option in options or []} >= {"yes", "no"}:
             return "Yes", "profile.certifications"
-        if spec.get("resolver") == "skill_level":
+        if spec.get("resolver") == "phone_type":
+            # A number alone says nothing about its device type. Only an
+            # explicitly typed profile number matching the primary phone
+            # establishes it; conflicting/missing evidence stays unanswered.
+            number = re.sub(r"\D", "", str(raw or ""))
+            matches = [(field, label) for field, label in (
+                ("phone_mobile", "Mobile"), ("phone_home", "Home"), ("phone_work", "Work")
+            ) if number and re.sub(r"\D", "", str(getattr(profile, field, "") or "")) == number]
+            if len(matches) == 1:
+                field_name, val = matches[0]
+            else:
+                val = ""
+        elif spec.get("resolver") == "skill_level":
             val = _skill_level(raw, question)
         elif spec.get("resolver") == "text_if_true":
             # A statement the owner has made once ("I require sponsorship before I am able to work"), given only
@@ -917,6 +966,8 @@ def resolve_profile_value(
         matched_opt = best_option_match(val, options)
         if matched_opt:
             return matched_opt, src
+        if concept == "HOW_DID_YOU_HEAR":
+            return "", ""
 
     return val, src
 

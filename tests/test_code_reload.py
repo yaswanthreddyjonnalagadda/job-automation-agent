@@ -11,6 +11,7 @@ other tests.
 import apply_flow
 import browser_automation
 import page_agent
+import sites
 from browser_automation import JobApplicationAssistant
 
 
@@ -55,3 +56,13 @@ def test_a_helper_with_a_syntax_error_keeps_the_running_version(monkeypatch):
     assert apply_flow.reload_browser_automation(assistant) is assistant
     assert "browser_automation" not in reloaded and "account_state" not in reloaded
     assert "form_fields" not in reloaded          # nothing half-reloaded: the whole running version is kept
+
+
+def test_code_reload_refreshes_every_registered_portal_adapter(monkeypatch):
+    reloaded=[]
+    monkeypatch.setattr(apply_flow.importlib,'reload',lambda module:reloaded.append(module.__name__) or module)
+    assistant=JobApplicationAssistant.__new__(JobApplicationAssistant)
+    apply_flow.reload_browser_automation(assistant)
+    for adapter in sites.ADAPTERS:
+        assert adapter.__module__ in reloaded
+        assert reloaded.index(adapter.__module__) < reloaded.index('sites')

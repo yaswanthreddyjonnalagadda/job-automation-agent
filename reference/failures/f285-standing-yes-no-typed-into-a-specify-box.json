@@ -1,0 +1,16 @@
+{
+  "id": "f285",
+  "date": "2026-11-01",
+  "class": "A keyword chose the wrong kind of answer: a settled Yes/No was typed into a free-text box that asks the owner to specify",
+  "symptom": "Color Health (CareerPuck): 'If you will require the company's assistance or sponsorship for work authorization, please specify the type (e.g., H-1B transfer, TN, ...)' was filled with 'Yes'. The correct answer (H-1B) was proposed afterwards but could not replace it, and the run handed over with 'could not set'.",
+  "site": "app.careerpuck.com/job-board/color-health, 1 November 2026; output/Color_Senior_IT_Systems_Engineer/pages/20261031_233732/page_04.txt",
+  "root_cause": "page_agent._STANDING_ANSWERS matched the bare word 'sponsor' (and 'relocat' and others) in any question and answered a boolean profile fact with Yes or No whatever the control was. A free-text box that asks to specify, describe or explain wants a value, not a yes or no.",
+  "why_tests_missed": "Standing-answer tests used yes/no controls (radios, selects) or clearance questions. None gave a text box a question that contained a standing keyword but asked for detail.",
+  "fix": "known_answer skips a boolean standing answer when the control is a free-text box with no options and the question asks to specify, describe, explain, elaborate or list, or asks what type; the question then goes to the planner.",
+  "tests": [
+    "tests/test_standing_yes_no_does_not_fill_a_specify_box.py::test_a_specify_the_type_text_box_is_not_given_yes",
+    "tests/test_standing_yes_no_does_not_fill_a_specify_box.py::test_a_box_asking_to_describe_or_explain_is_not_given_yes",
+    "tests/test_standing_yes_no_does_not_fill_a_specify_box.py::test_the_yes_no_question_is_still_answered_from_the_profile"
+  ],
+  "prevention": "Decide the kind of answer from the control and the question's verb (whether / specify / describe) before reaching for a topic keyword; a topic keyword alone never decides the answer."
+}

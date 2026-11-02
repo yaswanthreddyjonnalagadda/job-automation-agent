@@ -1,0 +1,18 @@
+{
+  "id": "f295",
+  "date": "2026-11-02",
+  "class": "A decision was made from an incidental property of the thing (how long its label is, where the window happens to be scrolled) instead of from what it is, and two readers of one fact used two different limits",
+  "symptom": "Fastly (Greenhouse): two required dropdowns, 'Are you subject to any agreements that may restrict your ability to be employed in this position ...?' and 'How much relevant professional experience do you have building distributed systems ...?', were never put to the model. The run reached the review step and stopped for the owner with both still showing 'Select...'.",
+  "site": "job-boards.greenhouse.io (Fastly, Senior Engineer - Network Management Platform), 1 November 2026",
+  "root_cause": "(1) required_questions read each way a star can be drawn with its own length limit (120, 120, 600, 200 characters). Both questions are over 120 characters, so the page's stars were not read for them; they got no star, split_optional filed them as optional, and they were left blank 'without asking a model'. The last check, which reads the page itself with no length limit, then found them blank and stopped the run. (2) The field inventory called a field visible only if it was inside the window (bottom > 0), so after the agent had worked below the 'agreements' dropdown, the dropdown had scrolled above the window and the inventory ignored it: its list was never opened, and the model was asked without its choices.",
+  "why_tests_missed": "Required-question tests used short labels, and the longest recorded one (Walmart, 410 characters) came through the one pattern that allowed 600. No test put two readers of the same fact side by side or varied the label length. Inventory tests looked at a page from the top, never after scrolling past a field, and the made-up test sites were short enough to fit in one window.",
+  "fix": "One limit (_QUESTION_TEXT_MAX = 600) shared by every pattern in required_questions. The inventory's visibility test measures position on the page (window scroll added) instead of position in the window, so a field scrolled above the window still counts and one parked off the page's own edge (left:-9999px) still does not.",
+  "tests": [
+    "tests/test_required_long_question.py::test_the_two_long_fastly_questions_are_required",
+    "tests/test_required_long_question.py::test_a_marked_question_is_required_at_any_length",
+    "tests/test_required_long_question.py::test_a_required_question_is_not_left_blank_as_optional",
+    "tests/test_field_visible_after_scrolling.py::test_a_field_is_as_visible_scrolled_past_as_in_view",
+    "tests/test_field_visible_after_scrolling.py::test_a_field_hidden_off_the_page_or_by_style_is_still_invisible"
+  ],
+  "prevention": "A fact several readers need (is this question required, is this field on the page) has one reader and one limit, tested across the whole range of the property it could depend on (label length 20 to 590, scroll position top to bottom). Never judge a field by where the window is. A form taller than the window is the normal case, so test it scrolled."
+}

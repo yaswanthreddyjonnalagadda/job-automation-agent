@@ -1,0 +1,16 @@
+{
+  "id": "f209",
+  "date": "2026-10-20",
+  "site": "Cross-portal open questions; Fal application 106",
+  "class": "Missing original-resume context and non-enforcing content validation for generated answers",
+  "symptom": "Fal run 20261020_164529 filled two technical questions with years/title/degree biography, omitted requested environment scale, and asserted no kernel-tuning projects without explicit supporting evidence. Complete saved page also shows a separate missing required GitHub profile; no submission confirmation.",
+  "root_cause": "Targeted answering ignored ResumeData.raw_text, queried a nonexistent browser extraction method and normally absent job.resume_text, then cached empty context. Writer checks covered style and length but not grounding or coverage. Full-page planner answers had no independent content gate. Default minimum length encouraged filler.",
+  "why_tests_missed": "Writer tests supplied resume text directly and tested tone/length. They did not exercise runtime context plumbing, content rejection, malformed reviews, or planner bypasses.",
+  "fix": "Use the parsed original resume; retain longer relevant evidence; independently review final fitted answers for support and coverage with one bounded rewrite. Reject invalid/unavailable content reviews, enforce explicit form limits, and stop padding to a default minimum. Apply the same reviewer to full-page answers/corrections regardless of claimed source, preserve exact known answers, cache reviews by evidence and answer, and route reviews to the selected answer provider.",
+  "tests": [
+    "tests/test_open_answer_evidence.py",
+    "tests/test_open_answers.py",
+    "tests/test_job_posting_to_the_ai.py"
+  ],
+  "prevention": "Test the complete evidence-to-browser path with synthetic profiles. Content approval must gate writes and fallback plans; absence of evidence is not evidence of absence. Semantic model review is an additional check, not a guarantee of factual correctness."
+}

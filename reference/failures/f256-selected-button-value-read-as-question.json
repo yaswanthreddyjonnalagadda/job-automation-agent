@@ -1,0 +1,15 @@
+{
+  "id": "f256",
+  "date": "2026-10-26",
+  "class": "Selected custom dropdown answer remains part of its label",
+  "symptom": "A saved No on Personal Information was reported as a blank required question after resume.",
+  "site": "Church Mutual ADP Senior Network Engineer application 548, supervised continuation 25\u201326 October 2026",
+  "root_cause": "The parser separated nested placeholders from button labels but did not separate committed values.",
+  "why_tests_missed": "Placeholder coverage did not include a saved selected value with a matching preceding field label.",
+  "fix": "Separate a nested suffix value only when it is a placeholder or the remaining button label matches explicit preceding field context.",
+  "tests": [
+    "tests/test_labeled_dropdown_placeholders.py::test_selected_button_answer_is_separate_from_its_matching_field_label",
+    "tests/test_labeled_dropdown_placeholders.py::test_nested_button_text_without_a_matching_field_label_is_not_an_answer"
+  ],
+  "prevention": "Retain portal-shaped regression fixtures, inspect every repeated record, verify committed values and preserve submission and personal-answer gates."
+}

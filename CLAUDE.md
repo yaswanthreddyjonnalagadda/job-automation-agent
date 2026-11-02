@@ -147,3 +147,11 @@ of them hold.
   postmortems go in the Claude Project; the root keeps rules only. The one
   exception is `reference/failures/`, the machine-readable failure catalogue
   above, which is data the project keeps.
+
+## 8. Multi-Agent Coordination (`docs/AGENT_SYNC.md` & `scripts/agent_status.py`)
+Claude Code, Codex, and Antigravity work together on this repository:
+- **Run `python scripts/agent_status.py` first at the start of every session/task**, and read [`docs/AGENT_SYNC.md`](docs/AGENT_SYNC.md) and [`AGENTS.md`](AGENTS.md).
+- **Check uncommitted work and pending work before editing:** `python scripts/agent_status.py` reports uncommitted working-tree changes, stashes/unmerged branches, the latest `fNNN` failure ID (and next available ID), pending/stopped applications in `data/applications.db`, the latest saved page run in `output/`, and open backlog items. Never revert or overwrite uncommitted changes left by another agent.
+- **Inspect the entire stopped page/run, not just the first failure line:** when a run stops (`output/<Job>/pages/<Run>/page_XX.txt`), inspect every field, option list, and error across the saved steps so multiple issues on the same page (e.g. a dropdown ambiguity AND an unmapped salary field) are resolved in one pass rather than requiring another aborted browser run.
+- **Update [`docs/AGENT_SYNC.md`](docs/AGENT_SYNC.md) and re-run `python scripts/agent_status.py`** when completing a fix or discovering a new cross-portal issue so all agents stay synchronized.
+

@@ -1,0 +1,19 @@
+{
+  "id": "f271",
+  "date": "2026-10-27",
+  "class": "After a step the site redirected the browser to a page that is not the application, and the run kept working on that page",
+  "symptom": "Walmart (careers.walmart.com): the emailed code was accepted and the site showed its careers home page ('Cashiers wanted', 'Trending roles'). The run pressed the home page's picture-carousel 'Next' three times and stopped for the owner with 'the page did not change after three tries -- stuck in a validation loop (BLOCKED_VALIDATION_LOOP)'.",
+  "site": "Walmart careers site, 27 October 2026 (saved pages output/Walmart_(USA)_Senior_Network_Engineer/pages/20261027_225618)",
+  "root_cause": "Nothing noticed that the page was no longer the application. The existing recovery (UKG, 30 September: 'the site's own menu -- back to the job') needs a form to have been seen earlier in the run and a control inside the header or footer, and a carousel 'Next' is neither. The helper that judges what a page shows, apply_flow.shows_the_application, would also have been fooled: it counted any visible input outside type=search as an application field, and a careers site's header search box is a plain text input.",
+  "why_tests_missed": "The home-page cases in tests/test_resume_point.py had no search box in the header, and no test drove the main loop through a loop-guard stop on a page that holds no application.",
+  "fix": "When the loop guard trips and the page is neither the application nor its posting nor a review step (apply_flow.left_the_application, judged by what the page shows), the run reopens the job's own page and its application (apply_flow.reopen_application) instead of stopping, at most twice per run (MAX_RETURNS_TO_JOB); if the job page cannot be reopened, or the loop returns, it ends with the owner as before. shows_the_application no longer counts inputs inside the page's header, navigation, footer or search landmarks.",
+  "tests": [
+    "tests/test_left_the_application.py::test_a_header_search_box_is_not_an_application_field",
+    "tests/test_left_the_application.py::test_left_the_application_is_judged_by_what_the_page_shows",
+    "tests/test_left_the_application.py::test_a_loop_on_the_careers_home_goes_back_to_the_job_and_carries_on",
+    "tests/test_left_the_application.py::test_a_loop_on_a_page_that_holds_the_application_is_still_reported",
+    "tests/test_left_the_application.py::test_going_back_is_bounded_so_a_site_that_keeps_sending_it_home_ends_with_the_owner",
+    "tests/test_left_the_application.py::test_a_job_page_that_cannot_be_reopened_ends_with_the_owner_not_a_crash"
+  ],
+  "prevention": "Decide whether the run is still inside the application from what the page shows, not from which control the plan chose; recover to a known place (the job's own page) before giving a stalled run to the owner, with a cap, and test the recovery in the real main loop."
+}

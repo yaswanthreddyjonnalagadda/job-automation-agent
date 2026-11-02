@@ -1,0 +1,21 @@
+{
+  "id": "f227",
+  "date": "2026-10-23",
+  "site": "The Applications dashboard (web_ui.py, templates/cockpit_card.html, static/cockpit.js)",
+  "class": "A control or a piece of text on the page did not do what it said: buttons with nothing behind them, a live feed that treated an employer's words as page markup, and a state that looked like success when nothing had happened",
+  "symptom": "Pause could only answer 'unavailable'; Resume said 'resumed' with nothing running; Stop and Show browser stayed on screen when nothing ran; the live-events route would crash when a browser tab left (it called a method that does not exist); the activity feed and answers table inserted employer page text, handoff reasons and answers as HTML, so text such as <img onerror=...> ran as script; every answer showed 'Accepted' even after the owner changed it; the card's inner layout inherited the page grid and clipped; the page could not be used by keyboard or screen reader (unnamed inputs, no skip link, blocking alert/confirm/prompt) and the dark-mode and gradient colours failed contrast.",
+  "root_cause": "The page was assembled from parts that were never checked against each other: controls were added for features the runtime does not have (pause, takeover, an events stream no page consumed), dynamic text was built with string templates and innerHTML instead of the DOM, two components shared one class name (cockpit-grid), and nothing tested that every control had a route, a handler, a name and a readable colour.",
+  "why_tests_missed": "Tests pinned the dead features (a disabled Pause button, a 409 from /api/cockpit/pause) and the old markup, and none looked at the rendered page as a person or a screen reader meets it.",
+  "fix": "Removed the Pause control and route, the takeover route, the unused events stream and the old runs block; rebuilt the live card from the DOM with textContent only; made every button appear only when it can act (Continue only while waiting, Show browser and Stop only while running) and hide itself in the script as well as in the stylesheet; replaced alert/confirm/prompt with one accessible dialog; renamed the colliding class; labelled every input and added a skip link, landmarks, aria-current and keyboard handling; repaired the colour tokens so every text and background pair passes AA in light and dark.",
+  "tests": [
+    "tests/test_dashboard_controls.py::test_every_form_and_link_on_the_page_leads_to_a_real_route",
+    "tests/test_dashboard_controls.py::test_every_control_has_a_name_a_person_can_hear",
+    "tests/test_dashboard_controls.py::test_there_is_no_pause_control_and_no_dead_button",
+    "tests/test_dashboard_controls.py::test_the_activity_feed_never_runs_employer_text_as_markup",
+    "tests/test_dashboard_controls.py::test_a_button_shows_only_when_it_can_do_something",
+    "tests/test_dashboard_controls.py::test_a_form_that_asks_to_be_confirmed_waits_for_the_owner",
+    "tests/test_dashboard_controls.py::test_the_colours_the_page_uses_are_readable",
+    "tests/test_dashboard_controls.py::test_the_start_button_gradient_keeps_white_text_readable_at_every_stop"
+  ],
+  "prevention": "Build UI from the DOM, never from strings of text that came from outside; give every control a route, a handler and a name before it ships; show a control only in the state where it can act; and test the rendered page (routes, names, colour pairs) rather than the markup that happened to be there."
+}

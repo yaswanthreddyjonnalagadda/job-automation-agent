@@ -1,0 +1,19 @@
+{
+  "id": "f173",
+  "date": "2026-10-17",
+  "site": "Any employer ATS with accounts (Workday tenants, iCIMS, SuccessFactors)",
+  "class": "An account was recognised only by the exact employer string in one table, so a differently written name or an application sent before the account was recorded looked like a stranger and got a second account",
+  "symptom": "The owner's rule is: prefer Google; otherwise, if we have applied to this client before, sign in and do not create an account. The agent only signed in when the accounts table held the exact employer string, and otherwise went to Create Account.",
+  "root_cause": "account_on_record() looked up ats_accounts by exact lower-cased employer. 'Marathon Petroleum' and 'Marathon Petroleum Company LP' were different keys, and a submitted application to the employer (proof an account exists) was never consulted.",
+  "why_tests_missed": "Account tests stubbed account_on_record() as a yes/no; none exercised how the answer is derived, or the same employer written two ways.",
+  "fix": "employer_names.same_employer() compares names without case, punctuation or legal form. Both trackers get applied_before(employer) over submitted applications. The agent signs in when an account is on record or the employer was applied to before (account_expected()); a rejected sign-in on an only-inferred account still falls back to creating one. Google stays first wherever the site offers it.",
+  "tests": [
+    "tests/test_applied_before_signs_in.py::test_one_employer_written_two_ways_is_one_employer",
+    "tests/test_applied_before_signs_in.py::test_different_or_empty_employers_are_never_the_same",
+    "tests/test_applied_before_signs_in.py::test_a_submitted_application_to_the_same_employer_counts_as_applied_before",
+    "tests/test_applied_before_signs_in.py::test_an_application_that_never_got_in_or_another_employer_does_not",
+    "tests/test_applied_before_signs_in.py::test_a_create_form_with_an_employer_applied_to_before_goes_to_sign_in",
+    "tests/test_applied_before_signs_in.py::test_a_stranger_employer_still_gets_its_account_made"
+  ],
+  "prevention": "Decide 'do we already have a relationship with this party' from every record that proves it (accounts and sent applications), matched on a normalised identity, in one function the whole flow calls."
+}

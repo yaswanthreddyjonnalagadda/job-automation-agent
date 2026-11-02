@@ -1,0 +1,15 @@
+{
+  "id": "f283",
+  "date": "2026-11-01",
+  "class": "A server-side fault banner that does not say 'refresh' was answered by pressing Next again, not by loading the page again",
+  "symptom": "HonorHealth Support Services Engineer III (Workday), My Experience: every field was filled and no required-field error remained, but Next answered 'Errors Found / Page Error - Error Code: I|<id>' twice. The agent pressed Next again until the validation-loop guard stopped the run (BLOCKED_VALIDATION_LOOP).",
+  "site": "honorhealth.wd12.myworkdayjobs.com on 1 November 2026; output/HonorHealth_Support_Services_Engineer_III_-_Network/pages/20261031_213820/page_13.txt to page_17.txt",
+  "root_cause": "Only banners that say 'something went wrong' or ask the visitor to refresh or try again were treated as passing faults the agent clears by reloading. Workday's bare 'Page Error' with an 'Error Code: I|' identifier says neither, so it was read as a validation failure of the form and Next was pressed again, which hits the same server fault.",
+  "why_tests_missed": "The refresh test used Workday's 'Something went wrong. Please refresh' wording. No test showed the banner without any wording about refreshing.",
+  "fix": "ASKS_FOR_A_REFRESH also matches a 'Page Error' followed by 'Error Code: I|'. The existing once-per-run reload then applies.",
+  "tests": [
+    "tests/test_page_agent.py::test_workdays_bare_page_error_banner_is_refreshed_once",
+    "tests/test_page_agent.py::test_a_page_that_asks_to_be_refreshed_is_refreshed"
+  ],
+  "prevention": "Classify a page's fault banner by what it is (a server error with an identifier) not by whether its wording asks for a refresh. Reload once before treating a fully filled page that keeps erroring as a validation failure."
+}

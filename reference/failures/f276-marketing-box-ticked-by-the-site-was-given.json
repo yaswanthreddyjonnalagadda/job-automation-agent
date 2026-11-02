@@ -1,0 +1,20 @@
+{
+  "id": "f276",
+  "date": "2026-10-28",
+  "class": "A rule written as 'never tick X' assumed the site draws X unticked, so a box the site had ticked was given on the owner's behalf",
+  "symptom": "Walmart's 'Create your Walmart account' form (identity.walmart.com) draws 'Send me emails about new arrivals, hot items, daily savings and more.' already ticked. The run was on that form with the box ticked; pressing Continue would have subscribed the owner to marketing email against their rule that a marketing opt-in is never given for them.",
+  "site": "Walmart identity sign-up, 28 October 2026 (caught by reading the live form before Continue was pressed; the run was stopped and restarted, and nothing was submitted)",
+  "root_cause": "fill_create_account_form and create_ats_account skipped marketing boxes ('marketing opt-ins are the user's choice, not ours') but never changed one the site had ticked. The vocabulary for 'marketing' was also two different short regexes in two places, neither of which matched Walmart's wording.",
+  "why_tests_missed": "The create-account tests asserted that a marketing box is never ticked, using boxes drawn unticked; none started from a box the site had already ticked or looked at the box's state when the form was sent.",
+  "fix": "marketing_opt_in.is_marketing_opt_in is the one definition of the wording (newsletter, promotions, job alerts, new arrivals, daily savings, special offers, 'send me emails/offers', ...). JobApplicationAssistant._clear_site_ticked_marketing unticks any visible ticked box it matches, in both create-account flows, right before the form is sent; under the owner's SITE_PREFILL_POLICY=leave the site's own value stands (config default is 'correct'). A box that cannot be cleared holds the form for the owner ('untick it, then press Continue') and nothing is sent.",
+  "tests": [
+    "tests/test_site_ticked_marketing.py::test_marketing_wordings_are_recognised",
+    "tests/test_site_ticked_marketing.py::test_other_boxes_are_not_marketing",
+    "tests/test_site_ticked_marketing.py::test_a_marketing_box_the_site_ticked_is_unticked_and_nothing_else_is_touched",
+    "tests/test_site_ticked_marketing.py::test_under_the_leave_policy_the_sites_own_value_stands",
+    "tests/test_site_ticked_marketing.py::test_a_box_that_ticks_itself_again_is_reported_so_the_form_is_not_sent",
+    "tests/test_site_ticked_marketing.py::test_the_create_form_is_sent_with_the_marketing_box_the_site_ticked_unticked",
+    "tests/test_site_ticked_marketing.py::test_the_create_form_is_held_when_the_site_will_not_let_the_box_go"
+  ],
+  "prevention": "State an owner rule about a checkbox in terms of the box's final state when the form is sent, not of what the agent does to it; test the state at the moment of submission, with the site's own pre-ticked default."
+}

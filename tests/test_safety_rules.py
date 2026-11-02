@@ -374,6 +374,8 @@ def test_no_underscore_name_is_used_before_it_exists():
             defined.add(node.id)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             defined.update((a.asname or a.name).split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            defined.add(node.name)          # `except X as name`
 
     used = {n.id for n in ast.walk(tree)
             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)

@@ -1,0 +1,16 @@
+{
+  "id": "f258",
+  "date": "2026-10-26",
+  "class": "Education cards cannot resolve explicit school details or expand to the saved degree count",
+  "symptom": "ADP Education History stopped at Country and Graduated?, and only one of two saved degrees had a card. Its City showed the home city; the exact earlier write path for that value remains unconfirmed.",
+  "site": "Church Mutual ADP application 548 Education History, saved page_35 and supervised continuation 26 October 2026",
+  "root_cause": "Education records had no structured school location/completion facts, country was deliberately unsupported and graduated wording had no resolver. Inline card expansion supported only work records, excluding education.",
+  "why_tests_missed": "Existing education tests covered schools, majors and dates but no explicit school location/completion detail dictionaries; inline expansion tests covered employment only.",
+  "fix": "Add school-matched profile education_details and resolve only explicit city/state/country/graduated facts from the matching degree. Extend bounded inline expansion to the saved education count and reuse adapter-aware mapping after Add. Correct the observed City from source-resume facts during supervision; do not claim its earlier write path is proven.",
+  "tests": [
+    "tests/test_education_entry_details.py::test_school_facts_are_explicit_and_scoped_to_their_school",
+    "tests/test_inline_education.py::test_missing_degree_is_added_once_until_saved_history_is_complete",
+    "tests/test_repeated_location_correction.py::test_home_city_does_not_replace_a_school_city"
+  ],
+  "prevention": "Test complete degree cards, require explicit institution-specific facts and compare card counts with saved history. Never substitute residence data for a school location."
+}

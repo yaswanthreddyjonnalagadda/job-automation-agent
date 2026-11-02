@@ -1,0 +1,12 @@
+{
+  "id": "f212",
+  "date": "2026-10-21",
+  "site": "HEICO ADP career site, application 110",
+  "class": "Posting navigation classified as final submission by label alone",
+  "symptom": "The page agent identified a job description and chose Apply, but the browser guard denied the click and handed off before the application opened. Both saved pages were inspected: a privacy dialog followed by the job listing.",
+  "root_cause": "The browser guard treated Apply as a final-submission synonym without the posting context already recognized by the page agent. Live ADP DOM showed a form-free sdf-button inside the job-detail apply row.",
+  "why_tests_missed": "Submission tests covered final controls and credentials but omitted ADP's posting-entry custom element.",
+  "fix": "Add an ADP-specific click-time posting-entry predicate under sites/adp.py. Require the exact ADP host, job-detail route and requisition, expected component and Apply label, no form association, and no visible form, dialog or input controls. Other submission checks remain unchanged.",
+  "tests": ["tests/test_submission_firewall.py::test_adp_posting_apply_is_navigation_only"],
+  "prevention": "Distinguish proven application entry from final submission using portal structure and live state, while keeping ambiguous Apply controls denied."
+}

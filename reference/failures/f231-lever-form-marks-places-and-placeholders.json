@@ -1,0 +1,19 @@
+{
+  "id": "f231",
+  "date": "2026-10-23",
+  "site": "Palantir (Lever) and any form drawn the same way",
+  "class": "A form fact was read from one markup shape only: the required star on its own line, a list's instruction row, a town suggestion in another spelling, and a bare Date beside a name were each left unread, so optional boxes went to a model, a required list stayed empty and a suggestion list stayed open",
+  "symptom": "On a live Palantir run: optional Preferred Name and Name Pronunciation were filled with essay text from a model; Current location stayed typed with its suggestion list open; the University list was never chosen; the Date under the disability form's name stayed empty.",
+  "root_cause": "required_questions() knew two markups and missed Lever's (the star as a separate line after the label), so no question counted as required and every optional box was sent to the model; a list's first row 'Click Here (If you encounter an issue ...)' was not recognised as a placeholder, so the list looked already answered; the town in 'Fairfax, Virginia, United States' matched two suggestions ('Fairfax, VA, USA' and 'Fairfax, Waterford, VA, USA') and a plain box never clicked a suggestion; a bare 'Date' had no rule.",
+  "why_tests_missed": "Saved pages replay what is read and answered but not what is typed or clicked, and no fixture had this star markup, an instruction-worded placeholder or two suggestions for one town.",
+  "fix": "required_questions() reads the star on a following line and a star ending the box's name; placeholders include 'Click here ...' rows (page_agent, option_match, geo_reference); same_locality() requires the same extra parts on both sides, so 'Fairfax, Waterford' is another place; after a town is typed into a plain box the suggestion that names the same town is clicked (form_fields.pick_open_row, which also sees Lever's dropdown-location rows); the Date under a self-identification Name is the day it is filled in. Replay of saved pages: no answer changes.",
+  "tests": [
+    "tests/test_lever_form_marks_and_places.py::test_a_star_on_its_own_line_after_the_label_marks_the_question_required",
+    "tests/test_lever_form_marks_and_places.py::test_optional_boxes_are_then_left_blank_and_the_required_ones_kept",
+    "tests/test_lever_form_marks_and_places.py::test_a_town_in_one_spelling_is_the_same_town_in_another_but_not_a_neighbouring_place",
+    "tests/test_lever_form_marks_and_places.py::test_the_date_under_a_self_identification_name_is_the_day_it_is_filled_in",
+    "tests/test_lever_form_marks_and_places.py::test_a_bare_date_anywhere_else_is_not_guessed",
+    "tests/test_lever_form_marks_and_places.py::test_a_lists_instruction_row_is_its_placeholder_not_an_answer"
+  ],
+  "prevention": "Read a required mark, a placeholder and a place by what they mean, not by one site's markup; test each with a second markup shape, and treat a list whose selected row is its first row as unanswered."
+}

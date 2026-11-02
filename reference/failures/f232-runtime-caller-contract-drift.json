@@ -1,0 +1,23 @@
+{
+  "id": "f232",
+  "date": "2026-10-23",
+  "site": "Local cockpit, rules engine and shared browser/answer fallbacks; synthetic audit regressions",
+  "class": "Runtime callers drift from handler, adapter, provider and profile contracts",
+  "symptom": "Cockpit stop/cancel call an undefined handler; overrides silently miss tracker persistence; rules progression references uninitialized variables; browser fallbacks call missing methods; Gemini review routes to the document writer; clearance history is inferred from current possession.",
+  "root_cause": "New callers were not exercised against real handler signatures, provider dispatch sets, adapter ownership and the temporal scope of profile facts. Broad exception handling hid persistence and browser dispatch errors.",
+  "why_tests_missed": "Tests covered individual helpers without the cockpit routes or fallback callers. Provider classification omitted the new review method. A code-entry fake lacked the Enter fallback and masked unrelated runtime coverage.",
+  "fix": "Return JSON through the existing stop primitive and clear handoff only after it succeeds. Pass application host to record_answer and report synchronization failure without private payloads. Compute rules confirmation status before cleanup and use only defined checkpoint keys. Dispatch uploads and multiselect inspection to their actual owners. Route Gemini content review to answers. Exclude historical clearance questions from the current-possession rule. Update the code-entry fake to exercise Enter.",
+  "tests": [
+    "tests/test_cockpit_audit_fixes.py::test_cockpit_stop_and_cancel_stop_the_active_run",
+    "tests/test_cockpit_audit_fixes.py::test_override_reaches_real_tracker_signature",
+    "tests/test_cockpit_audit_fixes.py::test_override_is_persisted_in_sqlite_tracker",
+    "tests/test_fallback_audit_fixes.py::test_rules_continue_clears_checkpoints_without_reader_agent",
+    "tests/test_fallback_audit_fixes.py::test_rules_confirmation_computes_status_before_cleanup",
+    "tests/test_fallback_audit_fixes.py::test_searchable_answers_use_adapter_selection",
+    "tests/test_fallback_audit_fixes.py::test_upload_tile_can_finish_in_dialog",
+    "tests/test_open_answer_evidence.py::test_gemini_content_review_routes_to_answer_provider_not_document_writer",
+    "tests/test_clearance_possession.py::test_no_current_clearance_is_only_a_possession_answer",
+    "tests/test_greenhouse_and_screening_coverage.py::test_complete_account_code_accepts_8_char_alphanumeric_greenhouse_code"
+  ],
+  "prevention": "Exercise route-to-handler, caller-to-tracker, provider dispatch and browser fallback contracts with synthetic state; test current and historical questions separately. Isolated rules-branch tests do not establish complete rules-engine or live application success."
+}

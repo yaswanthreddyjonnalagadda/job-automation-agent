@@ -1,0 +1,12 @@
+{
+  "id": "f242",
+  "date": "2026-10-23",
+  "site": "Bank of America application 140, military spouse/domestic partner question",
+  "class": "Personal relationship mistaken for an employer relationship",
+  "symptom": "Required military-spouse status was answered No from profile.relatives_employed_here. Community-college attendance and referral status were also present as No without established profile support.",
+  "root_cause": "The employment-family question pattern accepted any partner after spouse, including domestic partner. That incorrectly applied an employment-family fact to the person's own military relationship status. The separate unsupported community-college and referral answers could not be justified by the deterministic resolver.",
+  "why_tests_missed": "Family-employment tests covered company/vendor relationships but did not distinguish a person's own domestic/military relationship from a relative's job.",
+  "fix": "Require employment or business context for partner in the employment-family resolver; domestic/military partner status is left unresolved without an approved answer. Preserve actual spouse employment questions. Held submission and asked the owner for the three unsupported required facts; no confirmation is assumed.",
+  "tests": ["tests/test_relationship_question_scope.py"],
+  "prevention": "A negative answer about one relationship does not establish another personal fact. Unsupported required answers remain a review blocker."
+}

@@ -1,0 +1,14 @@
+{
+  "id": "f254",
+  "date": "2026-10-26",
+  "class": "Approved employer preferences are absent from structured records",
+  "symptom": "Required reasons for leaving were not resolved per employer despite approved profile answers. Employer-contact permission was genuinely missing.",
+  "site": "Church Mutual ADP Senior Network Engineer application 548, supervised continuation 25\u201326 October 2026",
+  "root_cause": "Repeated history did not merge the separate per-employer approved preference data.",
+  "why_tests_missed": "History tests did not combine company matching with separate approved preference tuples.",
+  "fix": "Copy records and merge only uniquely matched employer reasons and contact permissions. Add blank-default permission storage; never assume consent.",
+  "tests": [
+    "tests/test_employment_entry_preferences.py::test_profile_employer_preferences_are_applied_to_the_matching_record_only"
+  ],
+  "prevention": "Retain portal-shaped regression fixtures, inspect every repeated record, verify committed values and preserve submission and personal-answer gates."
+}

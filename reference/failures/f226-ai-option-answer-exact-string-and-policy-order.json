@@ -1,0 +1,15 @@
+{
+  "id": "f226",
+  "date": "2026-10-23",
+  "site": "Any list question answered by the AI single-question path or the native-select chooser (found by the REA evidence audit of 23 October)",
+  "class": "Two readings of the same list answer: one too literal, one that skipped the profile's sponsorship policy",
+  "symptom": "A model answer 'Bachelor's' for the offered 'Bachelor's Degree', or '2 weeks' for 'Within 2 weeks', was rejected and the question left blank; separately, a bare 'Yes' in a native select took the first 'Yes, with sponsorship' row before the profile's sponsorship answer was consulted.",
+  "root_cause": "answer_single_question compared the model's text to each option with exact equality only, while PageAgent._pick and _match_option applied the sponsorship policy first and _choose_exact tried the generic matcher first: the same decision lived in three places with three orders.",
+  "why_tests_missed": "The one existing AI-option test used an exact Yes/No answer, and the sponsorship tests exercised _pick and _match_option, not the native-select branch of _choose_exact.",
+  "fix": "option_match.resolve_offered is the single reading of an answer for a list: exact words, then the profile's sponsorship policy for a bare Yes (a row the profile cannot back is never chosen; unknown stays the owner's), then best_option, then for a start-date question only (concept NOTICE_PERIOD) the same wait in days or weeks, never when two options state it. answer_single_question uses it, and _choose_exact now applies the sponsorship policy before the generic match like its siblings. No substring, near-spelling or only-one-option guess.",
+  "tests": [
+    "tests/test_evidence_audit_regressions.py::test_ai_option_answers_use_bounded_shared_resolution",
+    "tests/test_evidence_audit_regressions.py::test_native_selection_obeys_policy_before_generic_match"
+  ],
+  "prevention": "Give every answer-to-option decision one function and one order (exact, policy, bounded match); never let a second chooser re-derive it."
+}

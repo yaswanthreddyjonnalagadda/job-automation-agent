@@ -31,7 +31,7 @@ SAFE_EXTENSIONS = {'.html', '.txt', '.json', '.png', '.log', '.jsonl'}
 PLACEHOLDER = '<redacted-value>'
 
 # Exact labels only; no keyword test that might bless an applicant's answer.
-SAFE_LABELS = frozenset('application|personal information|contact information|first name|middle name|last name|full name|email|phone|address|city|state|postal code|country|password|verification code|resume|cover letter|education|work experience|experience|review|continue|next|back|save|submit|submit application|sign in|create account|required|optional'.split('|'))
+SAFE_LABELS = frozenset('application|personal information|contact information|my information|my experience|application questions|voluntary disclosures|self identify|terms and conditions|first name|middle name|last name|full name|email|phone|address|city|state|postal code|country|password|verification code|resume|cover letter|education|work experience|experience|school or university|degree|field of study|job title|company|location|review|continue|save and continue|save & continue|next|back|save|submit|submit application|sign in|create account|autofill with resume|apply manually|use my last application|select one|add|delete|required|optional'.split('|'))
 SAFE_ROLES = frozenset('button textbox checkbox radio combobox listbox option heading link group form dialog alert navigation main document generic text paragraph list listitem spinbutton iframe separator status progressbar banner'.split())
 SAFE_TAGS = frozenset('html head body main section article div span p h1 h2 h3 h4 h5 h6 label legend fieldset form input textarea select option button a ul ol li table thead tbody tr th td nav header footer dialog br hr'.split())
 # A role whose own text is the site speaking to the user, not a form field's label.
@@ -145,6 +145,71 @@ def sanitize_snapshot(text: str, context: PrivacyContext | None = None) -> str:
     return '\n'.join(out)
 
 
+# Control types the stop report may name. A checkbox's value is always non-empty,
+# so "filled" alone cannot say whether it is ticked; "checked" and "kind" can.
+FIELD_KINDS = frozenset({'text', 'email', 'password', 'tel', 'number', 'url', 'search', 'date',
+                         'checkbox', 'radio', 'file', 'hidden', 'select', 'textarea'})
+
+
+def capture_form_state(page, path: Path) -> bool:
+    """Save boolean/count evidence for a silent form stop, never labels or values.
+
+    Screenshots and text projections can conceal the reason a form stayed open.
+    Inspect each non-challenge frame for native validity and guard denial kinds.
+    This is observation only: no checkValidity(), submission, or field changes.
+    """
+    import safety
+    kinds = {'click', 'enter', 'form_submit', 'javascript_form_submit',
+             'javascript_request_submit', 'credential_shape_changed'}
+    flags = ('valueMissing', 'typeMismatch', 'patternMismatch', 'tooLong', 'tooShort',
+             'rangeUnderflow', 'rangeOverflow', 'stepMismatch', 'badInput', 'customError')
+    frames = getattr(page, 'frames', None) or [page]
+    evidence = []
+    for index, frame in enumerate(frames[:30]):
+        if safety.is_captcha_frame(getattr(frame, 'url', '')):
+            continue
+        item = {'frame_index': index, 'readable': False}
+        try:
+            raw = frame.evaluate("""flags => {
+                const shown = e => !!e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
+                const fields = [...document.querySelectorAll('input,select,textarea')].slice(0, 500);
+                const submits = [...document.querySelectorAll('button[type=submit],input[type=submit]')];
+                const denials = window.__jaaSubmissionGuardV0?.denials() || [];
+                return {
+                    fields: fields.map(e => ({visible: shown(e), required: !!e.required,
+                        kind: e.tagName === 'SELECT' ? 'select' : e.tagName === 'TEXTAREA' ? 'textarea' : e.type,
+                        checked: !!e.checked,
+                        disabled: !!e.disabled, filled: !!e.value, password: e.type === 'password',
+                        valid: e.validity ? e.validity.valid : true,
+                        failures: flags.filter(f => e.validity?.[f] === true)})),
+                    submit_count: submits.length,
+                    disabled_submits: submits.filter(e => e.disabled).length,
+                    visible_alerts: [...document.querySelectorAll('[role=alert]')].filter(shown).length,
+                    denial_kinds: denials.slice(-100).map(d => d.kind)
+                };
+            }""", list(flags))
+            # Only fixed keys, booleans, bounded counts and known enums cross the
+            # boundary. Even unexpected browser-controlled strings are discarded.
+            item['readable'] = True
+            item['fields'] = [
+                {**{key: field.get(key) is True for key in
+                    ('visible', 'required', 'disabled', 'filled', 'password', 'valid', 'checked')},
+                 'kind': field.get('kind') if field.get('kind') in FIELD_KINDS else 'other',
+                 'failures': [flag for flag in flags if flag in field.get('failures', [])]}
+                for field in raw.get('fields', [])[:500] if type(field) is dict]
+            for key in ('submit_count', 'disabled_submits', 'visible_alerts'):
+                count = raw.get(key)
+                if type(count) is int and 0 <= count <= 100000:
+                    item[key] = count
+            denials = raw.get('denial_kinds', [])
+            item['guard_denials'] = {kind: denials.count(kind) for kind in sorted(kinds)
+                                    if kind in denials}
+        except Exception:
+            item['readable'] = False
+        evidence.append(item)
+    return write_safe_text(path, json.dumps({'schema_version': 1, 'frames': evidence}))
+
+
 def sanitize_console_logs(entries) -> list[dict]:
     result = []
     if type(entries) is not list:
@@ -247,6 +312,8 @@ def _regular_path(path: Path) -> bool:
 
 def _safe_artifact_name(name):
     if name in DIAGNOSTIC_FILES or DIAGNOSTIC_PATTERNS.fullmatch(name):
+        return True
+    if re.fullmatch(r'(?:stopped_[0-9_]+|[0-9_]+_ACCOUNT)\.state\.json', name):
         return True
     match = re.fullmatch(r'[0-9_]+_([A-Za-z_]+)\.(?:txt|png)', name)
     if not match:
@@ -356,6 +423,8 @@ audio, iframe, object, embed { visibility: hidden !important; }
 
 
 def capture_safe_screenshot(page, path: Path) -> bool:
+    import local_debug
+    local_debug.capture(page, str(path))
     path = Path(path)
     token = uuid.uuid4().hex
     installed = False
@@ -545,6 +614,8 @@ def install_log_privacy():
         return
     def factory(*args,**kwargs):
         record = previous(*args,**kwargs)
+        import local_debug
+        local_debug.record_log(record)
         try:
             original = record.msg
             if record.args and isinstance(original,str) and original in _static_log_templates(record.pathname):
@@ -586,11 +657,11 @@ LOG_OPERATIONS = frozenset("""
     ACCOUNT_HELD ACCOUNT_STATE ACCOUNT_UNVERIFIED ACCOUNT_VERIFIED AI_ANSWERED_QUESTION ANSWERED
     ANSWER_BANK ANSWER_LIBRARY APPLY_ENTRY_BLOCKED APPLY_ENTRY_NAVIGATED ATTACHED AUTOFILL AUTO_SUBMIT
     AUTO_SUBMIT_FAILED BLOCKED_VALIDATION_LOOP BRAIN CHOICE CHOICES CODE CONSENT CONSENT_SCAN CORRECTED
-    COVER_LETTER_REJECTED COVER_LETTER_RETRY DISQUALIFIED_POLICY_MISMATCH DROPPED DUPLICATE ENTRIES
+    COVER_LETTER_REJECTED COVER_LETTER_RETRY DISQUALIFIED_POLICY_MISMATCH DROPPED DUPLICATE EDUCATION_SKIPPED ENTRIES
     ENTRY EVIDENCE FIELD_ACTION FIELD_COMMITTED FIELD_PRESERVED FINISHED FORENSIC_CAPTURE FORM_ERROR
     GEMINI GMAIL GOTO HANDOFF KEPT KNEW LEARNED LEFT_FOR_YOU LEGAL_ANSWER_CONFLICT LOCATION_SWEEP LOGIN
     LOGIN_BLOCKED LOGIN_FAILED LOGIN_HELD LOGIN_NO_ACCOUNT LOGIN_OK LOGIN_PAUSED LOGIN_REJECTED LOOKED
-    NEEDS_USER_REVIEW NEXT NEXT_STUCK NO_NEXT_BUTTON OPEN_ANSWER PAGE_FULLY_KNOWN PASSCODE PASSCODE_OK
+    NEEDS_USER_REVIEW NEXT NEXT_STUCK NO_NEXT_BUTTON OPEN_ANSWER OPTIONAL_LEFT_BLANK PAGE_FULLY_KNOWN PASSCODE PASSCODE_OK
     PHONE_ALERT PHONE_CONSOLE
     PLATFORM_ANSWER POSTING_PAGE PROFILE_ANSWER PROFILE_CREATED PROFILE_DIALOG READ READY_TO_SUBMIT
     READ_FROM_EARLIER_RUN RECALLED RECOVERY RECOVERY_OK RECOVERY_REJECTED RELOAD_FAILED RELOAD_REJECTED
@@ -609,7 +680,7 @@ LOG_OPERATIONS = frozenset("""
 # (email, token, code). Every other LOG_OPERATIONS category keeps the fully-opaque default.
 CONTENT_PRESERVING_OPERATIONS = frozenset("""
     ACCOUNT_CREATE_FAILED ACCOUNT_CREATE_BLOCKED ACCOUNT_CREATED ACCOUNT_HELD ACCOUNT_UNVERIFIED
-    FORM_ERROR VALIDATION_FAILED LOGIN_BLOCKED LOGIN_FAILED LOGIN_HELD LOGIN_NO_ACCOUNT LOGIN_PAUSED
+    EDUCATION_SKIPPED FORM_ERROR VALIDATION_FAILED LOGIN_BLOCKED LOGIN_FAILED LOGIN_HELD LOGIN_NO_ACCOUNT LOGIN_PAUSED
     LOGIN_REJECTED SUBMISSION_BLOCKED SUBMIT_HELD NEEDS_USER_REVIEW HANDOFF
     DISQUALIFIED_POLICY_MISMATCH SCREENING_QA_FAILED BLOCKED_VALIDATION_LOOP LEGAL_ANSWER_CONFLICT
 """.split())
@@ -655,6 +726,8 @@ class PrivateRunLog:
         write_safe_text(self.path,self.text)
 
     def append(self, line):
+        import local_debug
+        local_debug.record_log(logging.LogRecord('stdout', logging.INFO, __file__, 0, line, (), None))
         self.text += sanitize_log_line(line)
         if len(self.text.encode()) > TEXT_LIMIT:
             self.text = self.text[-TEXT_LIMIT//2:]

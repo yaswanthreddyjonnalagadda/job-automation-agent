@@ -1,0 +1,12 @@
+{
+  "id": "f238",
+  "date": "2026-10-23",
+  "site": "Bank of America application 140, How Did You Hear About Us",
+  "class": "Nested virtual dropdown reads only the initial leaf viewport",
+  "symptom": "Runtime typed the approved LinkedIn answer but left the required source uncommitted; Workday rejected Save and Continue. The actual offered choice was LinkedIn.com under Jobs Website/Online, outside the initial mounted rows.",
+  "root_cause": "Nested category traversal inspected only immediately mounted child rows. The separate scrolling helper matched only normalized exact text, bypassing shared offered-option aliases and ambiguity handling.",
+  "why_tests_missed": "Existing hierarchical prompt fixtures put the leaf immediately in the DOM. They did not combine category navigation, virtualized children, an offered alias, and a competing match outside the first viewport.",
+  "fix": "Scan the current category's virtual list completely before central option matching, revisit the uniquely matched offered leaf to commit it, and invoke that scan for nested categories. Reject incomplete scans and do not override ambiguity using only the initial viewport. During supervision selected the real LinkedIn.com leaf and observed progression to My Experience; no application submission was made.",
+  "tests": ["tests/test_workday_prompt_textbox.py::test_nested_virtual_prompt_reads_all_leaf_options_before_matching"],
+  "prevention": "Exercise nested virtual options and offscreen competing labels. A typed search value is not a committed selection; validate the resulting chip and successful page progression."
+}

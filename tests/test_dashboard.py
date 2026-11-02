@@ -229,6 +229,6 @@ def test_only_one_run_is_shown_at_the_top(client, monkeypatch):
     })
     monkeypatch.setattr(web_ui, "_process_alive", lambda pid: pid == 4242)
     page = client.get("/").get_data(as_text=True)
-    assert "Current run" in page
+    assert "Running" in page
     assert "jobs.example.com/live" in page
     assert "jobs.example.com/old" not in page and "jobs.example.com/older" not in page

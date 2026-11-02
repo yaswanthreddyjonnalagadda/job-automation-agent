@@ -1,0 +1,19 @@
+{
+  "id": "f215",
+  "date": "2026-10-22",
+  "site": "ADP (myjobs.adp.com) and job portals showing status on posting after submission",
+  "class": "Terminal submission or already-applied state on job details page not recognized as confirmation",
+  "symptom": "After submitting Heico on ADP, the site redirected back to the job posting where the Apply button changed to 'Applied'. The runner saw 0 fields and no next button, treated it as an unmoving page stall after 3 retries, marked status needs_user_review, and left the browser open waiting for user review.",
+  "root_cause": "ADP does not show a traditional 'Thank you for applying' confirmation page; it redirects to /cx/job-details where the action button becomes 'Applied'. Neither _site_confirms() nor _says_already_applied() nor submission_confirmed() checked for ADP's 'Applied' button state.",
+  "why_tests_missed": "Existing confirmation tests only checked for confirmation heading phrases ('Thank you for applying', 'Application received') or explicit Workday-style text notices, not button-state status switches on job details pages.",
+  "fix": "Created dedicated AdpAdapter with is_adp_applied_posting() detecting ADP job-details pages with 'Applied' button and no form fields. Integrated into browser_automation.submission_confirmed(), page_agent._site_confirms(), and page_agent._says_already_applied() to classify as submitted when an application form was active (_seen_form or final_pressed) or already_applied when opening a previously applied posting.",
+  "tests": [
+    "tests/test_adp_applied_button.py::test_is_adp_applied_posting",
+    "tests/test_adp_applied_button.py::test_adp_adapter_registration",
+    "tests/test_adp_applied_button.py::test_browser_automation_submission_confirmed_on_adp",
+    "tests/test_adp_applied_button.py::test_page_agent_submitted_outcome_when_seen_form",
+    "tests/test_adp_applied_button.py::test_page_agent_already_applied_outcome_when_not_seen_form"
+  ],
+  "prevention": "Ensure portal adapters detect platform-specific terminal receipt states (like disabled/toggled 'Applied' action buttons) and classify them cleanly as submitted or already_applied rather than stalling into needs_user_review."
+}
+

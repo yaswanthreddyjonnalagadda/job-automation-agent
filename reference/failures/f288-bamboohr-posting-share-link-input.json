@@ -1,0 +1,15 @@
+{
+  "id": "f288",
+  "date": "2026-11-01",
+  "class": "Posting page share-link textbox falsely caused submission guard to intercept opening Apply button as final submit",
+  "symptom": "Tri-City Group (BambooHR): clicking 'Apply for This Job' was denied by SubmissionGuardV0 with SUBMISSION_GUARD_V0_DENIED, halting the application on the job posting.",
+  "site": "tricitygroup.bamboohr.com/careers/185, 1 November 2026",
+  "root_cause": "BambooHR job postings contain a 'Link to This Job' share textbox holding the URL alongside social sharing buttons. posting_entry.py's structural query queried document.querySelectorAll('form, [role=\"dialog\"], iframe, input:not([type=\"hidden\"]), textarea, select') and treated this non-form URL input as proof of an embedded application form, causing postingEntry to return false and submission_guard to treat 'Apply for This Job' as a final submit attempt.",
+  "why_tests_missed": "Existing structural posting tests had only the Apply button and navigation chrome. None had a job-share link input on the posting page.",
+  "fix": "Added isJobShareLink to posting_entry.py to classify read-only or URL-holding share inputs as siteChrome, disarmed submission guard while on job description in browser_automation.py protect_submission(), and reset circuit breaker and posting reload counters on reload in page_agent.py.",
+  "tests": [
+    "tests/test_posting_entry_structural.py::test_posting_with_share_link_textbox_only_opens_application"
+  ],
+  "prevention": "Job posting URL sharing inputs and non-application utility boxes must be explicitly classified as chrome so structural posting checks recognize that the posting does not yet hold an application."
+}
+

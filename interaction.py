@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import random
 import re
 import time
 from typing import Any, Callable, Optional
@@ -31,9 +33,112 @@ CARD_COMMIT_TEXT_PATTERN = re.compile(
 )
 
 
+# Human-paced typing (owner's request, 20 October 2026): an instant .fill() puts a whole answer in a box in
+# no time at all, which anti-bot scripts (hCaptcha, Turnstile, DataDome) score as automation. Boxes are typed
+# one key at a time at a person's speed, one field after another. Longer answers are inserted at once, as a
+# person pastes an essay. HUMAN_TYPING=0 turns this off; HUMAN_TYPING_DELAY_MS sets the average key delay.
+HUMAN_TYPING_MAX_CHARS = 200
+
+
+def human_typing_enabled() -> bool:
+    return os.getenv("HUMAN_TYPING", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def keystroke_delay_ms() -> int:
+    """One delay per field, varied around the configured average, so no two fields share a rhythm."""
+    try:
+        base = int(os.getenv("HUMAN_TYPING_DELAY_MS", "45"))
+    except ValueError:
+        base = 45
+    base = min(max(base, 10), 250)
+    return max(5, int(base * random.uniform(0.7, 1.4)))
+
+
+def _pause(seconds: float) -> None:
+    """A human pause between actions (patched out in tests)."""
+    time.sleep(seconds)
+
+
+def _is_phone_formatting(shown: str, wanted: str) -> bool:
+    """True only when `shown` and `wanted` represent the same phone number where
+    an input mask added or stripped standard phone punctuation (e.g. '(555) 123-4567' vs '5551234567').
+    Never matches passwords, names, emails, decimals, or general text."""
+    if not shown or not wanted:
+        return False
+    if re.search(r"[a-zA-Z]", wanted) or re.search(r"[a-zA-Z]", shown):
+        return False
+    phone_allowed = re.compile(r"^[\s\d\+\-\(\)\.]+$")
+    if not phone_allowed.match(wanted) or not phone_allowed.match(shown):
+        return False
+    wd = re.sub(r"\D", "", wanted)
+    sd = re.sub(r"\D", "", shown)
+    return len(wd) in (10, 11) and wd == sd
+
+
+def _same_text(shown: str, wanted: str, is_password: bool = False) -> bool:
+    """The box holds what was typed. Exact comparison is required by default (including case,
+    punctuation, and decimals) so dropped characters in passwords or numbers trigger the fallback.
+    Only recognized masked phone number inputs allow punctuation formatting differences."""
+    if shown == wanted:
+        return True
+    if is_password:
+        return False
+    return _is_phone_formatting(shown, wanted)
+
+
+def type_like_a_person(locator: Any, value: str, timeout: Optional[float] = None) -> bool:
+    """Click the box, clear it, and type `value` one key at a time at a person's speed.
+
+    True only when the box is then read back holding `value`. False means nothing reliable was
+    typed (typing off, a long answer, a box that cannot be typed into or read back, or a box that
+    changed what was typed) -- the caller then sets the value the old way, so a box is never left
+    worse off than an instant fill would leave it."""
+    if not human_typing_enabled() or not value or len(value) > HUMAN_TYPING_MAX_CHARS:
+        return False
+    if not callable(getattr(locator, "press_sequentially", None)):
+        return False
+    delay = keystroke_delay_ms()
+    # Enough time for every keystroke, never less than the caller allowed.
+    type_timeout = max(float(timeout or 0), len(value) * delay * 1.5 + 5_000)
+    is_password = False
+    try:
+        is_password = (locator.get_attribute("type") or "").strip().lower() == "password"
+    except Exception as exc:
+        logger.warning("Could not tell whether the field is a password field (treated as not one): %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+    try:
+        try:
+            locator.click(timeout=1_500)
+        except Exception:
+            locator.focus(timeout=1_500)      # covered by an overlay: focus it without the click
+        _pause(random.uniform(0.08, 0.2))
+        try:
+            current = locator.input_value(timeout=1_000)
+        except Exception:
+            current = None
+        if current:
+            locator.fill("", timeout=type_timeout)
+        locator.press_sequentially(value, delay=delay, timeout=type_timeout)
+        shown = locator.input_value(timeout=2_000)
+    except Exception as exc:
+        logger.debug("HUMAN_TYPING: could not type into the box (%s)", str(exc).splitlines()[0][:100])
+        return False
+    return isinstance(shown, str) and _same_text(shown, value, is_password=is_password)
+
+
+def type_text(locator: Any, value: str, timeout: Optional[float] = None) -> None:
+    """Puts `value` in a plain box: human-paced keystrokes, or an instant fill when typing is off,
+    the answer is long, or the box did not keep what was typed. Followed by a short pause so the
+    next field is started as a person would, after this one."""
+    if type_like_a_person(locator, value, timeout):
+        _pause(random.uniform(0.15, 0.35))
+        return
+    locator.fill(value, **({"timeout": timeout} if timeout is not None else {}))
+
+
 def fill_and_dispatch(locator: Any, value: str, timeout: Optional[float] = None, **kwargs: Any) -> None:
-    """Fills an input using Playwright's native .fill() and immediately dispatches
-    three bubbling synthetic events: 'input', 'change', and 'blur'.
+    """Puts `value` in an input -- human-paced keystrokes where possible (type_like_a_person),
+    otherwise Playwright's native .fill() -- and then dispatches three bubbling synthetic
+    events: 'input', 'change', and 'blur'.
 
     This ensures reactive/virtual DOM frameworks (React, Vue, Angular, Ant Design)
     register controlled component state and do not silently drop field values on form submission.
@@ -42,7 +147,10 @@ def fill_and_dispatch(locator: Any, value: str, timeout: Optional[float] = None,
     if timeout is not None:
         fill_kwargs["timeout"] = timeout
 
-    locator.fill(value, **fill_kwargs)
+    # Clearing a box, or a call with extra Playwright options, keeps the plain fill.
+    typed = bool(value) and not kwargs and type_like_a_person(locator, value, timeout)
+    if not typed:
+        locator.fill(value, **fill_kwargs)
     try:
         locator.evaluate("""el => {
             el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
@@ -51,6 +159,8 @@ def fill_and_dispatch(locator: Any, value: str, timeout: Optional[float] = None,
         }""")
     except Exception as exc:
         logger.debug("Synthetic event dispatch on locator failed: %s", exc)
+    if typed:
+        _pause(random.uniform(0.15, 0.35))   # one field, then the next -- not all at once
 
 
 def click_resiliently(locator: Any, timeout_ms: int = 4_000) -> bool:
@@ -262,14 +372,14 @@ def resolve_ant_dropdown(
                 wrapper.first.click(timeout=2_000)
             else:
                 locator.click(timeout=2_000)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("dropdown: opening the wrapper: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
 
     def close() -> None:
         try:
             locator.press("Escape", timeout=1_000)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("dropdown: closing with Escape: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
 
     # 2. The list this select opened, read whole.
     token = f"jaa{time.time_ns() % 10**12}"
@@ -291,8 +401,8 @@ def resolve_ant_dropdown(
             deadline = time.monotonic() + 2.0
             try:
                 locator.press("ArrowDown", timeout=1_000)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("dropdown: opening from the keyboard: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
         page.wait_for_timeout(100)
     dropdown = page.locator(f'[data-jaa-list="{token}"]')
     try:
@@ -515,8 +625,8 @@ def wipe_and_enforce_location_sweep(
             texts = []
             try:
                 texts = [x.strip() for x in loc.locator("option").all_inner_texts()]
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("country/state: reading the select's options: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
             label = next((x for x in texts if x and same(x, wanted)), None)
             if label is None:
                 logger.info("LOCATION_SWEEP: %r is not among this list's options -- left for you", wanted)
@@ -548,8 +658,8 @@ def wipe_and_enforce_location_sweep(
                     if text and same(text, wanted):
                         click_resiliently(offered.nth(i))
                         break
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("country/state: clicking the offered option: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
         if record_callback:
             record_callback(f"[id={json.dumps(field['id'])}]", wanted)
 
@@ -561,13 +671,13 @@ def wipe_and_enforce_location_sweep(
         # 2. Let the page load the country's states before touching them.
         try:
             page.wait_for_load_state("networkidle", timeout=7_000)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("country/state: waiting for the page to settle: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
         page.wait_for_timeout(1_000)
         try:
             loc_info = page.evaluate(finder_script, scope) or loc_info
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("country/state: re-reading the field positions: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
 
     # 3. Then the state, then the city.
     state_field = loc_info.get("state")
@@ -649,8 +759,8 @@ def commit_draft_cards(page: Page, timeout_ms: int = 4_000) -> int:
                 # Wait for network settlement
                 try:
                     page.wait_for_load_state("networkidle", timeout=3_000)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("draft cards: waiting for the network to settle: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
                 page.wait_for_timeout(800)
             except Exception as exc:
                 logger.debug("Failed while inspecting/clicking card button: %s", exc)
@@ -711,8 +821,8 @@ def sweep_modals_and_policies(page_or_tab: Any, profile: Any = None) -> bool:
                     if safety.is_attestation(modal_text) and not getattr(profile, "sign_attestations", False):
                         logger.info("Modal contains legal attestation/certification -- leaving for user")
                         continue
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("draft cards: reading the modal text: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
 
                 # 1. Programmatically scroll internal text container to the bottom
                 try:
@@ -765,24 +875,15 @@ def sweep_modals_and_policies(page_or_tab: Any, profile: Any = None) -> bool:
 
                 # 3. Locate and click primary confirmation button ('Save', 'Agree', 'Accept', etc.)
                 confirm_clicked = False
-                confirm_selectors = (
-                    "button:has-text('I Accept')",
-                    "button:has-text('Accept All')",
-                    "button:has-text('Accept')",
-                    "button:has-text('I Agree')",
-                    "button:has-text('Agree')",
-                    "button:has-text('Save')",
-                    "button:has-text('Continue')",
-                    "button:has-text('Confirm')",
-                    "button:has-text('Done')",
-                    "button:has-text('OK')",
-                    "button:has-text('Close')",
-                    "[role='button']:has-text('Agree')",
-                    "[role='button']:has-text('Accept')",
+                confirm_labels = (
+                    "I Accept", "Accept All", "Accept", "I Agree", "Agree",
+                    "Save", "Continue", "Confirm", "Done", "OK", "Close",
                 )
 
-                for c_sel in confirm_selectors:
-                    c_btn = modal.locator(c_sel).first
+                for confirmation in confirm_labels:
+                    c_btn = modal.get_by_role(
+                        "button", name=re.compile(r"^\s*" + re.escape(confirmation) + r"\s*$", re.I)
+                    ).first
                     try:
                         if c_btn.count() and c_btn.is_visible():
                             label = (c_btn.inner_text(timeout=500) or "").strip()
@@ -799,8 +900,8 @@ def sweep_modals_and_policies(page_or_tab: Any, profile: Any = None) -> bool:
                     page.wait_for_timeout(500)
                     try:
                         modal.wait_for(state="hidden", timeout=4_000)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("draft cards: waiting for the modal to close: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
 
                     backdrop_selectors = (
                         ".ant-modal-mask",
@@ -814,8 +915,8 @@ def sweep_modals_and_policies(page_or_tab: Any, profile: Any = None) -> bool:
                             mask = page.locator(b_sel)
                             if mask.count() and mask.first.is_visible():
                                 mask.first.wait_for(state="hidden", timeout=2_000)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug("draft cards: waiting for the mask to clear: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
 
                     if not modal.is_visible():
                         dismissed_any = True

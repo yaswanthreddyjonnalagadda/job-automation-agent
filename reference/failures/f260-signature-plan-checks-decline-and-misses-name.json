@@ -1,0 +1,14 @@
+{
+  "id": "f260",
+  "date": "2026-10-26",
+  "class": "Signature planning checks opposing radio answers",
+  "symptom": "The eSignature planner checked both I Accept and I Decline, leaving Decline selected, while the nested Type in your name field stayed blank.",
+  "site": "Church Mutual ADP Senior Network Engineer application 548, supervised continuation 26 October 2026",
+  "root_cause": "Standing signature permission was converted to checked for every attestation radio regardless of its label. The typed-name field lacked its enclosing signature context.",
+  "why_tests_missed": "Checkbox-style declaration coverage did not model opposing signature radio choices with a separately labelled name.",
+  "fix": "Plan only affirmative attestation radios and inherit bounded named signature-container context for typed-name fields. Preserve sign_attestations authorization and the existing sign-last verification gate.",
+  "tests": [
+    "tests/test_signature_radio_plan.py::test_signature_plan_accepts_once_and_fills_its_scoped_legal_name"
+  ],
+  "prevention": "Cover complete portal-shaped workflows and verify committed answers against the correct personal, employer or school scope; preserve owner values and final-submission gates."
+}

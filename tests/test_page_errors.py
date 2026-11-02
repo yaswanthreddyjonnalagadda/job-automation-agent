@@ -27,6 +27,16 @@ def test_the_workday_errors_panel_is_read_in_its_own_words():
     ('- generic [ref=e1]: Please select a state', ["Please select a state"]),
     ('- alert [ref=e1]: Email address is invalid', ["Email address is invalid"]),
     ('- text: Start date must be before the end date', []),
+    # the legend that explains the required marker is not an error, however it is worded (Walmart, 27 October 2026)
+    ('- note [ref=e1]: Fields marked with an asterisk (*) are required', []),
+    ('- note [ref=e1]: Fields marked with * are required', []),
+    ('- generic [ref=e1]: Required fields are marked with an asterisk (*)', []),
+    ('- generic [ref=e1]: "An asterisk (*) denotes a required field"', []),
+    ('- generic [ref=e1]: Fields marked with an asterisk (*) are required\n- alert [ref=e2]: Phone number is required',
+     ["Phone number is required"]),
+    # a real error that happens to mention the marker is still an error
+    ('- alert [ref=e1]: The field First name (marked with an asterisk) is required and must have a value.',
+     ["The field First name (marked with an asterisk) is required and must have a value."]),
     ('- generic [ref=e1]: Zip code must be a 5-digit number', ["Zip code must be a 5-digit number"]),
     ('- generic [ref=e1]: "* Indicates a required field"\n- button "Degree Graduate Required" [ref=e2]', []),
     ('- button "Errors Found" [ref=e1]\n- text: Error', []),
@@ -109,3 +119,22 @@ def test_a_file_goes_into_the_hidden_box_of_a_drop_zone(page, tmp_path, action):
     button = next(c for c in controls if c.name == "Select files")
     assert agent.do(page, page_agent.Answer(button.ref, "Upload a file", action, resume.name, "document"), button)
     assert page.evaluate("document.querySelector('input[type=file]').files[0].name") == resume.name
+
+
+def test_workday_server_error_code_is_recognized_as_page_error():
+    """Workday (f283): When a session desyncs or server exception occurs, Workday renders:
+    Page Error: - Error Code: I|a3dba7b3-f258-4f7e-b146-6838235cfe67
+    page_errors must detect this as an active page error rather than ignoring it and clicking Save 3x."""
+    snapshot = (
+        '- heading "Errors Found" [level=3]:\n'
+        '  - button "Errors Found" [expanded]\n'
+        '- list:\n'
+        '  - listitem:\n'
+        '    - heading "Error Page Error" [level=4]: ErrorPage Error\n'
+        '    - text: "- Error Code: I|a3dba7b3-f258-4f7e-b146-6838235cfe67"\n'
+        '  - listitem:\n'
+        '    - heading "Error Page Error" [level=4]: ErrorPage Error\n'
+        '    - text: "- Error Code: I|1d2434be-fdb1-44ee-be44-03766cde7dc6"\n'
+    )
+    errors = page_agent.page_errors(snapshot)
+    assert any("Error Code: I|" in e for e in errors)

@@ -53,6 +53,7 @@ def test_capture_failure_restores_and_does_not_mark_safe(page, tmp_path, monkeyp
 
 
 def test_mask_install_failure_skips_capture(page, tmp_path, monkeypatch):
+    monkeypatch.delenv('LOCAL_DEBUG_CAPTURE', raising=False)   # the owner's .env may switch the local capture on
     monkeypatch.setattr(page, 'evaluate', lambda *a, **k: (_ for _ in ()).throw(RuntimeError('482193')))
     monkeypatch.setattr(page, 'screenshot', lambda **k: pytest.fail('raw capture attempted'))
     assert not d.capture_safe_screenshot(page, tmp_path / 'page.png')

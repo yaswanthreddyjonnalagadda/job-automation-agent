@@ -1,0 +1,16 @@
+{
+  "id": "f190",
+  "date": "2026-10-18",
+  "site": "Any (Datadog audit run with FORM_ANSWER_MODE=profile and no writer key)",
+  "class": "A __getattr__ raised a non-AttributeError for an optional attribute, so hasattr/getattr-with-default crashed instead of answering 'absent'",
+  "symptom": "The run stopped before the browser opened, with 'no writer has a key in Settings' -- although the run promises to attach the owner's own resume when no writer is set.",
+  "root_cause": "apply_flow asks hasattr(claude, 'cost_summary'). Brain sends that name to Writers, whose __getattr__ raised ClaudeIntegrationError (a RuntimeError) for every name when no writer existed; hasattr only swallows AttributeError.",
+  "why_tests_missed": "Writers was tested for writing documents with and without writers, never probed for an attribute it does not have.",
+  "fix": "With no writer, Writers.__getattr__ raises AttributeError for any name that is not a document; asking for tailor_resume/generate_cover_letter still raises ClaudeIntegrationError with the reason.",
+  "tests": [
+    "tests/test_no_writer_attribute_probe.py::test_probing_a_brain_with_no_writer_answers_absent",
+    "tests/test_no_writer_attribute_probe.py::test_asking_for_a_document_with_no_writer_still_says_why",
+    "tests/test_no_writer_attribute_probe.py::test_the_answering_side_is_untouched"
+  ],
+  "prevention": "A proxy's __getattr__ raises AttributeError for anything it does not provide; a domain error is raised only when a provided capability is used."
+}

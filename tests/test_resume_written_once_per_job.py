@@ -40,6 +40,7 @@ def setting(tmp_path, monkeypatch):
     profile = SimpleNamespace(first_name="Jane", last_name="Doe", full_name="Jane Doe", email="jane@example.com",
                               phone="", linkedin_url="", city="", state="")
     resume = SimpleNamespace(raw_text="Jane Doe network engineer")
+    monkeypatch.setattr(apply_flow, "parse_resume", lambda path: resume)
     return SimpleNamespace(tracker=tracker, job=job, key=key, writer=writer, profile=profile, resume=resume,
                            folder=tmp_path / "out")
 
@@ -69,3 +70,20 @@ def test_a_small_but_whole_pdf_is_reused_and_a_cut_off_one_is_not(setting):
     assert len(first.read_bytes()) < 20_000
     assert apply_flow.reuse_stored_document(setting.tracker, setting.key, "resume", setting.folder) is not None
     assert not apply_flow._whole_pdf(SMALL_PDF[:2_000])
+
+
+def test_cached_unsupported_resume_is_replaced(setting, monkeypatch):
+    prepare(setting)
+    monkeypatch.setattr(apply_flow, "parse_resume", lambda path: SimpleNamespace(raw_text="UNSUPPORTED"))
+    monkeypatch.setattr(apply_flow.safety, "unsupported_claims",
+                        lambda source, text: ["UNSUPPORTED"] if text == "UNSUPPORTED" else [])
+    prepare(setting)
+    assert setting.writer.calls == 2
+
+
+def test_all_rejected_writers_use_original_resume(setting, monkeypatch):
+    monkeypatch.setattr(apply_flow.safety, "unsupported_claims", lambda *args: ["PA-5200"])
+    result = prepare(setting)
+    assert result == Path(apply_flow.config_module.RESUME_PATH)
+    assert setting.tracker.latest_document(setting.key, "resume") is None
+    assert not list(setting.folder.glob("*.pdf"))

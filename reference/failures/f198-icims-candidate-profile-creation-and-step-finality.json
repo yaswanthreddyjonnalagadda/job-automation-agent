@@ -1,0 +1,20 @@
+{
+  "id": "f198",
+  "date": "2026-10-18",
+  "site": "iCIMS and ATS portals with multi-step candidate profile builders (Mutual of Enumclaw)",
+  "class": "ATS candidate profile creation steps containing identity and file upload fields were rejected by the dedicated account creation gateway, and intermediate wizard steps matching submit labels were blocked without recognized step indicators",
+  "symptom": "On Mutual of Enumclaw (iCIMS), after filling First Name, Last Name, Email, Login, and Password on the /candidate?from=profilebuilder step, clicking 'Submit Profile' failed with ACCOUNT_CREATE_BLOCKED: account-control click was not confirmed because SubmissionGuardV0's credentialControl strictly rejected forms containing non-credential inputs or labeled 'Submit Profile'.",
+  "root_cause": "1. SubmissionGuardV0.click_account_creation used credentialControl which only accepted dedicated modal credential forms (no name inputs, no file inputs, exact account button labels). 2. 'Submit Profile' matched safety.SUBMIT_LABEL_RE, so the submission guard click listener blocked it as an unauthorized final submission unless explicitly authorized. 3. _STEP_FINALITY_SCRIPT in browser_automation.py only recognized Workday steppers, classifying iCIMS 'Step 1 of 3' as UNKNOWN, causing intermediate wizard steps with submit labels to fail closed.",
+  "why_tests_missed": "Tests covered dedicated account creation dialogs (Workday) and pure application submit forms, but did not test combined ATS registration wizard steps (iCIMS) where profile creation and account credential setting happen in an integrated multi-field form.",
+  "fix": "1. In submission_guard.py, introduce candidateProfileControl and authorizeCandidateProfile in _guard_script, permitting ATS candidate profile creation clicks when valid passwords and email are present while rejecting forms with final application submit buttons or missing credentials. Add click_candidate_profile to SubmissionGuardV0. 2. In browser_automation.py fill_create_account_form, fall back to click_candidate_profile when click_account_creation is not confirmed. 3. In browser_automation.py _STEP_FINALITY_SCRIPT, recognize iCIMS accessible stepper format ('Step N of M. <Step Name>(Current Step)') to classify current < total as NON_FINAL and current >= total as FINAL.",
+  "tests": [
+    "tests/test_candidate_profile_gateway_and_step_finality.py::test_candidate_profile_gateway_authorizes_icims_profile_form",
+    "tests/test_candidate_profile_gateway_and_step_finality.py::test_candidate_profile_gateway_rejects_mismatched_passwords",
+    "tests/test_candidate_profile_gateway_and_step_finality.py::test_candidate_profile_gateway_rejects_missing_email",
+    "tests/test_candidate_profile_gateway_and_step_finality.py::test_candidate_profile_gateway_rejects_form_with_final_submit",
+    "tests/test_candidate_profile_gateway_and_step_finality.py::test_fill_create_account_form_succeeds_on_icims_profile",
+    "tests/test_candidate_profile_gateway_and_step_finality.py::test_icims_step_finality_classification"
+  ],
+  "prevention": "Support ATS registration patterns that combine initial identity and credentials via dedicated candidate profile authorization without weakening dedicated credential modal containment or final submission firewall."
+}
+

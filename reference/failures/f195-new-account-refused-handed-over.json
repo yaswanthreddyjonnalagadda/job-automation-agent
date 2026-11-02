@@ -1,0 +1,20 @@
+{
+  "id": "f195",
+  "date": "2026-10-18",
+  "site": "Workday (R. L. Polk Mobility, wd503); any site that refuses a new account until its email is verified",
+  "class": "An account the agent had just created was not counted as one the site knows, so a refused sign-in went to the owner without the approved recoveries",
+  "symptom": "After Create Account, Workday showed neither Candidate Home nor the application; the one sign-in got 'You may have entered the wrong email address or password or your account might be locked.' and the run stopped for the owner.",
+  "root_cause": "account_state._knows_account counted only an account on record or an email the site took; 'created here in this run' did not count, so WRONG_PASSWORD went to FOR_OWNER instead of the verification link or the reset to the ATS password (CLAUDE.md §5). verify_account_by_email_link also opened the mail only on a page that says 'verify', which Workday's refusal never does.",
+  "why_tests_missed": "The refused-password tests covered an account on record or an email the site took, and the verification tests a page that says 'verify'; none had a refusal right after a creation.",
+  "fix": "_knows_account includes memory.created. WRONG_PASSWORD on a just-created account: VERIFY_BY_LINK first (verify_account_by_email_link(just_created=True) accepts a refused sign-in page), then RESET_PASSWORD at once if no link came, then the owner.",
+  "tests": [
+    "tests/test_new_account_refused_is_verified_first.py::test_a_just_created_account_that_is_refused_is_verified_from_the_mail_first",
+    "tests/test_new_account_refused_is_verified_first.py::test_then_its_password_is_reset_to_the_ats_password",
+    "tests/test_new_account_refused_is_verified_first.py::test_then_it_is_the_owners",
+    "tests/test_new_account_refused_is_verified_first.py::test_a_sign_in_form_refused_before_on_a_just_created_account_is_reset_not_handed_over",
+    "tests/test_new_account_refused_is_verified_first.py::test_an_account_nobody_knows_is_still_the_owners",
+    "tests/test_new_account_refused_is_verified_first.py::test_the_mail_is_read_for_a_just_created_account_on_a_refused_sign_in",
+    "tests/test_new_account_refused_is_verified_first.py::test_the_mail_stays_closed_on_a_refused_sign_in_for_an_account_not_made_here"
+  ],
+  "prevention": "What the agent itself did on a site in this run is evidence about the account; decide recoveries with it, not only with what the page says."
+}

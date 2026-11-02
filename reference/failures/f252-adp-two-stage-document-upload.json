@@ -1,0 +1,15 @@
+{
+  "id": "f252",
+  "date": "2026-10-26",
+  "class": "ADP document upload needs a dialog commit",
+  "symptom": "Resume upload stopped after opening the chooser dialog; no attachment was committed.",
+  "site": "Church Mutual ADP Senior Network Engineer application 548, supervised continuation 25\u201326 October 2026",
+  "root_cause": "The generic path expects an existing file input or native chooser, while ADP creates a shadow input after Upload and requires Save.",
+  "why_tests_missed": "Existing fixtures did not model a deferred shadow input and a separate Save.",
+  "fix": "Use the portal upload hook, respect guarded click denial and retain attachment-receipt verification.",
+  "tests": [
+    "tests/test_adp_upload_dialog.py::test_document_upload_commits_dialog_and_requires_attachment_evidence",
+    "tests/test_adp_upload_dialog.py::test_adp_upload_click_denial_never_opens_a_dialog"
+  ],
+  "prevention": "Retain portal-shaped regression fixtures, inspect every repeated record, verify committed values and preserve submission and personal-answer gates."
+}

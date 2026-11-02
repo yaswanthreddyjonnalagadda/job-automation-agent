@@ -1,0 +1,15 @@
+{
+  "id": "f208",
+  "date": "2026-10-20",
+  "site": "Cross-portal document preparation; Fal application 106",
+  "class": "Detected unsupported claims survive correction failure and cached reuse",
+  "symptom": "Fal's first Gemini draft triggered PA-5200 rejection. Investigation reproduced PDF generation when a corrective draft still overclaims or its request raises. The saved Fal PDF itself passes the existing claim checker.",
+  "root_cause": "The retry selected fewer unsupported claims but lacked a final rejection gate before PDF generation; cached tailored PDFs were returned without revalidation.",
+  "why_tests_missed": "Document reuse tests checked storage and call counts, not rejection after a failed or partially improved correction.",
+  "fix": "Reject every draft with remaining detected unsupported claims, continue the configured provider fallback, and validate stored PDF text before reuse. Existing original-resume fallback remains available.",
+  "tests": [
+    "tests/test_document_claim_rejection.py",
+    "tests/test_resume_written_once_per_job.py"
+  ],
+  "prevention": "Validation must gate artifact creation and cache reuse. A smaller error count is not a successful correction; test error, partial correction, clean correction, and fallback."
+}

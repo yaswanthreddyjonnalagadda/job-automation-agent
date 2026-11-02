@@ -1,0 +1,17 @@
+{
+  "id": "f184",
+  "date": "2026-10-17",
+  "site": "Workday (Invesco; any list with 'Yes, without restrictions' / 'Yes, with company sponsorship')",
+  "class": "A legal answer was resolved without the facts that distinguish its options, so it either refused to choose or could have chosen the false statement",
+  "symptom": "'Are you legally eligible to work in the country where this job is located?' offers Yes, without restrictions / Yes, with company sponsorship / No. The agent's answer 'Yes' fit two rows, so it refused and stopped; and the authorization rule, given those rows, resolved to 'Yes, without restrictions' for an owner who needs sponsorship.",
+  "root_cause": "The shared matcher has no profile: a bare 'Yes' among two 'Yes...' rows is ambiguous, and the concept resolver took the first matching row. Neither asked the one fact that tells the rows apart, whether the owner needs sponsorship.",
+  "why_tests_missed": "Authorization fixtures offered plain Yes/No, or 'Yes, I am authorized'; none had rows differing in what the owner would be saying about sponsorship.",
+  "fix": "option_match.sponsorship_choice: a bare Yes among such rows is the 'with sponsorship' row when the profile says the owner needs sponsorship, the 'without restrictions' row when it says they do not, and nothing when the profile is silent or only the false row is offered. Used by the authorization concept and by the page agent's choice among a list's rows. Lists that do not speak of sponsorship are unchanged.",
+  "tests": [
+    "tests/test_yes_with_or_without_sponsorship.py::test_the_sponsorship_rows_follow_the_profile",
+    "tests/test_yes_with_or_without_sponsorship.py::test_lists_that_do_not_speak_of_sponsorship_are_left_to_the_usual_matcher",
+    "tests/test_yes_with_or_without_sponsorship.py::test_the_authorization_rule_never_answers_without_restrictions_for_an_owner_who_needs_sponsorship",
+    "tests/test_yes_with_or_without_sponsorship.py::test_the_agent_picks_the_row_its_profile_supports"
+  ],
+  "prevention": "When options differ by a fact about the owner, resolve them from that fact in one shared place; never let a first-match rule choose between statements of different truth."
+}

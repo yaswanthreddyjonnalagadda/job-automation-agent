@@ -1,0 +1,14 @@
+{
+  "id": "f240",
+  "date": "2026-10-23",
+  "site": "Bank of America application 140, relocation question",
+  "class": "Named checkbox answers bypass group matching and lose compound labels",
+  "symptom": "Review showed both the negative relocation option and a positive option checked. Owner explicitly chose both positive expense options.",
+  "root_cause": "The early check-action dispatcher checked the referenced control before matching its requested answer against the question choices. A Yes answer referencing the negative relocation checkbox therefore checked No. The later multi-choice path also split commas within labels and only added selections. Replay confirmed the actual saved relocation boxes already had question ownership; parent-scope fallback addresses a separate layout variant.",
+  "why_tests_missed": "Earlier checkbox fixtures introduced adjacent choices directly and used simple labels; they did not combine named parent groups, comma-bearing labels, stale contradictory selections and an explicit complete owner answer.",
+  "fix": "Route named check actions through scoped choice matching while preserving literal per-control state actions. Preserve commas within labels when stronger separators delimit complete choices. Replace stale selections only for a fully resolved explicit owner/library set. Recover named parent scope for previously ungrouped layout variants without combining independent declarations or repeated groups. Observed both approved Yes options and no No on the live Review page.",
+  "tests": [
+    "tests/test_checkbox_approved_sets.py"
+  ],
+  "prevention": "Test grouped choice ownership, punctuation inside labels, unsupported/ambiguous values causing no mutation, and complete approved sets removing stale choices."
+}

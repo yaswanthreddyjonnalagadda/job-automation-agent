@@ -1,0 +1,22 @@
+{
+  "id": "f293",
+  "date": "2026-11-01",
+  "class": "A score was presented as a fit between the owner and a job, but it was computed from only one side of the comparison",
+  "symptom": "Every suggested job showed 60-70% and the owner could see no score for their resume against the job description. The same roles kept reappearing, and one role open in three cities filled three cards.",
+  "site": "job_discovery.py, matching_engine.py, the Suggested jobs section of web_ui.py, 1 November 2026",
+  "root_cause": "The Greenhouse feed was requested without the posting's content, so no description was ever available for it; the title-only score was the only score, and matching_engine.evaluate (resume against posting) was never run on a suggestion. Rows then ranked on that single saturated number, and a role listed once per location was never merged.",
+  "why_tests_missed": "Discovery tests fed rows that already had a score and checked ordering and expiry; none checked what the score was computed from, that a posting's text reached it, or that a missing input must yield no score rather than a number.",
+  "fix": "The Greenhouse feed asks for content=true and keeps the posting as plain text (html_to_text). The scan scores the owner's resume against that text with matching_engine.evaluate (no model call, no cost, repeatable) and stores resume_score with the skills matched and missing; the table gains those columns in place. A posting with no text, or no resume, gets no resume score and says so. The list ranks scored jobs first by resume score, then title score, then newest. A role listed for several places is one card with a count of the other locations.",
+  "tests": [
+    "tests/test_resume_jd_score.py::test_greenhouse_is_asked_for_the_description_and_returns_it",
+    "tests/test_resume_jd_score.py::test_the_table_of_an_older_install_gains_the_new_columns_in_place",
+    "tests/test_resume_jd_score.py::test_a_scan_scores_the_resume_against_the_posting",
+    "tests/test_resume_jd_score.py::test_a_resume_that_does_not_fit_scores_low_and_names_what_is_missing",
+    "tests/test_resume_jd_score.py::test_a_posting_with_no_description_gets_no_resume_score_not_a_guess",
+    "tests/test_resume_jd_score.py::test_no_resume_means_no_resume_score",
+    "tests/test_resume_jd_score.py::test_the_better_resume_match_is_listed_first_and_unscored_last",
+    "tests/test_resume_jd_score.py::test_a_card_shows_the_resume_match_and_what_is_matched_and_missing",
+    "tests/test_suggested_jobs_view.py::test_the_same_role_listed_for_several_places_is_one_card_with_a_count"
+  ],
+  "prevention": "A number labelled as a comparison must be computed from both things compared, and tests must assert what a score was computed from. When an input is missing, show no score and say why."
+}

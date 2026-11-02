@@ -15,8 +15,11 @@ launch a browser that is signed into their employer ATS accounts.
 
 from __future__ import annotations
 
+import functools
 import io
+import logging
 import json
+from typing import Optional
 import re
 import os
 import signal
@@ -27,9 +30,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, Response, abort, redirect, render_template_string, request, send_file, url_for
+from flask import Flask, Response, abort, g, redirect, render_template_string, request, send_file, url_for
 
 import diagnostics
+import detail_view
+import discovered_view
+import health_view
 diagnostics.install_log_privacy()
 import application_status
 import ui_shell
@@ -38,7 +44,6 @@ import run_outcomes
 from config import get_app_config
 from tracking import chosen, open_tracker as get_tracker
 import sqlite3
-import queue
 import handoff
 try:
     from runtime_events import RuntimeEvent, EventName, ReasonCode, AnswerSource
@@ -54,6 +59,9 @@ except ImportError:
 
 BASE_DIR = Path(__file__).resolve().parent
 app = Flask(__name__)
+logger = logging.getLogger(__name__)
+# the page script and styles are small and change with the code: never let a browser keep a stale copy
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
 from launch_dashboard import source_id
 RUNTIME_INFO = {'directory': str(BASE_DIR), 'source_id': source_id(BASE_DIR),
@@ -63,6 +71,62 @@ import web_guard  # noqa: E402
 
 web_guard.install(app)
 ui_shell.install(app)
+
+
+# ----------------------------------------------------------------------
+# Links to files the agent wrote (logs, screenshots, page captures)
+# ----------------------------------------------------------------------
+def _artifact_ref(path) -> str:
+    """The reference a link carries for a file: its place inside the project, never the owner's own folders.
+    A file outside the project has no reference."""
+    try:
+        return Path(path).resolve().relative_to(BASE_DIR.resolve()).as_posix()
+    except (ValueError, OSError):
+        return ""
+
+
+def _artifact_path(ref) -> Path:
+    """The file a link's reference names (a project-relative reference; an absolute path from an old link still works).
+    Whether it may be served is the route's decision, not this one's."""
+    candidate = Path(str(ref or ""))
+    return (candidate if candidate.is_absolute() else BASE_DIR / candidate).resolve()
+
+
+@functools.lru_cache(maxsize=512)
+def _servable_at(path: str, mtime: float, size: int) -> bool:
+    return diagnostics.read_safe_artifact(Path(path)) is not None
+
+
+def _artifact_servable(path) -> bool:
+    """Whether the viewer will really serve this file. A link that answers 404 is worse than none."""
+    try:
+        target = Path(path)
+        stat = target.stat()
+        return _servable_at(str(target), stat.st_mtime, stat.st_size)
+    except OSError:
+        return False
+
+
+def artifact_ok(path) -> bool:
+    return bool(path) and bool(_artifact_ref(path)) and _artifact_servable(path)
+
+
+def needs_you_count() -> int:
+    """How many applications are waiting for the owner (the badge on the Applications tab). Never breaks a page."""
+    if "needs_you" in g:
+        return g.needs_you
+    try:
+        g.needs_you = ui_shell.group_counts(get_tracker().list_all())["needs"]
+    except Exception:
+        g.needs_you = 0
+    return g.needs_you
+
+
+app.jinja_env.filters["aref"] = _artifact_ref
+app.jinja_env.globals.update(decision_view=detail_view.decision_view, answered_by=detail_view.answered_by,
+                             history_rows=detail_view.group_events, worker_state=health_view.worker_state)
+app.jinja_env.globals.update(artifact_ok=lambda p: artifact_ok(p), needs_you_count=lambda: needs_you_count())
+
 
 from web_setup import setup_pages  # noqa: E402  (the pages import web_ui back, lazily)
 
@@ -95,8 +159,8 @@ def _save_runs() -> None:
                   "started": r["started"].isoformat() if hasattr(r["started"], "isoformat") else r["started"]}
             for url, r in _RUNS.items()
         }, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+    except Exception as _swallowed:
+        logger.debug("_save_runs: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
 
 def _process_alive(pid) -> bool:
@@ -126,8 +190,8 @@ def _load_runs() -> None:
             _RUNS[url] = {"state": state, "log": r.get("log", ""), "pid": r.get("pid"),
                           "started": datetime.fromisoformat(r["started"]) if r.get("started") else None,
                           "proc": None, "stopping": False}
-    except Exception:
-        pass
+    except Exception as _swallowed:
+        logger.debug("_load_runs: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
 
 _load_runs()
@@ -214,8 +278,8 @@ def _kill_pid_tree(pid: int) -> None:
     else:
         try:
             os.killpg(int(pid), signal.SIGTERM)
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("_kill_pid_tree: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
@@ -228,8 +292,141 @@ def _kill_tree(proc: subprocess.Popen) -> None:
     else:
         try:
             os.killpg(proc.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        except ProcessLookupError as _swallowed:
+            logger.debug("_kill_tree: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+
+
+_SCAN = {"thread": None, "started": None}
+_SCAN_LOCK = threading.Lock()
+
+
+def scan_running() -> bool:
+    thread = _SCAN["thread"]
+    return bool(thread and thread.is_alive())
+
+
+def wait_for_scan(seconds: float = 600) -> None:
+    """Waits for a scan that is running (used by tests and by anything that must see its result)."""
+    thread = _SCAN["thread"]
+    if thread is not None:
+        thread.join(seconds)
+
+
+def _run_scan(engine) -> None:
+    try:
+        _remember_scan(engine.scan_all(min_match_threshold=60))
+    except Exception as exc:
+        logger.warning("The job scan failed: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+    finally:
+        _SCAN["started"] = None
+
+
+@app.post("/api/discovered/scan")
+def scan_discovered():
+    """Starts a scan and returns at once: reading a hundred employers takes minutes, so it runs in the background."""
+    from job_discovery import JobDiscoveryEngine
+    with _SCAN_LOCK:
+        if not scan_running():
+            engine = JobDiscoveryEngine()
+            # Besides the owner's own list, every employer an application was already made through is scanned.
+            try:
+                engine.history = [(a.company, a.url) for a in get_tracker().list_all() if getattr(a, "url", "")]
+            except Exception as exc:
+                logger.warning("Could not read the applications to find employers: %s", str(exc).splitlines()[0][:100])
+            _SCAN["started"] = datetime.now(timezone.utc)
+            _SCAN["thread"] = threading.Thread(target=_run_scan, args=(engine,), daemon=True, name="job-scan")
+            _SCAN["thread"].start()
+    return redirect(url_for("index"))
+
+
+_LAST_SCAN = BASE_DIR / "data" / "_last_scan.json"
+
+
+def _remember_scan(stats) -> None:
+    """What the last scan did, so the page can say so after it reloads (when, and how many boards)."""
+    try:
+        record = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                  "boards": int((stats or {}).get("companies_scanned") or 0),
+                  "saved": int((stats or {}).get("relevant_jobs_saved") or 0)}
+        _LAST_SCAN.write_text(json.dumps(record), encoding="utf-8")
+    except (OSError, TypeError, ValueError) as _swallowed:
+        logger.debug("_remember_scan: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+
+
+def last_scan() -> dict:
+    try:
+        record = json.loads(_LAST_SCAN.read_text(encoding="utf-8"))
+        record["at"] = datetime.fromisoformat(record["at"])
+        return record
+    except (OSError, ValueError, KeyError):
+        return {}
+
+
+@app.post("/api/discovered/<int:job_id>/apply")
+def apply_discovered(job_id: int):
+    from job_discovery import JobDiscoveryEngine
+    engine = JobDiscoveryEngine()
+    job = engine.queue_for_application(job_id)
+    if job and job.get("already_submitted"):
+        return redirect(url_for("index", error=f"You already submitted an application for {job.get('job_title')} at {job.get('company_name')}."))
+    if job and job.get("url"):
+        url = job["url"].strip()
+        busy = _running_url()
+        if busy:
+            return redirect(url_for("index", error=f"{busy[:80]} is still running. Stop it before starting another."))
+        threading.Thread(target=_run_apply, args=(url,), daemon=True).start()
+    return redirect(url_for("index"))
+
+
+@app.post("/api/discovered/<int:job_id>/dismiss")
+def dismiss_discovered(job_id: int):
+    from job_discovery import JobDiscoveryEngine
+    engine = JobDiscoveryEngine()
+    engine.dismiss_job(job_id)
+    return redirect(url_for("index"))
+
+
+@app.post("/api/webhook/command")
+def remote_webhook_command():
+    """Execute a remote command string (/apply <id>, /dismiss <id>, /status, /scan)."""
+    import notifications
+    cmd = request.form.get("command") or (request.get_json(silent=True) or {}).get("command") or ""
+    res = notifications.handle_remote_command(cmd)
+    if res.get("status") == "ok" and cmd.strip().startswith("/apply"):
+        job = res.get("job")
+        if job and job.get("url"):
+            url = job["url"].strip()
+            busy = _running_url()
+            if not busy:
+                threading.Thread(target=_run_apply, args=(url,), daemon=True).start()
+    return res, 200
+
+
+@app.post("/api/webhook/telegram")
+def telegram_webhook():
+    """Webhook receiver for Telegram bot messages."""
+    import notifications
+    data = request.get_json(silent=True) or {}
+    msg = data.get("message") or {}
+    text = msg.get("text", "")
+    chat_id = (msg.get("chat") or {}).get("id")
+
+    res = notifications.handle_remote_command(text)
+    if res.get("status") == "ok" and text.strip().startswith("/apply"):
+        job = res.get("job")
+        if job and job.get("url"):
+            url = job["url"].strip()
+            busy = _running_url()
+            if not busy:
+                threading.Thread(target=_run_apply, args=(url,), daemon=True).start()
+
+    reply_text = res.get("message", "Done.")
+    if chat_id:
+        cfg = notifications.get_notification_config()
+        if cfg["telegram_bot_token"]:
+            tg_url = f"https://api.telegram.org/bot{cfg['telegram_bot_token']}/sendMessage"
+            notifications.send_http_json(tg_url, {"chat_id": chat_id, "text": reply_text})
+    return res, 200
 
 
 @app.post("/apply")
@@ -493,6 +690,10 @@ def resume_application(app_id: int):
         return redirect(url_for("index", error="That application has no URL to resume."))
     if record.status == "submitted":
         return redirect(url_for("index", error=f"{record.title} was already submitted."))
+    if hasattr(tracker, "find_submitted"):
+        already = tracker.find_submitted(url=record.url, company=record.company, title=record.title)
+        if already and already.id != record.id:
+            return redirect(url_for("index", error=f"{record.title} at {record.company} was already submitted."))
     busy = _running_url()
     if busy:
         return redirect(url_for("index", error=(
@@ -528,13 +729,16 @@ def stop_application(app_id: int):
     return redirect(url_for("index"))
 
 
+# What the status menu accepts (after submitting: interviewing, rejected, offer, for the Progress page).
+VALID_STATUSES = {"prepared", "form_filled", "ready_to_submit", "needs_user_review", "submitted", "skipped",
+                  "job_not_found", "already_applied", "interviewing", "rejected", "offer"}
+
+
 @app.post("/application/<int:app_id>/status")
 def change_application_status(app_id: int):
     """Updates an application's status directly from the UI (e.g. submitted, needs_user_review, etc.)."""
     new_status = (request.form.get("status") or "").strip()
-    valid_statuses = {"prepared", "form_filled", "ready_to_submit", "needs_user_review", "submitted", "skipped",
-                      "job_not_found", "interviewing", "rejected", "offer"}   # what happened after submitting, for the Progress page
-    if new_status not in valid_statuses:
+    if new_status not in VALID_STATUSES:
         return redirect(url_for("application", app_id=app_id, error="Invalid status."))
     tracker = get_tracker()
     record = next((a for a in tracker.list_all() if a.id == app_id), None)
@@ -734,9 +938,12 @@ def update_answer_in_ledger(answer_id: int, new_value: str) -> bool:
     try:
         tracker = get_tracker()
         if hasattr(tracker, "record_answer"):
-            tracker.record_answer(app_key, q_text, new_value, answered_by="user")
-    except Exception:
-        pass
+            from urllib.parse import urlparse
+            application = tracker.get(app_key)
+            host = (urlparse(application.url).hostname or "") if application else ""
+            tracker.record_answer(app_key, host, q_text, new_value, answered_by="user")
+    except Exception as exc:
+        logger.warning("Cockpit override saved locally but tracker synchronization failed (%s)", type(exc).__name__)
     return True
 
 
@@ -788,6 +995,62 @@ if RuntimeEvent is not None:
 # ----------------------------------------------------------------------
 # Live Agent Cockpit API Routes
 # ----------------------------------------------------------------------
+# What a run's own progress log says, in words. A run is a separate process, so the dashboard's in-memory event buffer never
+# holds its events; the run writes one JSON line per step to logs/run_*.jsonl (event names only, never the values), and that
+# is what the live card reads. (event name) -> (what it says, stage it belongs to)
+_RUN_LOG_WORDS = {
+    "APPLY_ENTRY_NAVIGATED": ("Opened the application form", None),
+    "REUSED_RESUME": ("Reused the resume already written for this job", None),
+    "AUTOFILL": ("Filled in the form from your resume", "form_filling"),
+    "FIELD_ACTION": ("Filled in a field", "form_filling"),
+    "ATTACHED": ("Attached your resume", "form_filling"),
+    "AI_ANSWERED_QUESTION": ("Had the AI answer a question", "form_filling"),
+    "READ": ("Read the page", None),
+    "NEXT": ("Moved on to the next step", "form_filling"),
+    "CAPTCHA": ("A CAPTCHA appeared", "form_filling"),
+    "AUTO_SUBMIT": ("Checked the form before submitting", "submit"),
+    "FORENSIC_CAPTURE": ("Saved the page for review", None),
+}
+_RUN_LOG_QUIET = {"RUNTIME", "STARTED", "SOURCE_ID", "BRAIN", "ANSWER_BANK"}
+
+
+def _events_from_run_log(live_url: str, limit: int = 40) -> tuple[list[dict], Optional[float]]:
+    """(newest-first activity lines, seconds since the run last wrote anything) for the run on `live_url`."""
+    with _RUNS_LOCK:
+        started = (_RUNS.get(live_url) or {}).get("started")
+    since = started.timestamp() if isinstance(started, datetime) else (float(started) if isinstance(started, (int, float)) else 0.0)
+    try:
+        candidates = [f for f in (BASE_DIR / "logs").glob("run_*.jsonl") if f.stat().st_mtime >= since - 10]
+        newest = max(candidates, key=lambda f: f.stat().st_mtime)
+        with open(newest, "rb") as handle:
+            handle.seek(0, 2)
+            handle.seek(max(0, handle.tell() - 65536))
+            lines = handle.read().decode("utf-8", "replace").splitlines()
+    except (OSError, ValueError):
+        return [], None
+    entries = []
+    for line in lines:
+        try:
+            entry = json.loads(line)
+            when = datetime.fromisoformat(str(entry["time"]))
+        except (ValueError, KeyError, TypeError):
+            continue
+        entries.append((when, str(entry.get("event") or "")))
+    if not entries:
+        return [], None
+    seen_for = max(0.0, (datetime.now(timezone.utc) - entries[-1][0]).total_seconds())
+    events = []
+    for when, name in reversed(entries):
+        if name in _RUN_LOG_QUIET:
+            continue
+        words, stage = _RUN_LOG_WORDS.get(name, (name.replace("_", " ").capitalize(), None))
+        events.append({"timestamp": when.isoformat(), "event": name, "display_message": words, "stage": stage or "",
+                       "is_verified": False})
+        if len(events) >= limit:
+            break
+    return events, seen_for
+
+
 @app.get("/api/cockpit-state")
 def api_cockpit_state():
     live_url = _running_url()
@@ -816,6 +1079,9 @@ def api_cockpit_state():
     recent_events = []
     if RuntimeEvent is not None:
         recent_events = [e.as_dict() for e in reversed(RuntimeEvent.get_recent(limit=40))]
+    last_activity_seconds = None
+    if live_url and not recent_events:
+        recent_events, last_activity_seconds = _events_from_run_log(live_url)
 
     stage = "Discovery"
     stage_step = 1
@@ -916,37 +1182,8 @@ def api_cockpit_state():
         "active_handoff": active_handoff,
         "recent_events": recent_events,
         "recent_answers": recent_answers,
+        "last_activity_seconds": last_activity_seconds,
     }
-
-
-@app.get("/api/events/stream")
-def api_events_stream():
-    """SSE stream emitting RuntimeEvent objects as they occur."""
-    def event_stream():
-        q = queue.Queue(maxsize=100)
-        def listener(ev):
-            try:
-                q.put_nowait(ev)
-            except Exception:
-                pass
-        if RuntimeEvent is not None:
-            RuntimeEvent.register_listener(listener)
-        try:
-            while True:
-                try:
-                    ev = q.get(timeout=15.0)
-                    yield f"data: {json.dumps(ev.as_dict())}\n\n"
-                except queue.Empty:
-                    yield ": keep-alive\n\n"
-        finally:
-            if RuntimeEvent is not None:
-                RuntimeEvent.remove_listener(listener)
-    return Response(event_stream(), mimetype="text/event-stream")
-
-
-@app.post("/api/cockpit/pause")
-def api_cockpit_pause():
-    return {"ok": False, "error": "Pause is unavailable for this run. No action was sent."}, 409
 
 
 @app.post("/api/cockpit/resume")
@@ -972,7 +1209,8 @@ def _signal_waiting_run(decision):
 
 @app.post("/api/cockpit/stop")
 def api_cockpit_stop():
-    return stop()
+    stopped = _stop_run(_running_url() or "")
+    return {"ok": True, "status": "stopped" if stopped else "not_running"}
 
 
 def raise_browser_window() -> bool:
@@ -1017,22 +1255,6 @@ def api_cockpit_raise_browser():
         return {"ok": False, "error": str(exc)}
 
 
-@app.post("/api/cockpit/takeover")
-def api_cockpit_takeover():
-    try:
-        raise_browser_window()
-        active_h = handoff.Handoff(
-            category=handoff.OWNER_REVIEW,
-            reason="User initiated manual browser takeover",
-            required_action="Review application in open browser and continue when ready",
-            resume_condition="User presses Continue",
-        )
-        handoff.set_active_handoff(active_h)
-        return {"ok": True}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
-
-
 @app.post("/api/handoff/resolve")
 def api_handoff_resolve():
     data = request.form if request.form else (request.get_json(silent=True) or {})
@@ -1047,8 +1269,9 @@ def api_handoff_resolve():
         return {"ok": True, "message": "Timeout extended"}
 
     if action == "cancel":
+        result = api_cockpit_stop()
         handoff.clear_active_handoff()
-        return stop()
+        return result
 
     ok, msg = handoff.resolve_active_handoff()
     if ok:
@@ -1083,29 +1306,35 @@ def api_application_answers(app_id: int):
     return {"ok": True, "answers": answers}
 
 
+def _browser_check() -> dict:
+    """Whether the browser the agent drives can be found (slow: it starts Playwright's driver)."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            return {"title": "Playwright Chromium", "ok": True, "message": f"Browser located: {Path(p.chromium.executable_path).name}"}
+    except Exception as exc:
+        return {"title": "Playwright Chromium", "ok": False,
+                "message": f"Chromium not runnable: {str(exc).splitlines()[0][:100]}",
+                "hint": "Run `python -m playwright install chromium`"}
+
+
+@app.get("/health/browser")
+def health_browser():
+    return _browser_check()
+
+
 @app.get("/health")
 def health_check():
     import config as cfg_mod
 
     checks = {}
 
-    # 1. Playwright Chromium
-    try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            exec_path = p.chromium.executable_path
-            checks["playwright"] = {
-                "title": "Playwright Chromium",
-                "ok": True,
-                "message": f"Browser located: {Path(exec_path).name}",
-            }
-    except Exception as exc:
-        checks["playwright"] = {
-            "title": "Playwright Chromium",
-            "ok": False,
-            "message": f"Chromium not runnable: {str(exc).splitlines()[0][:100]}",
-            "hint": "Run `python -m playwright install chromium`",
-        }
+    # 1. Playwright Chromium: starting its driver takes seconds, so the page asks for it afterwards.
+    wants_html = request.accept_mimetypes.accept_html and not request.is_json
+    if wants_html:
+        checks["playwright"] = {"title": "Playwright Chromium", "ok": None, "pending": True, "message": "Checking\u2026"}
+    else:
+        checks["playwright"] = _browser_check()
 
     # 2. User profile
     try:
@@ -1237,7 +1466,7 @@ def health_check():
             "message": f"Worker manager error: {exc}",
         }
 
-    all_ok = all(c["ok"] for c in checks.values())
+    all_ok = all(c["ok"] for c in checks.values() if not c.get("pending"))
     status_str = "ok" if all_ok else "warning"
 
     if request.accept_mimetypes.accept_html and not request.is_json:
@@ -1258,6 +1487,15 @@ def health_check():
 # ----------------------------------------------------------------------
 PAGE_SIZE = 10        # applications shown at first, and added by "Show 10 more"
 MAX_SHOWN = 300       # as far as the list grows
+
+# How recently a suggested job was posted, from the last hour to the last week (the owner's choice on the page).
+JOB_WINDOWS = {
+    "1h": {"hours": 1, "label": "Last hour", "phrase": "in the last hour"},
+    "24h": {"hours": 24, "label": "Last 24 hours", "phrase": "in the last 24 hours"},
+    "3d": {"hours": 72, "label": "Last 3 days", "phrase": "in the last 3 days"},
+    "7d": {"hours": 168, "label": "Last week", "phrase": "in the last week"},
+}
+DEFAULT_JOB_WINDOW = "7d"
 
 
 @app.get("/")
@@ -1300,12 +1538,36 @@ def index():
         employer = active_h.get("employer", "")
         stage = "Handoff"
 
+    discovered_jobs = []
+    window = JOB_WINDOWS.get(request.args.get("within", ""), JOB_WINDOWS[DEFAULT_JOB_WINDOW])
+    try:
+        from job_discovery import JobDiscoveryEngine
+        discovery_engine = JobDiscoveryEngine()
+        # Posted inside the chosen window, newest first, and nothing the owner has already applied to, skipped or
+        # been turned down for: those never come back as suggestions.
+        discovered_jobs = discovered_view.prepare(
+            discovery_engine.get_discovered_jobs(min_score=60, limit=40, hide_applied=False,
+                                                 within_hours=window["hours"]), apps, newest_first=True)
+    except Exception:
+        discovered_jobs = []
+
     return render_template_string(
         INDEX_HTML, apps=apps[:show], total=len(apps), shown=min(show, len(apps)),
         more=min(show + PAGE_SIZE, MAX_SHOWN), can_show_more=show < min(len(apps), MAX_SHOWN),
         groups=ui_shell.group_counts(apps), runs=latest_run(runs), signals=signals, error=request.args.get("error"),
         working_url=working_url, is_running=bool(live), job_title=job_title, employer=employer, stage=stage,
+        discovered_jobs=discovered_jobs, last_scan=last_scan(), rest_line=_rest_line(runs),
+        job_windows=JOB_WINDOWS, job_window=window, scanning=scan_running(), scan_started=_SCAN["started"],
     )
+
+
+def _rest_line(runs: dict) -> str:
+    """What the idle card says after "No application is running": how the last run ended."""
+    run = next(iter(latest_run(runs).values()), None)
+    if not run:
+        return "Nothing has run yet."
+    who = " at ".join(x for x in (run.get("title"), run.get("company")) if x)
+    return f"Last run: {run.get('state') or 'ended'}" + (f" · {who}" if who else "")
 
 
 def waiting_runs(data_dir: Path) -> list[dict]:
@@ -1321,8 +1583,8 @@ def waiting_runs(data_dir: Path) -> list[dict]:
         try:
             job = json.loads((Path(data_dir) / f"_job_{name[:-4]}.json").read_text(encoding="utf-8-sig"))
             label = f"{job.get('title', '')} at {job.get('company', '')}".strip() or label
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as _swallowed:
+            logger.debug("waiting_runs: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
         found.append({"signal": f"_signal_{name}", "label": label})
     return found
 
@@ -1486,7 +1748,7 @@ def progress_of(record, validation: dict) -> dict:
 @app.get("/evidence")
 def evidence():
     """Serve only B5-marked artifacts within the existing resolved output root."""
-    target = Path(request.args.get("path", "")).resolve()
+    target = _artifact_path(request.args.get("path", ""))
     root = (BASE_DIR / "output").resolve()
     if target != root and root not in target.parents:
         abort(404)
@@ -1514,8 +1776,7 @@ def document(doc_id: int):
 
 @app.get("/log")
 def log():
-    path = request.args.get("path", "")
-    target = Path(path).resolve()
+    target = _artifact_path(request.args.get("path", ""))
     root = (BASE_DIR / "logs").resolve()
     if (target != root and root not in target.parents) or target.suffix not in {".log", ".jsonl", ".txt"}:
         abort(404)
@@ -1773,252 +2034,289 @@ SETTINGS_HTML = ui_shell.page("Settings", """
 
 
 INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
-<main class="wrap">
-  <div class="page-head"><div>
-    <h1>Applications</h1>
-    <p class="sub">Paste a job link. The agent fills the form from your profile and saved answers, asks you only what
-      it can't know, and stops at Review for you to submit.</p>
-  </div></div>
-
-  <div class="stats">
-    <div class="stat tone-info"><b>{{ total }}</b><span>Tracked</span></div>
-    <div class="stat tone-ok"><b>{{ groups.done }}</b><span>Submitted</span></div>
-    <div class="stat tone-warn{% if groups.needs %} hot{% endif %}"><b>{{ groups.needs }}</b><span>Waiting for you</span></div>
-    <div class="stat tone-violet"><b>{{ groups.talking }}</b><span>Interviews &amp; offers</span></div>
-    <div class="stat tone-grey"><b>{{ groups.skipped }}</b><span>Skipped</span></div>
-  </div>
-
-  {% if error %}<div class="err" role="alert">{{ error }}</div>{% endif %}
-
-  <div class="card apply-card">
-    <form class="apply" method="post" action="/apply">
+<main id="main" class="dash" tabindex="-1">
+  <p class="sr-only" id="needs-live" role="status" aria-live="polite">{% if groups.needs %}{{ groups.needs }} application{{ '' if groups.needs == 1 else 's' }} need{{ 's' if groups.needs == 1 else '' }} you{% else %}Nothing needs you{% endif %}</p>
+  <header class="dash-head">
+    <div>
+      <h1>Applications</h1>
+    </div>
+    <form class="dash-start" method="post" action="/apply" aria-label="Start an application">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input type="url" name="url" required aria-label="Job posting link"
-             placeholder="Paste a job link: Workday, Greenhouse, Lever, Ashby, iCIMS...">
-      <button type="submit">Apply</button>
+      <label for="job-url" class="sr-only">Link to the job posting</label>
+      <input id="job-url" type="url" name="url" required inputmode="url" autocomplete="off"
+             placeholder="Paste a job link from the employer's own site" aria-describedby="job-url-hint">
+      <button type="submit">Start application</button>
     </form>
-    <p class="hint">Only employers' own sites. Job boards and staffing agencies are refused.</p>
-  </div>
+  </header>
+  <p class="dash-start-hint" id="job-url-hint">Workday, Greenhouse, Lever, iCIMS and other employer sites. Job boards and staffing agencies are refused. {{ submit_promise() }}</p>
 
-  <!-- Live Agent Cockpit Component -->
-  {% include 'cockpit_card.html' %}
+  {% if error %}<div class="err" role="alert" style="margin-top:16px">{{ error }}</div>{% endif %}
+
+  {% if total %}
+  <p class="dash-bar-label"><b>Submitted of tracked:</b> {{ groups.done }} of {{ total }}</p>
+  <div class="dash-bar" role="img"
+       aria-label="Submitted of tracked: {{ groups.done }} of {{ total }}">
+    <i class="b-done" style="flex-grow:{{ groups.done }}"></i><i class="b-needs" style="flex-grow:{{ groups.needs }}"></i><i class="b-working" style="flex-grow:{{ groups.working }}"></i><i class="b-skipped" style="flex-grow:{{ groups.skipped }}"></i>
+  </div>
+  {% endif %}
 
   {% set waiting = apps | selectattr('status', 'in', ['ready_to_submit', 'needs_user_review', 'BLOCKED_VALIDATION_LOOP']) | rejectattr('url', 'equalto', working_url or '-') | list %}
-  {% if working_url %}
-    <div class="card" style="margin-bottom:12px"><strong>The agent is working</strong>
-      <div class="hint">It is filling the form in its browser. When it stops for you, <em>Needs you</em> shows
-        <strong>Continue</strong>, <strong>Resume</strong>, <strong>Skip</strong>, <strong>Close browser</strong>
-        and <strong>Reload</strong>.</div></div>
-  {% endif %}
+
   {% if signals or waiting %}
-    <h2>Needs you</h2>
-    <div class="card attention">
-      {% if signals %}
-        <p class="hint" style="margin:0 0 6px">The agent is waiting in its browser. Deal with what it stopped for,
-          then press <strong>Continue</strong> and it reads the page again. <strong>Resume</strong> does the same
-          with the agent's latest logic; <strong>Reload</strong> starts the application again from the posting.</p>
-        {% for s in signals %}
-          <div class="item">
-            <div><strong>{{ s.label }}</strong><div class="hint">Paused in the browser</div></div>
-            <div class="actions">
-              <form method="post" action="/signal/{{ s.signal }}" class="actions">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button name="decision" value="continue" title="You dealt with it: the agent reads the page again and carries on">Continue</button>
-                <button class="ghost" name="decision" value="reload_code" title="Carry on from this page with the agent's latest logic -- the form stays as it is">Resume</button>
-                <button class="ghost" name="decision" value="skip">Skip</button>
-                <button class="ghost" name="decision" value="close">Close browser</button>
-              </form>
-              <form method="post" action="/restart" class="actions"
-                    onsubmit="return confirm('Start this application again from the posting, with the latest logic? This browser closes; nothing is submitted, and what the site saved stays saved.')">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button class="ghost" title="Close this run and start the application again from its posting, with the agent's latest logic">Reload</button>
-              </form>
-            </div>
-          </div>
-        {% endfor %}
-      {% endif %}
-      {% for a in waiting[:5] %}
-        <div class="item">
-          <div style="min-width:0">
-            <a href="/application/{{ a.id }}"><strong>{{ a.title }}</strong></a>
-            <span class="muted">at {{ a.company }}</span>
-            <span class="pill {{ status_class(a.status) }}" style="margin-left:6px">{{ status_label(a.status) }}</span>
-            {% if a.notes %}<div class="hint clamp-2">{{ a.notes[:220] }}</div>{% endif %}
-          </div>
-          <div class="actions">
-            <a href="{{ a.last_page_url or a.url }}" target="_blank" rel="noopener"><button class="ghost" type="button">Open form &rarr;</button></a>
-          </div>
-        </div>
-      {% endfor %}
-      {% if waiting|length > 5 %}<p class="hint">and {{ waiting|length - 5 }} more in the list below</p>{% endif %}
-    </div>
-  {% endif %}
-
-  {% if runs %}
-    <h2>Current run</h2>
-    {% for url, r in runs.items() %}
-    <div class="card run">
-      <div class="where">
+  <section class="dash-needs" aria-labelledby="needs-h">
+    <h2 id="needs-h">Needs your action</h2>
+    {% for s in signals %}
+      <div class="item">
         <div>
-          {% if r.state == 'running' %}<span class="live">{{ 'Waiting for you' if signals else 'Running' }}</span>{% else %}<span class="pill">{{ r.state }}</span>{% endif %}
-          {% if r.title %}<strong style="margin-left:8px">{{ r.title }}</strong>{% endif %}
-          {% if r.company %}<span class="muted"> at {{ r.company }}</span>{% endif %}
+          <b>{{ s.label }}</b>
+          <small>The agent has paused in its browser window. Finish what it asks there, then press Continue.</small>
         </div>
-        <a class="url truncate" href="{{ url }}" target="_blank" rel="noopener" title="{{ url }}">{{ url }}</a>
-        {% if r.last_page_url and r.last_page_url != url %}
-          <span class="url truncate" title="{{ r.last_page_url }}">Now at: {{ r.last_page_url }}</span>
-        {% endif %}
-        {% if r.started %}<div class="links"><span class="muted">Started {{ r.started|local }}</span></div>{% endif %}
+        <div class="dash-actions">
+          <form method="post" action="/signal/{{ s.signal }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button name="decision" value="continue" title="The agent re-reads the page and carries on">Continue</button>
+          </form>
+          <form method="post" action="/signal/{{ s.signal }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="ghost" name="decision" value="reload_code" title="Load the latest agent code into the paused run, then carry on">Use latest code</button>
+            <button class="ghost" name="decision" value="skip" title="Leave this application and move on">Skip it</button>
+            <button class="ghost" name="decision" value="close" title="Close the agent's browser window">Close window</button>
+          </form>
+          <form method="post" action="/restart" data-confirm="Start this application again?"
+                data-confirm-body="It restarts from the job posting with the latest version of the agent. Answers already on the employer's form are kept." data-confirm-text="Start again">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="ghost" title="Start again from the posting with the latest agent code">Start again</button>
+          </form>
+        </div>
       </div>
-      <div class="row-actions">
-        {% if r.log %}<a href="/log?path={{ r.log }}" target="_blank"><button class="ghost" type="button" title="What the agent did, step by step">View log</button></a>{% endif %}
-        {% if r.screenshot %}<a href="/evidence?path={{ r.screenshot }}" target="_blank"><button class="ghost" type="button">View screen</button></a>{% endif %}
-        {% if r.app_id %}<a href="/application/{{ r.app_id }}"><button class="ghost" type="button">Details</button></a>{% endif %}
-        {% if r.state == 'running' %}
-        <form method="post" action="/reload-agent">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <button class="ghost" title="Load edited agent code into this run without restarting it">Reload agent code</button>
-        </form>
-        <form method="post" action="/stop"
-              onsubmit="return confirm('Stop this application and close its browser? Nothing will be submitted, and you can start it again.')">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <input type="hidden" name="url" value="{{ url }}">
-          <button class="ghost danger">Stop</button>
-        </form>
-        {% endif %}
-      </div>
-    </div>
     {% endfor %}
+    {% for a in waiting[:4] %}
+      <div class="item">
+        <div style="min-width:0">
+          <a href="/application/{{ a.id }}"><b>{{ a.title }}</b></a>
+          <small>{{ company_label(a.company) }} &middot; <span class="pill {{ status_class(a.status) }}">{{ status_label(a.status) }}</span></small>
+          {% if a.notes %}<small style="display:block;margin-top:2px">{{ a.notes[:180] }}</small>{% endif %}
+        </div>
+        <div class="dash-actions">
+          <a class="button small" href="{{ a.last_page_url or a.url }}" target="_blank" rel="noopener">Open the form<span class="sr-only"> (opens in a new tab)</span></a>
+          <a class="button ghost small" href="/application/{{ a.id }}">Details</a>
+        </div>
+      </div>
+    {% endfor %}
+  </section>
   {% endif %}
 
-  <h2>All applications <span class="count">{{ total }}</span></h2>
-  <div class="card flush">
-    {% if apps %}
-    <div class="toolbar">
-      <div class="chips" role="group" aria-label="Filter by status">
-        <button type="button" class="chip" data-filter="all" aria-pressed="true">All</button>
-        <button type="button" class="chip" data-filter="needs" aria-pressed="false">Needs you<span class="n">{{ groups.needs }}</span></button>
-        <button type="button" class="chip" data-filter="working" aria-pressed="false">In progress<span class="n">{{ groups.working }}</span></button>
-        <button type="button" class="chip" data-filter="done" aria-pressed="false">Submitted<span class="n">{{ groups.done }}</span></button>
-        <button type="button" class="chip" data-filter="skipped" aria-pressed="false">Skipped<span class="n">{{ groups.skipped }}</span></button>
-      </div>
-      <input type="search" id="app-search" placeholder="Search company or role" aria-label="Search applications">
-    </div>
-    {% endif %}
-    <table class="fixed cards" id="apps">
-      <colgroup><col style="width:27%"><col><col style="width:160px"><col style="width:132px"><col style="width:168px"></colgroup>
-      <thead><tr class="head"><th class="company">Company</th><th>Role</th><th>Status</th><th class="when">Updated</th><th class="actions">Actions</th></tr></thead>
-      <tbody>
-      {% for a in apps %}
-      <tr class="app" data-group="{{ status_group(a.status) }}" data-text="{{ (a.company ~ ' ' ~ a.title ~ ' ' ~ (a.location or ''))|lower }}">
-        <td class="company">
-          <strong class="truncate" title="{{ a.company }}">{{ a.company }}</strong>
-          <span class="loc truncate" title="{{ a.location or '' }}">{{ a.location or '—' }}</span>{# kept when empty: rows stay one height #}
-        </td>
-        <td class="role"><a href="/application/{{ a.id }}" class="clamp-2" title="{{ a.title }}" style="color:var(--ink)">{{ a.title }}</a></td>
-        <td class="status"><span class="pill {{ status_class(a.status) }}" title="{{ a.status }}">{{ status_label(a.status) }}</span></td>
-        <td class="when">{{ a.updated_at|local }}</td>
-        <td class="actions"><div class="row-actions">
-          {% if a.status != 'submitted' %}
-            <form method="post" action="/resume/{{ a.id }}">
+  <div class="dash-section" style="margin-top:20px">
+    {% include 'cockpit_card.html' %}
+    {% if runs %}
+      {% for url, r in runs.items() %}
+        <p class="dash-sub" style="margin-top:10px">
+          {% if r.state == 'running' %}Running{% else %}Last run: {{ r.state }}{% endif %}
+          {% if r.title %}&middot; {{ r.title }}{% endif %}{% if r.company %} at {{ r.company }}{% endif %}
+          {% if not r.title %}&middot; <a href="{{ url }}" target="_blank" rel="noopener">{{ url|truncate(70) }}</a>{% endif %}
+          {% if r.started %}&middot; started {{ r.started|local }}{% endif %}
+          {% if r.log and artifact_ok(r.log) %}&middot; <a href="/log?path={{ r.log|aref|urlencode }}" target="_blank" rel="noopener">View log</a>{% endif %}
+          {% if r.screenshot and artifact_ok(r.screenshot) %}&middot; <a href="/evidence?path={{ r.screenshot|aref|urlencode }}" target="_blank" rel="noopener">Last screenshot</a>{% endif %}
+          {% if r.app_id %}&middot; <a href="/application/{{ r.app_id }}">Details</a>{% endif %}
+          {% if r.state == 'running' %}
+            &middot; <form method="post" action="/reload-agent" style="display:inline">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <button class="ghost small" title="{{ 'Reopen the part-filled form at ' + a.last_page_url[:80] if a.last_page_url else 'Start this application again from the posting' }} -- the resume and answers already stored are reused">Resume</button>
-            </form>
-          {% else %}
-            <a href="/application/{{ a.id }}"><button class="ghost small" type="button">Details</button></a>
+              <button class="ghost small" title="Load the latest agent code into the run in progress">Reload agent code</button></form>
           {% endif %}
-          <details class="menu">
-            <summary aria-label="More actions for {{ a.company }}" title="More actions">&#8943;</summary>
-            <div class="menu-items">
-              <a href="/application/{{ a.id }}"><button type="button">Details</button></a>
-              {% if a.status != 'submitted' %}
-                <form method="post" action="/application/{{ a.id }}/status">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                  <input type="hidden" name="status" value="submitted">
-                  <input type="hidden" name="next" value="/">
-                  <button title="Mark this application as submitted">Mark submitted</button>
-                </form>
-                <form method="post" action="/stop-application/{{ a.id }}">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                  <button title="Stop the run working on this application and close its browser. Nothing is submitted and the application is kept.">Stop its run</button>
-                </form>
-              {% endif %}
-              <hr>
-              <form method="post" action="/delete/{{ a.id }}"
-                    onsubmit="return confirm('Delete {{ a.company }} -- {{ a.title[:60] }}?\\n\\nThis removes the application, its documents, its answers and its history. It cannot be undone.');">
+        </p>
+      {% endfor %}
+    {% endif %}
+  </div>
+
+  <section class="dash-section" aria-labelledby="hist-h">
+    <header>
+      <h2 id="hist-h">Your applications <span class="count">{{ total }}</span></h2>
+    </header>
+    <div class="dash-history">
+      {% if apps %}
+        <div class="toolbar">
+          <div class="dash-chips" role="group" aria-label="Filter by status">
+            <button type="button" class="dash-chip" data-filter="all" aria-pressed="true">All</button>
+            <button type="button" class="dash-chip {{ 'has-items' if groups.needs else 'is-zero' }}" data-filter="needs" aria-pressed="false">Needs you<span class="n">{{ groups.needs }}</span></button>
+            <button type="button" class="dash-chip" data-filter="working" aria-pressed="false">In progress<span class="n">{{ groups.working }}</span></button>
+            <button type="button" class="dash-chip" data-filter="done" aria-pressed="false">Submitted<span class="n">{{ groups.done }}</span></button>
+            <button type="button" class="dash-chip" data-filter="skipped" aria-pressed="false">Skipped<span class="n">{{ groups.skipped }}</span></button>
+          </div>
+          <label class="sr-only" for="app-search">Search your applications</label>
+          <input type="search" id="app-search" placeholder="Search company or role" autocomplete="off">
+        </div>
+        <p class="sr-only" id="apps-count" role="status" aria-live="polite"></p>
+      {% endif %}
+
+      <table class="cards" id="apps">
+        <caption class="sr-only">Your applications, newest first</caption>
+        <thead><tr class="head"><th scope="col" class="company">Company</th><th scope="col">Role</th><th scope="col">Status</th><th scope="col" class="when">Updated</th><th scope="col" class="actions"><span class="sr-only">Actions</span></th></tr></thead>
+        <tbody>
+        {% for a in apps %}
+        <tr class="app" data-group="{{ status_group(a.status) }}" data-text="{{ (a.company ~ ' ' ~ a.title ~ ' ' ~ (a.location or ''))|lower }}">
+          <td class="company"><strong>{{ company_label(a.company) }}</strong></td>
+          <td class="role">
+            <a href="/application/{{ a.id }}">{{ a.title }}</a>
+            <span class="loc">{{ a.location or 'Location not stated' }}</span>
+          </td>
+          <td class="status"><span class="pill {{ status_class(a.status) }}" title="{{ a.notes[:200] if a.notes else status_label(a.status) }}">{{ status_label(a.status) }}</span></td>
+          <td class="when">{{ a.updated_at|local }}</td>
+          <td class="actions"><div class="row-actions">
+            {% if a.status != 'submitted' and status_group(a.status) != 'skipped' %}
+              <form method="post" action="/resume/{{ a.id }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button class="danger" title="Remove this application and everything filed under it">Delete</button>
+                <button class="small" title="{{ 'Start this application' if a.status in ('prepared', 'ready_to_apply') else 'Pick this application up where it stopped' }}">{{ 'Start' if a.status in ('prepared', 'ready_to_apply') else 'Resume' }}<span class="sr-only"> {{ a.company }}</span></button>
+              </form>
+            {% else %}
+              <a class="button ghost small" href="/application/{{ a.id }}">Details<span class="sr-only"> for {{ a.company }}</span></a>
+            {% endif %}
+            <details class="menu">
+              <summary aria-label="More actions for {{ a.company }}, {{ a.title }}">&#8943;</summary>
+              <div class="menu-items">
+                <a class="button ghost" href="/application/{{ a.id }}" style="justify-content:flex-start;border:0;background:transparent">Details</a>
+                {% if a.status != 'submitted' %}
+                  <form method="post" action="/application/{{ a.id }}/status" data-confirm="Mark {{ a.company }} as submitted?"
+                        data-confirm-body="Only do this if you sent it yourself. The agent will not try it again." data-confirm-text="Mark submitted">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="status" value="submitted">
+                    <input type="hidden" name="next" value="/">
+                    <button title="Record that you submitted this one yourself">Mark as submitted</button>
+                  </form>
+                  <form method="post" action="/stop-application/{{ a.id }}" data-confirm="Stop this run?" data-confirm-body="The agent stops and its browser closes. Nothing is submitted." data-confirm-text="Stop it" data-danger="1">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button title="Stop the agent working on this application">Stop its run</button>
+                  </form>
+                {% endif %}
+                <hr>
+                <form method="post" action="/delete/{{ a.id }}" data-confirm="Delete {{ a.company }}?"
+                      data-confirm-body="{{ a.title[:80] }}. This removes it from your list and cannot be undone." data-confirm-text="Delete" data-danger="1">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <button class="danger" title="Remove this application from the list">Delete</button>
+                </form>
+              </div>
+            </details>
+          </div></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5"><div class="empty"><b>Nothing tracked yet</b>Paste a job link above or start a suggested job.</div></td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+
+      <div class="dash-empty" id="no-match" hidden style="border:0;border-radius:0"><b>No matches</b>Nothing fits that filter or search.</div>
+
+      <div class="more">
+        <span class="muted">Showing {{ shown }} of {{ total }}</span>
+        {% if can_show_more %}
+          <a class="button ghost small" href="/?show={{ more }}">Show {{ more - shown }} more</a>
+        {% elif total > 10 %}
+          <a class="button ghost small" href="/?show=10">Show fewer</a>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+
+  <section class="dash-section" aria-labelledby="jobs-h">
+    <header>
+      <div>
+        <h2 id="jobs-h">Suggested jobs <span class="count">{{ discovered_jobs | length }}</span></h2>
+        <p class="dash-sub">Roles found on employers' own job boards that fit your profile. Starting one prepares the application; you review it before anything is sent.</p>
+        <p class="dash-sub" id="scan-status" role="status" aria-live="polite">{% if scanning %}Checking job boards{% if scan_started %} since {{ scan_started|local('%I:%M %p') }}{% endif %}. This takes a few minutes; reload this page to see the result.{% elif last_scan %}Updated {{ last_scan.at|local('%I:%M %p') }} &middot; {{ last_scan.boards }} board{{ '' if last_scan.boards == 1 else 's' }} checked{% else %}Not checked yet{% endif %}</p>
+      </div>
+      <form method="post" action="/api/discovered/scan" data-busy="Checking job boards&hellip;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="ghost" title="Look for new postings on your job boards and on the employers you have already applied through">Find new jobs</button>
+      </form>
+    </header>
+    <nav class="dash-chips" aria-label="How recently the job was posted" style="margin-bottom:10px">
+      {% for key, w in job_windows.items() %}
+        <a class="dash-chip" href="/?within={{ key }}#jobs-h"{% if w.hours == job_window.hours %} aria-current="true"{% endif %}>{{ w.label }}</a>
+      {% endfor %}
+    </nav>
+    <p class="dash-sub">Newest first. Jobs you have already applied to, skipped or been turned down for are not listed. A job whose site gives no posting date is not listed either; a site that dates a job only by its day (Workday) appears from "Last 24 hours" on, never under "Last hour".</p>
+    {% if discovered_jobs %}
+      <div class="dash-chips" role="group" aria-label="Filter suggested jobs" style="margin-bottom:14px">
+        <button type="button" class="dash-chip" data-job-filter="all" aria-pressed="true">All</button>
+        <button type="button" class="dash-chip" data-job-filter="top" aria-pressed="false">Best matches</button>
+        <button type="button" class="dash-chip" data-job-filter="remote" aria-pressed="false">Remote</button>
+        <button type="button" class="dash-chip" data-job-filter="greenhouse" aria-pressed="false">Greenhouse</button>
+        <button type="button" class="dash-chip" data-job-filter="lever" aria-pressed="false">Lever</button>
+        <button type="button" class="dash-chip" data-job-filter="workday" aria-pressed="false">Workday</button>
+        <button type="button" class="dash-chip" data-job-filter="ashby" aria-pressed="false">Ashby</button>
+        <button type="button" class="dash-chip" data-job-filter="icims" aria-pressed="false">iCIMS</button>
+      </div>
+      <div class="dash-jobs" id="discovered-feed">
+        {% for dj in discovered_jobs %}
+          {% set fit = dj.resume_score if dj.resume_score is not none else dj.match_score %}
+          <article class="job-card" data-score="{{ fit }}" data-remote="{{ dj.is_remote }}" data-ats="{{ dj.ats_type }}">
+            <div class="job-top">
+              <div class="ring {% if fit >= 85 %}high{% elif fit >= 70 %}mid{% endif %}" style="--p:{{ fit }}"
+                   role="img" aria-label="{{ 'Resume match' if dj.resume_score is not none else 'Title match' }} {{ fit }} percent"><b>{{ fit }}%</b></div>
+              <div style="min-width:0">
+                <p class="job-company">{{ dj.company_name }}</p>
+                <h3 class="job-title"><a href="{{ dj.url }}" target="_blank" rel="noopener">{{ dj.job_title }}<span class="sr-only"> (opens the posting in a new tab)</span></a></h3>
+              </div>
+            </div>
+            <div class="job-meta">
+              {% if dj.resume_score is not none %}<span class="tag" title="Your resume compared with the skills this posting asks for">Resume match {{ dj.resume_score }}%</span>{% endif %}
+              <span class="tag" title="Scored from the job title, location and seniority only">Title match {{ dj.match_score }}%</span>
+              {% if dj.place %}<span title="{{ dj.location }}">{{ dj.place }}{% if dj.more_places %} <small>+{{ dj.more_places }} more</small>{% endif %}</span>
+              {% elif not dj.is_remote %}<span>Location not stated</span>{% endif %}
+              {% if dj.is_remote %}<span class="tag remote">Remote</span>{% endif %}
+              {% if dj.is_new %}<span class="tag new">New</span>{% endif %}
+              {% if dj.age %}<span class="muted">{{ dj.age }}</span>{% endif %}
+              {% if dj.other_openings %}<span class="muted" title="The same role is listed for other places; this is the best match">+{{ dj.other_openings }} other location{{ '' if dj.other_openings == 1 else 's' }}</span>{% endif %}
+              <span class="tag">{{ dj.ats_type | capitalize }}</span>
+            </div>
+            {% if dj.resume_score is not none %}
+              {% if dj.resume_matched %}<div class="job-meta"><span class="muted">Your resume has:</span>{% for m in dj.resume_matched[:4] %}<span class="tag">{{ m }}</span>{% endfor %}</div>{% endif %}
+              {% if dj.resume_missing %}<div class="job-meta"><span class="muted">Posting also asks for:</span>{% for m in dj.resume_missing[:3] %}<span class="tag applied">{{ m }}</span>{% endfor %}</div>{% endif %}
+            {% else %}
+              <div class="job-meta"><span class="muted">No resume match: the posting's text was not read.</span></div>
+              {% if dj.matched_skills %}<div class="job-meta">{% for m in dj.matched_skills[:3] %}<span class="tag">{{ m }}</span>{% endfor %}</div>{% endif %}
+            {% endif %}
+            <div class="job-foot">
+              <form method="post" action="/api/discovered/{{ dj.id }}/apply">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="small">Start application</button>
+              </form>
+              <form method="post" action="/api/discovered/{{ dj.id }}/dismiss">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="linklike" aria-label="Not interested in {{ dj.job_title }} at {{ dj.company_name }}">Not interested</button>
               </form>
             </div>
-          </details>
-        </div></td>
-      </tr>
-      {% else %}
-      <tr><td colspan="5"><div class="empty"><b>Nothing tracked yet</b>Paste a job link above to start your first application.</div></td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    <div class="empty" id="no-match" hidden><b>No matches</b>Nothing shown here fits that filter.</div>
-    <div class="more">
-      <span class="muted">Showing {{ shown }} of {{ total }}</span>
-      {% if can_show_more %}
-        <a href="/?show={{ more }}"><button class="ghost" type="button">Show {{ more - shown }} more</button></a>
-      {% elif total > 10 %}
-        <a href="/?show=10"><button class="ghost" type="button">Show fewer</button></a>
-      {% endif %}
-    </div>
-  </div>
+          </article>
+        {% endfor %}
+      </div>
+      <div class="dash-empty" id="jobs-none" hidden><b>No jobs match that filter</b>Try another one.</div>
+    {% else %}
+      <div class="dash-empty"><b>No jobs posted {{ job_window.phrase }}</b>{% if last_scan %}Try a longer time, or press <b style="display:inline">Find new jobs</b> to check again.{% else %}Press <b style="display:inline">Find new jobs</b> to check your job boards and the employers you have applied through.{% endif %}</div>
+    {% endif %}
+  </section>
 </main>
-<script>
-(() => {
-  const rows = [...document.querySelectorAll("#apps tr.app")];
-  const chips = [...document.querySelectorAll(".chip[data-filter]")];
-  const search = document.getElementById("app-search");
-  const none = document.getElementById("no-match");
-  let group = "all";
-  try { group = sessionStorage.getItem("apps-filter") || "all"; } catch (e) {}
-  function apply() {
-    const q = (search && search.value || "").trim().toLowerCase();
-    let shown = 0;
-    rows.forEach(r => {
-      const ok = (group === "all" || r.dataset.group === group) && (!q || r.dataset.text.includes(q));
-      r.hidden = !ok; if (ok) shown++;
-    });
-    chips.forEach(c => c.setAttribute("aria-pressed", String(c.dataset.filter === group)));
-    if (none) none.hidden = shown > 0 || !rows.length;
-  }
-  chips.forEach(c => c.addEventListener("click", () => {
-    group = c.dataset.filter;
-    try { sessionStorage.setItem("apps-filter", group); } catch (e) {}
-    apply();
-  }));
-  if (search) search.addEventListener("input", apply);
-  // One row menu open at a time; a click elsewhere closes it.
-  document.addEventListener("click", e => {
-    document.querySelectorAll("details.menu[open]").forEach(d => { if (!d.contains(e.target)) d.open = false; });
-  });
-  apply();
-})();
-</script>
 """)
+
 
 DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
 <main class="wrap">
-  <p class="crumbs"><a href="/">Applications</a> / {{ a.company }}</p>
+  <p class="crumbs"><a href="/">Applications</a> / {{ company_label(a.company) }}</p>
   <div class="page-head">
     <div style="min-width:0">
       <h1>{{ a.title }}</h1>
       <div class="head-facts">
-        <strong style="color:var(--ink)">{{ a.company }}</strong>
+        <strong style="color:var(--ink)">{{ company_label(a.company) }}</strong>
         {% if a.location %}<span>{{ a.location }}</span>{% endif %}
         <span class="pill {{ status_class(a.status) }}">{{ status_label(a.status) }}</span>
         <a href="{{ a.url }}" target="_blank" rel="noopener">Open posting &rarr;</a>
-        {% if run_log %}<a href="/log?path={{ run_log }}" target="_blank">View log</a>{% endif %}
+        {% if run_log and artifact_ok(run_log) %}<a href="/log?path={{ run_log|aref|urlencode }}" target="_blank">View log</a>{% endif %}
       </div>
     </div>
-    <form method="post" action="/application/{{ a.id }}/status" style="display:flex; align-items:center; gap:8px; margin:0">
+    <details class="menu">
+      <summary aria-label="More actions">&#8943;</summary>
+      <div class="menu-items" style="padding:10px; min-width:260px">
+    <form method="post" action="/application/{{ a.id }}/status" style="display:flex; flex-direction:column; align-items:stretch; gap:8px; margin:0">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label for="status-select" class="muted" style="font-size:13px; white-space:nowrap">Change status</label>
+      <label for="status-select" class="muted" style="font-size:13px">Change status</label>
       <select id="status-select" name="status" style="width:auto; padding:7px 10px">
         <option value="needs_user_review" {% if a.status == 'needs_user_review' %}selected{% endif %}>Needs you</option>
         <option value="submitted" {% if a.status == 'submitted' %}selected{% endif %}>Submitted</option>
@@ -2027,12 +2325,15 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
         <option value="prepared" {% if a.status == 'prepared' %}selected{% endif %}>Prepared</option>
         <option value="skipped" {% if a.status == 'skipped' %}selected{% endif %}>Skipped</option>
         <option value="job_not_found" {% if a.status == 'job_not_found' %}selected{% endif %}>Job doesn't exist</option>
+        <option value="already_applied" {% if a.status == 'already_applied' %}selected{% endif %}>Already applied</option>
         <option value="interviewing" {% if a.status == 'interviewing' %}selected{% endif %}>Interviewing</option>
         <option value="rejected" {% if a.status == 'rejected' %}selected{% endif %}>Rejected</option>
         <option value="offer" {% if a.status == 'offer' %}selected{% endif %}>Offer</option>
       </select>
       <button type="submit" class="small">Update</button>
     </form>
+      </div>
+    </details>
   </div>
 
   <div class="card">
@@ -2044,7 +2345,7 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
     <p style="margin:0"><strong>Step {{ progress.step }} of {{ progress.of }}</strong>
        {% if progress.blocked %}<span class="pill needs_user_review" style="margin-left:6px">Needs you</span>{% endif %}</p>
     {% if a.notes %}<p class="muted" style="margin:6px 0 0">{{ a.notes }}</p>{% endif %}
-    {% if handoff and handoff.category %}
+    {% if handoff and handoff.category and status_group(a.status) not in ('done', 'skipped') %}
       <p class="section-title">What to do ({{ handoff.category.replace('_', ' ').title() }})</p>
       <ul class="plain">
         {% if handoff.required_action %}<li>{{ handoff.required_action }}</li>{% endif %}
@@ -2066,13 +2367,13 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
 
   <div class="grid-2">
     <div>
-      {% if latest_screenshot %}
+      {% if latest_screenshot and artifact_ok(latest_screenshot) %}
       <h2 style="margin-top:8px">What the agent sees</h2>
-      <a class="shot" href="/evidence?path={{ latest_screenshot }}" target="_blank" title="Open the full image">
-        <img src="/evidence?path={{ latest_screenshot }}" alt="The latest page the agent captured">
+      <a class="shot" href="/evidence?path={{ latest_screenshot|aref|urlencode }}" target="_blank" title="Open the full image">
+        <img src="/evidence?path={{ latest_screenshot|aref|urlencode }}" alt="The latest page the agent captured">
       </a>
       {% endif %}
-      <h2{% if not latest_screenshot %} style="margin-top:8px"{% endif %}>About</h2>
+      <h2{% if not (latest_screenshot and artifact_ok(latest_screenshot)) %} style="margin-top:8px"{% endif %}>About</h2>
       <div class="card flush">
         <table>
           <tr><th class="label">Applied via</th><td><a class="truncate" style="display:block" href="{{ a.url }}" target="_blank" rel="noopener" title="{{ a.url }}">{{ a.url }}</a></td></tr>
@@ -2105,15 +2406,17 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
         <p class="hint" style="margin-top:0">Setting: <strong>{{ 'on' if auto_submit_on else 'off' }}</strong>
            (AUTO_SUBMIT_VERIFIED_ONLY). The agent submits once every mandatory field is filled and the form shows no error.</p>
         {% if decision %}
-          <p><span class="pill {{ 'submitted' if decision.eligible else 'needs_user_review' }}">{{ 'Eligible' if decision.eligible else 'Not eligible' }}</span>
-             <span class="muted">decided {{ decision.decided_at }}</span></p>
-          {% if decision.reasons %}
-            <ul class="plain">{% for r in decision.reasons %}<li>{{ r }}</li>{% endfor %}</ul>
-          {% endif %}
+          {% set dv = decision_view(decision, status_group(a.status)) %}
+          <p><span class="pill {{ 'submitted' if dv.eligible else 'needs_user_review' }}">{{ dv.verdict }}</span>
+             {% if dv.when %}<span class="muted">decided {{ dv.when|local('%d %b %Y %I:%M %p') }}</span>{% endif %}</p>
+          <p class="hint">{{ dv.note }}</p>
+          {% if dv.reasons %}
+            <ul class="plain">{% for r in dv.reasons %}<li>{{ r }}</li>{% endfor %}</ul>
+          {% elif dv.no_reasons %}<p class="hint">{{ dv.no_reasons }}</p>{% endif %}
           {% if decision.evidence_paths %}
             <p class="hint">Evidence:
               {% for name, path in decision.evidence_paths.items() %}
-                <a href="/evidence?path={{ path }}" target="_blank">{{ name }}</a>{{ ", " if not loop.last }}
+                {% if artifact_ok(path) %}<a href="/evidence?path={{ path|aref|urlencode }}" target="_blank">{{ name }}</a>{{ ", " if not loop.last }}{% endif %}
               {% endfor %}
             </p>
           {% endif %}
@@ -2147,7 +2450,7 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
     <table>
       <thead><tr><th style="width:45%">Question</th><th>Answer</th><th class="label">By</th></tr></thead>
       {% for q in answers %}
-      <tr><td>{{ q.question }}</td><td>{{ q.answer }}</td><td class="label">{{ q.answered_by }}</td></tr>
+      <tr><td>{{ q.question }}</td><td>{{ q.answer }}</td><td class="label">{{ answered_by(q.answered_by) }}</td></tr>
       {% else %}
       <tr><td colspan="3" class="muted">No answers recorded for this application.</td></tr>
       {% endfor %}
@@ -2158,15 +2461,15 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
   <div class="card flush">
     <table>
       <thead><tr><th class="when">When</th><th class="label">Kind</th><th>What happened</th><th class="actions">Evidence</th></tr></thead>
-      {% for e in events %}
+      {% for e in history_rows(events) %}
         <tr>
           <td class="when">{{ e.created_at|local }}</td>
-          <td class="muted">{{ e.kind }}</td>
-          <td>{{ (e.message or '')[:160] }}</td>
+          <td class="muted">{{ e.label }}</td>
+          <td>{{ (e.message or '')[:160] }}{% if e.count > 1 %} <span class="muted">&times;{{ e.count }}</span>{% endif %}</td>
           <td class="actions">
-            {%- if e.screenshot_path %}<a href="/evidence?path={{ e.screenshot_path }}" target="_blank">screenshot</a>{% endif -%}
-            {%- if e.screenshot_path and e.html_path %} &middot; {% endif -%}
-            {%- if e.html_path %}<a href="/evidence?path={{ e.html_path }}" target="_blank">html</a>{% endif -%}
+            {%- if e.screenshot_path and artifact_ok(e.screenshot_path) %}<a href="/evidence?path={{ e.screenshot_path|aref|urlencode }}" target="_blank">screenshot</a>{% endif -%}
+            {%- if e.screenshot_path and artifact_ok(e.screenshot_path) and e.html_path and artifact_ok(e.html_path) %} &middot; {% endif -%}
+            {%- if e.html_path and artifact_ok(e.html_path) %}<a href="/evidence?path={{ e.html_path|aref|urlencode }}" target="_blank">html</a>{% endif -%}
           </td>
         </tr>
       {% else %}

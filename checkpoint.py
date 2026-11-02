@@ -93,8 +93,8 @@ def _git_short_sha() -> str:
             sha = out.stdout.strip()
             if sha:
                 return sha
-    except Exception:
-        pass
+    except Exception as _swallowed:
+        logger.debug("_git_short_sha: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
     return "unknown"
 
 

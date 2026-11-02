@@ -1,8 +1,16 @@
-# Job Automation Agent — Codex Instructions
+# Job Automation Agent — Multi-Agent Instructions (Codex, Antigravity, Claude Code)
 
 ## Mission
 
 Develop a reliable job-application agent that completes as much as possible autonomously using the user's profile, preferences, approved answers, authorized credentials, application state, deterministic rules, and AI reasoning. Human intervention should be the exception. Correctness and reliability take priority over new features.
+
+## Multi-agent synchronization (`docs/AGENT_SYNC.md` & `scripts/agent_status.py`)
+
+All coding agents (**Codex**, **Claude Code**, and **Antigravity**) work on this repository and MUST stay synchronized through [docs/AGENT_SYNC.md](docs/AGENT_SYNC.md) and [`scripts/agent_status.py`](scripts/agent_status.py):
+- **At session start (mandatory first command)**: Run `python scripts/agent_status.py` and read [docs/AGENT_SYNC.md](docs/AGENT_SYNC.md). This checks uncommitted working-tree files, unmerged branches/stashes, the latest `fNNN` failure ID, pending/stopped applications in `data/applications.db`, latest saved page runs in `output/`, and the shared backlog. Never overwrite or revert uncommitted work left by another agent.
+- **Inspect the whole stopped page/run, not just one symptom**: When investigating a stopped run (`output/<Job>/pages/<Run>/page_XX.txt`), inspect every field, option list, and error across the saved steps so multiple issues on the same page are fixed in one pass rather than requiring repeated browser runs.
+- **Use the canonical module map**: Follow the 9-subsystem map in [docs/AGENT_SYNC.md](docs/AGENT_SYNC.md) (put shared option logic in `option_match.py`, question patterns in `reference/concepts.json` + `concept_matcher.py`, and portal-specific DOM rules in `sites/<portal>.py`).
+- **At task completion**: Update [docs/AGENT_SYNC.md](docs/AGENT_SYNC.md) with the latest `fNNN` failure ID, active branch/PR status, and completed/discovered backlog items, then re-run `python scripts/agent_status.py` to verify a clean state.
 
 ## Coding agents, models, and cost
 
@@ -13,9 +21,9 @@ Develop a reliable job-application agent that completes as much as possible auto
 
 ## Development and branches
 
-Before editing, inspect the branch, working-tree changes, relevant recent work, and existing implementation. Preserve unfinished and unrelated work. Make the smallest correct change, preserve working behavior, and avoid unrelated refactors. Report unrelated issues unless they block correctness or safety. A roadmap is context, not a task queue.
+Before editing, inspect the branch, working-tree changes, relevant recent work, and existing implementation ([docs/AGENT_SYNC.md](docs/AGENT_SYNC.md)). Preserve unfinished and unrelated work. Make the smallest correct change, preserve working behavior, and avoid unrelated refactors. Report unrelated issues unless they block correctness or safety. A roadmap is context, not a task queue.
 
-Architecture/reliability work currently belongs on `codex/architecture-reliability`. Do not silently move work between branches, create unnecessary PRs, or merge to `main` without an explicit request. Keep commits logically scoped and reviewable; leave merging to the owner unless requested.
+Do not silently move work between branches, create unnecessary PRs, or merge to `main` without an explicit request. Keep commits logically scoped and reviewable; leave merging to the owner unless requested.
 
 Retain the engineering constraints in `CLAUDE.md`: fix the failure class rather than one site/value; record production bugs in `reference/failures/` with real regression references; keep place data in `reference/geo.json` and user facts in the profile; use existing centralized policy and preserve owner-entered values. Changes to `safety.py` require explicit owner approval on the PR. Update `BEHAVIOUR.md` for runtime behavior changes. Future explicit user instructions take precedence over repository guidance.
 

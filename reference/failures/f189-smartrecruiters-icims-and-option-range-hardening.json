@@ -1,0 +1,21 @@
+{
+  "id": "f189",
+  "date": "2026-10-18",
+  "site": "SmartRecruiters (Versant), iCIMS (Mutual of Enumclaw), Workday (CrowdStrike), Option Matching",
+  "class": "SmartRecruiters guest apply was blocked by 'Confirm your email*' being misclassified as VERIFY_EMAIL, salary range dropdowns failed option matching, file upload buttons were clicked as generic dropdowns opening native Windows file dialogs, iCIMS lacked dedicated iframe targeting, and schema.org fallback recorded ATS vendor name instead of tenant employer",
+  "symptom": "On SmartRecruiters (Versant), the run was held waiting for an email verification link because 'Confirm your email*' matched _VERIFY on a page without passwords, and the total annual compensation expectation dropdown could not be set because option_match lacked range bucket matching; file upload buttons ('Choose file', 'Upload file') matched Control.GENERIC_NAMES in fill_deterministic and profile_plan, causing Playwright to click them and open native Windows file explorer dialogs; on iCIMS (Mutual of Enumclaw), page_agent typed candidate info into the outer corporate header search bar and navigated away because browser_automation did not scope to #icims_content_iframe; and fetch_schema_org_job recorded employer as 'SMARTRECRUITERS' instead of 'Versant'.",
+  "root_cause": "_VERIFY in account_state.py matched 'confirm your email' whenever passwords == 0 without verifying whether the page was an active application form. option_match._best_option lacked interval parsing for numeric compensation ranges (e.g. '$111,000 - $120,000/yr'). Control.GENERIC_NAMES combined file upload actions with dropdown placeholders, allowing upload buttons to be marked answerable_button. sites/ lacked an IcimsAdapter with find_application_frame hook. And job_sources.py line 424 extracted host subdomain rather than checking ATS_VENDORS.",
+  "why_tests_missed": "Existing account_state tests tested email verification on auth pages without personal details, option_match tests tested exact text and categories but not numeric salary intervals, and iCIMS was previously untested live.",
+  "fix": "In account_state.py, guard VERIFY_EMAIL with not _application_fields(snapshot) and expand _UNVERIFIED for verification-sent banners; in option_match.py, add _numeric_range_match for salary and experience interval options; in page_agent.py, split GENERIC_DROPDOWN_NAMES from GENERIC_NAMES to exclude file upload buttons from answerable dropdowns; create sites/icims.py with IcimsAdapter scoping to #icims_content_iframe and wire into browser_automation.py; and in job_sources.py, use _company_from_url when the host matches ATS_VENDORS.",
+  "tests": [
+    "tests/test_smartrecruiters_icims_and_option_range_hardening.py::test_smartrecruiters_guest_apply_not_misclassified_as_verify_email",
+    "tests/test_smartrecruiters_icims_and_option_range_hardening.py::test_workday_account_creation_verification_notification_classified_as_verify_email",
+    "tests/test_smartrecruiters_icims_and_option_range_hardening.py::test_numeric_salary_range_bucket_option_matching",
+    "tests/test_smartrecruiters_icims_and_option_range_hardening.py::test_years_of_experience_bucket_matching",
+    "tests/test_smartrecruiters_icims_and_option_range_hardening.py::test_file_upload_buttons_excluded_from_generic_dropdown_names",
+    "tests/test_smartrecruiters_icims_and_option_range_hardening.py::test_icims_adapter_registration_and_frame_targeting",
+    "tests/test_smartrecruiters_icims_and_option_range_hardening.py::test_job_sources_company_extraction_from_smartrecruiters_url"
+  ],
+  "prevention": "Never classify a form with candidate personal fields as an account verification gate; parse numeric ranges for compensation pickers; separate file upload controls from dropdown choice controls; and always scope iframe-based ATS platforms to their content iframe."
+}
+

@@ -84,7 +84,8 @@ def test_the_reads_are_still_recorded_per_account_and_kept_small():
 
 # --- every reader goes through it ---------------------------------------------------------------------
 
-INBOX = ('<!doctype html><table><tr class="zA"><td>Example ATS</td><td>Your verification code is 482913</td></tr>'
+INBOX = ('<!doctype html><button aria-label="Google Account: Owner (owner@example.com)">Account</button>'
+         '<table><tr class="zA"><td>Example ATS</td><td>Your verification code is 482913</td></tr>'
          "</table>")
 
 
@@ -518,3 +519,39 @@ def test_two_factor_with_no_named_mechanism_preserves_the_existing_unknown_polic
     outcome, gmail_called, blocker = _complete_code_through(context, html)
     assert gmail_called
     assert not blocker
+
+
+# --- a code step with no button (ADP, 21 October 2026) ------------------------------------------------------------
+
+NO_BUTTON_CODE_STEP = """<html><body><h2>Verify</h2><p>Please check your email for the security code</p>
+<label for="c">Passcode</label><input id="c"><a href="#">Resend</a>
+<script>document.getElementById('c').addEventListener('keydown',
+  e => { if (e.key === 'Enter') document.title = 'submitted:' + e.target.value; });</script>
+</body></html>"""
+
+
+def test_a_code_step_with_no_button_is_submitted_with_enter(context):
+    """ADP's security-code page has a Passcode box and only Resend / Try a different method links: typing the
+    code and pressing nothing left the step unsubmitted, so the run went round email -> code -> email."""
+    import page_agent
+    page = employer_page(context, NO_BUTTON_CODE_STEP)
+    assistant = assistant_for(ALLOWED)
+    assistant.passcode_from_gmail = lambda *a, **k: "482913"
+    agent = page_agent.PageAgent(assistant, SimpleNamespace(), SimpleNamespace(auto_submit=False, ats_email=""),
+                                 ALLOWED, SimpleNamespace(raw_text="x"),
+                                 SimpleNamespace(title="t", company="c", url=URL), resume_file=None)
+    snapshot = agent.snapshot(page)
+    controls = page_agent.parse_snapshot(snapshot)
+    assert agent.complete_account_code(page, controls, snapshot) is True
+    assert page.title() == "submitted:482913"
+
+
+def test_a_privacy_popup_over_the_code_step_is_answered_before_the_code_box_is_read():
+    """ADP shows its Employer Privacy Policy pop-up right after the code is accepted, with the code box still
+    behind it: the box was read as a question for the owner and the run stopped (21 October 2026). A pop-up
+    laid over the page owns the interaction, so the page agent offers it to accept_consent_dialog first."""
+    from pathlib import Path
+    text = (Path(__file__).resolve().parent.parent / "page_agent.py").read_text(encoding="utf-8")
+    loop = text.index("if self.complete_account_code(page, controls, snapshot):")
+    assert text.rfind("self.assistant.accept_consent_dialog(tab)", 0, loop) > text.rfind("def ", 0, loop)
+    assert text.count("self.assistant.accept_consent_dialog(tab)") == 1

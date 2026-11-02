@@ -15,7 +15,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-ANSWERS = frozenset({"plan_page", "read_page", "choose_option", "answer_screening_questions", "answer_single_question"})
+ANSWERS = frozenset({"plan_page", "read_page", "choose_option", "answer_screening_questions",
+                     "answer_single_question", "review_open_answer"})
 DOCUMENTS = frozenset({"tailor_resume", "generate_cover_letter"})
 
 PROVIDERS = {"claude": "Anthropic Claude", "gemini": "Google Gemini", "openai": "OpenAI"}
@@ -89,6 +90,10 @@ class Writers:
         if name.startswith("__"):
             raise AttributeError(name)
         if not self._found:
+            if name not in DOCUMENTS:
+                # A probe for anything else (hasattr(brain, "cost_summary")) is answered "absent": a non-
+                # AttributeError here went through hasattr and stopped the run before the browser opened (f190).
+                raise AttributeError(name)
             from claude_integration import ClaudeIntegrationError
             raise ClaudeIntegrationError("no writer has a key in Settings -- your own resume is attached as it is")
         if name not in DOCUMENTS:

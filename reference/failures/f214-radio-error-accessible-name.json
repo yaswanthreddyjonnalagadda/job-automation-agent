@@ -1,0 +1,13 @@
+{
+  "id": "f214",
+  "date": "2026-10-21",
+  "site": "Heico ADP Preliminary Questions; form options across portals",
+  "class": "Validation error text pollutes radio accessible names and blocks option matching",
+  "symptom": "On ADP, an unanswered radio group presented options as ['Error Add response.', 'Error Add response.'] in the accessibility tree, causing option matching for 'Yes' or 'No' to fail and leaving the field unanswered.",
+  "root_cause": "When a field is submitted blank, ADP's markup associates the validation error banner ('Error Add response.') with the radio buttons via aria-describedby/aria-errormessage, which overwrites their computed accessible name in the snapshot. parse_snapshot only adopted child/adjacent text if controls[-1].name was empty.",
+  "why_tests_missed": "Existing snapshot tests used clean markup where radio buttons carried empty names or exact label names, not DOM trees mutated by live validation errors.",
+  "fix": "In parse_snapshot, recognize validation error and placeholder phrases on radio/checkbox/switch controls (_CHOICE_ERROR_NAME) and allow child or adjacent generic/text elements (indent >= last_control_indent) to provide the genuine choice label.",
+  "tests": ["tests/test_radio_error_labels.py::test_radio_with_validation_error_name_adopts_child_label"],
+  "prevention": "Never treat validation error banners as valid option choice labels. Ensure radio/checkbox parsers recover the actual choice text from child or sibling DOM nodes when errors are present."
+}
+

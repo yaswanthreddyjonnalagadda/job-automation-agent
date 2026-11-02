@@ -1,0 +1,4923 @@
+{
+ "_about": "Application questions read from public Greenhouse job-board question lists (scripts/question_coverage.py harvest). Question text, type and option labels only.",
+ "questions": [
+  {
+   "label": "(Optional) Personal Preferences",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "anthropic"
+   ]
+  },
+  {
+   "label": "[Optional, if \"other\" is selected above] My pronouns are",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "asana"
+   ]
+  },
+  {
+   "label": "[Optional] Preferred Full Name (The name that you would like to be referred to as. Please input your legal name in the first and last name fields above.)",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "asana"
+   ]
+  },
+  {
+   "label": "[Optional] Pronouns - how should we refer to you in the third person?",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "she/her/hers",
+    "he/him/his",
+    "they/them/theirs",
+    "other (my preference is not reflected by the options above)"
+   ],
+   "boards": [
+    "asana"
+   ]
+  },
+  {
+   "label": "Additional Information",
+   "type": "textarea",
+   "required": false,
+   "options": [],
+   "boards": [
+    "figma",
+    "anthropic"
+   ]
+  },
+  {
+   "label": "Agreement to Arbitrate",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I understand and agree to the terms of the Agreement to Arbitrate set forth above."
+   ],
+   "boards": [
+    "anthropic"
+   ]
+  },
+  {
+   "label": "AI Policy for Application",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "anthropic"
+   ]
+  },
+  {
+   "label": "Airbnb Candidate Privacy Policy",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I acknowledge that I have read and understood the Airbnb Candidate Privacy Policy."
+   ],
+   "boards": [
+    "airbnb"
+   ]
+  },
+  {
+   "label": "Are you a close relative of a government official (i.e., child/step-child, spouse/partner, parent/guardian, aunt/uncle, first cousin, in-law)?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes, I am a relative of a government official.",
+    "No, I am not a relative of a government official."
+   ],
+   "boards": [
+    "coinbase"
+   ]
+  },
+  {
+   "label": "Are you a current government official or were you a government official in the last five years (e.g., employee of a government agency or a government owned/controlled company, holder of public office or a civil service position)?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "No, I am not a current or former Government Official",
+    "Yes, I am a current Government Official",
+    "Yes, I am a former Government Official"
+   ],
+   "boards": [
+    "coinbase"
+   ]
+  },
+  {
+   "label": "Are you a current MongoDB employee?",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "mongodb"
+   ]
+  },
+  {
+   "label": "Are you a U.S. Person (U.S. Citizen, National, Lawful Permanent Resident, Refugee, or Asylee), and can you provide documentation establishing U.S. Person status upon hire? Please note: Candidates who require visa sponsorship (e.g. H-1B, F-1, O-1, L-1, etc.) are not U.S. Persons.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "okta"
+   ]
+  },
+  {
+   "label": "Are you a US citizen or lawful permanent resident?",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "robinhood"
+   ]
+  },
+  {
+   "label": "Are you at least 18 years of age?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "coinbase"
+   ]
+  },
+  {
+   "label": "Are you authorized to work in Ireland?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "squarespace"
+   ]
+  },
+  {
+   "label": "Are you authorized to work in the country for which you applied?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "figma"
+   ]
+  },
+  {
+   "label": "Are you authorized to work in the country where this job is located?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "squarespace"
+   ]
+  },
+  {
+   "label": "Are you authorized to work in the location(s) you selected in your previous response?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "Are you authorized to work in the stated location of this role?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "brex"
+   ]
+  },
+  {
+   "label": "Are you authorized to work in the United States?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "instacart",
+    "squarespace"
+   ]
+  },
+  {
+   "label": "Are you available to work full-time for 6 months starting January 2027?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "mongodb"
+   ]
+  },
+  {
+   "label": "Are you based in Japan?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes, I am based in Tokyo.",
+    "Yes, I am based in Kanto region.",
+    "Yes, I am based in Japan outside of Tokyo/Kanto region",
+    "No, I am based outside of Japan"
+   ],
+   "boards": [
+    "airbnb"
+   ]
+  },
+  {
+   "label": "Are you comfortable with the salary range posted for this position?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "instacart"
+   ]
+  },
+  {
+   "label": "Are you currently authorized to work for Pinterest in the country in which you are applying for a position?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "pinterest"
+   ]
+  },
+  {
+   "label": "Are you currently authorized to work in the U.S.?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "reddit"
+   ]
+  },
+  {
+   "label": "Are you currently based in or willing to relocate to the Bay Area for this position?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "discord"
+   ]
+  },
+  {
+   "label": "Are you currently eligible to work in Taiwan?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes, I am currently eligible to work in the country where this role is based.",
+    "No, I am not currently eligible to work in the country where this role is based."
+   ],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "Are you currently enrolled in a degree programme, or did you complete a degree within the last 12 months?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes — I am currently enrolled in a degree programme",
+    "Yes — I completed a degree within the last 12 months",
+    "Yes - I completed a degree more than 12 months ago but I have less than a years relevant work experience",
+    "No"
+   ],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "Are you currently located in the US?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "discord"
+   ]
+  },
+  {
+   "label": "Are you currently or have you ever worked for Airbnb in any capacity? This could include, but is not limited to, a full-time employee, intern, apprentice, or contingent worker.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "airbnb"
+   ]
+  },
+  {
+   "label": "Are you currently still employed with this company?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "squarespace"
+   ]
+  },
+  {
+   "label": "Are you currently subject to any non-compete or non-solicitation agreement that would impact your ability to work at Airbnb or prevent you from accepting a job offer from Airbnb?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "airbnb"
+   ]
+  },
+  {
+   "label": "Are you currently, or have you previously, worked at Instacart?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "instacart"
+   ]
+  },
+  {
+   "label": "Are you currently, or have you previously, worked for Instacart?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "instacart"
+   ]
+  },
+  {
+   "label": "Are you fluent in both English and Portuguese?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "figma"
+   ]
+  },
+  {
+   "label": "Are you fluent in German or French?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "figma"
+   ]
+  },
+  {
+   "label": "Are you legally authorised to work full-time in the country where this job is based?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes, no restriction.",
+    "Yes, but I will need sponsorship in the future.",
+    "No, I need sponsorship now."
+   ],
+   "boards": [
+    "datadog"
+   ]
+  },
+  {
+   "label": "Are you legally authorized to work in the country in which this role is located?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "twilio"
+   ]
+  },
+  {
+   "label": "Are you legally authorized to work in the country in which you are applying for a position?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "pinterest"
+   ]
+  },
+  {
+   "label": "Are you legally authorized to work in the country in which you are applying?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "databricks"
+   ]
+  },
+  {
+   "label": "Are you legally authorized to work in the country where the job is located?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes, I am currently legally authorized to work in the country where the job is located.",
+    "No, I am not currently legally authorized to work in the country where the job is located."
+   ],
+   "boards": [
+    "airbnb"
+   ]
+  },
+  {
+   "label": "Are you legally authorized to work in the country where this position is located?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "coinbase"
+   ]
+  },
+  {
+   "label": "Are you legally authorized to work in the country you reside?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "okta"
+   ]
+  },
+  {
+   "label": "Are you legally authorized to work in the United States for our Company?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "discord"
+   ]
+  },
+  {
+   "label": "Are you legally authorized to work in the United States?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "twilio"
+   ]
+  },
+  {
+   "label": "Are you legally authorized to work in the US?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "roblox"
+   ]
+  },
+  {
+   "label": "Are you legally eligible to work in the country where this role is located?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "robinhood"
+   ]
+  },
+  {
+   "label": "Are you legally entitled to work in Canada?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "instacart"
+   ]
+  },
+  {
+   "label": "Are you legally work authorized to work in the US?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "robinhood"
+   ]
+  },
+  {
+   "label": "Are you located in Mexico City?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "elastic"
+   ]
+  },
+  {
+   "label": "Are you located in one of the following countries or regions: Belarus, Cuba, Iran, North Korea (DPRK), Syria, or Russia, including the Ukrainian territories annexed by Russia (The Crimea region of Ukraine, The Donetsk People's Republic (DNR), The Luhansk People's Republic (LNR), Kherson or Zaporizhzhia)",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "elastic"
+   ]
+  },
+  {
+   "label": "Are you located in Spain, Greece, Ireland, Poland, Portugal or the UK?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "elastic"
+   ]
+  },
+  {
+   "label": "Are you open to relocation for this role?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "anthropic"
+   ]
+  },
+  {
+   "label": "Are you open to working in-person in one of our offices 25% of the time?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "anthropic"
+   ]
+  },
+  {
+   "label": "Are you or have you ever been employed by Deloitte or a Deloitte entity (Roblox's current independent auditor)?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "roblox"
+   ]
+  },
+  {
+   "label": "Are you pursuing or have you completed a PhD?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "roblox"
+   ]
+  },
+  {
+   "label": "Are you Singaporean or a Permanent Resident of Singapore?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes, Singaporean or permanent resident",
+    "No"
+   ],
+   "boards": [
+    "datadog"
+   ]
+  },
+  {
+   "label": "Are you subject to any contractual obligations or post-employment restrictions that may apply to or would limit your employment at Squarespace? (e.g., non-compete)?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No",
+    "Not Sure"
+   ],
+   "boards": [
+    "squarespace"
+   ]
+  },
+  {
+   "label": "Are you subject to any employment agreements and/or post-employment restrictions with your current employer or a past employer?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "gitlab"
+   ]
+  },
+  {
+   "label": "Are you willing to work from the office(s) listed on the job description?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "robinhood"
+   ]
+  },
+  {
+   "label": "As part of our commitment to understanding candidates' backgrounds, we invite you to share your SAT or ACT score if you feel comfortable. This information is optional and will help us in evaluating your application alongside your other qualifications.",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "As Stripe grows, we are always aiming to expand our recruitment presence at conferences and gatherings. Please let us know of any conferences you’re planning to attend this year or have previously attended to help inform our team about future recruitment opportunities.",
+   "type": "textarea",
+   "required": false,
+   "options": [],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "Asana is seeking the below information for the exclusive and limited purpose of complying with U.S. export control laws given that the position for which you are applying may require access to technology subject to those laws. We will not use the information that you provide for any other purpose. Are you a citizen or legal permanent resident of Cuba, Iran, North Korea, Syria or Ukraine (Crimea region)?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "asana"
+   ]
+  },
+  {
+   "label": "At the time of application, are you 18+ years of age?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "roblox"
+   ]
+  },
+  {
+   "label": "At which organization(s) did you market to Public Sector accounts, and in what capacity (e.g., federal, state/local, education)?",
+   "type": "textarea",
+   "required": true,
+   "options": [],
+   "boards": [
+    "elastic"
+   ]
+  },
+  {
+   "label": "Before submitting your application please review the points below:",
+   "type": "multi_value_multi_select",
+   "required": true,
+   "options": [
+    "I acknowledge receipt of the Airbnb Candidate Data Privacy Notice"
+   ],
+   "boards": [
+    "airbnb"
+   ]
+  },
+  {
+   "label": "Brief research summary In 2-3 sentences please describe what problems you are solving and why does it matter? For example: My research focuses on...",
+   "type": "textarea",
+   "required": true,
+   "options": [],
+   "boards": [
+    "roblox"
+   ]
+  },
+  {
+   "label": "By agreeing here: (1) I certify that the information I provided to Asana in connection with my application for employment is accurate and truthful; and (2) I acknowledge and agree that I have carefully read the mutual Applicant Arbitration Agreement set out below and agree to be bound by it",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "asana"
+   ]
+  },
+  {
+   "label": "By checking this box, I confirm I have read, reviewed and understood the guidelines outlined in the Candidate AI Responsible Use Policy. I affirm that all the information and materials I submit throughout my application and candidacy will reflect my own work and experience.",
+   "type": "multi_value_multi_select",
+   "required": true,
+   "options": [
+    "Acknowledge"
+   ],
+   "boards": [
+    "twilio"
+   ]
+  },
+  {
+   "label": "By checking this box, you consent to Okta using your data to evaluate your candidacy for this role and any other current or future roles that may be a fit for your profile. You may request the removal of your data at any time by contacting greenhouse@okta.com.",
+   "type": "multi_value_multi_select",
+   "required": false,
+   "options": [
+    "Yes"
+   ],
+   "boards": [
+    "okta"
+   ]
+  },
+  {
+   "label": "By clicking the \"Acknowledge\" button, you acknowledge that Twilio processes data in accordance with the Twilio Applicant Privacy Policy.",
+   "type": "multi_value_multi_select",
+   "required": true,
+   "options": [
+    "Acknowledge"
+   ],
+   "boards": [
+    "twilio"
+   ]
+  },
+  {
+   "label": "By selecting \"I agree,\" I understand that the information I have provided as part of this job application will be processed in accordance with Reddit's Candidate Privacy Policy.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I agree"
+   ],
+   "boards": [
+    "reddit"
+   ]
+  },
+  {
+   "label": "By selecting 'I acknowledge' and submitting this application, you confirm that you have read Elastic's Candidate Privacy Statement and understand how your data will be processed to evaluate your candidacy. In jurisdictions where consent is legally required, your submission constitutes express consent to the processing of your personal data for recruitment purposes.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I acknowledge"
+   ],
+   "boards": [
+    "elastic"
+   ]
+  },
+  {
+   "label": "Can you perform these essential functions of the job with reasonable accommodation?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "lyft"
+   ]
+  },
+  {
+   "label": "Candidate AI Usage Attestation:",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I agree"
+   ],
+   "boards": [
+    "airbnb"
+   ]
+  },
+  {
+   "label": "Candidate Privacy Statement (https://www.squarespace.com/s/Candidate-Privacy.pdf)",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I acknowledge the above statement."
+   ],
+   "boards": [
+    "squarespace"
+   ]
+  },
+  {
+   "label": "Consent to Privacy Notice (Japan)",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I have read and consent to the Privacy Notice."
+   ],
+   "boards": [
+    "airbnb"
+   ]
+  },
+  {
+   "label": "Cumulative GPA",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "roblox"
+   ]
+  },
+  {
+   "label": "Current Company",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "affirm",
+    "asana"
+   ]
+  },
+  {
+   "label": "Current Location",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Australia",
+    "Canada - Alberta",
+    "Canada - British Columbia",
+    "Canada - Ontario",
+    "Canada - Quebec",
+    "Canada - Saskatchewan",
+    "Canada - New Brunswick",
+    "Canada - Newfoundland and Labrador",
+    "Canada - Northwest Territories",
+    "Canada - Nova Scotia",
+    "Canada - Nunavut",
+    "Canada - Manitoba",
+    "Canada - Prince Edward Island",
+    "Canada - Yukon",
+    "United Kingdom",
+    "France",
+    "Germany",
+    "Ireland",
+    "Israel",
+    "Japan",
+    "Mexico",
+    "Netherlands",
+    "Poland",
+    "Singapore",
+    "Sweden",
+    "Switzerland",
+    "Taiwan",
+    "US - Alabama",
+    "US - Alaska",
+    "US - Arizona",
+    "US - Arkansas",
+    "US - California",
+    "US - Colorado",
+    "US - Connecticut",
+    "US - Delaware",
+    "US - Florida",
+    "US - Georgia",
+    "US - Hawaii",
+    "US - Idaho",
+    "US - Illinois",
+    "US - Indiana",
+    "US - Iowa",
+    "US - Kansas",
+    "US - Kentucky",
+    "US - Louisiana",
+    "US - Maine",
+    "US - Maryland",
+    "US - Massachusetts",
+    "US - Michigan",
+    "US - Minnesota",
+    "US - Mississippi",
+    "US - Missouri",
+    "US - Montana",
+    "US - Nebraska",
+    "US - Nevada",
+    "US - New Hampshire",
+    "US - New Jersey",
+    "US - New Mexico",
+    "US - New York",
+    "US - North Carolina"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Current Title",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "asana"
+   ]
+  },
+  {
+   "label": "Do you consent to Brex processing your personal information for the purpose of assessing your candidacy for this position in accordance with Brex’s Applicant Privacy Policy?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Consent"
+   ],
+   "boards": [
+    "brex"
+   ]
+  },
+  {
+   "label": "Do you currently live in, or plan to relocate to, the specified location to meet this in-office requirement?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes, I live here",
+    "Yes, I plan to relocate",
+    "No"
+   ],
+   "boards": [
+    "brex"
+   ]
+  },
+  {
+   "label": "Do you currently live or are you willing to relocate to the job’s location?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I currently live in this job's location.",
+    "I am willing to relocate to this job's location.",
+    "I do not live and not willing to relocate to this job's location."
+   ],
+   "boards": [
+    "cloudflare"
+   ]
+  },
+  {
+   "label": "Do you currently or have you previously worked for Databricks in the past?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "No",
+    "Yes - I currently work at Databricks",
+    "Yes - Previous Full-Time Employee",
+    "Yes - Previous Contractor",
+    "Yes - Previous Intern"
+   ],
+   "boards": [
+    "databricks"
+   ]
+  },
+  {
+   "label": "Do you currently reside in the United States or Canada?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "gitlab"
+   ]
+  },
+  {
+   "label": "Do you currently work for or have you ever worked for a U.S. government entity, either as a contractor or employee?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes, I do work/have worked for a U.S. government entity.",
+    "No, I have never."
+   ],
+   "boards": [
+    "asana"
+   ]
+  },
+  {
+   "label": "Do you currently, or have you previously, worked at Capital One or a company acquired by Capital One as an employee, contractor, consultant, or temp? (For example Capital One Bank, N.A., Capital One Services, Inc., Chevy Chase Bank, Discover, Hibernia, ING Direct, North Fork Bank)",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "brex"
+   ]
+  },
+  {
+   "label": "Do you have 4+ years of B2B SaaS sales experience?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Do you have 4+ years of experience in account management, digital advertising, paid media, ad operations, ecommerce, client services, or a related field?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "instacart"
+   ]
+  },
+  {
+   "label": "Do you have 5+ years of state or local government, policy or corporate government relations experience?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "instacart"
+   ]
+  },
+  {
+   "label": "Do you have 6+ years of B2B SaaS sales experience, ideally including time in early-stage, new product, or evolving GTM environments?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Do you have 6+ years of previous working experience in a Sales Engineering/Solution Engineering or similar role?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "instacart"
+   ]
+  },
+  {
+   "label": "Do you have a deep understanding of state and local lawmaking and regulatory processes?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "instacart"
+   ]
+  },
+  {
+   "label": "Do you have a Masters degree and 10+ years of industry experience or a Ph.D and 6+ years of industry experience in applied science or data science roles? This does not include research or internships.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "reddit"
+   ]
+  },
+  {
+   "label": "Do you have a Masters degree and 5+ years of industry experience or a Ph.D and 4+ years of industry experience in applied science or data science roles? This does not include research or internships.",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "reddit"
+   ]
+  },
+  {
+   "label": "Do you have an active offer deadline or another recruiting-process deadline we should be aware of? If yes, please share the deadline date and any relevant context.",
+   "type": "textarea",
+   "required": true,
+   "options": [],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "Do you have an advanced english level (writing, listening, speaking)?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "lyft"
+   ]
+  },
+  {
+   "label": "Do you have an established professional network and reputation within the travel or hospitality industry (for example, existing relationships with hotel groups or other travel partners at headquarter or regional level)?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "airbnb"
+   ]
+  },
+  {
+   "label": "Do you have any deadlines or timeline considerations we should be aware of?",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "anthropic"
+   ]
+  },
+  {
+   "label": "Do you have any outside business activity(ies) (advisory, consulting, or board roles, or side businesses) that you would continue engaging in or plan to engage in if you joined Okta in this role?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "okta"
+   ]
+  },
+  {
+   "label": "Do you have any prior internship experience?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "coinbase"
+   ]
+  },
+  {
+   "label": "Do you have at least 2 years of experience in an Account-Based Marketing (ABM) or strategic field marketing role?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "elastic"
+   ]
+  },
+  {
+   "label": "Do you have at least 2 years of full time relevant working experience?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Do you have at least 5 years of experience as a software engineer?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "squarespace"
+   ]
+  },
+  {
+   "label": "Do you have at least 8 years of experience in lifecycle, email, CRM, or retention marketing, with progressively increasing responsibility?",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Do you have at least eight years of experience in strategic finance, FP&A, or a closely related finance function?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Do you have Elastic Observability or Security experience?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "elastic"
+   ]
+  },
+  {
+   "label": "Do you have experience building financial models to evaluate product launches, pricing, packaging, or growth initiatives?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Do you have experience directly managing a team of key, strategic or enterprise account managers across multiple countries or regions?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "airbnb"
+   ]
+  },
+  {
+   "label": "Do you have experience directly managing employees, including responsibility for their performance, development, and coaching?",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Do you have experience working within a SaaS or subscription based business model?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Do you have hands-on experience developing segmented, personalized, and behavior-triggered email journeys using a marketing automation platform such as Iterable, Braze, Eloqua, or an equivalent?",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Do you have the unrestricted right to work in the country where this role is located?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "robinhood"
+   ]
+  },
+  {
+   "label": "Do you have working knowledge of government buying cycles and procurement processes?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "elastic"
+   ]
+  },
+  {
+   "label": "Do you have: a) any Personal/Familial Relationships (current Robinhood employees or employees of Robinhood’s vendors); b) any Outside Business Activities that you wish to continue; c) any investment that is greater than 5% of the outstanding shares of a publicly-traded company; d) any investment in a private company that has a business relationship or that is a current competitor of Robinhood; or e) any Intellectual Property Ownership (patents, trademarks, copyrights) that you wish to retain and/or create/develop while at Robinhood?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "robinhood"
+   ]
+  },
+  {
+   "label": "Do you hold an active TS/SCI clearance with a Full Scope Poly?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "okta"
+   ]
+  },
+  {
+   "label": "Do you hold an advanced degree (masters or Ph.D) in one of the following fields?: Mathematics, Statistics, Computer Science, Computational Science, Scientific Computing, Operations Research, Physics, Astrophysics, Geophysics, Biophysics, Industrial Engineering, Chemical Engineering, Nuclear Engineering, Biostatistics, Biophysics, Neuroscience, Financial Engineering, Mathematical Finance, Economics",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "reddit"
+   ]
+  },
+  {
+   "label": "Do you live in Ireland?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "squarespace"
+   ]
+  },
+  {
+   "label": "Do you now or will you in the future need sponsorship for employment visa status in the country in which you are applying?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "databricks"
+   ]
+  },
+  {
+   "label": "Do you now or will you in the future require immigration sponsorship to work at Cloudflare in South Korea?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "cloudflare"
+   ]
+  },
+  {
+   "label": "Do you now or will you in the future require immigration sponsorship to work at Cloudflare?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "cloudflare"
+   ]
+  },
+  {
+   "label": "Do you now, or will you in the future, require immigration sponsorship for work authorization to work in this location?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "asana"
+   ]
+  },
+  {
+   "label": "Do you now, or will you in the future, require immigration sponsorship to work at Reddit?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "reddit"
+   ]
+  },
+  {
+   "label": "Do you now, or will you in the future, require immigration sponsorship to work for Affirm in Canada?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "affirm"
+   ]
+  },
+  {
+   "label": "Do you opt-in to receive WhatsApp messages from Stripe Recruiting?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "Do you plan to move out of the state/country in which you currently reside within the next 6-12 months?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I have no plans to move at this time",
+    "Australia",
+    "California",
+    "Canada",
+    "Colorado",
+    "Connecticut",
+    "Florida",
+    "Georgia",
+    "Hawaii",
+    "Illinois",
+    "Ireland",
+    "Kansas",
+    "Kentucky",
+    "Maryland",
+    "Massachusetts",
+    "Michigan",
+    "Minnesota",
+    "Missouri",
+    "Netherlands",
+    "New Jersey",
+    "New York",
+    "North Carolina",
+    "Ohio",
+    "Oregon",
+    "Pennsylvania",
+    "Poland",
+    "Portugal",
+    "Tennessee",
+    "Texas",
+    "United Kingdom",
+    "Virginia",
+    "Washington",
+    "Wisconsin",
+    "Other - My state/country is not listed"
+   ],
+   "boards": [
+    "squarespace"
+   ]
+  },
+  {
+   "label": "Do you possess business fluency in Japanese?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "databricks"
+   ]
+  },
+  {
+   "label": "Do you require immigration sponsorship to work for Affirm in the United States?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "affirm"
+   ]
+  },
+  {
+   "label": "Do you require visa sponsorship, now or in the future, to continue working in Taiwan?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes, I will require visa sponsorship now or in the future to continue working in the country where this role is based.",
+    "No, I do not require visa sponsorship now or in the future to continue working in the country where this role is based."
+   ],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "Do you require visa sponsorship?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "anthropic"
+   ]
+  },
+  {
+   "label": "Do you, now or in the future, require sponsorship to work in the United States?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "instacart"
+   ]
+  },
+  {
+   "label": "Due to business needs, this role requires that this person be based in the San Francisco-Bay Area. Are you open to relocating to the San Francisco-Bay Area for this specific role?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes, I am open to relocating to the San Francisco-Bay Area.",
+    "No, I prefer a fully-remote role.",
+    "No, I am already based in the San Francisco-Bay Area."
+   ],
+   "boards": [
+    "airbnb"
+   ]
+  },
+  {
+   "label": "Education: Last University Attended",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "pinterest"
+   ]
+  },
+  {
+   "label": "Email",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "cloudflare",
+    "stripe",
+    "datadog",
+    "figma",
+    "mongodb",
+    "coinbase",
+    "okta",
+    "reddit",
+    "pinterest",
+    "roblox",
+    "airbnb",
+    "dropbox",
+    "lyft",
+    "twilio",
+    "gitlab",
+    "robinhood",
+    "instacart",
+    "databricks",
+    "affirm",
+    "brex",
+    "asana",
+    "discord",
+    "anthropic",
+    "elastic",
+    "squarespace"
+   ]
+  },
+  {
+   "label": "Fingerprint",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "First Name",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "cloudflare",
+    "stripe",
+    "datadog",
+    "figma",
+    "mongodb",
+    "coinbase",
+    "okta",
+    "reddit",
+    "pinterest",
+    "roblox",
+    "airbnb",
+    "dropbox",
+    "lyft",
+    "twilio",
+    "gitlab",
+    "robinhood",
+    "instacart",
+    "databricks",
+    "affirm",
+    "brex",
+    "asana",
+    "discord",
+    "anthropic",
+    "elastic",
+    "squarespace"
+   ]
+  },
+  {
+   "label": "From where do you intend to work?",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "figma"
+   ]
+  },
+  {
+   "label": "Gender",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "Decline To Self Identify",
+    "Female",
+    "Male"
+   ],
+   "boards": [
+    "cloudflare",
+    "stripe",
+    "datadog",
+    "figma",
+    "coinbase",
+    "okta",
+    "airbnb",
+    "dropbox",
+    "lyft",
+    "gitlab",
+    "databricks",
+    "affirm",
+    "brex",
+    "discord",
+    "anthropic",
+    "elastic"
+   ]
+  },
+  {
+   "label": "Gender Pronouns (She/Her/Hers, He/Him/His, They/Them/Theirs, etc.)",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "elastic"
+   ]
+  },
+  {
+   "label": "Gender:",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Male",
+    "Female",
+    "Other",
+    "Decline to Self Identify"
+   ],
+   "boards": [
+    "airbnb"
+   ]
+  },
+  {
+   "label": "Github",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "mongodb",
+    "affirm"
+   ]
+  },
+  {
+   "label": "Github Profile",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "asana"
+   ]
+  },
+  {
+   "label": "Give us your best TL;DR about why you might be a good fit for this ML team/role (1-2 sentences)",
+   "type": "textarea",
+   "required": true,
+   "options": [],
+   "boards": [
+    "reddit"
+   ]
+  },
+  {
+   "label": "Have you been accountable for a revenue or monetization goal and demonstrated measurable impact through lifecycle marketing programs, such as paid conversion, retention, or expansion?",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Have you been employed by Lyft, or any subsidiary, affiliate, or business unit of Lyft, in the past (whether on a full-time or part-time basis)?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "lyft"
+   ]
+  },
+  {
+   "label": "Have you been employed by Okta, Inc. or any of its subsidiaries in the past?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "okta"
+   ]
+  },
+  {
+   "label": "Have you been employed, or otherwise engaged, by an Asana entity in the past? (Previous independent contractors, select \"Yes.\")",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "asana"
+   ]
+  },
+  {
+   "label": "Have you directly supported Product, Product Growth, or Product Monetization teams in a finance business partner capacity?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Have you ever been employed by Stripe or a Stripe affiliate?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "Have you ever interviewed at Anthropic before?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "anthropic"
+   ]
+  },
+  {
+   "label": "Have you ever worked at MongoDB before?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "mongodb"
+   ]
+  },
+  {
+   "label": "Have you ever worked for Figma before, as an employee or a contractor/consultant?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "figma"
+   ]
+  },
+  {
+   "label": "Have you ever worked for or provided services to Roblox, Inc. or any of its subsidiaries as a full-time employee, part-time employee, contractor, intern, or agency worker?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes, currently employed or contracted",
+    "Yes, formerly employed or contracted",
+    "No, I have never worked or contracted for Roblox in any capacity"
+   ],
+   "boards": [
+    "roblox"
+   ]
+  },
+  {
+   "label": "Have you ever worked for Robinhood as an employee, intern or contractor? Note that providing false or misleading information may result in disqualification from the hiring process.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I currently work at Robinhood as a full-time employee or intern",
+    "I have previously worked at Robinhood as a full-time employee or intern (Hoodie Alumni)",
+    "I currently work at Robinhood in a contractor role",
+    "I have previously worked at Robinhood in a contractor role",
+    "I have never worked at Robinhood"
+   ],
+   "boards": [
+    "robinhood"
+   ]
+  },
+  {
+   "label": "Have you interviewed for these roles in the past 3 months?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "anthropic"
+   ]
+  },
+  {
+   "label": "Have you owned lifecycle marketing programs in-house at a SaaS or technology company, or a digital consumer business?",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Have you partnered with Product and analytics or data science teams to run A/B tests and use the results to improve lifecycle program performance?",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Have you presented financial recommendations to senior leaders and influenced a product or business decision?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Have you previously been employed at Affirm for any length of time?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I have not previously been employed at Affirm",
+    "I have been employed at Affirm as a full-time employee",
+    "I have been employed at Affirm as a part-time employee",
+    "I have been employed at Affirm as an intern",
+    "I have been employed at Affirm as a contractor"
+   ],
+   "boards": [
+    "affirm"
+   ]
+  },
+  {
+   "label": "Have you previously been employed by Coinbase in any capacity?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "coinbase"
+   ]
+  },
+  {
+   "label": "Have you previously been employed by or worked directly for Squarespace in any capacity? Please choose all that apply. Answering YES means you have worked at Squarespace before. This does not include owning a site.",
+   "type": "multi_value_multi_select",
+   "required": true,
+   "options": [
+    "No - I have not worked at Squarespace before",
+    "Yes - Full Time Employee at Squarespace",
+    "Yes - Temporary Hire at Squarespace",
+    "Yes - Intern at Squarespace",
+    "Yes - Consultant or Vendor for Squarespace"
+   ],
+   "boards": [
+    "squarespace"
+   ]
+  },
+  {
+   "label": "Have you previously worked at or consulted for GitLab?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "gitlab"
+   ]
+  },
+  {
+   "label": "Have you previously worked for Dropbox?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes, former employee",
+    "Yes, former contingent worker or vendor",
+    "No, I have not previously worked for Dropbox"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Have you used Robinhood?",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "robinhood"
+   ]
+  },
+  {
+   "label": "How did you first hear about this opportunity?",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "LinkedIn",
+    "Glassdoor",
+    "Twitter",
+    "Instagram",
+    "Pinterest-hosted Recruiting Event",
+    "Current Pinterest Employee",
+    "Google Search",
+    "Other"
+   ],
+   "boards": [
+    "pinterest"
+   ]
+  },
+  {
+   "label": "How did you first hear about this role?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Roblox Careers Site",
+    "Roblox Early Career Newsletter",
+    "Campus Ambassador",
+    "Conference",
+    "On Campus Event",
+    "Virtual Event",
+    "LinkedIn",
+    "Handshake",
+    "Piazza",
+    "Word of Mouth",
+    "Referred by Roblox Employee",
+    "Other"
+   ],
+   "boards": [
+    "roblox"
+   ]
+  },
+  {
+   "label": "How did you first learn about Affirm as an employer?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Affirm blog",
+    "Affirm Recruiting Team reached out",
+    "Affirm’s Career Site",
+    "AfroTech",
+    "Alumni Forum",
+    "Built In",
+    "Facebook",
+    "Glassdoor",
+    "I have used Affirm as a product",
+    "I know someone that works at Affirm",
+    "Include.io",
+    "Indeed",
+    "Infoshare",
+    "Instagram",
+    "LinkedIn",
+    "Nextplay",
+    "POCIT",
+    "SheTO",
+    "The Muse",
+    "Twitter",
+    "Virtual Career Fair",
+    "Other"
+   ],
+   "boards": [
+    "affirm"
+   ]
+  },
+  {
+   "label": "How did you hear about this job?",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "cloudflare",
+    "coinbase",
+    "reddit",
+    "airbnb",
+    "robinhood",
+    "instacart",
+    "databricks",
+    "discord"
+   ]
+  },
+  {
+   "label": "How did you hear about this opportunity?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Advisor or Faculty referral",
+    "AfroTech",
+    "Angelist",
+    "Attended a talk or conference",
+    "Blind App",
+    "Break Through Tech",
+    "BuiltIn Boston",
+    "BuiltIn NYC",
+    "ColorStack",
+    "Campus Event",
+    "Carnegie Mellon University department or mailing list",
+    "Datadog Employee",
+    "Datadog's Careers Page",
+    "Event",
+    "Flexjobs",
+    "Girls Who Code",
+    "Github",
+    "Glassdoor",
+    "Hacker News",
+    "Hired",
+    "Hiretual",
+    "I love Datadog's product!",
+    "Instagram",
+    "JobTeaser",
+    "LinkedIn (Datadog Page)",
+    "LinkedIn (Job Posting)",
+    "MLT (Management Leadership for Tomorrow)",
+    "Rewriting the Code",
+    "School job board",
+    "SHPE (Society of Hispanic Professional Engineers)",
+    "The Muse",
+    "Thrive",
+    "Underdog",
+    "Welcome to the Jungle",
+    "Other"
+   ],
+   "boards": [
+    "datadog"
+   ]
+  },
+  {
+   "label": "How did you hear about this role? (Please select all that apply)",
+   "type": "multi_value_multi_select",
+   "required": true,
+   "options": [
+    "BuiltIn",
+    "Contacted by Recruiter",
+    "Dropbox Career Site",
+    "Dropbox Talent Community",
+    "Facebook",
+    "Glassdoor",
+    "Google Search",
+    "In Person Event",
+    "Indeed",
+    "InHerSight",
+    "Instagram",
+    "LinkedIn",
+    "Referral from Dropboxer",
+    "The Muse"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "How did you hear about Twilio?",
+   "type": "multi_value_multi_select",
+   "required": true,
+   "options": [
+    "Careers Website",
+    "LinkedIn",
+    "Twitter",
+    "Glassdoor",
+    "Indeed",
+    "Twilio Blog",
+    "Conference or Event",
+    "Content (e.g. videos, ads, billboards etc)",
+    "Other"
+   ],
+   "boards": [
+    "twilio"
+   ]
+  },
+  {
+   "label": "How did you hear about us?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Career Page",
+    "Referral",
+    "LinkedIn",
+    "Social Media (Instagram, X)",
+    "Glassdoor",
+    "RepVue",
+    "Brex Blog / Employee Stories",
+    "Brex Video / Ad",
+    "Event / Conference",
+    "News / Media / Podcast",
+    "Other"
+   ],
+   "boards": [
+    "brex"
+   ]
+  },
+  {
+   "label": "How did you learn about this job?",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "AfroTech / Blavity",
+    "Black is Tech",
+    "Built in Austin",
+    "College Careers Page / Event",
+    "ColorStack",
+    "The Diana Initiative",
+    "Glassdoor",
+    "Jumpstart",
+    "Lesbians Who Tech (LWT)",
+    "Life at MongoDB Blog",
+    "LinkedIn",
+    "Latinas in Tech (LiT)",
+    "Mogul",
+    "MongoDB Careers Page",
+    "MongoDB Employee (Current or Former)",
+    "MongoDB Event",
+    "MongoDB Podcast",
+    "MongoDB Social Media Channels",
+    "MongoDB Videos",
+    "MongoDB Talent Communities",
+    "MyGWork",
+    "National Sales Network (NSN)",
+    "Out 4 Undergrad (O4U)",
+    "PowertoFly",
+    "Rewriting the Code",
+    "Vault Profile",
+    "Women in Technology International (WITI)",
+    "Women in IT Summit",
+    "Other"
+   ],
+   "boards": [
+    "mongodb"
+   ]
+  },
+  {
+   "label": "How many years of industry experience in a full-time Software Engineer role (does not include internships and co-ops) do you have?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Less than 8 years",
+    "8+ years"
+   ],
+   "boards": [
+    "anthropic"
+   ]
+  },
+  {
+   "label": "How should we communicate with you?",
+   "type": "multi_value_multi_select",
+   "required": true,
+   "options": [
+    "Email",
+    "Phone Call",
+    "Text Message",
+    "WhatsApp"
+   ],
+   "boards": [
+    "elastic"
+   ]
+  },
+  {
+   "label": "I acknowledge and agree to the processing of my personal data in accordance with Okta's privacy policy and personnel privacy policy (see below).",
+   "type": "multi_value_multi_select",
+   "required": true,
+   "options": [
+    "I acknowledge"
+   ],
+   "boards": [
+    "okta"
+   ]
+  },
+  {
+   "label": "I acknowledge this role follows an office-centric hybrid schedule that requires in-office work on Monday, Tuesday, and Thursday in Warsaw.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "asana"
+   ]
+  },
+  {
+   "label": "I am available to begin a potential full-time role before September 2028.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "coinbase"
+   ]
+  },
+  {
+   "label": "I certify that the facts set forth in this Application for Employment are true and complete to the best of my knowledge. I understand that if I am employed, false statements, omissions or misrepresentations may result in my dismissal. I authorize the Employer to make an investigation of any of the facts set forth in this application and release the Employer from any liability. The employer may contact any provided references.",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "lyft"
+   ]
+  },
+  {
+   "label": "I certify that the information provided in this application is true and correct to the best of my knowledge. I understand that any false statements or omissions may result in disqualification from employment consideration or, if employed, in termination.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "datadog"
+   ]
+  },
+  {
+   "label": "I understand my application will be processed in accordance with Datadog’s Candidate Privacy Policy",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "datadog"
+   ]
+  },
+  {
+   "label": "I understand my application will be processed in accordance with Datadog’s Candidate Privacy Policy.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "datadog"
+   ]
+  },
+  {
+   "label": "I understand that Coinbase may use AI tools to assist in the application and interview process.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes"
+   ],
+   "boards": [
+    "coinbase"
+   ]
+  },
+  {
+   "label": "If located in the US, in what city and state do you reside?",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "If not, tell us a bit more about your location or relocation plans",
+   "type": "textarea",
+   "required": false,
+   "options": [],
+   "boards": [
+    "reddit"
+   ]
+  },
+  {
+   "label": "If this role offers the option to work from a remote location, do you plan to work remotely?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes, I intend to work remotely.",
+    "No, I intend to work from an office location."
+   ],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "If Yes, or if you are not sure, please elaborate below. If you answered no, please input ‘N/A’.",
+   "type": "textarea",
+   "required": true,
+   "options": [],
+   "boards": [
+    "squarespace"
+   ]
+  },
+  {
+   "label": "If yes, please describe:",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "okta"
+   ]
+  },
+  {
+   "label": "If yes, please identify name of person / vendor and describe relationship / association:",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "okta"
+   ]
+  },
+  {
+   "label": "If you answered \"Other\" above, please note your graduation date.",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "mongodb"
+   ]
+  },
+  {
+   "label": "If you answered \"Yes\" to the above question, please provide additional information here:",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "robinhood"
+   ]
+  },
+  {
+   "label": "If you answered MongoDB Employee, MongoDB Event, or Other, please specify here:",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "mongodb"
+   ]
+  },
+  {
+   "label": "If you answered ‘Yes - Consultant or Vendor for Squarespace', please elaborate below, provide the name of the employer (including if a sole proprietor/freelancer), dates of your engagement with Squarespace, and briefly describe the nature of your work with Squarespace. If you did not answer this way, please put ‘N/A’.",
+   "type": "textarea",
+   "required": true,
+   "options": [],
+   "boards": [
+    "squarespace"
+   ]
+  },
+  {
+   "label": "If you answered “Yes,” please list the U.S. government entity you worked for. If not applicable, type 'N/A.'",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "asana"
+   ]
+  },
+  {
+   "label": "If you currently work, or have previously worked, at Capital One or a company acquired by Capital One, please provide your Employee ID (EID). This information is required for former/current employees.",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "brex"
+   ]
+  },
+  {
+   "label": "If you do require employee sponsorship or assistance for work authorization, please list the type of support you may require.",
+   "type": "textarea",
+   "required": false,
+   "options": [],
+   "boards": [
+    "pinterest"
+   ]
+  },
+  {
+   "label": "If you heard about us through a referral, please state the Brex employee's name.",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "brex"
+   ]
+  },
+  {
+   "label": "If you selected a response to the prior question other than “none of the above,” please confirm whether any of the following also applies to you. Select all that apply.",
+   "type": "multi_value_multi_select",
+   "required": true,
+   "options": [
+    "U.S. citizen",
+    "U.S. non-citizen national",
+    "U.S. permanent resident (Green Card holder)",
+    "Individual granted asylum in the U.S.",
+    "Individual granted refugee status in the U.S.",
+    "Individual granted citizenship in a country other than Cuba, Iran, North Korea, or Syria",
+    "Individual granted permanent residency in a country other than Cuba, Iran, North Korea, or Syria",
+    "None of these apply to me",
+    "Not applicable (i.e., I selected “none of the above” for the prior question)"
+   ],
+   "boards": [
+    "databricks"
+   ]
+  },
+  {
+   "label": "If you're not authorized to work at the stated location, what sponsorship would you require for the role?",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "brex"
+   ]
+  },
+  {
+   "label": "If you’ve selected \"Other - My location is not listed.” Please list the location by entering it below.",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "squarespace"
+   ]
+  },
+  {
+   "label": "In what cities are you available to work?",
+   "type": "multi_value_multi_select",
+   "required": true,
+   "options": [
+    "Amsterdam",
+    "Atlanta",
+    "Bangalore",
+    "Barcelona",
+    "Barueri São Paulo",
+    "Bordeaux",
+    "Boston",
+    "Chicago",
+    "Copenhagen",
+    "Denver",
+    "Dubai",
+    "Dublin",
+    "Grenoble",
+    "Hamburg",
+    "Jakarta",
+    "Lisbon",
+    "London",
+    "Lyon",
+    "Madrid",
+    "Melbourne",
+    "Mexico City",
+    "Montpellier",
+    "Mumbai",
+    "Nantes",
+    "New York City",
+    "Nice",
+    "Osaka",
+    "Paris",
+    "Pittsburgh",
+    "Remote",
+    "Riyadh",
+    "Salt Lake City",
+    "San Francisco",
+    "San Jose (Campbell)",
+    "San Sebastian",
+    "São Paulo",
+    "Seattle",
+    "Seoul",
+    "Singapore",
+    "Sophia Antipolis",
+    "Stockholm",
+    "Sydney",
+    "Tel Aviv",
+    "Tokyo",
+    "Toronto"
+   ],
+   "boards": [
+    "datadog"
+   ]
+  },
+  {
+   "label": "In what countries do you have the unrestricted right to work?",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "elastic"
+   ]
+  },
+  {
+   "label": "In what location(s) are you available to work?",
+   "type": "multi_value_multi_select",
+   "required": true,
+   "options": [
+    "Amsterdam",
+    "Atlanta",
+    "Bangalore",
+    "Barcelona",
+    "Barueri São Paulo",
+    "Bordeaux",
+    "Boston",
+    "Chicago",
+    "Copenhagen",
+    "Denver",
+    "Dubai",
+    "Dublin",
+    "Grenoble",
+    "Hamburg",
+    "Jakarta",
+    "Lisbon",
+    "London",
+    "Lyon",
+    "Madrid",
+    "Melbourne",
+    "Mexico City",
+    "Montpellier",
+    "Mumbai",
+    "Nantes",
+    "New York City",
+    "Nice",
+    "Osaka",
+    "Paris",
+    "Pittsburgh",
+    "Remote",
+    "Riyadh",
+    "Salt Lake City",
+    "San Francisco",
+    "San Jose (Campbell)",
+    "San Sebastian",
+    "São Paulo",
+    "Seattle",
+    "Seoul",
+    "Singapore",
+    "Sophia Antipolis",
+    "Stockholm",
+    "Sydney",
+    "Tel Aviv",
+    "Tokyo",
+    "Toronto"
+   ],
+   "boards": [
+    "datadog"
+   ]
+  },
+  {
+   "label": "Interview Recording Consent: To help our hiring team stay fully engaged during your interview, we use an AI tool called BrightHire. Please select \"yes\" if you consent to using BrightHire to record and transcribe your interview. Your decision will not impact your candidacy.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "robinhood"
+   ]
+  },
+  {
+   "label": "Is your most recent country of citizenship one of the following countries: Cuba, Iran, North Korea (DPRK), or Syria?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "elastic"
+   ]
+  },
+  {
+   "label": "Is your most recent legal permanent residency in one of the following countries: Cuba, Iran, North Korea (DPRK), or Syria?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "elastic"
+   ]
+  },
+  {
+   "label": "It is important to us to create an accessible and inclusive interview experience. Please let us know if there are any adjustments we can make to assist you during the hiring and interview process.",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "gitlab"
+   ]
+  },
+  {
+   "label": "Last Name",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "cloudflare",
+    "stripe",
+    "datadog",
+    "figma",
+    "mongodb",
+    "coinbase",
+    "okta",
+    "reddit",
+    "pinterest",
+    "roblox",
+    "airbnb",
+    "dropbox",
+    "lyft",
+    "twilio",
+    "gitlab",
+    "robinhood",
+    "instacart",
+    "databricks",
+    "affirm",
+    "brex",
+    "asana",
+    "discord",
+    "anthropic",
+    "elastic",
+    "squarespace"
+   ]
+  },
+  {
+   "label": "Legal Name",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "roblox"
+   ]
+  },
+  {
+   "label": "Legal Name (if different than above)",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "cloudflare"
+   ]
+  },
+  {
+   "label": "LinkedIn Profile",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "datadog",
+    "figma",
+    "mongodb",
+    "okta",
+    "reddit",
+    "pinterest",
+    "airbnb",
+    "dropbox",
+    "lyft",
+    "twilio",
+    "gitlab",
+    "robinhood",
+    "databricks",
+    "affirm",
+    "brex",
+    "asana",
+    "discord",
+    "anthropic",
+    "squarespace"
+   ]
+  },
+  {
+   "label": "LinkedIn Profile URL",
+   "type": "textarea",
+   "required": true,
+   "options": [],
+   "boards": [
+    "stripe",
+    "coinbase",
+    "twilio"
+   ]
+  },
+  {
+   "label": "LinkedIn Profile, Github, Personal Website, or Portfolio",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "LinkedIn Profile:",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "instacart",
+    "elastic"
+   ]
+  },
+  {
+   "label": "LinkedIn URL",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "roblox"
+   ]
+  },
+  {
+   "label": "Location",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "cloudflare",
+    "stripe",
+    "figma",
+    "mongodb",
+    "coinbase",
+    "okta",
+    "reddit",
+    "pinterest",
+    "roblox",
+    "airbnb",
+    "lyft",
+    "twilio",
+    "robinhood",
+    "instacart",
+    "databricks",
+    "brex",
+    "asana",
+    "discord",
+    "elastic"
+   ]
+  },
+  {
+   "label": "Location Cost Tier",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "High Cost",
+    "Mid Cost",
+    "Low Cost",
+    "Unknown"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "May we contact your current employer?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "lyft"
+   ]
+  },
+  {
+   "label": "Name Pronunciation",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "affirm"
+   ]
+  },
+  {
+   "label": "Other Links",
+   "type": "textarea",
+   "required": false,
+   "options": [],
+   "boards": [
+    "affirm"
+   ]
+  },
+  {
+   "label": "Other Website",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "figma"
+   ]
+  },
+  {
+   "label": "Personal Website",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "asana"
+   ]
+  },
+  {
+   "label": "Phone",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "cloudflare",
+    "stripe",
+    "datadog",
+    "figma",
+    "mongodb",
+    "coinbase",
+    "okta",
+    "reddit",
+    "pinterest",
+    "roblox",
+    "airbnb",
+    "dropbox",
+    "lyft",
+    "twilio",
+    "gitlab",
+    "robinhood",
+    "instacart",
+    "databricks",
+    "affirm",
+    "brex",
+    "asana",
+    "discord",
+    "anthropic",
+    "elastic",
+    "squarespace"
+   ]
+  },
+  {
+   "label": "Please choose the country in which you are located.",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "Afghanistan",
+    "Albania",
+    "Algeria",
+    "Andorra",
+    "Angola",
+    "Antigua and Barbuda",
+    "Argentina",
+    "Armenia",
+    "Australia",
+    "Austria",
+    "Azerbaijan",
+    "Bahamas",
+    "Bahrain",
+    "Bangladesh",
+    "Barbados",
+    "Belarus",
+    "Belgium",
+    "Belize",
+    "Benin",
+    "Bhutan",
+    "Bolivia",
+    "Bosnia and Herzegovina",
+    "Botswana",
+    "Brazil",
+    "Brunei",
+    "Bulgaria",
+    "Burkina Faso",
+    "Burundi",
+    "Cabo Verde",
+    "Cambodia",
+    "Cameroon",
+    "Canada",
+    "Central African Republic",
+    "Chad",
+    "Chile",
+    "China",
+    "Colombia",
+    "Comoros",
+    "Crimea",
+    "Democratic Republic of the Congo",
+    "Republic of the Congo",
+    "Costa Rica",
+    "Cote d'Ivoire",
+    "Croatia",
+    "Cuba",
+    "Cyprus",
+    "Czech Republic",
+    "Denmark",
+    "Djibouti",
+    "Dominica",
+    "Dominican Republic",
+    "Ecuador",
+    "Egypt",
+    "El Salvador",
+    "Equatorial Guinea",
+    "Eritrea",
+    "Estonia",
+    "Eswatini",
+    "Ethiopia",
+    "Fiji"
+   ],
+   "boards": [
+    "gitlab"
+   ]
+  },
+  {
+   "label": "Please confirm receipt of the above linked Global Data Privacy Notice and US Arbitration Agreement.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Confirmed"
+   ],
+   "boards": [
+    "coinbase"
+   ]
+  },
+  {
+   "label": "Please confirm whether any of the below applies to you. Select all that apply. Note: This information will only be used to ensure compliance with U.S. sanctions and export controls.",
+   "type": "multi_value_multi_select",
+   "required": true,
+   "options": [
+    "Citizen or permanent resident of Cuba, Iran, North Korea, or Syria",
+    "Ordinarily a resident of Cuba, Iran, North Korea, Syria or the Crimea, Donetsk, Luhansk, Zaporizhzhia, or Kherson regions of Ukraine",
+    "Ordinarily a resident of Russia or Belarus and not willing to relocate for a Databricks role",
+    "None of the above"
+   ],
+   "boards": [
+    "databricks"
+   ]
+  },
+  {
+   "label": "Please describe any need for a reasonable accommodation for this hiring process (no documentation required).",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "lyft"
+   ]
+  },
+  {
+   "label": "Please email me about future job openings",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Please enter your relevant employment and military service above using the + Add Another Employment link.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Thank you"
+   ],
+   "boards": [
+    "lyft"
+   ]
+  },
+  {
+   "label": "Please indicate whether you are either a citizen or resident of any of the following countries: Cuba, Iran, North Korea, Syria or Crimea Region of Ukraine.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "twilio"
+   ]
+  },
+  {
+   "label": "Please provide the name of your current (or most recent) company",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "reddit"
+   ]
+  },
+  {
+   "label": "Please provide the zip code of your primary residence.",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Please read the arbitration agreement below",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I will read the arbitration agreement below."
+   ],
+   "boards": [
+    "anthropic"
+   ]
+  },
+  {
+   "label": "Please review and acknowledge Cloudflare's Candidate Privacy Policy (cloudflare.com/candidate-privacy-notice/).",
+   "type": "multi_value_multi_select",
+   "required": true,
+   "options": [
+    "Acknowledge/Confirm"
+   ],
+   "boards": [
+    "cloudflare"
+   ]
+  },
+  {
+   "label": "Please review and acknowledge Roblox's Candidate Arbitration Agreement",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I acknowledge that I received and had the opportunity to review Roblox's Candidate Arbitration Agreement, and I agree to be bound by its terms."
+   ],
+   "boards": [
+    "roblox"
+   ]
+  },
+  {
+   "label": "Please review and acknowledge Roblox's Job Applicant Privacy Notice",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I acknowledge that I have read and understood Roblox's Job Applicant Privacy Notice."
+   ],
+   "boards": [
+    "roblox"
+   ]
+  },
+  {
+   "label": "Please review and acknowledge the specific Robinhood Applicant Privacy Policy applicable to the country where you are applying.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I acknowledge"
+   ],
+   "boards": [
+    "robinhood"
+   ]
+  },
+  {
+   "label": "Please review the linked document:",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I acknowledge that I have read and understood the terms of the Lyft Candidate Privacy Notice."
+   ],
+   "boards": [
+    "lyft"
+   ]
+  },
+  {
+   "label": "Please select all the languages you speak fluently.",
+   "type": "multi_value_multi_select",
+   "required": true,
+   "options": [
+    "Arabic",
+    "Bahasa Indonesia",
+    "Bulgarian",
+    "Cantonese",
+    "Croatian",
+    "Czech",
+    "Danish",
+    "Dutch",
+    "English",
+    "Estonian",
+    "Finnish",
+    "French",
+    "German",
+    "Greek",
+    "Hebrew",
+    "Hindi",
+    "Hungarian",
+    "Italian",
+    "Japanese",
+    "Korean",
+    "Latvian",
+    "Lithuanian",
+    "Malay",
+    "Mandarin",
+    "Norwegian",
+    "Polish",
+    "Portuguese",
+    "Portuguese (Brazilian)",
+    "Romanian",
+    "Russian",
+    "Slovak",
+    "Slovenian",
+    "Spanish",
+    "Swedish",
+    "Tagalog",
+    "Thai",
+    "Turkish",
+    "Ukrainian",
+    "Vietnamese"
+   ],
+   "boards": [
+    "datadog"
+   ]
+  },
+  {
+   "label": "Please select the country or countries you anticipate working in for the role in which you are applying.",
+   "type": "multi_value_multi_select",
+   "required": true,
+   "options": [
+    "Australia",
+    "Belgium",
+    "Brazil",
+    "Canada",
+    "France",
+    "Germany",
+    "India",
+    "Indonesia",
+    "Ireland",
+    "Israel",
+    "Italy",
+    "Japan",
+    "Luxembourg",
+    "Malaysia",
+    "Mexico",
+    "New Zealand",
+    "Poland",
+    "Portugal",
+    "Romania",
+    "Singapore",
+    "South Korea",
+    "Spain",
+    "Sweden",
+    "Switzerland",
+    "Taiwan",
+    "Thailand",
+    "The Netherlands",
+    "UAE",
+    "UK",
+    "US"
+   ],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "Please select the country where you currently reside.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Australia",
+    "Belgium",
+    "Brazil",
+    "Canada",
+    "Egypt",
+    "France",
+    "Germany",
+    "India",
+    "Indonesia",
+    "Ireland",
+    "Israel",
+    "Italy",
+    "Japan",
+    "Malaysia",
+    "Mexico",
+    "New Zealand",
+    "Poland",
+    "Portugal",
+    "Romania",
+    "Singapore",
+    "South Korea",
+    "Spain",
+    "Sweden",
+    "Switzerland",
+    "Taiwan",
+    "Thailand",
+    "The Netherlands",
+    "UAE",
+    "UK",
+    "US",
+    "Other"
+   ],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "Please select the Machine Learning focus area that best aligns with your background or interests. Primary Focus (Most Relevant):",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Computer Vision, 3D Gen, Multimodal",
+    "NLP, LLM",
+    "Recommendation Systems",
+    "Infrastructure & Optimization",
+    "Other"
+   ],
+   "boards": [
+    "roblox"
+   ]
+  },
+  {
+   "label": "Please select the Machine Learning focus area that best aligns with your background or interests. Secondary Focus (Second Most Relevant):",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "Computer Vision, 3D Gen, Multimodal",
+    "NLP, LLM",
+    "Recommendation Systems",
+    "Infrastructure & Optimization",
+    "Other"
+   ],
+   "boards": [
+    "roblox"
+   ]
+  },
+  {
+   "label": "Please select your country of residence from the list below. Pinterest typically requires employees to work and reside in the country of their employment. Certain geographies may also have provincial requirements.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Australia",
+    "Brazil",
+    "Canada",
+    "France",
+    "Germany",
+    "Ireland",
+    "Italy",
+    "Japan",
+    "Mexico",
+    "Netherlands",
+    "Singapore",
+    "Spain",
+    "Sweden",
+    "Switzerland",
+    "United Kingdom",
+    "USA",
+    "Not Listed"
+   ],
+   "boards": [
+    "pinterest"
+   ]
+  },
+  {
+   "label": "Please select your most advanced degree from this list or select “I do not have a degree” or “Other.” Please note that unless required, not having a degree will not impact your application.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "**I do not have a degree",
+    "**Other",
+    "High School",
+    "Associate's Degree",
+    "Bachelor's Degree",
+    "Master's Degree",
+    "Master of Business Administration (M.B.A.)",
+    "Juris Doctor (J.D.)",
+    "Doctor of Medicine (M.D.)",
+    "Doctor of Philosophy (Ph.D.)",
+    "Engineer's Degree"
+   ],
+   "boards": [
+    "squarespace"
+   ]
+  },
+  {
+   "label": "Please share your gender pronouns.",
+   "type": "multi_value_multi_select",
+   "required": false,
+   "options": [
+    "She / Her",
+    "He / Him",
+    "They / Them",
+    "Ae / Aer",
+    "Ey / Em",
+    "Fae / Faer",
+    "Ne / Nem",
+    "Per / Per",
+    "Ve / Vir",
+    "Xe / Xem",
+    "Xie / Hir",
+    "Yo / Yo",
+    "Ze / Hir",
+    "Ze / Zir",
+    "Other"
+   ],
+   "boards": [
+    "lyft"
+   ]
+  },
+  {
+   "label": "Portfolio",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "affirm"
+   ]
+  },
+  {
+   "label": "Preferred First Name",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "datadog",
+    "figma",
+    "reddit",
+    "pinterest",
+    "roblox",
+    "airbnb",
+    "twilio",
+    "databricks",
+    "asana",
+    "discord",
+    "anthropic",
+    "elastic"
+   ]
+  },
+  {
+   "label": "Preferred Name",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "stripe",
+    "mongodb",
+    "affirm"
+   ]
+  },
+  {
+   "label": "Professional Profile (LinkedIn, Github, Website, etc)",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "elastic"
+   ]
+  },
+  {
+   "label": "Pronouns",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "she/her",
+    "he/him",
+    "they/them",
+    "my pronouns are not listed",
+    "I prefer not to disclose"
+   ],
+   "boards": [
+    "stripe",
+    "figma",
+    "affirm"
+   ]
+  },
+  {
+   "label": "Race",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "Decline To Self Identify",
+    "Two or More Races",
+    "Native Hawaiian or Other Pacific Islander",
+    "White",
+    "Hispanic or Latino",
+    "Black or African American",
+    "Asian",
+    "American Indian or Alaskan Native"
+   ],
+   "boards": [
+    "cloudflare",
+    "stripe",
+    "datadog",
+    "figma",
+    "coinbase",
+    "okta",
+    "dropbox",
+    "lyft",
+    "gitlab",
+    "databricks",
+    "affirm",
+    "brex",
+    "discord",
+    "anthropic",
+    "elastic"
+   ]
+  },
+  {
+   "label": "Race:",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "American Indian or Alaskan Native",
+    "Asian",
+    "Black or African American",
+    "Hispanic or Latino",
+    "White",
+    "Native Hawaiian or Other Pacific Islander",
+    "Two or More Races",
+    "Decline to Self Identify"
+   ],
+   "boards": [
+    "airbnb"
+   ]
+  },
+  {
+   "label": "Receive alerts for similar jobs?",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "mongodb"
+   ]
+  },
+  {
+   "label": "Review the list of Roblox groups below and share your top preferences for potential team match. Primary Interest:",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Foundational AI",
+    "Growth and Discovery",
+    "Ads and Brands",
+    "Safety",
+    "Economy",
+    "Creator",
+    "Engine",
+    "Infrastructure"
+   ],
+   "boards": [
+    "roblox"
+   ]
+  },
+  {
+   "label": "Review the list of Roblox groups below and share your top preferences. Secondary Interest:",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Foundational AI",
+    "Growth and Discovery",
+    "Ads and Brands",
+    "Safety",
+    "Economy",
+    "Creator",
+    "Engine",
+    "Infrastructure"
+   ],
+   "boards": [
+    "roblox"
+   ]
+  },
+  {
+   "label": "Robinhood adheres to applicable laws and regulations in relation to government officials given inherent bribery and/or corruption risk. A government official is any person that performs a public function on any level or acts in any official capacity on behalf of a government or government owned entity. a) Do you currently hold or have you held, within the last 5 years, a position as a government official? b) Have you been referred or recommended for this position by a government official? c) Are you related to or have a close personal relationship with a government official?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "robinhood"
+   ]
+  },
+  {
+   "label": "Roblox Username",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "roblox"
+   ]
+  },
+  {
+   "label": "School - Please select your most recently attended school from this list or select the option “My School is not listed” or “I did not attend college.” Please note that unless required, not having a degree will not impact your application.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "**My school is not listed",
+    "**I did not attend college",
+    "Aalborg University",
+    "Aalto University",
+    "Aarhus University",
+    "Abertay University",
+    "Aberystwyth University",
+    "Abilene Christian University",
+    "Abo Akademi University",
+    "Abraham Baldwin Agricultural College",
+    "Abu Dhabi University",
+    "Academy of Art University",
+    "Acadia University",
+    "Acharya Nagarjuna University",
+    "Acupuncture and Integrative Medicine College - Berkeley",
+    "Adams State University",
+    "Adelphi University",
+    "Adrian College",
+    "Adventist University of Health Sciences",
+    "Agnes Scott College",
+    "AIB College of Business",
+    "Ain Shams University",
+    "Airlangga University",
+    "Ajou University",
+    "Al Azhar University",
+    "Al-Farabi Kazakh National University",
+    "Al-Imam Mohamed Ibn Saud Islamic University",
+    "Alabama A&M University",
+    "Alabama State University",
+    "Alaska Pacific University",
+    "Albany College of Pharmacy and Health Sciences",
+    "Albany State University",
+    "Albertus Magnus College",
+    "Albion College",
+    "Albright College",
+    "Alcorn State University",
+    "Alderson Broaddus University",
+    "Alexandria University",
+    "Alexandru Ioan Cuza University",
+    "Alfred University",
+    "Alice Lloyd College",
+    "Allegheny College",
+    "Allen College",
+    "Allen University",
+    "Alliant International University",
+    "Alma College",
+    "Alpen-Adria-Universität Klagenfurt",
+    "Alvernia University",
+    "Alverno College",
+    "Amberton University",
+    "American Academy of Art",
+    "American Indian College of the Assemblies of God",
+    "American InterContinental University",
+    "American International College",
+    "American Jewish University",
+    "American Public University System",
+    "American University",
+    "American University in Bulgaria",
+    "American University in Cairo",
+    "American University of Beirut"
+   ],
+   "boards": [
+    "squarespace"
+   ]
+  },
+  {
+   "label": "Similarly, we also invite you to provide your GPA, this can help us further understand your academic experience.",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "StackExchange",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "mongodb"
+   ]
+  },
+  {
+   "label": "The person in this role is required to live within 50 miles commuting distance of the office where the role is listed. Are you currently based within 50 miles of the job location, or able to relocate there before your start date?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "reddit"
+   ]
+  },
+  {
+   "label": "This position is based in the United States. Do you currently reside in commutable proximity to a Lyft Flexdrive hub or office or are you open to relocating?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I am willing to relocate before starting employment.",
+    "I am not willing to relocate before starting employment.",
+    "I already reside near and am able to work at a Lyft Flexdrive Hub or On-site Office."
+   ],
+   "boards": [
+    "lyft"
+   ]
+  },
+  {
+   "label": "This position is based in the United States. Do you currently reside in commutable proximity to a Lyft Office located in New York City, or are you open to relocating?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I am willing to relocate before starting employment.",
+    "I am not willing to relocate before starting employment.",
+    "I already reside near a Lyft office and I am able to work at a Lyft On-site Office."
+   ],
+   "boards": [
+    "lyft"
+   ]
+  },
+  {
+   "label": "This position is required to work out of a Lyft Office in Mexico City, if you do not reside within the country and within commutable proximity to the office, are you open to relocating?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I am willing to relocate before starting employment.",
+    "I am not willing to relocate before starting employment.",
+    "I already reside near a Lyft office and I am able to work at an On-site Office."
+   ],
+   "boards": [
+    "lyft"
+   ]
+  },
+  {
+   "label": "This position is required to work out of a Lyft Office in Toronto, if you do not reside within the country and within commutable proximity to the office, are you open to relocating?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I am willing to relocate before starting employment.",
+    "I am not willing to relocate before starting employment.",
+    "I already reside within commutable distance to Toronto and am able to work at an On-site Office."
+   ],
+   "boards": [
+    "lyft"
+   ]
+  },
+  {
+   "label": "This role requires in-office work three days per week (Mon, Wed, Thurs). Do you acknowledge and agree to this requirement?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes, I’m currently located here",
+    "Yes, I’d relocate prior to the start of the role",
+    "No, I’m not located nearby"
+   ],
+   "boards": [
+    "brex"
+   ]
+  },
+  {
+   "label": "To the best of your knowledge, do you have any family members / relatives or personal relationships at Okta or at any suppliers, partners, or vendors that have a business relationship with Okta? (For purposes of this question, a “family member / relative or personal relationship” is defined as close personal friends (including sexual and/or romantic relationships), close relatives (spouse, partner, children, cousins, aunts, uncles, nieces, nephews, grandparents or grandchildren), someone who lives in your household, or anyone else with whom you have a close enough personal relationship or connection that it could improperly bias your conduct or decision making or be perceived to be capable of impacting your conduct or decision making.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "okta"
+   ]
+  },
+  {
+   "label": "To your knowledge, do you or a close relative currently hold a role, have a significant financial interest in, or maintain a close personal relationship with a senior leader at a company connected to Coinbase that could create an actual or perceived conflict of interest?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "coinbase"
+   ]
+  },
+  {
+   "label": "To your knowledge, were you referred to this position by a senior leader or decision‑maker at a current or prospective institutional client, business partner, or vendor of Coinbase?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "coinbase"
+   ]
+  },
+  {
+   "label": "Twitter",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "affirm"
+   ]
+  },
+  {
+   "label": "U.S. Equal Opportunity Employment Information (Completion is voluntary)",
+   "type": "multi_value_multi_select",
+   "required": false,
+   "options": [
+    "I decline to answer the following questions."
+   ],
+   "boards": [
+    "airbnb"
+   ]
+  },
+  {
+   "label": "Veteran Status:",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "I am a protected veteran",
+    "I am not a protected veteran",
+    "Decline to Self Identify"
+   ],
+   "boards": [
+    "airbnb"
+   ]
+  },
+  {
+   "label": "VeteranStatus",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "I don't wish to answer",
+    "I identify as one or more of the classifications of a protected veteran",
+    "I am not a protected veteran"
+   ],
+   "boards": [
+    "cloudflare",
+    "stripe",
+    "datadog",
+    "figma",
+    "coinbase",
+    "okta",
+    "dropbox",
+    "lyft",
+    "gitlab",
+    "databricks",
+    "affirm",
+    "brex",
+    "discord",
+    "anthropic",
+    "elastic"
+   ]
+  },
+  {
+   "label": "We are always aiming to keep our school list inclusive of all institutions. If you did not see your University listed in the previous question, please let us know your school name here.",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "We are hiring for several pillars: Claude Code, Consumer, Model Experience, and Platform Product. Please choose one pillar that seems like the best fit for you:",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Claude Code",
+    "Consumer",
+    "Model Experience",
+    "Platform Product"
+   ],
+   "boards": [
+    "anthropic"
+   ]
+  },
+  {
+   "label": "Website",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "datadog",
+    "mongodb",
+    "coinbase",
+    "okta",
+    "pinterest",
+    "roblox",
+    "dropbox",
+    "robinhood",
+    "databricks",
+    "discord",
+    "anthropic"
+   ]
+  },
+  {
+   "label": "Website or GitHub",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "brex"
+   ]
+  },
+  {
+   "label": "Website(s)",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "instacart"
+   ]
+  },
+  {
+   "label": "Website/Portfolio (please include password when applicable)",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "discord"
+   ]
+  },
+  {
+   "label": "What are your personal pronouns?",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "She / Her / Hers",
+    "He / Him / His",
+    "They / Them / Their",
+    "Zie / Ze / Zir / Hir / Zir",
+    "Please use my name",
+    "Multiple pronouns - Please ask me",
+    "Other - Please ask me"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "What are your preferred gender pronouns? (She/Her/Hers; He/Him/His; They/Them/Theirs, etc.)",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "brex"
+   ]
+  },
+  {
+   "label": "What are your pronouns?",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "mongodb"
+   ]
+  },
+  {
+   "label": "What college/university do you attend?",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "mongodb"
+   ]
+  },
+  {
+   "label": "What country are you based in?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Brazil",
+    "Canada",
+    "USA",
+    "Netherlands",
+    "United Kingdom",
+    "Other"
+   ],
+   "boards": [
+    "brex"
+   ]
+  },
+  {
+   "label": "What excites you about a career in sales?",
+   "type": "textarea",
+   "required": false,
+   "options": [],
+   "boards": [
+    "figma"
+   ]
+  },
+  {
+   "label": "What is the address from which you plan on working? If you would need to relocate, please type \"relocating\".",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "anthropic"
+   ]
+  },
+  {
+   "label": "What is the name of your current or most recent employer?",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "squarespace"
+   ]
+  },
+  {
+   "label": "What is the source of your right to work where this role is listed?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Citizen or permanent resident where this role is listed",
+    "Citizen of a country with an unlimited right to work where this role is listed",
+    "Valid visa with permission to work with any employer where this role is listed",
+    "I do not currently have an unlimited right to work where this role is listed and will require sponsorship"
+   ],
+   "boards": [
+    "twilio"
+   ]
+  },
+  {
+   "label": "What is your current country of residence?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Afghanistan",
+    "Albania",
+    "Algeria",
+    "Andorra",
+    "Angola",
+    "Antigua and Barbuda",
+    "Argentina",
+    "Armenia",
+    "Australia",
+    "Austria",
+    "Azerbaijan",
+    "Bahamas",
+    "Bahrain",
+    "Bangladesh",
+    "Barbados",
+    "Belarus",
+    "Belgium",
+    "Belize",
+    "Benin",
+    "Bhutan",
+    "Bolivia",
+    "Bosnia and Herzegovina",
+    "Botswana",
+    "Brazil",
+    "Brunei",
+    "Bulgaria",
+    "Burkina Faso",
+    "Burundi",
+    "Cabo Verde",
+    "Cambodia",
+    "Cameroon",
+    "Canada",
+    "Central African Republic",
+    "Chad",
+    "Chile",
+    "China",
+    "Colombia",
+    "Comoros",
+    "Crimea",
+    "Democratic Republic of the Congo",
+    "Republic of the Congo",
+    "Costa Rica",
+    "Cote d'Ivoire",
+    "Croatia",
+    "Cuba",
+    "Cyprus",
+    "Czech Republic",
+    "Denmark",
+    "Djibouti",
+    "Dominica",
+    "Dominican Republic",
+    "Ecuador",
+    "Egypt",
+    "El Salvador",
+    "Equatorial Guinea",
+    "Eritrea",
+    "Estonia",
+    "Eswatini",
+    "Ethiopia",
+    "Fiji"
+   ],
+   "boards": [
+    "gitlab"
+   ]
+  },
+  {
+   "label": "What is your current or most recent job title?",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "squarespace"
+   ]
+  },
+  {
+   "label": "What is your current or previous job title?",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "What is your expected graduation date?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Fall 2025",
+    "Summer 2026",
+    "Spring 2026",
+    "Fall 2026",
+    "Spring 2027",
+    "Summer 2027",
+    "Fall 2027",
+    "Spring 2028",
+    "Summer 2028",
+    "Fall 2028",
+    "Spring 2029",
+    "Summer 2029",
+    "Fall 2029",
+    "Spring 2030",
+    "Summer 2030",
+    "Fall 2030",
+    "Other"
+   ],
+   "boards": [
+    "mongodb"
+   ]
+  },
+  {
+   "label": "What is your experience engineering performance-critical software or optimizing complex systems? Please focus on the engineering work you’ve done yourself, such as designing for low latency, implementing algorithmic or hardware-aware optimizations, optimizing memory/concurrency models, or building custom performance analysis tools/harnesses, rather than simply configuring existing monitoring or running off-the-shelf profiling tools. Please also highlight any experience you have with deep system analysis (e.g., JVM internals, distributed data store internals, or lock-free concurrency) or strategies you’ve used to ensure system predictability and scalability at scale.",
+   "type": "textarea",
+   "required": true,
+   "options": [],
+   "boards": [
+    "elastic"
+   ]
+  },
+  {
+   "label": "What is your experience with analytical query engines and search systems? Please focus on your experience building or extending internals (query planning, optimization, execution, or parsing, as well as search indexing or retrieval), rather than making use of off-the-shelf services. Please also highlight any experience contributing to or working close to open source query engines, database, or search projects.",
+   "type": "textarea",
+   "required": true,
+   "options": [],
+   "boards": [
+    "elastic"
+   ]
+  },
+  {
+   "label": "What is your legal first name?",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "What is your most proficient programming language?",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "squarespace"
+   ]
+  },
+  {
+   "label": "What is your preferred office location?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Menlo Park, CA",
+    "New York, NY",
+    "Bellevue, WA",
+    "Toronto, Canada"
+   ],
+   "boards": [
+    "robinhood"
+   ]
+  },
+  {
+   "label": "What U.S State do you currently reside in?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Alaska",
+    "Arizona",
+    "Arkansas",
+    "California",
+    "Colorado",
+    "Connecticut",
+    "Delaware",
+    "District of Columbia",
+    "Florida",
+    "Georgia",
+    "Hawaii",
+    "Idaho",
+    "Illinois",
+    "Indiana",
+    "Iowa",
+    "Kansas",
+    "Kentucky",
+    "Louisiana",
+    "Maine",
+    "Maryland",
+    "Massachusetts",
+    "Michigan",
+    "Minnesota",
+    "Mississippi",
+    "Missouri",
+    "Nebraska",
+    "Nevada",
+    "New Hampshire",
+    "New Jersey",
+    "New Mexico",
+    "New York",
+    "North Carolina",
+    "Ohio",
+    "Oklahoma",
+    "Oregon",
+    "Pennsylvania",
+    "Rhode Island",
+    "South Carolina",
+    "Tennessee",
+    "Texas",
+    "Utah",
+    "Vermont",
+    "Virginia",
+    "Washington",
+    "Wisconsin",
+    "N/A - I do not reside in the above states"
+   ],
+   "boards": [
+    "pinterest"
+   ]
+  },
+  {
+   "label": "What's the name you'd prefer us to use throughout the interview process?",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "gitlab"
+   ]
+  },
+  {
+   "label": "When are you available to start full-time?",
+   "type": "multi_value_multi_select",
+   "required": true,
+   "options": [
+    "Q4 2026 (October - December)",
+    "Q1 2027 (January - March)",
+    "Q2 2027 (April - June)",
+    "Q3 2027 (July - September)",
+    "Q4 2027 (October - December)"
+   ],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "When is the earliest you would want to start working with us?",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "anthropic"
+   ]
+  },
+  {
+   "label": "When will you be available to work full-time? Full-time means working 40 hours per week while being based in our San Mateo, CA headquarters.",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Fall 2026",
+    "Winter 2026",
+    "Spring 2027",
+    "Summer 2027",
+    "Fall 2027",
+    "Winter 2027",
+    "Spring 2028",
+    "Summer 2028",
+    "Fall 2028",
+    "Winter 2028",
+    "Spring 2029",
+    "Summer 2029",
+    "Fall 2029",
+    "Winter 2029",
+    "Spring 2030",
+    "Summer 2030",
+    "Fall 2030",
+    "Winter 2030"
+   ],
+   "boards": [
+    "roblox"
+   ]
+  },
+  {
+   "label": "Where can we learn more about you?",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "anthropic"
+   ]
+  },
+  {
+   "label": "Where do you currently live?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Arizona",
+    "California",
+    "Colorado",
+    "Connecticut",
+    "Delaware",
+    "Dublin, Ireland",
+    "Florida",
+    "Georgia",
+    "Hawaii",
+    "Ireland",
+    "Kansas",
+    "Maryland",
+    "Massachusetts",
+    "Michigan",
+    "Minnesota",
+    "Missouri",
+    "Netherlands",
+    "New Jersey",
+    "New York",
+    "North Carolina",
+    "Ohio",
+    "Oregon",
+    "Pennsylvania",
+    "Portugal",
+    "Tennessee",
+    "Texas",
+    "Utah",
+    "Poland",
+    "Virginia",
+    "Washington",
+    "Wisconsin",
+    "Other - My state/country is not listed",
+    "United Kingdom"
+   ],
+   "boards": [
+    "squarespace"
+   ]
+  },
+  {
+   "label": "Which of the following best describes how you use AI tools today?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I am opposed to using AI tools in my workflow and prefer traditional/manual workflows.",
+    "I do not use AI tools for my work but I am not against it.",
+    "I have experimented with AI tools (professionally and/or personally).",
+    "I regularly use AI tools to speed up existing tasks (e.g., drafting, summarizing, debugging, basic analysis).",
+    "I design or automate workflows with AI tools (e.g., building agents, integrating AI into team processes)."
+   ],
+   "boards": [
+    "coinbase"
+   ]
+  },
+  {
+   "label": "Which programming language would you likely use for a coding interview?",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "anthropic"
+   ]
+  },
+  {
+   "label": "Which state or province do you currently live in?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "(US) Alabama",
+    "(US) Alaska",
+    "(US) Arizona",
+    "(US) Arkansas",
+    "(US) California",
+    "(US) Colorado",
+    "(US) Connecticut",
+    "(US) Delaware",
+    "(US) Florida",
+    "(US) Georgia",
+    "(US) Hawaii",
+    "(US) Idaho",
+    "(US) Illinois",
+    "(US) Indiana",
+    "(US) Iowa",
+    "(US) Kansas",
+    "(US) Kentucky",
+    "(US) Louisiana",
+    "(US) Maine",
+    "(US) Maryland",
+    "(US) Massachusetts",
+    "(US) Michigan",
+    "(US) Minnesota",
+    "(US) Mississippi",
+    "(US) Missouri",
+    "(US) Montana",
+    "(US) Nebraska",
+    "(US) Nevada",
+    "(US) New Hampshire",
+    "(US) New Jersey",
+    "(US) New Mexico",
+    "(US) New York",
+    "(US) North Carolina",
+    "(US) North Dakota",
+    "(US) Ohio",
+    "(US) Oklahoma",
+    "(US) Oregon",
+    "(US) Pennsylvania",
+    "(US) Rhode Island",
+    "(US) South Carolina",
+    "(US) South Dakota",
+    "(US) Tennessee",
+    "(US) Texas",
+    "(US) Utah",
+    "(US) Vermont",
+    "(US) Virginia",
+    "(US) Washington",
+    "(US) Washington, D.C.",
+    "(US) West Virginia",
+    "(US) Wisconsin",
+    "(US) Wyoming",
+    "(CAN) Alberta",
+    "(CAN) British Columbia",
+    "(CAN) Manitoba",
+    "(CAN) New Brunswick",
+    "(CAN) Newfoundland and Labrador",
+    "(CAN) Nova Scotia",
+    "(CAN) Ontario",
+    "(CAN) Prince Edward Island",
+    "(CAN) Quebec"
+   ],
+   "boards": [
+    "instacart"
+   ]
+  },
+  {
+   "label": "Which U.S. State or Canadian Province do you reside in?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Alabama",
+    "Alaska",
+    "Arizona",
+    "Arkansas",
+    "California",
+    "Colorado",
+    "Connecticut",
+    "District of Columbia",
+    "Delaware",
+    "Florida",
+    "Georgia",
+    "Hawaii",
+    "Idaho",
+    "Illinois",
+    "Indiana",
+    "Iowa",
+    "Kansas",
+    "Kentucky",
+    "Louisiana",
+    "Maine",
+    "Maryland",
+    "Massachusetts",
+    "Michigan",
+    "Minnesota",
+    "Mississippi",
+    "Missouri",
+    "Montana",
+    "Nebraska",
+    "Nevada",
+    "New Hampshire",
+    "New Jersey",
+    "New Mexico",
+    "New York",
+    "North Carolina",
+    "North Dakota",
+    "Ohio",
+    "Oklahoma",
+    "Oregon",
+    "Pennsylvania",
+    "Rhode Island",
+    "South Carolina",
+    "South Dakota",
+    "Tennessee",
+    "Texas",
+    "Utah",
+    "Vermont",
+    "Virginia",
+    "Washington",
+    "West Virginia",
+    "Wisconsin",
+    "Wyoming",
+    "Alberta",
+    "Ontario",
+    "British Columbia",
+    "Saskatchewan",
+    "Manitoba",
+    "Nova Scotia",
+    "New Brunswick",
+    "Newfoundland",
+    "Prince Edward Island"
+   ],
+   "boards": [
+    "affirm"
+   ]
+  },
+  {
+   "label": "Who is your current or previous employer?",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "Why Anthropic?",
+   "type": "textarea",
+   "required": true,
+   "options": [],
+   "boards": [
+    "anthropic"
+   ]
+  },
+  {
+   "label": "Why do you want to join Figma?",
+   "type": "textarea",
+   "required": true,
+   "options": [],
+   "boards": [
+    "figma"
+   ]
+  },
+  {
+   "label": "Why do you want to work at Discord?",
+   "type": "textarea",
+   "required": true,
+   "options": [],
+   "boards": [
+    "discord"
+   ]
+  },
+  {
+   "label": "Why do you want to work at MongoDB?",
+   "type": "textarea",
+   "required": false,
+   "options": [],
+   "boards": [
+    "mongodb"
+   ]
+  },
+  {
+   "label": "Why have you chosen to apply to Airbnb?",
+   "type": "textarea",
+   "required": true,
+   "options": [],
+   "boards": [
+    "airbnb"
+   ]
+  },
+  {
+   "label": "Will you now (or in the future) require visa sponsorship in order to work in the country where this job is located?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "robinhood"
+   ]
+  },
+  {
+   "label": "Will you now (or in the future) require visa sponsorship in order to work in the US?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "robinhood"
+   ]
+  },
+  {
+   "label": "Will you now or in the future require company sponsorship to retain or extend your work authorization in the country where the job is located?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes, I will require immigration sponsorship now to legally work in the country where the job is located.",
+    "Yes, I will require immigration sponsorship in the future to legally work in the country where the job is located.",
+    "No, I do not and will not require immigration sponsorship to legally work in the country where the job is located."
+   ],
+   "boards": [
+    "airbnb"
+   ]
+  },
+  {
+   "label": "Will you now or in the future require employer sponsorship or other employer assistance to obtain, extend, or maintain authorization to work in the country in which you are applying for a position?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "pinterest"
+   ]
+  },
+  {
+   "label": "Will you now or in the future require employment sponsorship?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes, I will require sponsorship",
+    "No, I will not require sponsorship"
+   ],
+   "boards": [
+    "mongodb"
+   ]
+  },
+  {
+   "label": "Will you now or in the future require immigration sponsorship to work for Instacart?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "instacart"
+   ]
+  },
+  {
+   "label": "Will you now or in the future require sponsorship for a visa to remain in your current location?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "No",
+    "Yes, Netherlands Highly Skilled Migrant Visa",
+    "Yes, Ireland Highly Skilled Worker Visa",
+    "Yes, EU Blue Card",
+    "Yes, USMCA Professional (TN) Visa (USA)",
+    "Yes, F-1 Visa OPT (USA)",
+    "Yes, but not one of the visas listed here"
+   ],
+   "boards": [
+    "gitlab"
+   ]
+  },
+  {
+   "label": "Will you now or in the future require sponsorship for employment visa status (e.g., H-1B visa status)?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "twilio"
+   ]
+  },
+  {
+   "label": "Will you now or in the future require sponsorship for work authorization?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "roblox",
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Will you now or in the future require sponsorship or a visa transfer for employment visa status (ie: H-1B visa)?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "No, I can work for any US employer without sponsorship (eg: US citizen, permanent resident, EAD, etc.)",
+    "Yes, I require sponsorship or a visa transfer (eg: J-1, F-1 CPT/OPT, H-1B, TN, etc.)"
+   ],
+   "boards": [
+    "dropbox"
+   ]
+  },
+  {
+   "label": "Will you now or in the future require visa sponsorship to obtain work authorization in the country where this job is located?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "squarespace"
+   ]
+  },
+  {
+   "label": "Will you now or in the future require Visa Sponsorship?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "okta"
+   ]
+  },
+  {
+   "label": "Will you now or will you in the future require employment visa sponsorship to work in the country in which the job you're applying for is located?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "anthropic"
+   ]
+  },
+  {
+   "label": "Will you require Elastic's sponsorship to continue or extend your work authorization status?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "elastic"
+   ]
+  },
+  {
+   "label": "Will you require immigration sponsorship at any point in the future to maintain authorization to work in the United States?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "affirm"
+   ]
+  },
+  {
+   "label": "Will you require our assistance with work authorization now or in the future?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "pinterest"
+   ]
+  },
+  {
+   "label": "Will you require sponsorship for employment visa status now or in the future?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "coinbase"
+   ]
+  },
+  {
+   "label": "Will you require Stripe to sponsor you for a work permit now or in the future for the location(s) you selected in in your previous response?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "Will you require Stripe to sponsor you for a work permit now or in the future?",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "stripe"
+   ]
+  },
+  {
+   "label": "Work Authorization",
+   "type": "multi_value_single_select",
+   "required": true,
+   "options": [
+    "I am authorized to work for any employer in the country in which this position is based.",
+    "I require/will require Lyft's sponsorship to obtain work authorization in the country in which this position is based (e.g. H-1B, TN, etc.)",
+    "My status to work in the country in which this position is based is unknown."
+   ],
+   "boards": [
+    "lyft"
+   ]
+  },
+  {
+   "label": "Work Experience: Current/Previous Employer",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "pinterest"
+   ]
+  },
+  {
+   "label": "Would you like to include your LinkedIn profile, personal website or blog?",
+   "type": "input_text",
+   "required": false,
+   "options": [],
+   "boards": [
+    "cloudflare"
+   ]
+  },
+  {
+   "label": "Would you like to stay up to date with MongoDB Culture and Careers content?",
+   "type": "multi_value_single_select",
+   "required": false,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "boards": [
+    "mongodb"
+   ]
+  },
+  {
+   "label": "Zip / postal code",
+   "type": "input_text",
+   "required": true,
+   "options": [],
+   "boards": [
+    "lyft"
+   ]
+  }
+ ]
+}

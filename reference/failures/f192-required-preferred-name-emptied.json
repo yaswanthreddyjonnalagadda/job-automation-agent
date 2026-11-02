@@ -1,0 +1,19 @@
+{
+  "id": "f192",
+  "date": "2026-10-18",
+  "site": "Greenhouse (Datadog 'Preferred First Name*'); any form that requires a field the profile leaves blank on purpose",
+  "class": "A field the profile says has no value was emptied even where the form requires it, and a 'Label*' star without a space was not read as required",
+  "symptom": "Datadog's required 'Preferred First Name*' was typed by the session, then emptied by the runtime ('your profile says there is none'); the form could not be sent.",
+  "root_cause": "preferred_name is in BLANK_MEANS_NONE, so known_answer returned '' and _clear_none_boxes emptied the box, with no notion of the form requiring it. required_questions also only read 'Label *', not 'Label*'.",
+  "why_tests_missed": "BLANK_MEANS_NONE was tested on optional boxes (UKG Address 2); no fixture had a required preferred-name box, and the star fixtures all had a space.",
+  "fix": "config.REQUIRED_STAND_IN names the truthful stand-in for a required 'none' field (preferred_name -> first_name). known_answer gives it when the box is required (star on the label or name, 'required' in the name, or among the page's starred questions); _clear_none_boxes then has nothing to empty. required_questions reads 'Label*' too.",
+  "tests": [
+    "tests/test_required_preferred_name.py::test_a_starred_preferred_name_takes_the_first_name",
+    "tests/test_required_preferred_name.py::test_a_preferred_name_the_page_marks_required_elsewhere_takes_the_first_name",
+    "tests/test_required_preferred_name.py::test_an_optional_preferred_name_stays_blank",
+    "tests/test_required_preferred_name.py::test_a_preferred_name_in_the_profile_is_used_as_it_is",
+    "tests/test_required_preferred_name.py::test_a_star_without_a_space_marks_the_question_required",
+    "tests/test_required_preferred_name.py::test_the_stand_ins_are_data"
+  ],
+  "prevention": "'The profile says none' and 'the form requires one' are two facts; decide with both, and keep the stand-ins as data."
+}

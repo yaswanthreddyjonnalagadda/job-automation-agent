@@ -1,0 +1,15 @@
+{
+  "id": "f274",
+  "date": "2026-10-27",
+  "class": "A step's only forward button was presumed to be the final submission, including a terms-and-conditions step's own consent button",
+  "symptom": "Walmart (careers.walmart.com), Terms and Conditions at 86%: the agent had signed the page on the owner's behalf, but its next press, 'Agree' beside 'Back', was refused with 'final submission is only available through the verified gateway or human handoff', and the run waited for the owner to press it.",
+  "site": "Walmart careers site, 27 October 2026 (saved pages output/Walmart_(USA)_Senior_Network_Engineer/pages/20261027_232923/page_14.txt)",
+  "root_cause": "submission_guard presumes that a form's only labelled button that is neither navigation nor a utility word (add, back, cancel, ...) is the last click, because a real submit can hide under a custom label ('Confirm & Send'). 'Back' is a utility word, so 'Agree' was the sole remaining action in the form and was denied. 'Agree' is not in the submit vocabulary (safety.is_submit_label is False for it); the rule that fired was the structural one.",
+  "why_tests_missed": "The sole-remaining-action tests used custom submit-like labels. None had a consent step, where the only forward button is a consent word the owner has already decided the agent accepts (BEHAVIOUR.md, 'Tick boxes': terms and privacy notices).",
+  "fix": "submission_guard treats a button as a consent step, not a final submission, when its whole label is a consent word (Agree, I Agree, Accept, Accept and Continue, I accept), its form's text is about terms and conditions, terms of use or service, privacy notice, policy or statement, or consent, and no other control in that form carries a submit label. 'Agree and Submit', 'Disagree', an 'Agree' on a form that says nothing about terms, and any real submit control stay under the old rules.",
+  "tests": [
+    "tests/test_consent_step.py::test_a_terms_step_consent_button_is_pressed",
+    "tests/test_consent_step.py::test_anything_else_keeps_the_old_rule"
+  ],
+  "prevention": "A guard rule that presumes final needs a named, tested exception for each kind of step the owner has already authorised (consent, acknowledgement), with a negative case for every neighbouring label; check what the owner decided about the page before treating a stop as the safe default."
+}

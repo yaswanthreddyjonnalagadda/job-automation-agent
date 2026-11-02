@@ -98,6 +98,26 @@ def same_organisation(a: str, b: str) -> bool:
     return False
 
 
+def current_answer(question: str, company: str, current_employer: str) -> Optional[str]:
+    """A current-employee question uses the stated current employer only.
+
+    None means a different question; an empty answer means missing evidence.
+    """
+    text = ' '.join((question or '').split())
+    match = re.search(r'^are you (?:an? )?(?:current|active) employee (?:of|at|with|for) (?P<org>[^?]+)', text, re.I) \
+        or re.search(r'^are you (?:an? )?(?:current|active) (?P<org>[^?]{2,70}?) employee\b', text, re.I)
+    if not match:
+        return None
+    org = _NAME_ENDS.sub('', match.group('org')).strip(' .\'"')
+    if _THIS_EMPLOYER.fullmatch(org):
+        org = company
+    if not org or _NOBODY_IN_PARTICULAR.match(org):
+        return None
+    if not str(current_employer or '').strip():
+        return ''
+    return 'Yes' if same_organisation(org, current_employer) else 'No'
+
+
 def answer(question: str, company: str, employers: Iterable[str]) -> str:
     """'Yes' when the organisation the question names is one the person worked for, 'No' when it is not, and ''
     when the question is not one of these."""

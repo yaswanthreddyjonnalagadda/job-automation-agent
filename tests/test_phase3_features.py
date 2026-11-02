@@ -142,6 +142,16 @@ def test_modal_interceptor_skips_password_login_dialogs(page):
     assert page.locator("button#save_btn").is_visible(), "Login modal button must remain untouched"
 
 
+def test_modal_agree_does_not_click_disagree(page):
+    page.set_content('''<div role="dialog"><p>Privacy notice</p>
+      <button onclick="window.choice='decline';this.parentElement.remove()">Disagree</button>
+      <button onclick="window.choice='accept';this.parentElement.remove()">Agree</button>
+      </div>''')
+    assert interaction.sweep_modals_and_policies(
+        page, SimpleNamespace(accept_application_privacy_prompts=True))
+    assert page.evaluate('window.choice') == 'accept'
+
+
 def test_modal_interceptor_never_advances_a_data_entry_dialog(page):
     page.set_content('''<div role="dialog" aria-modal="true" class="modal">
         <label>Legal First Name<input required></label>

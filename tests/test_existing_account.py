@@ -253,7 +253,8 @@ def test_neither_the_password_nor_the_code_is_ever_logged(page, agent, caplog):
 def test_the_gmail_reader_does_not_log_the_code_from_the_mail_it_read(browser, agent, caplog):
     """The real reader, on a stand-in inbox whose subject line shows the code."""
     caplog.set_level(logging.DEBUG)
-    inbox = ('<!doctype html><table><tr class="zA"><td>Example ATS</td>'
+    inbox = (f'<!doctype html><button aria-label="Google Account: Owner ({EMAIL})">Account</button>'
+             '<table><tr class="zA"><td>Example ATS</td>'
              f'<td>Your verification code is {CODE}</td></tr></table>')
     context = browser.new_context()  # the reader opens its own tab, which needs a real context
     try:

@@ -443,8 +443,12 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
         company: str = "",
         job_text: str = "",
         box: Optional[dict] = None,
+        several: bool = False,
     ) -> str:
         """Answers ONE specific unanswered question on behalf of the candidate.
+
+        `several`: a group of tick boxes ("which of the following do you have experience with?"): every option the
+        resume or profile shows, as the option texts joined by "; ", and only options that were offered.
         Extremely fast, token-efficient (< 300 tokens), and strictly grounded in
         the candidate's resume and profile facts.
 
@@ -473,10 +477,25 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
             "role, never as a fact about the candidate: a skill, tool or years of experience counts only if the "
             "resume or profile shows it. "
             "If options are provided, the answer MUST be an exact string from the options list. "
+            "When options are provided and the question asks for the candidate's preference, opinion or fit with "
+            "the employer (e.g. which company value resonates most) rather than a fact about them, choose the one "
+            "option that best matches the candidate's background and the role -- that is a judgement, not a "
+            "fabricated fact, so do not decline it. "
+            "When the options are levels of experience, use or proficiency, choose the highest level the resume or "
+            "profile genuinely supports and never one that overstates it. "
+            "When asked whether they would like to add something optional the facts do not contain (a name "
+            "pronunciation, a nickname), answer No. "
             "If it is a text/essay question (e.g. 'Why are you interested in this role?'), provide a "
             "concise, professional 1-3 sentence response grounded in their background. "
             "Respond with ONLY JSON: {\"answer\": \"<your concise answer>\"}"
         )
+        if several and options:
+            system += (
+                " THIS QUESTION ALLOWS SEVERAL ANSWERS (a group of tick boxes): answer with every option the resume "
+                "or profile genuinely shows, as a JSON list of exact option strings -- {\"answer\": [\"<option>\", ...]}"
+                " -- and never an option they do not support. A 'none of these' option is only for when no other "
+                "option applies, and is never combined with another."
+            )
 
         facts_lines = []
         if profile:
@@ -500,12 +519,19 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
             + (f"JOB POSTING:\n{job_text.strip()[:JOB_POSTING_CHARS]}\n\n" if (job_text or "").strip() else "")
             + f"QUESTION: {question}\n"
         )
-        if options:
+        if options and several:
+            user_message += (f"\nAVAILABLE OPTIONS (choose EVERY one that applies; answer with a JSON list of them):\n"
+                             f"{json.dumps(options, indent=2)}")
+        elif options:
             user_message += f"\nAVAILABLE OPTIONS (choose exactly one):\n{json.dumps(options, indent=2)}"
 
         try:
             raw = self._call(system=system, user_message=user_message, max_tokens=600)
             data = self._extract_json(raw)
+            if several and options:
+                import option_match
+                # Only boxes the page has, joined as the box-ticking step reads them; nothing real means no answer.
+                return "; ".join(option_match.several_offered(list(options), data.get("answer")))
             ans = str(data.get("answer") or "").strip()
             if is_non_answer(ans):
                 # "Not provided in the resume" is the model saying it does not know; typed into Steelcase's
@@ -513,19 +539,21 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
                 logger.info("AI had no answer for %r (%r) -- left for the owner", question[:50], ans[:60])
                 return ""
             if options and ans:
-                for opt in options:
-                    if opt.strip().lower() == ans.lower():
-                        return opt
-                return ""
+                import concept_matcher
+                import option_match
+                needs = getattr(profile, "requires_visa_sponsorship", None)
+                return option_match.resolve_offered(
+                    list(options), ans,
+                    needs_sponsorship=None if needs is None else concept_matcher._is_yes(needs),
+                    availability=concept_matcher.match_concept(question=question) == "NOTICE_PERIOD",
+                )
             return ans
         except Exception as exc:
             logger.info("Could not answer single question %r: %s", question[:50], exc)
             return ""
 
-    def _open_answer(self, question: str, resume_text: str, profile: Optional[UserProfile],
-                     job_title: str, company: str, job_text: str, box: dict) -> str:
-        """An open question, written in the owner's plain words by open_answers."""
-        import open_answers
+    @staticmethod
+    def _open_answer_facts(profile) -> str:
         facts = []
         if profile:
             facts.append(f"Name: {profile.full_name}")
@@ -537,18 +565,50 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
                 facts.append(f"Roles wanted: {', '.join(profile.target_titles)}")
             for level, subject, school, year in profile.education[:2]:
                 facts.append(f"Education: {level} in {subject}, {school} {year}".strip())
-        facts.append(f"Applying for: {job_title or 'this role'} at {company or 'this company'}")
+        return "\n".join(facts)
+
+    def review_open_answer(self, question: str, answer: str, *, resume_text: str = "",
+                           profile=None, job_text: str = "") -> list[str]:
+        import open_answers
+        facts = self._open_answer_facts(profile)
+        evidence = open_answers.evidence_text(question, resume_text)
+        key = (question, answer, facts, evidence, job_text)
+        cache = getattr(self, "_open_review_cache", None)
+        if cache is None:
+            cache = self._open_review_cache = {}
+        if key not in cache:
+            cache[key] = open_answers.review(
+                question, answer, ask=lambda system, user, tokens: self._call(
+                    system=system, user_message=user, max_tokens=tokens),
+                facts=facts, resume_text=evidence, job_text=job_text)
+            if len(cache) > 128:
+                del cache[next(iter(cache))]
+        issues = list(cache[key])
+        if any(issue.startswith("content review") for issue in issues):
+            del cache[key]  # A transient provider/schema failure may recover on a later attempt.
+        return issues
+
+    def _open_answer(self, question: str, resume_text: str, profile: Optional[UserProfile],
+                     job_title: str, company: str, job_text: str, box: dict) -> str:
+        """An open question, written in the owner's plain words by open_answers."""
+        import open_answers
+        facts = self._open_answer_facts(profile)
         limits = open_answers.limits_from(question, box.get("hint", ""), maxlength=box.get("maxlength"),
                                           minlength=box.get("minlength"))
         try:
             answer, left = open_answers.write(
                 question, ask=lambda system, user, tokens: self._call(system=system, user_message=user,
                                                                         max_tokens=tokens),
-                facts="\n".join(facts), resume_text=resume_text, job_text=job_text,
-                hint=box.get("hint", ""), limits=limits)
+                facts=facts, resume_text=resume_text,
+                job_text=f"Target role: {job_title} at {company}\n{job_text}",
+                hint=box.get("hint", ""), limits=limits,
+                reviewer=lambda answer: self.review_open_answer(
+                    question, answer, resume_text=resume_text, profile=profile, job_text=job_text))
         except ClaudeIntegrationError as exc:
             logger.info("Could not write an answer to %r: %s", question[:50], exc)
             return ""
+        if not answer:
+            logger.info("OPEN_ANSWER_REJECTED: content unavailable or unverified (%d issue(s))", len(left))
         return answer
 
     # ------------------------------------------------------------------

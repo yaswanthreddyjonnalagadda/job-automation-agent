@@ -127,8 +127,8 @@ def set_agent_busy(page: Any, busy: bool) -> None:
     for frame in _frames(page):
         try:
             frame.evaluate("b => { if (window.__jaaProvenance) window.__jaaProvenance.agentBusy = b; }", bool(busy))
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("set_agent_busy: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
 
 def owner_edited(target: Any, selector: str = "") -> Optional[bool]:
@@ -171,6 +171,6 @@ def _frames(page: Any) -> list:
     if frames:
         try:
             return list(frames)
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("_frames: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
     return [page]

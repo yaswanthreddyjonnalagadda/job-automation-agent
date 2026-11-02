@@ -1,0 +1,14 @@
+{
+  "id": "f272",
+  "date": "2026-10-27",
+  "class": "A legend that explains the required marker was read as an error the page was reporting",
+  "symptom": "Walmart (careers.walmart.com), 'What is your home address?': the agent filled the address, city, ZIP and State (corrected 'Select a state' to 'Virginia' from the profile) and the page moved on to Employment history, yet the run stopped for the owner with 'the form will not go on; it says: Fields marked with an asterisk (*) are required'.",
+  "site": "Walmart careers site, 27 October 2026 (saved pages output/Walmart_(USA)_Senior_Network_Engineer/pages/20261027_230655)",
+  "root_cause": "page_errors treats any line saying 'is required' / 'are required' as what the page says is wrong. It exempted Workday's legend ('* indicates a required field') but not the equally common 'Fields marked with an asterisk (*) are required', which sits on every page of the form. After a press that had not yet visibly moved the page, stuck_on_errors read the legend as the page's complaint and, seeing the same 'error' on the second press, stopped with 'the form will not go on'.",
+  "why_tests_missed": "The page-error cases covered real errors and one legend wording; none was a legend worded differently, and none put a legend beside a real error.",
+  "fix": "page_errors recognises a legend as text that names the marker (asterisk, (*), *, star) and says what it means (marked, indicates, denotes, identified, flagged) and asks for nothing (no must / invalid / please / enter / select). A real error that mentions the marker still counts, and a legend beside a real error leaves only the real error.",
+  "tests": [
+    "tests/test_page_errors.py::test_what_counts_as_the_page_saying_something_is_wrong"
+  ],
+  "prevention": "Tell an error from an explanation by what the text asks for, not by the word 'required'; test every common legend wording beside a real error."
+}

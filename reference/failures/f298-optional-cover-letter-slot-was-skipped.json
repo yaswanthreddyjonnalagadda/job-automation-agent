@@ -1,0 +1,17 @@
+{
+  "id": "f298",
+  "date": "2026-11-02",
+  "class": "A rule that sent a document only when it was required was kept in three places, so a place the form offered for it, but did not require, was skipped by all three",
+  "symptom": "Fastly (Greenhouse): the form had a 'Cover Letter' section with an Attach button and no star. The application went out with no cover letter, and none was ever written. The owner saw the same on the last Greenhouse applications and on other forms where a cover letter is an option.",
+  "site": "job-boards.greenhouse.io (Fastly, Senior Engineer - Network Management Platform), 2 November 2026",
+  "root_cause": "The agent wrote and attached a cover letter only when the form required one: page_agent.attach_documents looked for a star or the word 'required' beside the section, apply_flow's cover-letter provider asked has_required_cover_letter_field, and the older fill flow used the same test. An optional slot passed none of them. Cover letters were also behind a master switch (GENERATE_COVER_LETTERS) that was off.",
+  "why_tests_missed": "The optional case was pinned by tests that asserted it was skipped (written with the rule, Task 4.3), so the tests encoded the rule instead of questioning it. No test held the owner's actual instruction: a form that offers a place gets a letter.",
+  "fix": "The letter is written and attached wherever the form offers a place for one, required or not. It is still written only when an upload control for it has been found, so no model call is spent on a form without one. The decision lives in one function, apply_flow.cover_letter_for (the master switch, then write once and reuse); the page agent no longer looks for a star; the older flow writes for any place when the switch is on and always for a required one. GENERATE_COVER_LETTERS is switched on in the owner's setup.",
+  "tests": [
+    "tests/test_cover_letter_when_offered.py::test_a_cover_letter_is_written_and_attached_where_the_form_offers_a_place_for_one",
+    "tests/test_cover_letter_when_offered.py::test_no_letter_is_written_for_a_form_with_no_place_for_one",
+    "tests/test_cover_letter_when_offered.py::test_a_place_that_already_holds_a_letter_gets_no_second_one",
+    "tests/test_cover_letter_when_offered.py::test_the_letter_is_written_once_and_only_when_the_owner_has_switched_cover_letters_on"
+  ],
+  "prevention": "When the owner states what a document is for (send it wherever there is a place for it), that is the rule, in one place. A test that pins a default ('optional is skipped') must say whose decision it records."
+}

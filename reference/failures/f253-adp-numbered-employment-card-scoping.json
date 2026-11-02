@@ -1,0 +1,16 @@
+{
+  "id": "f253",
+  "date": "2026-10-26",
+  "class": "ADP numbered sibling regions lose repeated-record identity",
+  "symptom": "Collapsed employers were skipped; expanded sibling regions lost their work-record scope, causing missing Type, a wrong current end date and reused reason/location answers.",
+  "site": "Church Mutual ADP Senior Network Engineer application 548, supervised continuation 25\u201326 October 2026",
+  "root_cause": "Employer header buttons were not section titles. Initial header-only translation also let the sibling Employer region clear the section.",
+  "why_tests_missed": "Fixtures modeled nested controls, not the actual sibling header and region structure.",
+  "fix": "Expand existing numbered cards and translate both their headers and sibling regions into numbered semantic groups for shared repeated-entry resolution. Resolve Current/Previous only from explicit record.current.",
+  "tests": [
+    "tests/test_adp_repeated_cards.py::test_numbered_cards_keep_their_history_and_employment_type",
+    "tests/test_adp_repeated_cards.py::test_sibling_card_regions_preserve_record_scope",
+    "tests/test_adp_repeated_cards.py::test_only_existing_collapsed_cards_are_expanded"
+  ],
+  "prevention": "Retain portal-shaped regression fixtures, inspect every repeated record, verify committed values and preserve submission and personal-answer gates."
+}

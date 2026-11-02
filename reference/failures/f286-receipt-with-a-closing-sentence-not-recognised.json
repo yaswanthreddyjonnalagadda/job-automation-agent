@@ -1,0 +1,15 @@
+{
+  "id": "f286",
+  "date": "2026-11-01",
+  "class": "A confirmation page was not recognised because the employer added a sentence after the receipt",
+  "symptom": "Color Health on Ashby: the owner pressed Submit and the page said 'Success' and 'Your application was successfully submitted. We'll contact you if there are next steps.' The run kept waiting and the tracker stayed 'ready_to_submit' for an application that had been sent.",
+  "site": "jobs.ashbyhq.com/color-health, 1 November 2026",
+  "root_cause": "browser_automation._CONFIRMATION_HEADING_RE accepts a receipt only when the whole element text is the receipt phrase. The employer's closing sentence in the same paragraph made the element text longer than any phrase, so no element matched.",
+  "why_tests_missed": "Receipt tests used the confirming sentence alone, or a sentence ('We will be in touch') in a separate element. None had the closing sentence inside the receipt's own element.",
+  "fix": "One more receipt phrase: the receipt sentence followed by a sentence in which the employer speaks in the first-person future (We'll / We will ...). Advice to the visitor, conditional wording, hidden text and a page that still shows a form or Submit button are still not receipts.",
+  "tests": [
+    "tests/test_receipt_with_a_closing_sentence.py::test_a_receipt_with_a_closing_sentence_is_a_receipt",
+    "tests/test_receipt_with_a_closing_sentence.py::test_advice_hidden_text_and_unfinished_forms_are_still_not_receipts"
+  ],
+  "prevention": "Test a receipt as the site really words it, including the sentences it adds, and keep the rejection cases beside every new accepted wording."
+}

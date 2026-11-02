@@ -1,0 +1,15 @@
+{
+  "id": "f257",
+  "date": "2026-10-26",
+  "class": "Committed date formatting is mistaken for an uncommitted answer",
+  "symptom": "ADP employment Start Date values correctly displayed as MM/DD/YYYY were repeatedly corrected and eventually reported as could not set when the saved fact was a month and year.",
+  "site": "Church Mutual ADP application 548, Employment History supervised continuation on 26 October 2026",
+  "root_cause": "The fill path formats dates for the input, but correction and post-fill verification compare the displayed text with the original month-name answer. Month-only history also must not overwrite a matching imported day.",
+  "why_tests_missed": "Date formatting and segmented current-job tests did not verify the full correction and not_stuck paths against a committed numeric date.",
+  "fix": "Use a shared date comparison at the precision of the saved fact for repeated-date correction and date-field post-fill verification. Preserve a matching day when history supplies only month/year; explicit different days remain different.",
+  "tests": [
+    "tests/test_committed_history_dates.py::test_date_match_respects_the_precision_of_the_saved_fact",
+    "tests/test_committed_history_dates.py::test_committed_dates_are_verified_without_rewriting_a_matching_month"
+  ],
+  "prevention": "Test the displayed result through correction and progression checks, including differing valid formats, month-only facts, explicit day conflicts and invalid input."
+}

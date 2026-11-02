@@ -1,0 +1,16 @@
+{
+  "id": "f234",
+  "date": "2026-10-23",
+  "site": "Palantir Lever run 20261023_145539; Screenshot 2026-10-23 150551.png",
+  "class": "Factually supported qualifications substitute for employer or role motivation",
+  "symptom": "Why do you want to work at Palantir was filled with resume accomplishments and a statement that the work matched prior experience, without a concrete reason to choose the employer or role.",
+  "root_cause": "The drafting instruction asked for reasons but did not distinguish motivation from qualification. The content review described experience and factual question coverage without explicit motivation acceptance criteria, allowing a factually supported resume summary to pass.",
+  "why_tests_missed": "Review tests covered factual support, technical experience and fitted limits, but did not exercise an incomplete motivation answer followed by a posting-grounded repair.",
+  "fix": "Clarify why-answer generation and the existing content review: qualifications alone are incomplete for employer/role motivation. Require a concrete posting-backed reason and relevant supported experience; prohibit invented admiration, products, mission, impact or preferences. Accept a role-specific reason when no broader company facts are supplied. Preserve the existing bounded rewrite and fail-closed approval gate without extra model calls.",
+  "tests": [
+    "tests/test_motivation_and_form_date.py::test_motivation_contract_rejects_qualifications_only_then_rewrites",
+    "tests/test_motivation_and_form_date.py::test_motivation_review_requires_employer_evidence_without_inventing_feelings",
+    "tests/test_motivation_and_form_date.py::test_unrepaired_motivation_remains_unapproved"
+  ],
+  "prevention": "Validate coverage according to question intent as well as factuality. Scripted provider tests verify prompt and retry contracts; live model answer quality and the original application outcome remain unverified."
+}

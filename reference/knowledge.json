@@ -1,0 +1,29 @@
+{
+  "_about": "Word lists the answer engine (answer_engine.py) reads: names of human languages (for 'are you fluent in ...' questions), programming languages (for 'your most proficient language'), number words, and words that carry no meaning in a question about experience. Add a word here, not in code.",
+  "human_languages": [
+    "english", "spanish", "french", "german", "italian", "portuguese", "dutch", "swedish", "norwegian", "danish", "finnish",
+    "polish", "czech", "slovak", "hungarian", "romanian", "bulgarian", "greek", "turkish", "russian", "ukrainian", "arabic",
+    "hebrew", "persian", "farsi", "hindi", "urdu", "bengali", "bangla", "punjabi", "gujarati", "marathi", "tamil", "telugu",
+    "kannada", "malayalam", "nepali", "sinhala", "mandarin", "cantonese", "chinese", "japanese", "korean", "vietnamese",
+    "thai", "indonesian", "bahasa", "malay", "tagalog", "filipino", "swahili", "afrikaans", "catalan", "croatian", "serbian",
+    "bosnian", "slovenian", "lithuanian", "latvian", "estonian", "icelandic", "hausa", "yoruba", "amharic"
+  ],
+  "programming_languages": [
+    "python", "go", "golang", "java", "javascript", "typescript", "c++", "c#", "rust", "ruby", "php", "kotlin", "swift",
+    "scala", "perl", "bash", "powershell", "sql", "r"
+  ],
+  "number_words": {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "fifteen": 15, "twenty": 20
+  },
+  "experience_stopwords": [
+    "a", "an", "the", "of", "in", "on", "at", "to", "for", "and", "or", "with", "as", "by", "from", "any", "some", "your",
+    "you", "have", "has", "had", "do", "does", "did", "been", "being", "be", "is", "are", "was", "were", "this", "that",
+    "these", "those", "such", "other", "related", "similar", "relevant", "prior", "previous", "working", "work", "worked",
+    "experience", "experienced", "years", "year", "least", "more", "than", "including", "ideally", "role", "roles",
+    "function", "functions", "field", "area", "areas", "environment", "environments", "team", "teams", "company",
+    "business", "level", "full-time", "part-time", "strong", "proven", "demonstrated", "hands", "on", "using", "use", "within", "across", "also",
+    "plus", "full", "time", "fulltime", "professional", "industry", "position", "positions", "capacity", "background",
+    "how", "many", "much", "number", "what", "which", "please", "describe", "list", "knowledge", "understanding", "ability", "able", "building", "developing", "managing", "owned", "directly"
+  ]
+}

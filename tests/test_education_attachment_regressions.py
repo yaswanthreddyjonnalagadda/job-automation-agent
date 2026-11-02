@@ -99,3 +99,65 @@ def test_relocated_prompt_keeps_the_identity_of_its_education_row(page):
     assert WorkdayAdapter().select_from_searchable_input(agent().assistant,page,'--fieldOfStudy',['Primary subject'],keyboard=False)
     assert page.locator('[data-automation-id=selectedItem]').inner_text()=='Primary subject'
     assert page.locator('#b--fieldOfStudy').input_value()==''
+
+
+def test_education_from_and_to_datepicker_labels_and_years():
+    import repeated_entries
+    snap = """- group "Education" [ref=e1]:
+  - textbox "School or University" [ref=e2]: Eastern Illinois University
+  - combobox "Degree" [ref=e3]: M.S.
+  - combobox "Field of Study" [ref=e4]
+  - generic [ref=e5]:
+    - generic "From" [ref=e6]
+    - textbox "Date picker closed. No date currently selected." [ref=e7]
+  - generic [ref=e8]:
+    - generic "To (Actual or Expected)" [ref=e9]
+    - textbox [ref=e10]: "2022"
+  - textbox "School or University" [ref=e11]: JNTU Hyderabad
+  - combobox "Degree" [ref=e12]: B.S.
+  - combobox "Field of Study" [ref=e13]: Electrical Engineering
+  - generic [ref=e14]:
+    - generic "From" [ref=e15]
+    - textbox [ref=e16]
+  - generic [ref=e17]:
+    - generic "To (Actual or Expected)" [ref=e18]
+    - textbox [ref=e19]: "2019"
+"""
+    profile = SimpleNamespace(
+        education=[
+            ("Master's", "Computer Science", "Eastern Illinois University", "2022"),
+            ("Bachelor's", "Electrical and Electronics Engineering", "JNTU Hyderabad", "2019"),
+        ],
+        education_dates=[
+            ("Eastern Illinois University", "August 2021", "December 2022"),
+            ("JNTU Hyderabad", "August 2015", "April 2019"),
+        ],
+    )
+    history = repeated_entries.with_profile({"education": []}, profile)
+    entries = repeated_entries.entry_map(snap)
+    assert repeated_entries.answer(entries["e4"], history)[0] == "Computer Science"
+    assert repeated_entries.answer(entries["e7"], history)[0] == "2021"
+    assert repeated_entries.answer(entries["e10"], history)[0] == "2022"
+    assert repeated_entries.answer(entries["e13"], history)[0] == "Electrical and Electronics Engineering"
+    assert repeated_entries.answer(entries["e16"], history)[0] == "2015"
+    assert repeated_entries.answer(entries["e19"], history)[0] == "2019"
+
+
+def test_workday_education_fills_both_first_and_last_year_attended(page, monkeypatch):
+    page.set_content("""<div id="edu">
+      <input id="education-1--schoolName">
+      <input data-automation-id="dateSectionYear-input" id="education-1--firstYearAttended-dateSectionYear-input">
+      <input data-automation-id="dateSectionYear-input" id="education-1--lastYearAttended-dateSectionYear-input">
+    </div>""")
+    adapter = WorkdayAdapter()
+    monkeypatch.setattr(adapter, "delete_all_entries", lambda *args: 0)
+    monkeypatch.setattr(adapter, "_ensure_entry_slot", lambda *args: None)
+    monkeypatch.setattr(page, "wait_for_timeout", lambda _ms: None)
+    adapter.fill_education_section(
+        agent().assistant,
+        page,
+        [{"school": "Eastern Illinois University", "start": "August 2021", "end": "December 2022"}],
+    )
+    assert page.locator("#education-1--firstYearAttended-dateSectionYear-input").input_value() == "2021"
+    assert page.locator("#education-1--lastYearAttended-dateSectionYear-input").input_value() == "2022"
+

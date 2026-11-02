@@ -1,0 +1,12 @@
+{
+  "id": "f213",
+  "date": "2026-10-21",
+  "site": "HEICO ADP verification flow; modal confirmation across portals",
+  "class": "Substring matching confuses negative actions with affirmative consent",
+  "symptom": "After successful email-code entry, the modal interceptor clicked Disagree twice and returned ADP to sign-in, ending in a validation-loop handoff.",
+  "root_cause": "The selector :has-text('Agree') also matches Disagree and selected the first matching button.",
+  "why_tests_missed": "The modal test contained only an affirmative I Agree action, with no preceding negative alternative.",
+  "fix": "Match the complete accessible button name against the existing affirmative/close vocabulary using anchored, case-insensitive expressions. Keep entry-dialog and attestation guards.",
+  "tests": ["tests/test_phase3_features.py::test_modal_agree_does_not_click_disagree"],
+  "prevention": "Never use substring matches to choose between affirmative and negative actions. Test paired opposite labels in their actual order."
+}

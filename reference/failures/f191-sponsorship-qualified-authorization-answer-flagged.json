@@ -1,0 +1,18 @@
+{
+  "id": "f191",
+  "date": "2026-10-18",
+  "site": "Greenhouse (Datadog work-authorization list); any list whose rows combine authorization with sponsorship",
+  "class": "A qualified option ('No, I need sponsorship now') was judged by its first word instead of what it says",
+  "symptom": "On Datadog the agent chose 'No, I need sponsorship now' -- true for an owner who needs an H-1B transfer -- and safety.legal_answer_conflicts flagged it as 'but you are authorized to work', so the truthfulness declaration was refused.",
+  "root_cause": "The work-authorization branch of legal_answer_conflicts treated any value starting with 'No' as a denial of authorization, without reading the sponsorship qualifier the same row carries.",
+  "why_tests_missed": "Its tests used bare Yes/No values; the sponsorship-qualified rows were tested only for choosing (f184), not for checking.",
+  "fix": "option_match.sponsorship_said(text) is the one reading of what a row says the applicant needs (True / False / None), used by sponsorship_choice and by legal_answer_conflicts: a row that speaks of sponsorship is checked against profile.requires_visa_sponsorship; a bare 'No' is still a denial. _SPONSORED now reads 'need sponsorship' and _UNRESTRICTED 'do/will not need/require sponsorship'.",
+  "tests": [
+    "tests/test_sponsorship_qualified_authorization_answer.py::test_options_that_say_sponsorship_is_needed",
+    "tests/test_sponsorship_qualified_authorization_answer.py::test_options_that_say_sponsorship_is_not_needed",
+    "tests/test_sponsorship_qualified_authorization_answer.py::test_options_that_do_not_speak_of_sponsorship",
+    "tests/test_sponsorship_qualified_authorization_answer.py::test_a_plain_no_is_still_a_denial_of_authorization",
+    "tests/test_sponsorship_qualified_authorization_answer.py::test_the_shared_choice_still_picks_the_sponsored_row"
+  ],
+  "prevention": "Choosing an option and checking the chosen option use the same reading of it; never judge a qualified row by its first word."
+}

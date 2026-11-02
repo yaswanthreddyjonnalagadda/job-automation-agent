@@ -18,6 +18,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from resource_manager import HealthCategory, ResourceMetrics
+import logging
+
+logger = logging.getLogger('worker_manager')
 
 
 class WorkerType(str, Enum):
@@ -61,8 +64,8 @@ def detect_git_sha(base_dir: Optional[Path] = None) -> str:
         )
         if res.returncode == 0:
             return res.stdout.strip()
-    except Exception:
-        pass
+    except Exception as _swallowed:
+        logger.debug("detect_git_sha: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
     return "unknown"
 
 
@@ -138,8 +141,8 @@ class WorkerRegistry:
                     metrics=item.get("metrics", {}),
                     metadata=item.get("metadata", {}),
                 )
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("_load: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
     def _save(self) -> None:
         try:
@@ -149,8 +152,8 @@ class WorkerRegistry:
             with open(temp, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
             temp.replace(self._storage_path)
-        except Exception:
-            pass
+        except Exception as _swallowed:
+            logger.debug("_save: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
 
     def register(
         self,
