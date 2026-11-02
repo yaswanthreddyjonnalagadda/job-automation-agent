@@ -1817,6 +1817,23 @@ def load_latest_code(agent, assistant, job, experience_data):
         agent.claude = rechoose_brain(agent.claude, config_module.get_app_config(), job)
     except Exception as exc:
         logger.warning("Could not switch the brain over: %s", exc)
+    try:
+        guard = getattr(assistant, "_submission_guard", None)
+        if guard is not None:
+            import posting_entry
+            importlib.reload(posting_entry)
+            import submission_guard
+            importlib.reload(submission_guard)
+            guard._script = submission_guard._guard_script(guard._capability)
+            guard.context.add_init_script(script=guard._script)
+            for page in list(getattr(guard.context, "pages", ())):
+                if not page.is_closed():
+                    try:
+                        page.reload(wait_until="domcontentloaded", timeout=15_000)
+                    except Exception as reload_err:
+                        logger.debug("Page reload after guard update: %s", reload_err)
+    except Exception as exc:
+        logger.warning("Could not refresh submission guard on reload: %s", exc)
     logger.info("Reloaded the reading agent, your profile and the instructions")
     return assistant
 

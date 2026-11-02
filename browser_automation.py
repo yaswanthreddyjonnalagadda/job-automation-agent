@@ -375,6 +375,10 @@ class JobApplicationAssistant(EmailVerificationMixin):
             if tracker is not None and key:
                 guard.bind_application(tracker, key)
             guard.activate(page)
+        else:
+            guard = getattr(self, "_submission_guard", None)
+            if guard is not None:
+                guard.deactivate(page)
 
     def human_handoff(self, page: Page) -> None:
         """Park automation durably before allowing owner-controlled submission."""

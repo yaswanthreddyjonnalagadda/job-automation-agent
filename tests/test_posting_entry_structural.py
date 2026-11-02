@@ -87,3 +87,19 @@ def test_a_site_whose_name_merely_contains_a_social_host_is_not_a_job_board(page
     """x.com must match the host x.com, not any name ending in 'x.com' such as box.com."""
     opened, denials = click_apply(page, f"{HEADER}<main>{apply_button()}</main>", host="careers.box.com")
     assert opened and not denials
+
+
+def test_posting_with_share_link_textbox_only_opens_application(page):
+    """BambooHR's shape: a posting with an Apply button, a 'Link to This Job' URL box, and share buttons (f288)."""
+    body = (
+        f"{HEADER}<main>"
+        f"<h1>Senior IT Systems Engineer</h1>"
+        f"{apply_button('Apply for This Job')}"
+        f"<div><label for='share'>Link to This Job</label>"
+        f"<input id='share' aria-label='Link to This Job' value='https://tricitygroup.bamboohr.com/careers/185'></div>"
+        f"<button type='button'>Share LinkedIn</button>"
+        f"</main>"
+    )
+    opened, denials = click_apply(page, body, "Apply for This Job", host="tricitygroup.bamboohr.com")
+    assert opened and not denials
+

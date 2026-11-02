@@ -1761,6 +1761,8 @@ class PageAgent:
         # here as well as where the run starts, so a run that is already going gets them on Resume.
         if self.history and getattr(self, "profile", None) is not None:
             self.history = repeated_entries.with_profile(self.history, self.profile)
+        self._circuit_breaker = None
+        self._posting_reloads = 0
 
     # -- the page --------------------------------------------------------------
     @staticmethod
@@ -3751,6 +3753,26 @@ class PageAgent:
             if hasattr(self.assistant, "protect_submission"):
                 self.assistant.protect_submission(tab)
             self._current_host = urlparse(getattr(tab, "url", "")).netloc.lower()
+            if getattr(self, "_posting_reloads", 0) < 3:
+                if getattr(self.assistant, "on_job_description", lambda _p: False)(tab):
+                    guard = getattr(self.assistant, "_submission_guard", None) or getattr(self.assistant, "_ensure_submission_guard", lambda _p: None)(tab)
+                    if guard is not None and guard.denial_count(tab) > 0:
+                        self._posting_reloads = getattr(self, "_posting_reloads", 0) + 1
+                        try:
+                            import importlib
+                            import posting_entry
+                            importlib.reload(posting_entry)
+                            import submission_guard
+                            importlib.reload(submission_guard)
+                            guard._script = submission_guard._guard_script(guard._capability)
+                            guard.context.add_init_script(script=guard._script)
+                            tab.reload(wait_until="domcontentloaded", timeout=15_000)
+                            self.settle(page, 2_000)
+                            self._circuit_breaker = None
+                            self._pressed = {}
+                            logger.info("PageAgent reloaded posting tab to refresh submission guard (reload %d)", self._posting_reloads)
+                        except Exception as _exc:
+                            logger.warning("PageAgent reload on posting: %s", _exc)
             kind, notice = self._posting_verdict(tab)
             if kind == "gone":
                 return Outcome("job_not_found", page, [notice])

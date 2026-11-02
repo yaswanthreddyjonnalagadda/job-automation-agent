@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import safety
+import posting_entry
 from playwright.sync_api import Error as PlaywrightError
 
 logger = logging.getLogger(__name__)

@@ -47,7 +47,15 @@ _TEMPLATE = r"""element => {
     return false;
   };
   if (nonAppWidget(element, true)) return false;
-  const siteChrome = node => Boolean(node.closest('header, nav, footer, [role="banner"], [role="navigation"], [role="search"], [role="contentinfo"]')) || nonAppWidget(node);
+  const isJobShareLink = node => {
+    if (node.tagName !== 'INPUT' && node.tagName !== 'TEXTAREA') return false;
+    if (node.readOnly || node.hasAttribute('readonly')) return true;
+    const val = (node.value || '').trim();
+    if (/^https?:\/\//i.test(val)) return true;
+    const text = ((node.getAttribute('aria-label') || '') + ' ' + (node.name || '') + ' ' + (node.id || '') + ' ' + (node.placeholder || '')).toLowerCase();
+    return /\b(?:link\s+to\s+this\s+job|share|copy\s+(?:link|url)|job\s+link)\b/i.test(text);
+  };
+  const siteChrome = node => Boolean(node.closest('header, nav, footer, [role="banner"], [role="navigation"], [role="search"], [role="contentinfo"]')) || nonAppWidget(node) || isJobShareLink(node);
   // A frame is harmless only when it can be looked into (same origin), has no address of its own to load, and holds
   // no form control; a cross-origin or still-loading frame may be an embedded application, so it blocks.
   const frameHoldsAnApplication = frame => {
