@@ -13,7 +13,10 @@
     "tests/test_which_office_applying_for.py::test_no_fitting_office_is_left_to_the_owner",
     "tests/test_which_office_applying_for.py::test_a_state_written_in_full_still_matches",
     "tests/test_unlabelled_required_select.py::test_a_placeholder_option_with_a_value_is_still_blank",
-    "tests/test_unlabelled_required_select.py::test_a_chosen_option_is_not_blank"
+    "tests/test_unlabelled_required_select.py::test_a_chosen_option_is_not_blank",
+    "tests/test_office_select_is_answered_on_the_page.py::test_the_one_fitting_office_is_selected",
+    "tests/test_office_select_is_answered_on_the_page.py::test_an_unnamed_select_does_not_adopt_the_heading_above_it_as_its_answer",
+    "tests/test_office_select_is_answered_on_the_page.py::test_a_value_shown_beside_a_named_select_is_still_its_answer"
   ],
   "prevention": "Judge whether a choice was made by what the control shows, not by its value attribute, and make 'every required field is filled' depend on the page's own required flag and error text as well as on the agent's own inventory."
 }
