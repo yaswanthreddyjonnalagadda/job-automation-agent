@@ -70,8 +70,11 @@ INVENTORY_JS = r"""
     if (!e || !e.getClientRects().length) return false;
     const s = getComputedStyle(e);
     if (s.visibility === 'hidden' || s.display === 'none' || parseFloat(s.opacity) === 0) return false;
+    // Where the page puts it, not where the window happens to be: a field scrolled above the top of the window is
+    // still on the page (Fastly's 'agreements' dropdown was called invisible once the agent had worked below it,
+    // so its choices were never read -- f295). Only a field parked off the page's own edge (left:-9999px) is not.
     const r = e.getBoundingClientRect();
-    return r.width > 1 && r.height > 1 && r.right > 0 && r.bottom > 0;
+    return r.width > 1 && r.height > 1 && r.right + window.scrollX > 0 && r.bottom + window.scrollY > 0;
   };
   const byId = (root, id) => (root.getElementById ? root.getElementById(id) : null) || document.getElementById(id);
   const all = [];

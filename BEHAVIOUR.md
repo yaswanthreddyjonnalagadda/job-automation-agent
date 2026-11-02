@@ -429,6 +429,12 @@ no credit -- a page is not a reason to stop if every required question on it (ma
 presses Next, and the hand-over lists what it left blank. A required question still
 open stops the run for you, as before.
 
+A question is required when its page marks it with a star, however long its wording is: 
+a long question (over 120 characters, such as "Are you subject to any agreements that may restrict your 
+ability to be employed in this position ...?") is put to the AI like a short one, and is no longer left blank as 
+optional. A dropdown the form has scrolled past is still read: the agent opens it, reads its choices and 
+gives the AI those choices to pick from, wherever the window is scrolled.
+
 ## An account that already exists
 
 When an employer's page says an account already exists for your email, the

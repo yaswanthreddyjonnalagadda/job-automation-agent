@@ -1008,17 +1008,25 @@ def inline_required_questions(snapshot: str) -> list[str]:
     return found
 
 
+# The longest question whose star is read, the same for every way a star is drawn. Each pattern once had a limit of
+# its own (120, 200, 600), so a long required question was required to one and optional to another: Fastly's 139- and
+# 159-character ones were left blank without asking anyone, then stopped the run at the end (f295). The longest seen
+# is Walmart's 410 characters (f273).
+_QUESTION_TEXT_MAX = 600
+
+
 def required_questions(snapshot: str) -> set[str]:
     """The questions a form marks with a star, or flags with its own "Required" alert."""
-    marked = set(re.findall(r'- generic "([^"]{2,120})" \[ref=[\w-]+\]: "\*"', snapshot or ""))
+    n = _QUESTION_TEXT_MAX
+    marked = set(re.findall(r'- generic "([^"]{2,%d})" \[ref=[\w-]+\]: "\*"' % n, snapshot or ""))
     marked |= set(inline_required_questions(snapshot))
-    marked |= {m.strip() for m in re.findall(r'- generic \[ref=[\w-]+\]: ([^\n]{2,120}?) ?\*$',
+    marked |= {m.strip() for m in re.findall(r'- generic \[ref=[\w-]+\]: ([^\n]{2,%d}?) ?\*$' % n,
                                              snapshot or "", re.MULTILINE)}
     # Lever/Palantir: the label is a text line and its star a separate line after it, or the star ends the box's name.
     star = r"[*∗⁎✱-✳⩪＊﹡]+"
-    marked |= {m.strip() for m in re.findall(r"- text: ([^\n]{2,600})\n\s*- generic \[ref=[\w-]+\]: " + star + r"\s*$",
+    marked |= {m.strip() for m in re.findall(r"- text: ([^\n]{2,%d})\n\s*- generic \[ref=[\w-]+\]: " % n + star + r"\s*$",
                                              snapshot or "", re.MULTILINE)}
-    marked |= {m.strip() for m in re.findall(r'- (?:textbox|combobox|button|radiogroup|group) "([^"\n]{2,200}?) ?' + star + '"',
+    marked |= {m.strip() for m in re.findall(r'- (?:textbox|combobox|button|radiogroup|group) "([^"\n]{2,%d}?) ?' % n + star + '"',
                                              snapshot or "")}
     return {" ".join(q.split()) for q in marked if q.strip()}
 
