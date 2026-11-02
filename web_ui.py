@@ -79,6 +79,8 @@ ui_shell.install(app)
 def _artifact_ref(path) -> str:
     """The reference a link carries for a file: its place inside the project, never the owner's own folders.
     A file outside the project has no reference."""
+    if re.match(r"^[A-Za-z]:[\\/]", str(path)) and not re.match(r"^[A-Za-z]:", str(BASE_DIR)):
+        return ""            # a Windows drive path is outside the project on a host that has no drives
     try:
         return Path(path).resolve().relative_to(BASE_DIR.resolve()).as_posix()
     except (ValueError, OSError):
