@@ -1,5 +1,5 @@
 {
-  "id": "f252",
+  "id": "f294",
   "date": "2026-10-26",
   "site": "the Suggested jobs feed (job_discovery.py), every board",
   "class": "A ranking that saturates at one value, over a source list too small to change, with no way for old rows to leave",
