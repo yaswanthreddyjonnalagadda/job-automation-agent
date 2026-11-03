@@ -30,8 +30,10 @@ What it may never do is decided here, in code, whatever Claude proposes:
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import asdict, dataclass, field, replace
@@ -1616,6 +1618,22 @@ def posting_gone_message(text: str) -> str:
     return next((line for line in lines if re.fullmatch(pattern, line, re.I)), "")
 
 
+def posting_guard_refresh_modules():
+    """The submission-guard module for rebuilding a posting tab's guard script.
+
+    The running code, unless HOT_RELOAD=1 explicitly asks for a re-read from
+    disk: the page loop used to reload modules whenever a posting guard denied
+    a click, so behavior depended on whether an edit had landed mid-run --
+    untestable either way. (The deliberate resume path, load_latest_code, is
+    unchanged: it exists to pick up a fix the owner just made.)"""
+    import posting_entry
+    import submission_guard
+    if os.environ.get("HOT_RELOAD") == "1":
+        importlib.reload(posting_entry)
+        importlib.reload(submission_guard)
+    return submission_guard
+
+
 # ---------------------------------------------------------------------------
 # The agent
 # ---------------------------------------------------------------------------
@@ -1821,7 +1839,7 @@ class PageAgent:
         try:
             tab.wait_for_load_state("domcontentloaded", timeout=15_000)
         except Exception as _swallowed:
-            logger.debug("settle: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("settle: %s", diagnostics.short_exc(_swallowed, 100))
         host = urlparse(getattr(tab, "url", "") or "").netloc.lower()
         never_quiet = self.__dict__.setdefault("_never_quiet_hosts", set())
         try:
@@ -1832,7 +1850,7 @@ class PageAgent:
                 never_quiet.add(host)
                 logger.info("SETTLE: %s does not go quiet within %d ms; waited on briefly from now on",
                             "this site", self.NETWORK_QUIET_WAIT_MS)
-            logger.debug("settle: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("settle: %s", diagnostics.short_exc(_swallowed, 100))
         tab.wait_for_timeout(ms)
 
     def newest_tab(self, page, tabs_before: int):
@@ -1843,7 +1861,7 @@ class PageAgent:
                 logger.info("It opened in a new tab; continuing there")
                 return pages[-1]
         except Exception as _swallowed:
-            logger.debug("newest_tab: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("newest_tab: %s", diagnostics.short_exc(_swallowed, 100))
         return tab
 
     # -- signing in ------------------------------------------------------------------
@@ -2065,7 +2083,7 @@ class PageAgent:
                 if form_scope.get_by_role("link", name="Log Out").count() == 1:
                     return False
             except Exception as exc:
-                logger.debug("sign_in_step: iCIMS signed-in check failed: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                logger.debug("sign_in_step: iCIMS signed-in check failed: %s", diagnostics.short_exc(exc, 100))
         if "login.icims.com" == host:
             from sites.icims import IcimsAdapter
             if IcimsAdapter().dismiss_optional_passkey_enrollment(tab):
@@ -2140,7 +2158,7 @@ class PageAgent:
                 else:
                     verified = bool(verify and verify(tab))
             except Exception as exc:
-                logger.warning("VERIFY_LINK: %s", str(exc).splitlines()[0][:120])
+                logger.warning("VERIFY_LINK: %s", diagnostics.short_exc(exc, 120))
                 verified = False
             if verified:
                 # A fresh sign-in is due: the one refused was for an account not yet verified.
@@ -2148,7 +2166,7 @@ class PageAgent:
                 try:
                     tab.reload(wait_until="domcontentloaded", timeout=30_000)
                 except Exception as _swallowed:
-                    logger.debug("sign_in_step: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("sign_in_step: %s", diagnostics.short_exc(_swallowed, 100))
                 self.settle(page, 2_000)
                 # Observability only (P0-B2, 7 October 2026): some sites' verification link also
                 # signs the account in (a "magic link"), others only verify and still require a
@@ -2162,7 +2180,7 @@ class PageAgent:
                                 account_state.SIGNED_IN else "verification link opened; checking sign-in next",
                                 after)
                 except Exception as _swallowed:
-                    logger.debug("sign_in_step: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("sign_in_step: %s", diagnostics.short_exc(_swallowed, 100))
                 return True
             memory = replace(memory, verify_tried=True)
             step = account_state.next_step(state, memory)
@@ -2193,7 +2211,7 @@ class PageAgent:
             try:
                 return bool(self.assistant._goto_login_page(tab) or self._press_named(tab, r"^\s*(sign in|log in)\s*$"))
             except Exception as exc:
-                logger.warning("LOGIN: could not open sign-in (%s)", str(exc).splitlines()[0][:100])
+                logger.warning("LOGIN: could not open sign-in (%s)", diagnostics.short_exc(exc, 100))
                 return False
         if step.action == account_state.GOOGLE and email:
             return self._sign_in_with_google_step(page, tab, host, email, controls)
@@ -2235,7 +2253,7 @@ class PageAgent:
                         self._signed_in_at.discard(host)
                     return True
             except Exception as exc:
-                logger.warning("LOGIN: %s", str(exc).splitlines()[0][:120])
+                logger.warning("LOGIN: %s", diagnostics.short_exc(exc, 120))
             if not making_account and guard is not None and getattr(
                     guard, "last_credential_click", None) in ("", "not_performed"):
                 self._signed_in_at.discard(host)
@@ -2314,7 +2332,7 @@ class PageAgent:
                             host)
                 return True
         except Exception as exc:
-            logger.warning("RECOVERY: %s", str(exc).splitlines()[0][:120])
+            logger.warning("RECOVERY: %s", diagnostics.short_exc(exc, 120))
         return False
 
     def _note_account_state(self, page, host: str, state, step) -> None:
@@ -2365,7 +2383,7 @@ class PageAgent:
             diagnostics.write_safe_text(stem.with_suffix(".txt"),
                 diagnostics.sanitize_snapshot(self.snapshot(page)))
         except Exception as exc:
-            logger.debug("Could not save the account page: %s", str(exc).splitlines()[0][:100])
+            logger.debug("Could not save the account page: %s", diagnostics.short_exc(exc, 100))
 
     @staticmethod
     def _press_named(tab, pattern: str) -> bool:
@@ -2415,7 +2433,7 @@ class PageAgent:
                 logger.info("LOGIN: %s did not accept the Google account -- using its own sign-in", host)
             return True
         except Exception as exc:
-            logger.warning("LOGIN: Google sign-in did not go through (%s)", str(exc).splitlines()[0][:100])
+            logger.warning("LOGIN: Google sign-in did not go through (%s)", diagnostics.short_exc(exc, 100))
             return True   # the page has changed; read it again
 
     def _give_email_first(self, page, host: str, email: str, controls: list[Control]) -> bool:
@@ -2437,7 +2455,7 @@ class PageAgent:
                 self.locate(page, box.ref).press("Enter", timeout=5_000)
             return True
         except Exception as exc:
-            logger.warning("LOGIN: could not give the email (%s)", str(exc).splitlines()[0][:100])
+            logger.warning("LOGIN: could not give the email (%s)", diagnostics.short_exc(exc, 100))
             return False
 
     # A code emailed to the owner for their own account or email address.
@@ -2592,7 +2610,7 @@ class PageAgent:
                 getattr(self.assistant, filler)(tab, entries)
                 added = True
             except Exception as exc:
-                logger.warning("ENTRIES: could not add the %s entries: %s", heading, str(exc).splitlines()[0][:120])
+                logger.warning("ENTRIES: could not add the %s entries: %s", heading, diagnostics.short_exc(exc, 120))
                 continue
             # Verify the fill actually produced the right number of entries (Phase 0-B4) --
             # the section was marked done/redone above, before the filler ran, so a second
@@ -2656,7 +2674,7 @@ class PageAgent:
             self.locate(page, edit_m.group(1)).click(timeout=5_000)
             return True
         except Exception as exc:
-            logger.debug("Could not click Edit on My experience: %s", str(exc).splitlines()[0][:100])
+            logger.debug("Could not click Edit on My experience: %s", diagnostics.short_exc(exc, 100))
             return False
 
     def open_entry_for_missing_field(self, page, snapshot: str, controls: list[Control]) -> bool:
@@ -2686,7 +2704,7 @@ class PageAgent:
             self.locate(page, card.ref).click(timeout=6_000)
             return True
         except Exception as exc:
-            logger.debug("Could not open the entry: %s", str(exc).splitlines()[0][:100])
+            logger.debug("Could not open the entry: %s", diagnostics.short_exc(exc, 100))
             return False
 
     def rejected_by_the_page(self, snapshot: str, controls: list[Control]) -> list[str]:
@@ -2759,7 +2777,7 @@ class PageAgent:
                 self.locate(page, ref).click(timeout=5_000)
                 return True
             except Exception as exc:
-                logger.debug("Could not wake it: %s", str(exc).splitlines()[0][:80])
+                logger.debug("Could not wake it: %s", diagnostics.short_exc(exc, 80))
         return False
 
     def _code_boxes(self, page) -> list[Control]:
@@ -2882,7 +2900,7 @@ class PageAgent:
                 try:
                     self.locate(page, box.ref).fill("", timeout=2_000)
                 except Exception as _swallowed:
-                    logger.debug("complete_account_code: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("complete_account_code: %s", diagnostics.short_exc(_swallowed, 100))
             first = self.locate(page, boxes[0].ref)
             first.click(timeout=5_000)
             if len(boxes) > 1:
@@ -2902,7 +2920,7 @@ class PageAgent:
             logger.info("CODE: entered the code from your mail")
             return True
         except Exception as exc:
-            logger.warning("Could not complete the emailed code: %s", str(exc).splitlines()[0][:120])
+            logger.warning("Could not complete the emailed code: %s", diagnostics.short_exc(exc, 120))
             return False
 
     # -- profile-only form planning -------------------------------------------------
@@ -2931,7 +2949,7 @@ class PageAgent:
             loaded = json.loads(path.read_text(encoding="utf-8-sig")) if path.is_file() else {}
             self._profile_answer_library = loaded if isinstance(loaded, dict) else {}
         except Exception as exc:
-            logger.warning("Could not read %s: %s", path, str(exc).splitlines()[0][:120])
+            logger.warning("Could not read %s: %s", path, diagnostics.short_exc(exc, 120))
             self._profile_answer_library = {}
         return self._profile_answer_library
 
@@ -3426,7 +3444,7 @@ class PageAgent:
                             and (not control.options or any(_same_answer(said, option) for option in control.options)):
                         return said, "owner_earlier_answer"
             except Exception as _swallowed:
-                logger.debug("known_answer: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("known_answer: %s", diagnostics.short_exc(_swallowed, 100))
         # The answer bank: this question answered on any earlier application -- by the owner, or by the agent on one
         # the owner then sent -- on any portal (answer_bank.py). Last, so the profile and the owner's own answers
         # always come first; its answer goes into whatever this form draws through the same matcher as any other.
@@ -3586,7 +3604,7 @@ class PageAgent:
                         try:
                             self.tab(page).wait_for_load_state("networkidle", timeout=7_000)
                         except Exception as _swallowed:
-                            logger.debug("answer_what_is_known: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                            logger.debug("answer_what_is_known: %s", diagnostics.short_exc(_swallowed, 100))
                         self.settle(page, 1_000)
                 else:
                     star = "*" if any(_same_question(control.question, q) for q in required) else ""
@@ -3599,7 +3617,7 @@ class PageAgent:
                 open_questions.append(control.question + star)
                 self.failed.append(f"{control.question[:60]} = {value[:40]!r}")
                 logger.info("Could not answer %r automatically: %s", control.question[:60],
-                            str(exc).splitlines()[0][:100])
+                            diagnostics.short_exc(exc, 100))
         return filled, open_questions
 
     def _refresh_known_control(self, page, control: Control) -> Optional[Control]:
@@ -3814,11 +3832,7 @@ class PageAgent:
                     if guard is not None and guard.denial_count(tab) > 0:
                         self._posting_reloads = getattr(self, "_posting_reloads", 0) + 1
                         try:
-                            import importlib
-                            import posting_entry
-                            importlib.reload(posting_entry)
-                            import submission_guard
-                            importlib.reload(submission_guard)
+                            submission_guard = posting_guard_refresh_modules()
                             guard._script = submission_guard._guard_script(guard._capability)
                             guard.context.add_init_script(script=guard._script)
                             tab.reload(wait_until="domcontentloaded", timeout=15_000)
@@ -3850,17 +3864,17 @@ class PageAgent:
                         self._resume_autofill_attempted = True
                 except Exception as exc:
                     self._resume_autofill_attempted = True
-                    logger.info("AUTOFILL: resume parser could not run: %s", str(exc).splitlines()[0][:120])
+                    logger.info("AUTOFILL: resume parser could not run: %s", diagnostics.short_exc(exc, 120))
             try:
                 self.assistant.dismiss_cookie_banner(tab)
             except Exception as _swallowed:
-                logger.debug("_run_locked: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("_run_locked: %s", diagnostics.short_exc(_swallowed, 100))
             if safety.captcha_visible(page):
                 has_form = False
                 try:
                     has_form = tab.locator('input:not([type="hidden"]), select, textarea').count() > 3
                 except Exception as _swallowed:
-                    logger.debug("captcha form probe: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("captcha form probe: %s", diagnostics.short_exc(_swallowed, 100))
                 if not has_form or getattr(self, "_captcha_passes", 0) >= 3:
                     if RuntimeEvent is not None:
                         RuntimeEvent.emit(
@@ -4114,7 +4128,7 @@ class PageAgent:
                                 # Said out loud: at debug level a broken call (a missing function)
                                 # left every question blank with no word in the run's log.
                                 logger.warning("Could not answer %r with the AI: %s: %s", ctrl.question[:60],
-                                               type(exc).__name__, str(exc).splitlines()[0][:120] if str(exc) else "")
+                                               type(exc).__name__, diagnostics.short_exc(exc, 120) if str(exc) else "")
 
                         if newly_answered > 0:
                             self.settle(page, 800)
@@ -4172,7 +4186,7 @@ class PageAgent:
                 try:
                     tab.reload(wait_until="domcontentloaded", timeout=60_000)
                 except Exception as exc:
-                    logger.debug("Could not refresh: %s", str(exc).splitlines()[0][:70])
+                    logger.debug("Could not refresh: %s", diagnostics.short_exc(exc, 70))
                 self.settle(page, 3_000)
                 continue
 
@@ -4438,7 +4452,7 @@ class PageAgent:
                 done = self.do(page, answer, control)
             except Exception as exc:
                 done = False
-                logger.info("Could not answer %r: %s", answer.question[:60], str(exc).splitlines()[0][:100])
+                logger.info("Could not answer %r: %s", answer.question[:60], diagnostics.short_exc(exc, 100))
             if not done:
                 question = (control.question or answer.question)[:70]
                 self.failed.append(f"{question} = {answer.value[:40]!r}")
@@ -4582,7 +4596,7 @@ class PageAgent:
                 done = self.do(page, answer, control)
             except Exception as exc:
                 done = False
-                logger.info("Could not sign %r: %s", control.question[:60], str(exc).splitlines()[0][:100])
+                logger.info("Could not sign %r: %s", control.question[:60], diagnostics.short_exc(exc, 100))
             if not done:
                 self.failed.append(f"{control.question[:60]} = {answer.value[:40]!r}")
                 continue
@@ -4756,11 +4770,11 @@ class PageAgent:
                 done = self.do(page, answer, control)
             except Exception as exc:
                 done = False
-                logger.info("Could not attach the %s: %s", what, str(exc).splitlines()[0][:100])
+                logger.info("Could not attach the %s: %s", what, diagnostics.short_exc(exc, 100))
                 try:
                     self.tab(page).keyboard.press("Escape")   # a menu it opened instead is not left over the page
                 except Exception as _swallowed:
-                    logger.debug("attach_documents: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("attach_documents: %s", diagnostics.short_exc(_swallowed, 100))
             if done:
                 given.append((answer, control))
                 if action == "upload_cover_letter":
@@ -4892,7 +4906,7 @@ class PageAgent:
             if (self.locate(page, control.ref).get_attribute("type", timeout=2_000) or "").lower() == "password":
                 return "a password -- the agent never types those here"
         except Exception as _swallowed:
-            logger.debug("refusal: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("refusal: %s", diagnostics.short_exc(_swallowed, 100))
         if action in ("fill", "choose") and not answer.value.strip():
             # Emptying a box is an answer when the profile says the thing does
             # not exist: the owner has no middle name, and the site's import
@@ -5104,7 +5118,7 @@ class PageAgent:
                 done = self.do(page, answer, control)
             except Exception as exc:
                 done = False
-                logger.info("Could not correct %r: %s", control.question[:60], str(exc).splitlines()[0][:100])
+                logger.info("Could not correct %r: %s", control.question[:60], diagnostics.short_exc(exc, 100))
             if done:
                 given.append((answer, control))
                 self.written[control.question] = value
@@ -5152,7 +5166,7 @@ class PageAgent:
                 done = self._empty_box(page, control)
             except Exception as exc:
                 done = False
-                logger.info("Could not empty %r: %s", control.question[:60], str(exc).splitlines()[0][:100])
+                logger.info("Could not empty %r: %s", control.question[:60], diagnostics.short_exc(exc, 100))
             if done:
                 given.append((Answer(control.ref, control.question, "fill", "", source), control))
                 self.written[control.question] = ""
@@ -5215,7 +5229,7 @@ class PageAgent:
                     done = self._empty_box(page, control)
             except Exception as exc:
                 done = False
-                logger.info("Could not correct %r: %s", control.question[:60], str(exc).splitlines()[0][:100])
+                logger.info("Could not correct %r: %s", control.question[:60], diagnostics.short_exc(exc, 100))
             if done:
                 given.append((answer, control))
                 self.written[control.question] = value
@@ -5393,7 +5407,7 @@ class PageAgent:
                     break
                 tab.wait_for_timeout(150)
         except Exception as exc:
-            logger.debug("_fill_react_datepicker: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+            logger.debug("_fill_react_datepicker: %s", diagnostics.short_exc(exc, 100))
         return False
 
     def _shows_after_a_fresh_read(self, page, control: Control, want: str) -> bool:
@@ -5403,7 +5417,7 @@ class PageAgent:
                        and bool(c.answer) and _fill_value_committed(c.answer, want)
                        for c in parse_snapshot(self.snapshot(page)))
         except Exception as exc:
-            logger.debug("fresh read after a fill: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+            logger.debug("fresh read after a fill: %s", diagnostics.short_exc(exc, 100))
             return False
 
     @field_timing.timed("field", lambda self, page, answer, control: f"{answer.action}: {control.question}")
@@ -5523,7 +5537,7 @@ class PageAgent:
                     logger.info("Field %r is disabled or hidden -- skipped", control.question[:50])
                     return True
             except Exception as _swallowed:
-                logger.debug("do: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("do: %s", diagnostics.short_exc(_swallowed, 100))
             try:
                 input_type, placeholder = loc.evaluate(
                     "el => [el.tagName === 'INPUT' ? (el.type || '') : '', el.getAttribute('placeholder') || '']",
@@ -5558,7 +5572,7 @@ class PageAgent:
             try:
                 fill_and_dispatch(loc, fill_value, timeout=2_500)
             except Exception as fill_error:
-                field_timing.why(f"fill: {type(fill_error).__name__}: {str(fill_error).splitlines()[0][:90] if str(fill_error) else ''}")
+                field_timing.why(f"fill: {type(fill_error).__name__}: {diagnostics.short_exc(fill_error, 90) if str(fill_error) else ''}")
                 try:
                     is_inert = loc.evaluate("""(el) => {
                         return el.disabled || el.readOnly || el.getAttribute('aria-disabled') === 'true' ||
@@ -5571,13 +5585,13 @@ class PageAgent:
                         logger.info("Field %r is inert/disabled -- skipped", control.question[:50])
                         return True
                 except Exception as _swallowed:
-                    logger.debug("do: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("do: %s", diagnostics.short_exc(_swallowed, 100))
                 try:
                     if loc.is_disabled(timeout=1_000):
                         logger.info("Field %r is disabled -- skipped", control.question[:50])
                         return True
                 except Exception as _swallowed:
-                    logger.debug("do: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("do: %s", diagnostics.short_exc(_swallowed, 100))
                 try:
                     loc.evaluate("""(el, value) => {
                         const setter = Object.getOwnPropertyDescriptor(
@@ -5593,7 +5607,7 @@ class PageAgent:
                     }""", fill_value, timeout=1_000)
                     logger.info("Field %r filled via JS fallback after loc.fill failure -- verifying", control.question[:50])
                 except Exception as _swallowed:
-                    logger.debug("do: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("do: %s", diagnostics.short_exc(_swallowed, 100))
                 else:
                     # Verify the JS fallback actually committed the value (Phase 0-B4
                     # closure) -- the same positive-evidence check as the ordinary path
@@ -5622,7 +5636,7 @@ class PageAgent:
             try:
                 loc.press("Tab", timeout=800)
             except Exception as _swallowed:
-                logger.debug("do: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("do: %s", diagnostics.short_exc(_swallowed, 100))
             if is_phone_box and not fill_value.isdigit():
                 try:
                     tab.wait_for_timeout(150)
@@ -5641,7 +5655,7 @@ class PageAgent:
                             fill_value = digits_only
                             answer.value = digits_only
                 except Exception as _swallowed:
-                    logger.debug("do phone retry: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("do phone retry: %s", diagnostics.short_exc(_swallowed, 100))
             # Read the committed value back and verify it, rather than trusting that .fill()
             # not throwing means the value stuck (Phase 0-B4; task sections 4, 6-7). A plain
             # <input>/<textarea> is what this path fills.
@@ -5748,7 +5762,7 @@ class PageAgent:
                                 return self._confirm_resume_attached(page, path)
                             return self._confirm_cover_letter_attached(page, path, control)
                 except Exception as exc:
-                    logger.info("Nearby file input was unavailable: %s", str(exc).splitlines()[0][:120])
+                    logger.info("Nearby file input was unavailable: %s", diagnostics.short_exc(exc, 120))
             if answer.action == "upload_resume" and hasattr(self.assistant, "upload_via_chooser"):
                 try:
                     if self.assistant.upload_via_chooser(
@@ -5756,7 +5770,7 @@ class PageAgent:
                         self.settle(page, 1_500)
                         return self._confirm_resume_attached(page, path)
                 except Exception as exc:
-                    logger.info("Browser upload helper could not attach the resume: %s", str(exc).splitlines()[0][:120])
+                    logger.info("Browser upload helper could not attach the resume: %s", diagnostics.short_exc(exc, 120))
             try:
                 loc.set_input_files(str(path), timeout=8_000)
             except Exception:
@@ -5857,7 +5871,7 @@ class PageAgent:
                             checked = _is_checked(radio_loc)
                             return True if checked is None else checked
                 except Exception as _swallowed:
-                    logger.debug("do: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("do: %s", diagnostics.short_exc(_swallowed, 100))
                 logger.info("No choice matching %r for %r among %s", answer.value, control.question[:50],
                             [c.name for c in group][:8])
                 return False
@@ -5973,7 +5987,7 @@ class PageAgent:
                     if _is_checked(target) is True:
                         done.append(boxes[k].name)
                 except Exception as exc:
-                    logger.info("Could not tick %r: %s", boxes[k].name, str(exc).splitlines()[0][:100])
+                    logger.info("Could not tick %r: %s", boxes[k].name, diagnostics.short_exc(exc, 100))
             if done:
                 answered += 1
                 self.written[question] = "; ".join(done)
@@ -5991,7 +6005,7 @@ class PageAgent:
                     self.written[c.question] = answer.value
                     logger.info('FIELD_ACTION: application field handled')
             except Exception as exc:
-                logger.info("Could not choose %r: %s", answer.value, str(exc).splitlines()[0][:100])
+                logger.info("Could not choose %r: %s", answer.value, diagnostics.short_exc(exc, 100))
         return answered
 
     def _tick_several(self, page, boxes: list[Control], value: str, *, replace: bool = False) -> bool:
@@ -6037,7 +6051,7 @@ class PageAgent:
             self.locate(page, choice.ref).click(timeout=5_000)
         except Exception as exc:
             logger.info("TOGGLE: could not press %r for %r: %s", choice.name, choice.group[:60],
-                        str(exc).splitlines()[0][:100])
+                        diagnostics.short_exc(exc, 100))
         self.settle(page, 500)
         now = next((c for c in parse_snapshot(self.snapshot(page))
                     if c.toggle and c.group == choice.group and c.name == choice.name), None)
@@ -6117,7 +6131,7 @@ class PageAgent:
                     self._choice_methods[control.ref] = "opened_list"
                     return True
             except Exception as exc:
-                logger.debug("The list button did not help: %s", str(exc).splitlines()[0][:90])
+                logger.debug("The list button did not help: %s", diagnostics.short_exc(exc, 90))
         best = self.assistant._best_option
         if control.options:
             # What the profile says about sponsorship settles a bare Yes before the generic match can take the first
@@ -6153,7 +6167,7 @@ class PageAgent:
                     return True
                 return _fill_value_committed(chosen_text or "", control.options[index])
             except Exception as _swallowed:
-                logger.debug("_choose_exact: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("_choose_exact: %s", diagnostics.short_exc(_swallowed, 100))
 
         # A list whose choices exist only once it is opened -- Greenhouse's type-to-search lists, a server's
         # suggestions -- is filled by the field inventory's filler, which opens it the way its portal builds it,
@@ -6194,7 +6208,7 @@ class PageAgent:
         try:
             loc.evaluate("e => e.scrollIntoView({block: 'center'})")
         except Exception as _swallowed:
-            logger.debug("_choose_exact: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_choose_exact: %s", diagnostics.short_exc(_swallowed, 100))
 
         # In Ant Design and custom UI widgets, dispatch mousedown on the selector wrapper.
         # Ant Design's rc-select opens specifically on mousedown, not click.
@@ -6223,7 +6237,7 @@ class PageAgent:
                     loc.click(timeout=2_000)
                     opened = True
                 except Exception as _swallowed:
-                    logger.debug("_choose_exact: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("_choose_exact: %s", diagnostics.short_exc(_swallowed, 100))
 
         def _check_portal(val: str) -> bool:
             for selector in (
@@ -6263,7 +6277,7 @@ class PageAgent:
                                 self._choice_methods[control.ref] = "portal_option"
                                 return True
                 except Exception as _swallowed:
-                    logger.debug("_choose_exact._check_portal: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("_choose_exact._check_portal: %s", diagnostics.short_exc(_swallowed, 100))
             return False
 
         if _check_portal(value):
@@ -6276,7 +6290,7 @@ class PageAgent:
             if _check_portal(value):
                 return True
         except Exception as _swallowed:
-            logger.debug("_choose_exact: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_choose_exact: %s", diagnostics.short_exc(_swallowed, 100))
 
         # A long list takes a moment to appear: read at 0.7s, it was empty, and
         # School, Discipline and Veteran Status were all left blank.
@@ -6306,7 +6320,7 @@ class PageAgent:
                     self._choice_methods[control.ref] = "prompt_option"
                     return True
             except Exception as _swallowed:
-                logger.debug("_choose_exact: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("_choose_exact: %s", diagnostics.short_exc(_swallowed, 100))
             # Workday can render its opened menu outside the question's
             # accessibility subtree, so the snapshot scan sees no options.
             # Pick a matching visible menu item directly from the page.
@@ -6321,7 +6335,7 @@ class PageAgent:
                             self._choice_methods[control.ref] = "visible_menu"
                             return True
             except Exception as _swallowed:
-                logger.debug("_choose_exact: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("_choose_exact: %s", diagnostics.short_exc(_swallowed, 100))
             # A type-ahead list shows its choices once something is typed, and a
             # long list needs narrowing down.
             search_terms = self._search_terms(value)
@@ -6351,16 +6365,16 @@ class PageAgent:
                     try:
                         typing.evaluate("e => { e.scrollIntoView({block: 'center'}); e.focus(); }")
                     except Exception as _swallowed:
-                        logger.debug("_choose_exact: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                        logger.debug("_choose_exact: %s", diagnostics.short_exc(_swallowed, 100))
                     try:
                         typing.click(timeout=1_500)
                     except Exception as _swallowed:
-                        logger.debug("_choose_exact: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                        logger.debug("_choose_exact: %s", diagnostics.short_exc(_swallowed, 100))
                     if control.role in ("combobox", "searchbox", "textbox"):
                         try:
                             typing.fill("", timeout=1_500)
                         except Exception as _swallowed:
-                            logger.debug("_choose_exact: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                            logger.debug("_choose_exact: %s", diagnostics.short_exc(_swallowed, 100))
                     tab.keyboard.type(typed, delay=40)
                     tab.wait_for_timeout(400)
                 except Exception:
@@ -6395,7 +6409,7 @@ class PageAgent:
                         try:
                             loc.click(timeout=1_500)
                         except Exception as _swallowed:
-                            logger.debug("_choose_exact: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                            logger.debug("_choose_exact: %s", diagnostics.short_exc(_swallowed, 100))
                         loc.press("Control+A")
                         loc.press_sequentially(typed, delay=50)
                         tab.wait_for_timeout(400)
@@ -6427,7 +6441,7 @@ class PageAgent:
                         self._choice_methods[control.ref] = "typed_value"
                         return True
                 except Exception as _swallowed:
-                    logger.debug("_choose_exact: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("_choose_exact: %s", diagnostics.short_exc(_swallowed, 100))
             # Some widgets never put their list where the page's structure can
             # be read (R+L's "Employer State or Province"). A person types and
             # presses Down then Enter; so does the agent, and then checks the
@@ -6479,7 +6493,7 @@ class PageAgent:
             diagnostics.write_safe_text(path, diagnostics.sanitize_snapshot(info))
             logger.info("DROPDOWN_DUMP written to %s", path)
         except Exception as exc:
-            logger.info("DROPDOWN_DUMP failed: %s", str(exc).splitlines()[0][:120])
+            logger.info("DROPDOWN_DUMP failed: %s", diagnostics.short_exc(exc, 120))
 
     def put_in_a_spinbutton(self, page, loc, value: str) -> bool:
         """Get a value into a box that keeps its own count, and check it took."""
@@ -6513,7 +6527,7 @@ class PageAgent:
                 attempt()
                 tab.wait_for_timeout(300)
             except Exception as exc:
-                logger.debug("%s did not work: %s", attempt.__name__, str(exc).splitlines()[0][:70])
+                logger.debug("%s did not work: %s", attempt.__name__, diagnostics.short_exc(exc, 70))
                 continue
             if holds_it():
                 return True
@@ -6544,7 +6558,7 @@ class PageAgent:
                 tab.wait_for_timeout(600)
             except Exception as exc:
                 logger.debug("Could not type %r into %r: %s", typed, control.question[:40],
-                             str(exc).splitlines()[0][:80])
+                             diagnostics.short_exc(exc, 80))
                 return False
             snapshot = self.snapshot(page)
             shown = next((c for c in parse_snapshot(snapshot)
@@ -6567,7 +6581,7 @@ class PageAgent:
                     logger.info("REMOVED: %r was not %r for %r -- left empty", shown.answer[:50], value[:30],
                                 control.question[:40])
                 except Exception as exc:
-                    logger.debug("Could not remove a wrong choice: %s", str(exc).splitlines()[0][:80])
+                    logger.debug("Could not remove a wrong choice: %s", diagnostics.short_exc(exc, 80))
         return False
 
     def _wait_for_choices(self, page, seconds: float = 8.0, under: str = "",
@@ -6665,12 +6679,12 @@ class PageAgent:
                 try:
                     close()
                 except Exception as _swallowed:
-                    logger.debug("_open_and_read: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("_open_and_read: %s", diagnostics.short_exc(_swallowed, 100))
                 tab.wait_for_timeout(400)
             return list(dict.fromkeys(offered))
         except Exception as exc:
             logger.debug("Could not read the choices of %r: %s", (label or control.name)[:50],
-                         str(exc).splitlines()[0][:100])
+                         diagnostics.short_exc(exc, 100))
             return []
 
     def _pick(self, offered: list[tuple[str, str]], value: str) -> Optional[int]:
@@ -6782,7 +6796,7 @@ class PageAgent:
                 fallback.click(timeout=4_000)
                 return True
         except Exception as _swallowed:
-            logger.debug("_choose_inside: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_choose_inside: %s", diagnostics.short_exc(_swallowed, 100))
         return False
 
     def _letter_file(self) -> Optional[Path]:
@@ -6816,7 +6830,7 @@ class PageAgent:
         try:
             return self.tracker.recall_form_recipe(*identity)
         except Exception as exc:
-            logger.debug("Could not recall a form recipe: %s", str(exc).splitlines()[0][:100])
+            logger.debug("Could not recall a form recipe: %s", diagnostics.short_exc(exc, 100))
             return None
 
     def _mark_recipe_failed(self, identity: tuple[str, str, str, str, str]) -> None:
@@ -6825,7 +6839,7 @@ class PageAgent:
         try:
             self.tracker.mark_form_recipe_failed(*identity)
         except Exception as exc:
-            logger.debug("Could not mark a form recipe failed: %s", str(exc).splitlines()[0][:100])
+            logger.debug("Could not mark a form recipe failed: %s", diagnostics.short_exc(exc, 100))
 
     @staticmethod
     def _answer_verification_state(answer: Answer, before: Control, after: list[Control]) -> Optional[bool]:
@@ -6872,7 +6886,7 @@ class PageAgent:
                 try:
                     self.tracker.record_form_recipe(*identity, item["method"])
                 except Exception as exc:
-                    logger.debug("Could not save a verified form recipe: %s", str(exc).splitlines()[0][:100])
+                    logger.debug("Could not save a verified form recipe: %s", diagnostics.short_exc(exc, 100))
             if item.get("record_answer") and self.tracker is not None and hasattr(self.tracker, "record_answer"):
                 try:
                     self.tracker.record_answer(
@@ -6880,7 +6894,7 @@ class PageAgent:
                         options=control.options or None, answered_by="verified_agent",
                     )
                 except Exception as exc:
-                    logger.debug("Could not record the verified answer: %s", str(exc).splitlines()[0][:100])
+                    logger.debug("Could not record the verified answer: %s", diagnostics.short_exc(exc, 100))
 
     def _remember(self, control: Control, answer: Answer) -> None:
         question = control.question or answer.question
@@ -6958,7 +6972,7 @@ class PageAgent:
             scratch.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
             scratch.replace(path)
         except Exception as exc:
-            logger.debug("Could not record an unanswered question: %s", str(exc).splitlines()[0][:100])
+            logger.debug("Could not record an unanswered question: %s", diagnostics.short_exc(exc, 100))
 
     def blockers(self, page, plan: PagePlan, controls: list[Control], about_to_send: bool = True) -> list[str]:
         """What must stop the run. Before a submit that includes a required
@@ -7074,7 +7088,7 @@ class PageAgent:
             self.settle(tab, 3_000)
             return True
         except Exception as exc:
-            logger.debug("reload of an undrawn page: %s", str(exc).splitlines()[0][:100])
+            logger.debug("reload of an undrawn page: %s", diagnostics.short_exc(exc, 100))
             return False
 
     def _start_from_inline_email_box(self, page, tab, refused_label: str) -> str:
@@ -7100,7 +7114,7 @@ class PageAgent:
             self.settle(page, 2_500)
             return "the application was started from the posting's own email box"
         except Exception as exc:
-            logger.debug("inline email start: %s", str(exc).splitlines()[0][:100])
+            logger.debug("inline email start: %s", diagnostics.short_exc(exc, 100))
             return ""
 
     def press_next(self, page, plan: PagePlan, controls: list[Control]) -> tuple[str, object, str]:
@@ -7370,7 +7384,7 @@ class PageAgent:
                 chooser.value.set_files(str(self.resume_file))
                 logger.info("FILE DIALOG: %r asked for a file, so the agent gave it the resume", label[:40])
             except Exception as _swallowed:
-                logger.debug("_press_next_locked: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("_press_next_locked: %s", diagnostics.short_exc(_swallowed, 100))
         elif re.fullmatch(r"update profile", label, re.I) and "icims.com" in tab.url:
             if guard is None or not guard.click_candidate_profile(tab, locator):
                 return "stop", page, "iCIMS candidate profile update could not be safely authorized"
@@ -7549,7 +7563,7 @@ class PageAgent:
             if adapter_for(getattr(tab, "url", "")).submission_confirmed(tab):
                 return True
         except Exception as _swallowed:
-            logger.debug("_says_already_applied: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_says_already_applied: %s", diagnostics.short_exc(_swallowed, 100))
         try:
             return bool(ALREADY_APPLIED_TEXT.search(tab.inner_text("body", timeout=3_000) or ""))
         except Exception:
@@ -7564,7 +7578,7 @@ class PageAgent:
             if adapter_for(getattr(tab, "url", "")).submission_confirmed(tab):
                 return True
         except Exception as _swallowed:
-            logger.debug("_site_confirms: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_site_confirms: %s", diagnostics.short_exc(_swallowed, 100))
         try:
             frames = [f for f in tab.frames[1:]
                       if (f.url or "").startswith("http") and not safety.is_captcha_frame(f.url)]
@@ -7675,7 +7689,7 @@ class PageAgent:
             if _section_holds_a_file(self.snapshot(page), section):
                 verified = True
         except Exception as _swallowed:
-            logger.debug("_confirm_cover_letter_attached: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_confirm_cover_letter_attached: %s", diagnostics.short_exc(_swallowed, 100))
         if not verified:
             verified = self._file_input_holds_name(page, Path(path).name)
         if not verified:
@@ -7771,4 +7785,4 @@ class PageAgent:
                 keep_latest_runs(folder.parent, RUNS_KEPT)
             (folder / f"page_{self.pages_read:02d}.txt").write_text(snapshot or "", encoding="utf-8")
         except Exception as _swallowed:
-            logger.debug("_save: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_save: %s", diagnostics.short_exc(_swallowed, 100))

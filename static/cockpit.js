@@ -427,6 +427,178 @@
     }, 0);
   });
 
+  // a card's own button (Not interested) removes the card in place instead of reloading the page
+  document.addEventListener('submit', async (e) => {
+    const form = e.target;
+    if (!form.dataset || !('removeCard' in form.dataset) || e.defaultPrevented) return;
+    e.preventDefault();
+    const card = form.closest('article');
+    const label = card ? (card.querySelector('h3, h4') || {}).textContent || 'job' : 'job';
+    form.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    try {
+      const res = await fetch(form.action, { method: 'POST', body: new FormData(form),
+                                             headers: { 'X-Requested-With': 'fetch' } });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.ok !== true) throw new Error((json && json.error) || String(res.status));
+    } catch (err) {
+      toast('Could not dismiss that job. The page will reload so nothing is lost.', true);
+      window.location.reload();
+      return;
+    }
+    if (card) card.remove();
+    announce(`Not interested in ${label.trim()}. Removed from suggestions.`);
+    const feed = document.querySelector('#discovered-feed');
+    const empty = document.getElementById('jobs-none');
+    if (feed && empty && !feed.querySelector('article')) empty.hidden = false;
+  });
+
+  // a card's "check what it asks" swaps the button for the readiness line in place
+  document.addEventListener('submit', async (e) => {
+    const form = e.target;
+    if (!form.dataset || !('readiness' in form.dataset) || e.defaultPrevented) return;
+    e.preventDefault();
+    const btn = form.querySelector('button[type=submit]');
+    if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+    try {
+      const res = await fetch(form.action, { method: 'POST', body: new FormData(form),
+                                             headers: { 'X-Requested-With': 'fetch' } });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.ok !== true) throw new Error((json && json.error) || String(res.status));
+      const line = document.createElement('div');
+      line.className = 'job-meta';
+      const span = document.createElement('span');
+      span.className = 'muted';
+      span.textContent = json.line;
+      line.appendChild(span);
+      form.replaceWith(line);
+      announce(json.line + '.');
+    } catch (err) {
+      toast('Could not read that form. ' + err.message, true);
+      if (btn) { btn.disabled = false; btn.textContent = 'Check what it asks'; }
+    }
+  });
+
+
+  // a card's Apply starts the application and the card shows it in place instead of reloading the page
+  document.addEventListener('submit', async (e) => {
+    const form = e.target;
+    if (!form.dataset || !('applyCard' in form.dataset) || e.defaultPrevented) return;
+    e.preventDefault();
+    const card = form.closest('article');
+    const label = card ? (card.querySelector('h3, h4') || {}).textContent || 'job' : 'job';
+    const btn = form.querySelector('button[type=submit]');
+    if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+    try {
+      const res = await fetch(form.action, { method: 'POST', body: new FormData(form),
+                                             headers: { 'X-Requested-With': 'fetch' } });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.ok !== true) throw new Error((json && json.error) || String(res.status));
+      const note = document.createElement('span');
+      note.className = 'muted';
+      note.textContent = 'Applying… it left the suggestions; follow it under Applications.';
+      form.replaceWith(note);
+      const tick = card ? card.querySelector('[data-bulk-check]') : null;
+      if (tick) { tick.checked = false; tick.disabled = true; }
+      announce(`Applying for ${label.trim()}.`);
+      updateBulk();
+    } catch (err) {
+      toast('Could not start that application. ' + err.message, true);
+      if (btn) { btn.disabled = false; btn.textContent = 'Start application'; }
+    }
+  });
+
+  // ticked cards are queued or passed together; the bar only shows while something is ticked
+  function updateBulk() {
+    const bar = document.getElementById('bulk-form');
+    if (!bar) return;
+    const count = document.querySelectorAll('[data-bulk-check]:checked:not(:disabled)').length;
+    const say = bar.querySelector('[data-bulk-count]');
+    if (say) say.textContent = count === 1 ? '1 selected' : `${count} selected`;
+    bar.hidden = count === 0;
+  }
+  document.addEventListener('change', (e) => {
+    if (e.target && e.target.matches && e.target.matches('[data-bulk-check]')) updateBulk();
+  });
+  document.addEventListener('submit', async (e) => {
+    const form = e.target;
+    if (!form.dataset || !('bulk' in form.dataset) || e.defaultPrevented) return;
+    e.preventDefault();
+    const action = (e.submitter && e.submitter.value) || '';
+    const body = new FormData(form);
+    body.append('action', action);
+    form.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    let json = {};
+    try {
+      const res = await fetch(form.action, { method: 'POST', body,
+                                             headers: { 'X-Requested-With': 'fetch' } });
+      json = await res.json().catch(() => ({}));
+      if (!res.ok || json.ok !== true) throw new Error((json && json.error) || String(res.status));
+    } catch (err) {
+      toast('Could not update those jobs. The page will reload so nothing is lost.', true);
+      window.location.reload();
+      return;
+    }
+    (json.done || []).forEach((id) => {
+      const card = document.querySelector(`article[data-job-id="${id}"]`);
+      if (!card) return;
+      if (action === 'queue') {
+        const foot = card.querySelector('.job-foot');
+        const note = document.createElement('span');
+        note.className = 'muted';
+        note.textContent = 'Queued — press Start under Applications.';
+        if (foot) foot.replaceWith(note);
+        const tick = card.querySelector('[data-bulk-check]');
+        if (tick) { tick.checked = false; tick.disabled = true; }
+      } else {
+        card.remove();
+      }
+    });
+    const failed = (json.failed || []).length;
+    if (failed) toast(`${failed} of those jobs could not be updated.`, true);
+    announce(action === 'queue'
+      ? `${(json.done || []).length} jobs queued.`
+      : `${(json.done || []).length} jobs passed.`);
+    const feed = document.querySelector('#discovered-feed');
+    const empty = document.getElementById('jobs-none');
+    if (feed && empty && !feed.querySelector('article')) empty.hidden = false;
+    form.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+    updateBulk();
+  });
+  updateBulk();
+  // first-look hint for the suggestions list, shown once (no-JS never sees it)
+  try {
+    if (window.localStorage && localStorage.getItem('jaaFeedHintSeen') !== '1') {
+      const hint = document.getElementById('feed-hint');
+      if (hint) {
+        hint.hidden = false;
+        const ok = document.getElementById('feed-hint-ok');
+        if (ok) ok.addEventListener('click', () => {
+          try { localStorage.setItem('jaaFeedHintSeen', '1'); } catch (e) { /* private mode */ }
+          hint.hidden = true;
+        });
+      }
+    }
+  } catch (e) { /* private mode */ }
+  // "start next queued" begins the oldest queued application, then reloads to show it at the top
+  document.addEventListener('submit', async (e) => {
+    const form = e.target;
+    if (!form.dataset || !('autoApply' in form.dataset) || e.defaultPrevented) return;
+    e.preventDefault();
+    const btn = form.querySelector('button[type=submit]');
+    const label = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+    try {
+      const res = await fetch(form.action, { method: 'POST', body: new FormData(form),
+                                             headers: { 'X-Requested-With': 'fetch' } });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.ok !== true) throw new Error((json && json.error) || String(res.status));
+      window.location.reload();
+    } catch (err) {
+      toast('Could not start it. ' + err.message, true);
+      if (btn) { btn.disabled = false; btn.textContent = label; }
+    }
+  });
+
   // ---- page behaviour: history filter and search, suggested-jobs filter, row menus -----------------------------------------------
   function pageBehaviour() {
     const rows = [...document.querySelectorAll('#apps tr.app')];

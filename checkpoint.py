@@ -15,6 +15,7 @@ account-state *kind* name, a step label).
 
 from __future__ import annotations
 
+import diagnostics
 import json
 import logging
 import subprocess
@@ -94,7 +95,7 @@ def _git_short_sha() -> str:
             if sha:
                 return sha
     except Exception as _swallowed:
-        logger.debug("_git_short_sha: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+        logger.debug("_git_short_sha: %s", diagnostics.short_exc(_swallowed, 100))
     return "unknown"
 
 

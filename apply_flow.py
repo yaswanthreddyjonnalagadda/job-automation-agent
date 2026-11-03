@@ -51,8 +51,10 @@ import account_state
 import browser_automation
 import checkpoint
 import config as config_module
+import employer_signals
 import handoff
 import recovery
+import submit_policy
 from handoff import Handoff
 try:
     from runtime_events import RuntimeEvent, EventName, ReasonCode
@@ -136,7 +138,7 @@ def refresh_answer_bank(tracker) -> None:
         held = answer_bank.rebuild(tracker)
         logger.info("ANSWER_BANK: %d question(s) answered before can be answered on any portal", held)
     except Exception as exc:
-        logger.warning("ANSWER_BANK: not rebuilt (%s)", str(exc).splitlines()[0][:120] if str(exc) else type(exc).__name__)
+        logger.warning("ANSWER_BANK: not rebuilt (%s)", diagnostics.short_exc(exc, 120))
 
 
 def open_tracker(config):
@@ -584,7 +586,7 @@ def decide_next_step(assistant, page, step: int, experience_data: dict, filled_e
         commit_draft_cards(page)
     except Exception as exc:
         logger.warning("Could not save the draft experience/education cards before moving on: %s: %s",
-                       type(exc).__name__, str(exc).splitlines()[0][:120] if str(exc) else "")
+                       type(exc).__name__, diagnostics.short_exc(exc, 120) if str(exc) else "")
 
     if assistant.has_next_step(page):
         return "continue"
@@ -667,7 +669,7 @@ def save_stop_page(page, job_dir: Path) -> None:
             diagnostics.sanitize_snapshot(page.locator("body").aria_snapshot(mode="ai")))
         logger.info("Where it stopped: %s", stem.with_suffix(".png"))
     except Exception as exc:
-        logger.info("Could not save the page it stopped on: %s", str(exc).splitlines()[0][:100])
+        logger.info("Could not save the page it stopped on: %s", diagnostics.short_exc(exc, 100))
 
 
 def shows_the_application(assistant, page) -> bool:
@@ -1052,18 +1054,22 @@ def hand_over(assistant, page, tracker, key, job, job_dir: Path, resume_name: st
     evidence["comparison"] = str(comparison_path)
     diagnostics.write_safe_json(summary_path.with_name("validation.json"), report)
 
+    policy_ok, policy_note = submit_policy.auto_submit_allowed(decision.eligible, tracker)
     if hasattr(tracker, "record_event"):
         tracker.record_event(key, "auto_submit", decision.summary(),
                              screenshot_path=evidence.get("screenshot", ""),
                              html_path=evidence.get("html", ""),
-                             payload=diagnostics.sanitize_event_payload(decision.as_dict()))
+                             payload=diagnostics.sanitize_event_payload(
+                                 {**decision.as_dict(), "policy": policy_note}))
 
     status, message = safety.handover_status(report)
-    if decision.eligible:
+    if decision.eligible and policy_ok:
         submitted = submit_verified(assistant, page, tracker, key, job, job_dir, decision)
         if submitted:
             return STATUS_SUBMITTED
         status, message = STATUS_NEEDS_USER_REVIEW, "verified auto-submit did not complete -- please check the form"
+    elif decision.eligible:
+        status, message = STATUS_NEEDS_USER_REVIEW, "Verified auto-submit held: " + policy_note
     # There is deliberately no legacy AUTO_SUBMIT fallback here. Every
     # automatic submission must pass evaluate_auto_submit() above.
 
@@ -1198,7 +1204,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                 page = reopen_application(assistant, job)
                 continue
             except Exception as exc:
-                logger.warning("RECOVERY: could not go back to the job: %s", str(exc).splitlines()[0][:120])
+                logger.warning("RECOVERY: could not go back to the job: %s", diagnostics.short_exc(exc, 120))
         remember_progress(tracker, key, page, outcome.summary[:200], assistant=assistant)
         owner_handoff = None
         if outcome.kind != "submitted":
@@ -1227,7 +1233,7 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             try:
                 diagnostics.capture_safe_screenshot(page, job_dir / "submitted_confirmation.png")
             except Exception as exc:
-                logger.debug("No confirmation screenshot: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                logger.debug("No confirmation screenshot: %s", diagnostics.short_exc(exc, 100))
             delete_screenshots(job_dir)
             message = "Submitted by the agent -- the site confirmed it" + (f". Worth checking: {notes}" if notes else "")
             tracker.update_status(key, STATUS_SUBMITTED, notes=message[:1000])
@@ -1644,10 +1650,11 @@ def submit_verified(assistant, page, tracker, key, job, job_dir: Path, decision)
         tracker.update_status(key, STATUS_NEEDS_USER_REVIEW, notes="submission outcome is uncertain; reconcile before retry")
         return False
     tracker.update_status(key, status, notes=note)
+    employer_signals.record_employer_signal(tracker, key, assistant)
     try:
         diagnostics.capture_safe_screenshot(page, job_dir / "submitted_confirmation.png")
     except Exception as exc:
-        logger.debug("No confirmation screenshot: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+        logger.debug("No confirmation screenshot: %s", diagnostics.short_exc(exc, 100))
     if status == STATUS_SUBMITTED:
         delete_screenshots(job_dir)
     logger.info("AUTO_SUBMIT result: %s -- %s", status, note)
@@ -2016,7 +2023,7 @@ def main() -> None:
             try:
                 diag_consumer.close()
             except Exception as exc:
-                logger.debug("Could not close the diagnostics consumer: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                logger.debug("Could not close the diagnostics consumer: %s", diagnostics.short_exc(exc, 100))
             diag_consumer = None
         if RuntimeEvent is not None:
             RuntimeEvent.clear_current_run()
@@ -2399,7 +2406,7 @@ def main() -> None:
                                     page.wait_for_load_state("domcontentloaded", timeout=30_000)
                                 except Exception as exc:
                                     logger.debug("The new tab did not finish loading: %s",
-                                                 str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                                                 diagnostics.short_exc(exc, 100))
                             page = assistant.dismiss_apply_chooser(page)
                             continue
                 if decision == "stop":

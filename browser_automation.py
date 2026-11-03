@@ -199,7 +199,7 @@ class FramedPage:
             if frame is not None and not frame.is_detached():
                 return frame
         except Exception as _swallowed:
-            logger.debug("frame: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("frame: %s", diagnostics.short_exc(_swallowed, 100))
         try:
             for candidate in self.top.frames[1:]:
                 if self._name and candidate.name == self._name:
@@ -212,7 +212,7 @@ class FramedPage:
                     self._frame = candidate
                     return candidate
         except Exception as _swallowed:
-            logger.debug("frame: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("frame: %s", diagnostics.short_exc(_swallowed, 100))
         return self.top.main_frame  # the site has left the frame (a Google sign-in, say)
 
     @property
@@ -340,7 +340,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 # instance after all. Its stub claims the profile on the way out,
                 # so the leftovers go before the bundled build tries.
                 logger.warning("Could not start %s (%s) -- falling back to the bundled browser",
-                               channel, str(exc).splitlines()[0][:120])
+                               channel, diagnostics.short_exc(exc, 120))
                 self._release_profile(profile_dir)
                 self._context = self._launch("", profile_dir)
             # Record which form controls a person changes, so a value the site put
@@ -583,7 +583,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             except Exception as exc:
                 last = exc
                 logger.warning("%s failed (attempt %d/%d): %s", what, attempt, attempts,
-                               str(exc).splitlines()[0][:140])
+                               diagnostics.short_exc(exc, 140))
                 time.sleep(1.5 * attempt)
         logger.error("%s failed after %d attempts", what, attempts)
         if last:
@@ -619,11 +619,11 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 }]))
                 del page._console_logs[:-200]
             except Exception as _swallowed:
-                logger.debug("_attach_console_listener._on_console: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("_attach_console_listener._on_console: %s", diagnostics.short_exc(_swallowed, 100))
         try:
             page.on("console", _on_console)
         except Exception as _swallowed:
-            logger.debug("_attach_console_listener: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_attach_console_listener: %s", diagnostics.short_exc(_swallowed, 100))
 
     def open_job_page(self, url: str) -> Page:
         assert self._context is not None, "Use within a `with` block"
@@ -636,7 +636,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         try:
             page.bring_to_front()
         except Exception as _swallowed:
-            logger.debug("open_job_page: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("open_job_page: %s", diagnostics.short_exc(_swallowed, 100))
         self.with_retries(f"opening {url[:60]}", lambda: page.goto(url, wait_until="domcontentloaded"))
         # Workday/Greenhouse/etc. render via JS after domcontentloaded fires,
         # so the page is typically still blank at this point. Give it a
@@ -707,7 +707,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         try:
             self.sweep_modals_and_policies(page)
         except Exception as _swallowed:
-            logger.debug("dismiss_cookie_banner: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("dismiss_cookie_banner: %s", diagnostics.short_exc(_swallowed, 100))
         for selector in (
             # Rejecting optional cookies clears a banner just as well and shares
             # less; take that choice whenever the banner offers it.
@@ -745,7 +745,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     logger.info("Expanded all form sections")
                     return
         except Exception as _swallowed:
-            logger.debug("expand_all_sections: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("expand_all_sections: %s", diagnostics.short_exc(_swallowed, 100))
 
     def detect_form_fields(self, page: Page) -> list[DetectedField]:
         """Scans visible text/email/tel inputs and textareas, and tries to
@@ -863,7 +863,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 )
                 text = (legend_text or "").strip()
             except Exception as _swallowed:
-                logger.debug("_label_for: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("_label_for: %s", diagnostics.short_exc(_swallowed, 100))
         return text
 
 
@@ -936,12 +936,12 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 field.press("End")
                 field.press("Tab")
             except Exception as _swallowed:
-                logger.debug("set_value: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("set_value: %s", diagnostics.short_exc(_swallowed, 100))
             self.values.record(page, selector, value, source or "agent")
             self.note_page_changed()
             return True
         except Exception as exc:
-            logger.warning("Could not fill %s: %s", what or selector, str(exc).splitlines()[0][:120])
+            logger.warning("Could not fill %s: %s", what or selector, diagnostics.short_exc(exc, 120))
             return False
 
     def set_phone_country(self, page: Page, profile) -> int:
@@ -988,7 +988,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     try:
                         page.keyboard.press("Tab")
                     except Exception as _swallowed:
-                        logger.debug("set_phone_country: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                        logger.debug("set_phone_country: %s", diagnostics.short_exc(_swallowed, 100))
                     now = (button.get_attribute("title") or button.get_attribute("aria-label") or "")
                     if any(name.lower() in now.lower() for name in spellings):
                         logger.info('FIELD_ACTION: application field handled')
@@ -996,7 +996,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 else:
                     page.keyboard.press("Escape")
             except Exception as exc:
-                logger.debug("Phone flag picker failed: %s", str(exc).splitlines()[0][:100])
+                logger.debug("Phone flag picker failed: %s", diagnostics.short_exc(exc, 100))
 
         # 2. a searchable "Country" dropdown that belongs to the phone number.
         pickers = page.locator(".phone-input__country input[role=combobox], "
@@ -1032,7 +1032,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     field.press("Tab")
                     page.wait_for_timeout(400)
                 except Exception as _swallowed:
-                    logger.debug("set_phone_country: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("set_phone_country: %s", diagnostics.short_exc(_swallowed, 100))
                 chosen = self.displayed_value(field)
                 # The phone block is checked as a whole when its number field is
                 # left: a chosen country went on showing "Select a country"
@@ -1046,13 +1046,13 @@ class JobApplicationAssistant(EmailVerificationMixin):
                         number.press("Tab")
                         page.wait_for_timeout(500)
                 except Exception as _swallowed:
-                    logger.debug("set_phone_country: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("set_phone_country: %s", diagnostics.short_exc(_swallowed, 100))
                 if chosen:
                     self.note_page_changed()
                     logger.info('FIELD_ACTION: application field handled')
                     done += 1
             except Exception as exc:
-                logger.debug("Phone country dropdown failed: %s", str(exc).splitlines()[0][:100])
+                logger.debug("Phone country dropdown failed: %s", diagnostics.short_exc(exc, 100))
 
         # 3. any other "Country Code" combobox: a link that opens a searchable
         #    list, as on Schwab's sign-in step (iCIMS), options "(+1) United States".
@@ -1092,7 +1092,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     logger.info('FIELD_ACTION: application field handled')
                     done += 1
             except Exception as exc:
-                logger.debug("Country code list failed: %s", str(exc).splitlines()[0][:100])
+                logger.debug("Country code list failed: %s", diagnostics.short_exc(exc, 100))
         return done
 
     def fix_rejected_phone_numbers(self, page: Page) -> int:
@@ -1136,7 +1136,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 logger.info("Rewrote a phone number the form rejected: %r -> %r", value, digits)
                 fixed += 1
             except Exception as exc:
-                logger.debug("Could not rewrite a phone number: %s", str(exc).splitlines()[0][:100])
+                logger.debug("Could not rewrite a phone number: %s", diagnostics.short_exc(exc, 100))
         return fixed
 
     def _current_value(self, page: Page, selector: str) -> str:
@@ -1171,7 +1171,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             if self.complete_emailed_passcode(page):
                 fields = self.detect_form_fields(page)
         except Exception as exc:
-            logger.warning("Passcode step failed: %s", str(exc).splitlines()[0][:160])
+            logger.warning("Passcode step failed: %s", diagnostics.short_exc(exc, 160))
 
         # Sign in first when the site offers it in its header: logging in can
         # reload the form, which would wipe anything filled before it.
@@ -1256,7 +1256,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 try:
                     page.wait_for_load_state("networkidle", timeout=5_000)
                 except Exception as _swallowed:
-                    logger.debug("fill_detected_fields: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("fill_detected_fields: %s", diagnostics.short_exc(_swallowed, 100))
                 blanks = [f for f in self.detect_form_fields(page)
                           if f.matched_profile_key and f.selector
                           and values.get(f.matched_profile_key)
@@ -1267,7 +1267,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                         if again not in actually_filled:
                             actually_filled.append(again)
             except Exception as exc:
-                logger.debug("Second fill pass failed: %s", str(exc).splitlines()[0][:120])
+                logger.debug("Second fill pass failed: %s", diagnostics.short_exc(exc, 120))
             finally:
                 self._refilling = False
         self.handle_auth_gate(page, profile.email)
@@ -1276,7 +1276,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         try:
             self.answer_standard_questions(page, profile)
         except Exception as exc:
-            logger.warning("Standard answers failed: %s", str(exc).splitlines()[0][:160])
+            logger.warning("Standard answers failed: %s", diagnostics.short_exc(exc, 160))
 
         # A first sign-in can put a "Create your profile" window over the
         # application. The fields above were that window's; once it's saved,
@@ -1335,7 +1335,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     try:
                         page.wait_for_load_state("domcontentloaded", timeout=15_000)
                     except Exception as _swallowed:
-                        logger.debug("complete_profile_dialog: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                        logger.debug("complete_profile_dialog: %s", diagnostics.short_exc(_swallowed, 100))
                     logger.info("PROFILE_CREATED: saved the site's candidate profile window")
                     return True
             logger.warning("PROFILE_DIALOG: no Submit/Save button found in the profile window")
@@ -1368,7 +1368,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                             self._job_source = "LinkedIn"
                         break
             except Exception as _swallowed:
-                logger.debug("_job_source_name: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("_job_source_name: %s", diagnostics.short_exc(_swallowed, 100))
         return self._job_source
 
     @staticmethod
@@ -1597,7 +1597,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         try:
             return hook(*args)
         except Exception as exc:
-            logger.warning("Adapter %s failed: %s", name, str(exc).splitlines()[0][:120])
+            logger.warning("Adapter %s failed: %s", name, diagnostics.short_exc(exc, 120))
             return default
 
     @staticmethod
@@ -1758,7 +1758,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     try:
                         page.locator(f"[id={json.dumps(c['id'])}]").fill("")
                     except Exception as _swallowed:
-                        logger.debug("answer_standard_questions: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                        logger.debug("answer_standard_questions: %s", diagnostics.short_exc(_swallowed, 100))
                     c["value"] = ""
 
             # A country or state the site put here that contradicts the profile
@@ -1777,7 +1777,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     try:
                         page.locator(selector).fill("")
                     except Exception as _swallowed:
-                        logger.debug("answer_standard_questions: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                        logger.debug("answer_standard_questions: %s", diagnostics.short_exc(_swallowed, 100))
                     c["value"] = ""
 
             if c["value"]:
@@ -1890,7 +1890,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 if position is not None and position >= 0:
                     return [str(position + 1)]
             except Exception as _swallowed:
-                logger.debug("_experience_answer: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("_experience_answer: %s", diagnostics.short_exc(_swallowed, 100))
             return None
         if re.search(r"number of people managed|direct reports|people (you )?manage", q, re.IGNORECASE):
             managed = str(getattr(getattr(self, "_profile", None), "people_managed", "") or "")
@@ -2074,7 +2074,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                         return !auxiliary;
                     }).length""")
         except Exception as _swallowed:
-            logger.debug("on_job_description: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("on_job_description: %s", diagnostics.short_exc(_swallowed, 100))
         if field_count > 3 or self.is_review_step(page):
             return False
         try:
@@ -2089,7 +2089,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 if (control.get_attribute("type") or "").lower() == "submit":
                     return False
             except Exception as _swallowed:
-                logger.debug("on_job_description: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("on_job_description: %s", diagnostics.short_exc(_swallowed, 100))
             return True
         return bool(self.apply_destination(page))
 
@@ -2159,7 +2159,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 page.wait_for_timeout(2_000)
             self.note_page_changed()
         except Exception as exc:
-            logger.debug("Frame check failed: %s", str(exc).splitlines()[0][:100])
+            logger.debug("Frame check failed: %s", diagnostics.short_exc(exc, 100))
         return page
 
     def look_and_act(self, page: Page, claude, goal: str) -> tuple[str, bool]:
@@ -2221,7 +2221,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             shot = page.screenshot(full_page=False, timeout=15_000)
             seen = claude.read_page(shot, page.url, goal)
         except Exception as exc:
-            logger.warning("LOOKED: could not read the page (%s)", str(exc).splitlines()[0][:100])
+            logger.warning("LOOKED: could not read the page (%s)", diagnostics.short_exc(exc, 100))
             return "", False
         kind, label, why = seen.get("page", ""), seen.get("click", ""), seen.get("why", "")
         logger.info("LOOKED: %s -- %s%s", kind.replace("_", " ") or "a page", why[:140],
@@ -2262,12 +2262,12 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 if dispatched:
                     return True
             except Exception as _swallowed:
-                logger.debug("open_picker_control: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("open_picker_control: %s", diagnostics.short_exc(_swallowed, 100))
         try:
             field.click(timeout=4_000)
             return True
         except Exception as _swallowed:
-            logger.debug("open_picker_control: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("open_picker_control: %s", diagnostics.short_exc(_swallowed, 100))
         for wrapper in ("xpath=ancestor::*[contains(@class,'ant-select-selector')][1]",
                         "xpath=ancestor::*[contains(@class,'select-selector')][1]",
                         "xpath=ancestor::*[contains(@class,'select')][1]",
@@ -2290,7 +2290,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             }""")
             return True
         except Exception as exc:
-            logger.warning("Could not open a picker: %s", str(exc).splitlines()[0][:100])
+            logger.warning("Could not open a picker: %s", diagnostics.short_exc(exc, 100))
             return False
 
     def _answer_combobox_from_profile(self, page: Page, control: dict, candidates: list[str]) -> None:
@@ -2351,7 +2351,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         try:
             field.evaluate("e => e.scrollIntoView({block: 'center'})")
         except Exception as _swallowed:
-            logger.debug("_answer_combobox_from_profile: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_answer_combobox_from_profile: %s", diagnostics.short_exc(_swallowed, 100))
         self.open_picker_control(page, field)
         page.wait_for_timeout(700)
         if self.adapter(page).open_picker(page, control) and control.get("listbox"):
@@ -2370,7 +2370,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     page.wait_for_timeout(3_000)
                     opts, texts = visible_options()
             except Exception as _swallowed:
-                logger.debug("_answer_combobox_from_profile: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("_answer_combobox_from_profile: %s", diagnostics.short_exc(_swallowed, 100))
         idx = self._best_option(texts, candidates)
         if idx is None and re.search(r"salary|compensation|pay range", control.get("question", ""), re.I):
             idx = self._salary_band(texts)
@@ -2389,7 +2389,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             try:
                 field.fill("", timeout=3_000)
             except Exception as _swallowed:
-                logger.debug("_answer_combobox_from_profile: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("_answer_combobox_from_profile: %s", diagnostics.short_exc(_swallowed, 100))
             try:
                 field.type(term, delay=30, timeout=5_000)
             except Exception:
@@ -2406,7 +2406,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 try:
                     field.fill("", timeout=2_000)
                 except Exception as _swallowed:
-                    logger.debug("_answer_combobox_from_profile: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("_answer_combobox_from_profile: %s", diagnostics.short_exc(_swallowed, 100))
                 try:
                     field.type(first_word, delay=30, timeout=5_000)
                 except Exception:
@@ -2506,7 +2506,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 return groups;
             }""")
         except Exception as exc:
-            logger.warning("Radio-group scan failed: %s", str(exc).splitlines()[0][:120])
+            logger.warning("Radio-group scan failed: %s", diagnostics.short_exc(exc, 120))
             return []
 
     def answer_radio_group(self, page: Page, group: dict, answer: str) -> bool:
@@ -2633,7 +2633,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 return groups;
             }""".replace("SPACE", r"\s+"))
         except Exception as exc:
-            logger.warning("Checkbox-group scan failed: %s", str(exc).splitlines()[0][:120])
+            logger.warning("Checkbox-group scan failed: %s", diagnostics.short_exc(exc, 120))
             return []
 
     def _answer_checkbox_groups_from_profile(self, page: Page, rules) -> None:
@@ -2661,7 +2661,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 if not self.select_radio(page, element):  # same label-covers-input problem
                     continue
             except Exception as exc:
-                logger.warning("Could not tick %r: %s", question[:50], str(exc).splitlines()[0][:100])
+                logger.warning("Could not tick %r: %s", question[:50], diagnostics.short_exc(exc, 100))
                 continue
             self.values.record(page, selector, group["labels"][index], "profile:standard answer")
             logger.info('FIELD_ACTION: application field handled')
@@ -2831,7 +2831,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     logger.info("Closed the form's error message: %r", said[:120])
                     return True
         except Exception as exc:
-            logger.debug("Could not close an error message: %s", str(exc).splitlines()[0][:100])
+            logger.debug("Could not close an error message: %s", diagnostics.short_exc(exc, 100))
         return False
 
     def accept_consent_dialog(self, page: Page) -> bool:
@@ -3227,7 +3227,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         try:
             return any(bool(frame.evaluate(self._REVIEW_HEADING_JS)) for frame in page.frames)
         except Exception as exc:
-            logger.debug("is_review_step_by_heading: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+            logger.debug("is_review_step_by_heading: %s", diagnostics.short_exc(exc, 100))
             return False
 
     def is_review_step_by_wizard_marker(self, page: Page) -> bool:
@@ -3548,7 +3548,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                         logger.info("Next page: using the form's arrow button")
                         return el
             except Exception as exc:
-                logger.debug("Arrow search failed: %s", str(exc).splitlines()[0][:100])
+                logger.debug("Arrow search failed: %s", diagnostics.short_exc(exc, 100))
         return None
 
     def _page_fingerprint(self, page: Page) -> str:
@@ -3646,7 +3646,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     if loc.nth(i).is_visible():
                         return True
         except Exception as _swallowed:
-            logger.debug("_has_sign_in_affordance: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_has_sign_in_affordance: %s", diagnostics.short_exc(_swallowed, 100))
         return False
 
     def _goto_login_page(self, page: Page) -> bool:
@@ -3784,7 +3784,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         try:
             page.wait_for_load_state("domcontentloaded", timeout=15_000)
         except Exception as _swallowed:
-            logger.debug("sign_in_from_header: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("sign_in_from_header: %s", diagnostics.short_exc(_swallowed, 100))
 
         if header_link() is None:
             logger.info("LOGIN_OK: signed in on %s as %s", host, email)
@@ -3795,7 +3795,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 t.strip() for t in page.locator("[role=alert], [class*=error i]").all_inner_texts() if t.strip()
             )[:200]
         except Exception as _swallowed:
-            logger.debug("sign_in_from_header: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("sign_in_from_header: %s", diagnostics.short_exc(_swallowed, 100))
         logger.warning("LOGIN_FAILED: still signed out on %s%s", host, f" ({error})" if error else "")
         return False
 
@@ -3910,7 +3910,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         try:
             google.wait_for_load_state("domcontentloaded", timeout=15_000)
         except Exception as _swallowed:
-            logger.debug("_sign_in_with_google: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_sign_in_with_google: %s", diagnostics.short_exc(_swallowed, 100))
 
         if not google.is_closed() and "accounts.google.com" in google.url:
             chooser = google.get_by_text(re.compile(re.escape(email), re.IGNORECASE))
@@ -3943,7 +3943,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     page.wait_for_load_state("domcontentloaded", timeout=15_000)
                     page.wait_for_timeout(4_000)
                 except Exception as _swallowed:
-                    logger.debug("_sign_in_with_google: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("_sign_in_with_google: %s", diagnostics.short_exc(_swallowed, 100))
                 if header_link() is None:
                     logger.info("LOGIN_OK: signed in on %s with Google", host)
                     self.remember_account(page, email, "google")
@@ -4294,7 +4294,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             if manual.count() and manual.is_visible():
                 return False
         except Exception as _swallowed:
-            logger.debug("autofill_from_resume: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("autofill_from_resume: %s", diagnostics.short_exc(_swallowed, 100))
         # SuccessFactors application: uploading the resume makes the site parse
         # it and rebuild the form, wiping anything answered before. So it goes
         # first, before a single field is touched.
@@ -4456,7 +4456,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 if is_req:
                     return True
             except Exception as _swallowed:
-                logger.debug("has_required_cover_letter_field: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("has_required_cover_letter_field: %s", diagnostics.short_exc(_swallowed, 100))
 
         try:
             tiles = page.locator("a, button, [role=button], div, span").filter(
@@ -4473,7 +4473,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     if is_req:
                         return True
         except Exception as _swallowed:
-            logger.debug("has_required_cover_letter_field: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("has_required_cover_letter_field: %s", diagnostics.short_exc(_swallowed, 100))
 
         return False
 
@@ -4852,7 +4852,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     element.scroll_into_view_if_needed(timeout=3_000)
                     return element.element_handle(timeout=3_000)
             except Exception as exc:
-                logger.debug("Apply lookup failed: %s", str(exc).splitlines()[0][:100])
+                logger.debug("Apply lookup failed: %s", diagnostics.short_exc(exc, 100))
         return None
 
     def apply_destination(self, page: Page) -> str:
@@ -4870,7 +4870,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 return links.length ? links[0].href : '';
             }""")
         except Exception as exc:
-            logger.debug("Apply address lookup failed: %s", str(exc).splitlines()[0][:100])
+            logger.debug("Apply address lookup failed: %s", diagnostics.short_exc(exc, 100))
             return ""
         return href or ""
 
@@ -4996,7 +4996,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         try:
             target.wait_for_load_state("domcontentloaded", timeout=10_000)
         except Exception as _swallowed:
-            logger.debug("click_apply_button: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("click_apply_button: %s", diagnostics.short_exc(_swallowed, 100))
         try:
             target.wait_for_load_state("networkidle", timeout=10_000)
         except Exception:
@@ -5058,7 +5058,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         try:
             page.wait_for_load_state("domcontentloaded", timeout=10_000)
         except Exception as _swallowed:
-            logger.debug("dismiss_apply_chooser: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("dismiss_apply_chooser: %s", diagnostics.short_exc(_swallowed, 100))
         try:
             page.wait_for_load_state("networkidle", timeout=10_000)
         except Exception:
@@ -5276,7 +5276,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 diagnostics.sanitize_snapshot(page.locator("body").aria_snapshot(mode="ai")))
             logger.warning("ACCOUNT_CREATE_FAILED: what the site showed is saved in %s", folder / stem)
         except Exception as exc:
-            logger.info("Could not save the account page: %s", str(exc).splitlines()[0][:100])
+            logger.info("Could not save the account page: %s", diagnostics.short_exc(exc, 100))
 
     def _visible_error_texts(self, page: Page) -> list[str]:
         """What the page says went wrong. Workday's field errors are <p data-automation-id="inputAlert"> under the
@@ -5302,7 +5302,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         try:
             error_texts.append(page.locator("body").inner_text(timeout=3_000))
         except Exception as _swallowed:
-            logger.debug("_account_form_has_validation_error: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_account_form_has_validation_error: %s", diagnostics.short_exc(_swallowed, 100))
         return self._has_account_form_validation_error(error_texts)
 
     @staticmethod
@@ -5355,7 +5355,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             try:
                 attempt()
             except Exception as _swallowed:
-                logger.debug("_tick_checkbox: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("_tick_checkbox: %s", diagnostics.short_exc(_swallowed, 100))
             try:
                 if box.is_checked():
                     return True
@@ -5416,7 +5416,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 try:
                     box.uncheck(timeout=3_000)
                 except Exception as exc:
-                    logger.debug("_clear_site_ticked_marketing: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                    logger.debug("_clear_site_ticked_marketing: %s", diagnostics.short_exc(exc, 100))
                     box.evaluate("e => e.click()")
                 if box.is_checked():
                     stuck.append(label[:70])
@@ -5424,7 +5424,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 else:
                     logger.info("ACCOUNT: unticked a marketing opt-in the site had ticked")
             except Exception as exc:
-                logger.debug("_clear_site_ticked_marketing: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                logger.debug("_clear_site_ticked_marketing: %s", diagnostics.short_exc(exc, 100))
         return stuck
 
     def fill_create_account_form(self, page: Page, email: str) -> bool:
@@ -5637,7 +5637,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                         return self._account_form_failed(
                             "the consent box would not stay ticked -- tick it yourself, then press Continue")
                 except Exception as exc:
-                    logger.debug("Could not read a consent box back: %s", str(exc).splitlines()[0][:100])
+                    logger.debug("Could not read a consent box back: %s", diagnostics.short_exc(exc, 100))
 
             submit = page.get_by_role(
                 "button", name=re.compile(r"^\s*(create (my |your )?account|create (my |your )?profile|register|sign up|submit|submit profile)\s*$", re.IGNORECASE)
@@ -5670,7 +5670,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             try:
                 page.wait_for_load_state("domcontentloaded", timeout=15_000)
             except Exception as _swallowed:
-                logger.debug("fill_create_account_form: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("fill_create_account_form: %s", diagnostics.short_exc(_swallowed, 100))
 
             still_on_form = len(visible(page.locator("input[type='password']"))) >= 2
             errors = self._visible_error_texts(page)
@@ -5711,8 +5711,8 @@ class JobApplicationAssistant(EmailVerificationMixin):
             self.remember_account(page, email, "password")
             return True
         except Exception as exc:
-            logger.exception("ACCOUNT_CREATE_FAILED: %s", str(exc).splitlines()[0][:160])
-            return self._account_form_failed("an error stopped the form: " + str(exc).splitlines()[0][:120])
+            logger.exception("ACCOUNT_CREATE_FAILED: %s", diagnostics.short_exc(exc, 160))
+            return self._account_form_failed("an error stopped the form: " + diagnostics.short_exc(exc, 120))
 
     def create_ats_account(self, page: Page, email: str) -> bool:
         """Completes an employer ATS 'Create Account' form: fills both
@@ -5803,7 +5803,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         try:
             pw_locator.wait_for(state="visible", timeout=4_000)
         except Exception as _swallowed:
-            logger.debug("attempt_auto_login: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("attempt_auto_login: %s", diagnostics.short_exc(_swallowed, 100))
         if pw_locator.count() == 0 or not pw_locator.is_visible():
             # Not Google where the site has already refused that account.
             refused = domain in getattr(self, "google_refused_on", set())
@@ -5926,7 +5926,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         try:
             body = (page.locator("body").inner_text(timeout=5_000) or "").lower()
         except Exception as _swallowed:
-            logger.debug("_after_login_attempt: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_after_login_attempt: %s", diagnostics.short_exc(_swallowed, 100))
         rejected = re.search(r"invalid (email|user|login|password|credentials)|incorrect (email|password)|wrong (email|username|password)|"
                              r"don't recognize|not recognized|no account", body)
         pw_visible = page.locator("input[type='password']:visible").first
@@ -5990,7 +5990,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             found = [page.locator(f"[data-agent-email-box='{i}']").first for i in range(int(count or 0))]
             return [box for box in found if box.is_visible()]
         except Exception as exc:
-            logger.debug("Could not look for the email box: %s", str(exc).splitlines()[0][:100])
+            logger.debug("Could not look for the email box: %s", diagnostics.short_exc(exc, 100))
             return []
 
     @staticmethod
@@ -6233,7 +6233,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                         if el.input_value().strip():
                             continue
                     except Exception as _swallowed:
-                        logger.debug("_find_first_matching: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                        logger.debug("_find_first_matching: %s", diagnostics.short_exc(_swallowed, 100))
             return el
         return None
 
@@ -6278,7 +6278,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             if is_set():
                 return True
         except Exception as _swallowed:
-            logger.debug("select_radio: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("select_radio: %s", diagnostics.short_exc(_swallowed, 100))
 
         try:
             element_id = element.get_attribute("id") or ""
@@ -6289,7 +6289,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     if is_set():
                         return True
         except Exception as _swallowed:
-            logger.debug("select_radio: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("select_radio: %s", diagnostics.short_exc(_swallowed, 100))
 
         # The wrapper that carries the styling is what a person clicks.
         try:
@@ -6302,7 +6302,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             if is_set():
                 return True
         except Exception as _swallowed:
-            logger.debug("select_radio: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("select_radio: %s", diagnostics.short_exc(_swallowed, 100))
 
         # Last resort: set it and tell the page, the way the widget would.
         try:
@@ -6316,7 +6316,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             if is_set():
                 return True
         except Exception as exc:
-            logger.warning("Could not select an option: %s", str(exc).splitlines()[0][:100])
+            logger.warning("Could not select an option: %s", diagnostics.short_exc(exc, 100))
         return False
 
     def check_first_matching(self, page: Page, hints: list[str]) -> bool:
@@ -6721,7 +6721,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     logger.info("Saved an open section with %r", label[:30])
                     committed += 1
                 except Exception as exc:
-                    logger.debug("Could not save a section: %s", str(exc).splitlines()[0][:100])
+                    logger.debug("Could not save a section: %s", diagnostics.short_exc(exc, 100))
         return committed
 
     def click_next_step(self, page: Page) -> bool:
@@ -6764,7 +6764,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             # browser still open and the part-filled application in it. Letting
             # the timeout escape closed the window and threw away a Google
             # application the agent had already filled two steps of.
-            logger.warning("Could not advance the form: %s", str(exc).splitlines()[0][:120])
+            logger.warning("Could not advance the form: %s", diagnostics.short_exc(exc, 120))
             self._stuck_on = before
             return False
         # Workday-style wizards swap content client-side without a real
@@ -6787,11 +6787,11 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 try:
                     page.wait_for_load_state("networkidle", timeout=8_000)
                 except Exception as _swallowed:
-                    logger.debug("click_next_step: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("click_next_step: %s", diagnostics.short_exc(_swallowed, 100))
                 if self._page_fingerprint(page) != before:
                     logger.info("The form moved on when the button was pressed with the keyboard")
             except Exception as exc:
-                logger.debug("Keyboard press failed: %s", str(exc).splitlines()[0][:100])
+                logger.debug("Keyboard press failed: %s", diagnostics.short_exc(exc, 100))
 
         self._stuck_on = before if self._page_fingerprint(page) == before else None
         try:
@@ -6870,7 +6870,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             if adapter_for(page.url).submission_confirmed(page):
                 return True
         except Exception as _swallowed:
-            logger.debug("submission_confirmed: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("submission_confirmed: %s", diagnostics.short_exc(_swallowed, 100))
         try:
             # innerText alone is not reliable evidence of visibility here: a heading with
             # display:none measurably still returned its text in this runtime (verified, not
@@ -7090,14 +7090,14 @@ class JobApplicationAssistant(EmailVerificationMixin):
             login_guard.clear_hold(host, email)        # the refusal was for an unverified account
             return True
         except Exception as exc:
-            logger.warning("VERIFY_LINK: could not open the link: %s", str(exc).splitlines()[0][:120])
+            logger.warning("VERIFY_LINK: could not open the link: %s", diagnostics.short_exc(exc, 120))
             return False
         finally:
             try:
                 tab.close()
                 page.bring_to_front()
             except Exception as _swallowed:
-                logger.debug("verify_account_by_email_link: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("verify_account_by_email_link: %s", diagnostics.short_exc(_swallowed, 100))
 
 
     _ACCOUNT_EXISTS = re.compile(
@@ -7121,7 +7121,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             try:
                 texts.append(page.locator("body").inner_text(timeout=3_000) or "")
             except Exception as _swallowed:
-                logger.debug("_account_exists_message: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("_account_exists_message: %s", diagnostics.short_exc(_swallowed, 100))
         return any(self._ACCOUNT_EXISTS.search(" ".join((text or "").split())) for text in texts)
 
     @staticmethod
@@ -7186,7 +7186,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             if self.adapter(page).name == "workday" and self._goto_login_page(page):
                 return on_sign_in()
         except Exception as _swallowed:
-            logger.debug("_open_sign_in: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_open_sign_in: %s", diagnostics.short_exc(_swallowed, 100))
         return False
 
     @field_timing.timed('step', lambda *a, **k: 'sign in to existing account')
@@ -7275,7 +7275,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         try:
             texts = page.evaluate(self._RECEIPT_BOX_JS)
         except Exception as exc:
-            logger.debug("receipt box: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+            logger.debug("receipt box: %s", diagnostics.short_exc(exc, 100))
             return False
         if not isinstance(texts, list):
             return False             # a page that cannot say what its boxes hold has no receipt in one
@@ -7373,7 +7373,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         try:
             page.wait_for_load_state("networkidle", timeout=20_000)
         except Exception as _swallowed:
-            logger.debug("_click_verified_submit_locked: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_click_verified_submit_locked: %s", diagnostics.short_exc(_swallowed, 100))
         return True
 
     def wait_for_submission_evidence(self, page: Page, job_title: str = "",
@@ -7396,7 +7396,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     return f"the page confirmed it ({page.url[:80]})"
                 on_form = self.find_submit_button(page) is not None
             except Exception as _swallowed:
-                logger.debug("wait_for_submission_evidence: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("wait_for_submission_evidence: %s", diagnostics.short_exc(_swallowed, 100))
             if not on_form and check_mail and company and self._confirmation_email_due(waited, last_mail_check, mail_attempts):
                 mail_attempts += 1
                 last_mail_check = waited
@@ -7492,7 +7492,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 return out.slice(0, 200);
             }""")
         except Exception as exc:
-            logger.warning("Could not read the form back: %s", str(exc).splitlines()[0][:120])
+            logger.warning("Could not read the form back: %s", diagnostics.short_exc(exc, 120))
             return []
 
         fields = []
@@ -7568,7 +7568,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             # Signatures and attestations: listed for the user, never filled.
             report["attestations_pending"] = self.pending_attestations(page)
         except Exception as exc:
-            report["errors_shown"].append(f"validation failed: {str(exc).splitlines()[0][:120]}")
+            report["errors_shown"].append(f"validation failed: {diagnostics.short_exc(exc, 120)}")
         return report
 
     @staticmethod
@@ -7664,7 +7664,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         try:  # the page's markup beside the screenshot, for diagnosing unfamiliar forms
             diagnostics.capture_safe_dom(page, job_dir / "review_page.html")
         except Exception as _swallowed:
-            logger.debug("save_review_package: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("save_review_package: %s", diagnostics.short_exc(_swallowed, 100))
         leftovers = self.find_required_blanks(page)
         for label in leftovers["required_still_blank"]:
             logger.warning("REQUIRED_BLANK: %s", " ".join(label.split()))
@@ -7688,7 +7688,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 if item["q"]:
                     logger.info("UNANSWERED_SELECT: %s | options: %s", " ".join(item["q"].split())[:110], item["options"])
         except Exception as _swallowed:
-            logger.debug("save_review_package: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("save_review_package: %s", diagnostics.short_exc(_swallowed, 100))
         for message in leftovers["errors_shown"]:
             logger.warning("FORM_ERROR: %s", message)
         summary = {
@@ -7732,7 +7732,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
         try:
             waiting.write_text(datetime.now().isoformat(timespec="seconds"), encoding="utf-8")
         except OSError as _swallowed:
-            logger.debug("wait_for_signal: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("wait_for_signal: %s", diagnostics.short_exc(_swallowed, 100))
         # A stop that needs the owner: tell their phone, and serve the console while waiting (both optional).
         needs = getattr(self, "_owner_needs", None)
         self._phone = None
@@ -7750,17 +7750,17 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 try:
                     self._phone.close()
                 except Exception as _swallowed:
-                    logger.debug("wait_for_signal: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("wait_for_signal: %s", diagnostics.short_exc(_swallowed, 100))
                 self._phone = None
             try:
                 waiting.unlink(missing_ok=True)
             except OSError as _swallowed:
-                logger.debug("wait_for_signal: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("wait_for_signal: %s", diagnostics.short_exc(_swallowed, 100))
             if page is not None:
                 try:
                     provenance.set_agent_busy(page, True)
                 except Exception as _swallowed:
-                    logger.debug("wait_for_signal: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("wait_for_signal: %s", diagnostics.short_exc(_swallowed, 100))
 
     def _sleep_for_phone(self, seconds: float, page) -> None:
         """The wait's pause between looks. With the phone console open it is cut into short beats, each serving
@@ -7776,7 +7776,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 try:
                     console.service(tab)
                 except Exception as _swallowed:
-                    logger.debug("_sleep_for_phone: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("_sleep_for_phone: %s", diagnostics.short_exc(_swallowed, 100))
             remaining = end - time.time()
             if remaining <= 0:
                 return
@@ -7797,7 +7797,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             if frame is not None:
                 return FramedPage(page, frame)
         except Exception as _swallowed:
-            logger.debug("_captcha_observation_page: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_captcha_observation_page: %s", diagnostics.short_exc(_swallowed, 100))
         return page
 
     def _wait_for_signal(
@@ -7823,7 +7823,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
             job_info = json.loads(job_file.read_text(encoding="utf-8-sig"))
             job_title, company = job_info.get("title", ""), job_info.get("company", "")
         except Exception as _swallowed:
-            logger.debug("_wait_for_signal: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_wait_for_signal: %s", diagnostics.short_exc(_swallowed, 100))
         profile = getattr(self, "_profile", None)
         check_mail = bool(getattr(profile, "check_gmail_for_confirmation", True))
         if page is not None:
@@ -7861,7 +7861,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 captcha_start_path = urlparse(cur_url).path
                 captcha_start_passwords = captcha_page.locator("input[type=password]").count()
             except Exception as _swallowed:
-                logger.debug("_wait_for_signal: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("_wait_for_signal: %s", diagnostics.short_exc(_swallowed, 100))
             try:
                 captcha_seen = bool(safety.captcha_visible(captcha_page))
             except Exception:

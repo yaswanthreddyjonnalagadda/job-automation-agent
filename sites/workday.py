@@ -9,6 +9,7 @@ directly and are the next thing to move.
 
 from __future__ import annotations
 
+import diagnostics
 import json
 import logging
 import re
@@ -179,7 +180,6 @@ _FIELD_HINT_PATTERNS: dict[str, list[re.Pattern]] = {
 class WorkdayAdapter(SiteAdapter):
     name = "workday"
     hosts = ("myworkdayjobs.com", "myworkday.com", "wd1.myworkdayjobs", "wd103.myworkdayjobs")
-    confirmation_phrases = ("your application has been submitted", "application submitted", "already applied")
     portal_list_patterns = ("/candidate_home", "/applications")
 
     _REGISTRATION_ERROR = re.compile(
@@ -322,7 +322,7 @@ class WorkdayAdapter(SiteAdapter):
                 ):
                     names.append("Other")
             except Exception as exc:
-                logger.debug("WORKDAY: school Other prompt detection: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                logger.debug("WORKDAY: school Other prompt detection: %s", diagnostics.short_exc(exc, 100))
         return [n for n in dict.fromkeys(n.strip() for n in names) if n]
 
     @staticmethod
@@ -369,18 +369,18 @@ class WorkdayAdapter(SiteAdapter):
                     return False
             return True
         except Exception as exc:
-            logger.debug("Could not read the school list: %s", str(exc).splitlines()[0][:100])
+            logger.debug("Could not read the school list: %s", diagnostics.short_exc(exc, 100))
             return False
         finally:
             if typed_probe:
                 try:
                     field.fill("")
                 except Exception as exc:
-                    logger.debug("WORKDAY: clearing probe field: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                    logger.debug("WORKDAY: clearing probe field: %s", diagnostics.short_exc(exc, 100))
             try:
                 page.keyboard.press("Escape")
             except Exception as exc:
-                logger.debug("WORKDAY: Escape after the dropdown attempt failed: %s", str(exc).splitlines()[0][:100])
+                logger.debug("WORKDAY: Escape after the dropdown attempt failed: %s", diagnostics.short_exc(exc, 100))
 
     @field_timing.timed('step', lambda *a, **k: 'education section')
     def fill_education_section(self, assistant, page: Page, education: list[dict]) -> None:
@@ -782,7 +782,7 @@ class WorkdayAdapter(SiteAdapter):
                 extra.close()
             except Exception as exc:
                 logger.debug("WORKDAY: could not close the extra tab %s: %s", getattr(extra, "url", "?")[:80],
-                             str(exc).splitlines()[0][:100])
+                             diagnostics.short_exc(exc, 100))
 
     def select_skills(self, assistant, page, field, values: list[str]) -> tuple[list[str], list[str]]:
         """Search each supported skill separately and verify its committed tag."""
@@ -843,7 +843,7 @@ class WorkdayAdapter(SiteAdapter):
             try:
                 field.fill("")
             except Exception as exc:
-                logger.debug("WORKDAY: school Other prompt detection: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                logger.debug("WORKDAY: school Other prompt detection: %s", diagnostics.short_exc(exc, 100))
             page.keyboard.press("Escape")
             if popup.count() and popup.is_visible():
                 heading = page.get_by_role("heading", name="Skills", exact=True)
@@ -1002,7 +1002,7 @@ class WorkdayAdapter(SiteAdapter):
                 try:
                     field.fill("")
                 except Exception as exc:
-                    logger.debug("WORKDAY: clearing school field: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                    logger.debug("WORKDAY: clearing school field: %s", diagnostics.short_exc(exc, 100))
                 page.keyboard.press("Escape")       # none of the owner's names is in the list: left for the owner
                 self._clear_what_the_search_chose(page, field, id_suffix, multiselect_id, index, candidates)
                 return False
@@ -1057,7 +1057,7 @@ class WorkdayAdapter(SiteAdapter):
             logger.warning("WORKDAY: %s still holds %r, which is none of the owner's names",
                            id_suffix, self._multiselect_selection(page, id_suffix, multiselect_id, index))
         except Exception as exc:
-            logger.debug("WORKDAY: clearing the search's own pick: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+            logger.debug("WORKDAY: clearing the search's own pick: %s", diagnostics.short_exc(exc, 100))
 
     @staticmethod
     def _choose_scrolled_prompt(assistant, page, multiselect_id: str, wanted: str, deadline: float | None = None):
@@ -1406,7 +1406,7 @@ class WorkdayAdapter(SiteAdapter):
                         page.wait_for_timeout(1_000)
                     except Exception as exc:
                         logger.debug("WORKDAY: typing %r into the search box failed: %s", cand.split(",")[0].strip()[:40],
-                                     str(exc).splitlines()[0][:100])
+                                     diagnostics.short_exc(exc, 100))
 
                 options = assistant._open_option_texts(page)
                 if not options:

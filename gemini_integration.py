@@ -25,6 +25,7 @@ same facts. BEHAVIOUR.md says so. The key travels in a header, never in an addre
 """
 from __future__ import annotations
 
+import diagnostics
 import logging
 import re
 import time
@@ -153,7 +154,7 @@ def _retry_delay(reply) -> float:
             if found:
                 return min(float(found.group(1)), MAX_RATE_LIMIT_WAIT)
     except (ValueError, AttributeError) as _swallowed:
-        logger.debug("_retry_delay: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+        logger.debug("_retry_delay: %s", diagnostics.short_exc(_swallowed, 100))
     return 2.0
 
 

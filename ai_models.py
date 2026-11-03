@@ -7,6 +7,7 @@ or write a resume. The lists are kept for a few hours in data/_ai_models.json, a
 """
 from __future__ import annotations
 
+import diagnostics
 import json
 import logging
 import re
@@ -106,5 +107,5 @@ def catalogue(config: Any, refresh: bool = False) -> dict[str, dict]:
             CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
             CACHE_FILE.write_text(json.dumps(cached, indent=1), encoding="utf-8")
         except OSError as _swallowed:
-            logger.debug("catalogue: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("catalogue: %s", diagnostics.short_exc(_swallowed, 100))
     return result

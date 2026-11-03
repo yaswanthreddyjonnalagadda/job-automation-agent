@@ -17,6 +17,7 @@ same kind of site.
 from __future__ import annotations
 
 import argparse
+import diagnostics
 import json
 import logging
 import re
@@ -105,7 +106,7 @@ def check(browser, entry: dict, how_read: str) -> dict:
         outcome["reached"], reached = where_it_got(agent, page)
         outcome["ok"] = reached and not outcome["read"].startswith(("could not", "read wrongly"))
     except Exception as exc:
-        outcome["reached"] = f"stopped with an error: {str(exc).splitlines()[0][:100]}"
+        outcome["reached"] = f"stopped with an error: {diagnostics.short_exc(exc, 100)}"
     finally:
         context.close()
     return outcome

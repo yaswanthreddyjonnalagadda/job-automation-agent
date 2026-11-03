@@ -12,6 +12,7 @@ user's rule is to apply on the employer's own page.
 
 from __future__ import annotations
 
+import diagnostics
 import html
 import json
 import logging
@@ -538,7 +539,7 @@ def fetch_rendered_job(url: str) -> dict | None:
             finally:
                 browser.close()
     except Exception as exc:
-        logger.warning("Could not render %s: %s", url, str(exc).splitlines()[0][:120])
+        logger.warning("Could not render %s: %s", url, diagnostics.short_exc(exc, 120))
         return None
 
     body = re.sub(r"\n{3,}", "\n\n", (data.get("text") or "")).strip()

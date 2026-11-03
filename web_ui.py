@@ -30,7 +30,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, Response, abort, g, redirect, render_template_string, request, send_file, url_for
+from flask import Flask, Response, abort, g, has_request_context, jsonify, redirect, render_template_string, request, send_file, url_for
 
 import diagnostics
 import detail_view
@@ -162,20 +162,34 @@ def _save_runs() -> None:
             for url, r in _RUNS.items()
         }, indent=2), encoding="utf-8")
     except Exception as _swallowed:
-        logger.debug("_save_runs: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+        logger.debug("_save_runs: %s", diagnostics.short_exc(_swallowed, 100))
 
 
+#: Liveness answers by pid, kept for seconds: each check spawns tasklist on
+#: Windows, and the runs are re-read on every page load.
+_ALIVE_CACHE: dict = {}
+_ALIVE_TTL = 10.0
+
+
+@diagnostics.probe
 def _process_alive(pid) -> bool:
     if not pid:
         return False
+    now = time.monotonic()
+    hit = _ALIVE_CACHE.get(pid)
+    if hit is not None and now - hit[1] < _ALIVE_TTL:
+        return hit[0]
     try:
         if os.name == "nt":
             out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True).stdout
-            return str(pid) in out
-        os.kill(int(pid), 0)
-        return True
+            alive = str(pid) in out
+        else:
+            os.kill(int(pid), 0)
+            alive = True
     except Exception:
-        return False
+        alive = False
+    _ALIVE_CACHE[pid] = (alive, now)
+    return alive
 
 
 def _load_runs() -> None:
@@ -193,7 +207,7 @@ def _load_runs() -> None:
                           "started": datetime.fromisoformat(r["started"]) if r.get("started") else None,
                           "proc": None, "stopping": False}
     except Exception as _swallowed:
-        logger.debug("_load_runs: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+        logger.debug("_load_runs: %s", diagnostics.short_exc(_swallowed, 100))
 
 
 _load_runs()
@@ -281,7 +295,7 @@ def _kill_pid_tree(pid: int) -> None:
         try:
             os.killpg(int(pid), signal.SIGTERM)
         except Exception as _swallowed:
-            logger.debug("_kill_pid_tree: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_kill_pid_tree: %s", diagnostics.short_exc(_swallowed, 100))
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
@@ -295,7 +309,7 @@ def _kill_tree(proc: subprocess.Popen) -> None:
         try:
             os.killpg(proc.pid, signal.SIGTERM)
         except ProcessLookupError as _swallowed:
-            logger.debug("_kill_tree: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_kill_tree: %s", diagnostics.short_exc(_swallowed, 100))
 
 
 _SCAN = {"thread": None, "started": None}
@@ -318,7 +332,7 @@ def _run_scan(engine) -> None:
     try:
         _remember_scan(engine.scan_all(min_match_threshold=60))
     except Exception as exc:
-        logger.warning("The job scan failed: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+        logger.warning("The job scan failed: %s", diagnostics.short_exc(exc, 100))
     finally:
         _SCAN["started"] = None
 
@@ -334,7 +348,7 @@ def scan_discovered():
             try:
                 engine.history = [(a.company, a.url) for a in get_tracker().list_all() if getattr(a, "url", "")]
             except Exception as exc:
-                logger.warning("Could not read the applications to find employers: %s", str(exc).splitlines()[0][:100])
+                logger.warning("Could not read the applications to find employers: %s", diagnostics.short_exc(exc, 100))
             _SCAN["started"] = datetime.now(timezone.utc)
             _SCAN["thread"] = threading.Thread(target=_run_scan, args=(engine,), daemon=True, name="job-scan")
             _SCAN["thread"].start()
@@ -349,10 +363,11 @@ def _remember_scan(stats) -> None:
     try:
         record = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                   "boards": int((stats or {}).get("companies_scanned") or 0),
-                  "saved": int((stats or {}).get("relevant_jobs_saved") or 0)}
+                  "saved": int((stats or {}).get("relevant_jobs_saved") or 0),
+                  "failed": int((stats or {}).get("boards_failed") or 0)}
         _LAST_SCAN.write_text(json.dumps(record), encoding="utf-8")
     except (OSError, TypeError, ValueError) as _swallowed:
-        logger.debug("_remember_scan: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+        logger.debug("_remember_scan: %s", diagnostics.short_exc(_swallowed, 100))
 
 
 def last_scan() -> dict:
@@ -366,27 +381,108 @@ def last_scan() -> dict:
 
 @app.post("/api/discovered/<int:job_id>/apply")
 def apply_discovered(job_id: int):
-    from job_discovery import JobDiscoveryEngine
-    engine = JobDiscoveryEngine()
-    job = engine.queue_for_application(job_id)
-    if job and job.get("already_submitted"):
-        return redirect(url_for("index", error=f"You already submitted an application for {job.get('job_title')} at {job.get('company_name')}."))
-    if job and job.get("url"):
-        url = job["url"].strip()
-        busy = _running_url()
-        if busy:
-            return redirect(url_for("index", error=f"{busy[:80]} is still running. Stop it before starting another."))
-        threading.Thread(target=_run_apply, args=(url,), daemon=True).start()
+    from job_discovery import queue_discovered_job
+    wants_json = request.headers.get("X-Requested-With") == "fetch"
+    busy = _running_url()
+    if busy:
+        error = f"{busy[:80]} is still running. Stop it before starting another."
+        if wants_json:
+            return jsonify({"ok": False, "error": error})
+        return redirect(url_for("index", error=error))
+    job = queue_discovered_job(job_id)
+    if job is None:
+        if wants_json:
+            return jsonify({"ok": False, "error": "That suggestion is no longer listed."}), 404
+        return redirect(url_for("index"))
+    if job.get("already_submitted"):
+        error = f"You already submitted an application for {job.get('job_title')} at {job.get('company_name')}."
+        if wants_json:
+            return jsonify({"ok": False, "error": error})
+        return redirect(url_for("index", error=error))
+    if job.get("url"):
+        threading.Thread(target=_run_apply, args=(job["url"].strip(),), daemon=True).start()
+    if wants_json:
+        return jsonify({"ok": True, "started": True, "job_id": job_id,
+                        "title": job.get("job_title"), "company": job.get("company_name")})
+    return redirect(url_for("index"))
+
+
+@app.post("/api/discovered/<int:job_id>/readiness")
+def check_readiness(job_id: int):
+    from job_discovery import refresh_readiness
+    import readiness as readiness_mod
+    found = refresh_readiness(job_id)
+    if request.headers.get("X-Requested-With") == "fetch":
+        if not found:
+            return jsonify({"ok": False, "error": "This posting's form cannot be pre-read."})
+        return jsonify({"ok": True, "line": readiness_mod.summarize(found),
+                        "needs_owner": found.get("needs_owner", [])})
     return redirect(url_for("index"))
 
 
 @app.post("/api/discovered/<int:job_id>/dismiss")
 def dismiss_discovered(job_id: int):
-    from job_discovery import JobDiscoveryEngine
-    engine = JobDiscoveryEngine()
-    engine.dismiss_job(job_id)
+    from job_discovery import dismiss_discovered_job
+    removed = dismiss_discovered_job(job_id)
+    if request.headers.get("X-Requested-With") == "fetch":
+        return jsonify({"ok": True, "dismissed": job_id, "removed": removed})
     return redirect(url_for("index"))
 
+
+@app.post("/api/discovered/bulk")
+def bulk_discovered():
+    from job_discovery import dismiss_discovered_job, queue_discovered_job
+    wants_json = request.headers.get("X-Requested-With") == "fetch"
+    action = (request.form.get("action") or "").strip()
+    raw_ids = request.form.getlist("ids")
+    if action not in ("dismiss", "queue") or not raw_ids:
+        error = "Choose Queue or Pass and tick at least one job."
+        if wants_json:
+            return jsonify({"ok": False, "error": error}), 400
+        return redirect(url_for("index", error=error))
+    done, failed = [], []
+    for raw in raw_ids:
+        try:
+            picked = int(raw)
+        except (TypeError, ValueError):
+            failed.append(raw)
+            continue
+        if action == "dismiss":
+            (done if dismiss_discovered_job(picked) else failed).append(picked)
+        else:
+            queued = queue_discovered_job(picked)
+            if queued is None or queued.get("already_submitted"):
+                failed.append(picked)
+            else:
+                done.append(picked)
+    if wants_json:
+        return jsonify({"ok": True, "action": action, "done": done, "failed": failed})
+    return redirect(url_for("index"))
+
+
+@app.post("/api/auto-apply")
+def auto_apply():
+    """Starts the oldest queued application: the same run a Start press begins, so every gate still holds."""
+    wants_json = request.headers.get("X-Requested-With") == "fetch"
+    busy = _running_url()
+    if busy:
+        error = f"{busy[:80]} is still running. Stop it before starting another."
+        if wants_json:
+            return jsonify({"ok": False, "error": error})
+        return redirect(url_for("index", error=error))
+    queued = [a for a in get_tracker().list_all(status="ready_to_apply")
+              if getattr(a, "status", "") == "ready_to_apply" and (getattr(a, "url", "") or "").strip()]
+    if not queued:
+        error = "Nothing is queued. Queue suggestions first."
+        if wants_json:
+            return jsonify({"ok": False, "error": error})
+        return redirect(url_for("index", error=error))
+    nxt = queued[-1]
+    threading.Thread(target=_run_apply, args=(nxt.url.strip(),), daemon=True).start()
+    if wants_json:
+        return jsonify({"ok": True, "started": True, "id": nxt.id,
+                        "title": nxt.title, "company": nxt.company})
+    return redirect(url_for("index"))
 
 @app.post("/api/webhook/command")
 def remote_webhook_command():
@@ -1316,7 +1412,7 @@ def _browser_check() -> dict:
             return {"title": "Playwright Chromium", "ok": True, "message": f"Browser located: {Path(p.chromium.executable_path).name}"}
     except Exception as exc:
         return {"title": "Playwright Chromium", "ok": False,
-                "message": f"Chromium not runnable: {str(exc).splitlines()[0][:100]}",
+                "message": f"Chromium not runnable: {diagnostics.short_exc(exc, 100)}",
                 "hint": "Run `python -m playwright install chromium`"}
 
 
@@ -1423,7 +1519,7 @@ def health_check():
         checks["database"] = {
             "title": "Application Database",
             "ok": False,
-            "message": f"Database unavailable: {str(exc).splitlines()[0][:100]}",
+            "message": f"Database unavailable: {diagnostics.short_exc(exc, 100)}",
         }
 
     # 6. Remote Worker & Offload Architecture
@@ -1500,6 +1596,106 @@ JOB_WINDOWS = {
 DEFAULT_JOB_WINDOW = "7d"
 
 
+def _feed_filter_context(args) -> dict:
+    """The suggestions list's filters from the query string: validated, with defaults."""
+    country_code = (args.get("country", "") or "").strip().upper() or None
+    if country_code is not None and not (len(country_code) == 2 and country_code.isalpha()):
+        country_code = None
+    within_key = args.get("within", "")
+    if within_key not in JOB_WINDOWS:
+        within_key = DEFAULT_JOB_WINDOW
+    company = (args.get("company", "") or "").strip()[:64] or None
+    try:
+        min_score = int(args.get("min_score", 60))
+    except (TypeError, ValueError) as _swallowed:
+        logger.debug("feed min_score: %s", diagnostics.short_exc(_swallowed, 100))
+        min_score = 60
+    min_score = max(0, min(min_score, 100))
+    workplace = (args.get("workplace", "") or "").strip().lower()
+    if workplace not in ("remote", "onsite"):
+        workplace = "all"
+    kept = {}
+    if country_code:
+        kept["country"] = country_code
+    if company:
+        kept["company"] = company
+    if min_score != 60:
+        kept["min_score"] = str(min_score)
+    if workplace != "all":
+        kept["workplace"] = workplace
+    from urllib.parse import urlencode
+    return {
+        "country_code": country_code, "within_key": within_key, "window": JOB_WINDOWS[within_key],
+        "company": company, "min_score": min_score, "workplace": workplace,
+        "remote_only": {"remote": True, "onsite": False}.get(workplace),
+        "kept_params": ("&" + urlencode(kept)) if kept else "",
+    }
+
+
+def _suggested_jobs(apps, filters) -> tuple:
+    """The suggestion cards plus the filter row's country options; empty on failure, never raising."""
+    try:
+        from job_discovery import JobDiscoveryEngine
+        discovery_engine = JobDiscoveryEngine()
+        # Posted inside the chosen window, newest first, and nothing the owner has already applied to, skipped or
+        # been turned down for: those never come back as suggestions.
+        jobs = discovered_view.prepare(
+            discovery_engine.get_discovered_jobs(min_score=filters["min_score"], limit=40, hide_applied=False,
+                                                 within_hours=filters["window"]["hours"],
+                                                 country_code=filters["country_code"],
+                                                 company_like=filters["company"],
+                                                 remote_only=filters["remote_only"]), apps, newest_first=True)
+    except Exception as _swallowed:
+        logger.debug("suggested jobs: %s", diagnostics.short_exc(_swallowed, 100))
+        jobs = []
+    options: list = []
+    try:
+        from job_discovery import get_discovered_countries
+        import geo_reference
+        options = [(code, geo_reference.display_name(code)) for code in get_discovered_countries()]
+    except Exception as _swallowed:
+        logger.debug("index countries: %s", diagnostics.short_exc(_swallowed, 100))
+    return jobs, options
+
+
+def _filter_summary(filters, country_options) -> tuple:
+    """Whether any filter is on, and the one line naming them."""
+    bits = []
+    if filters["country_code"]:
+        bits.append(dict(country_options).get(filters["country_code"], filters["country_code"]))
+    if filters["company"]:
+        bits.append('"%s"' % filters["company"])
+    if filters["min_score"] != 60:
+        bits.append(f"{filters['min_score']}%+")
+    if filters["workplace"] == "remote":
+        bits.append("Remote")
+    elif filters["workplace"] == "onsite":
+        bits.append("On-site")
+    return bool(bits), " \u00b7 ".join(bits)
+
+
+def _inbox_items(tracker) -> list:
+    """The newest employer-email signals with display labels; empty when the tracker has none."""
+    recent = getattr(tracker, "recent_employer_signals", None)
+    if not callable(recent):
+        return []
+    try:
+        import employer_signals
+        items = []
+        for item in recent(10) or []:
+            payload = item.get("payload") or {}
+            items.append({
+                "label": employer_signals.label(payload.get("signal")),
+                "company": item.get("company"),
+                "title": item.get("title"),
+                "application_id": item.get("application_id"),
+                "created_at": item.get("created_at"),
+            })
+        return items
+    except Exception as _swallowed:
+        logger.debug("index inbox: %s", diagnostics.short_exc(_swallowed, 100))
+        return []
+
 @app.get("/")
 def index():
     import profile_setup
@@ -1508,6 +1704,7 @@ def index():
         return redirect(url_for("setup_pages.setup"))
     tracker = get_tracker()
     apps = tracker.list_all()
+    g.app_records = apps
     runs = _current_runs()
     # Only a live run can read a Continue; notes left by a run that died or was stopped are cleared.
     live = _running_url()
@@ -1521,7 +1718,8 @@ def index():
     working_url = live if (live and not signals) else ""
     try:
         show = int(request.args.get("show", PAGE_SIZE))
-    except ValueError:
+    except ValueError as _swallowed:
+        logger.debug("index show: %s", diagnostics.short_exc(_swallowed, 100))
         show = PAGE_SIZE
     show = max(PAGE_SIZE, min(show, MAX_SHOWN))
     active_h = handoff.get_active_handoff()
@@ -1540,26 +1738,26 @@ def index():
         employer = active_h.get("employer", "")
         stage = "Handoff"
 
-    discovered_jobs = []
-    window = JOB_WINDOWS.get(request.args.get("within", ""), JOB_WINDOWS[DEFAULT_JOB_WINDOW])
-    try:
-        from job_discovery import JobDiscoveryEngine
-        discovery_engine = JobDiscoveryEngine()
-        # Posted inside the chosen window, newest first, and nothing the owner has already applied to, skipped or
-        # been turned down for: those never come back as suggestions.
-        discovered_jobs = discovered_view.prepare(
-            discovery_engine.get_discovered_jobs(min_score=60, limit=40, hide_applied=False,
-                                                 within_hours=window["hours"]), apps, newest_first=True)
-    except Exception:
-        discovered_jobs = []
+    filters = _feed_filter_context(request.args)
+    discovered_jobs, country_options = _suggested_jobs(apps, filters)
+    has_filters, filter_summary = _filter_summary(filters, country_options)
 
+    queued_count = sum(1 for a in apps if getattr(a, "status", "") == "ready_to_apply")
+    inbox = _inbox_items(tracker)
     return render_template_string(
         INDEX_HTML, apps=apps[:show], total=len(apps), shown=min(show, len(apps)),
         more=min(show + PAGE_SIZE, MAX_SHOWN), can_show_more=show < min(len(apps), MAX_SHOWN),
         groups=ui_shell.group_counts(apps), runs=latest_run(runs), signals=signals, error=request.args.get("error"),
         working_url=working_url, is_running=bool(live), job_title=job_title, employer=employer, stage=stage,
         discovered_jobs=discovered_jobs, last_scan=last_scan(), rest_line=_rest_line(runs),
-        job_windows=JOB_WINDOWS, job_window=window, scanning=scan_running(), scan_started=_SCAN["started"],
+        job_windows=JOB_WINDOWS, job_window=filters["window"], scanning=scan_running(),
+        scan_started=_SCAN["started"], country_code=filters["country_code"] or "",
+        country_options=country_options, company=filters["company"] or "",
+        min_score=filters["min_score"], workplace=filters["workplace"],
+        within_key=filters["within_key"], kept_params=filters["kept_params"],
+        has_filters=has_filters, filter_summary=filter_summary,
+        queued_count=queued_count,
+        inbox=inbox,
     )
 
 
@@ -1586,7 +1784,7 @@ def waiting_runs(data_dir: Path) -> list[dict]:
             job = json.loads((Path(data_dir) / f"_job_{name[:-4]}.json").read_text(encoding="utf-8-sig"))
             label = f"{job.get('title', '')} at {job.get('company', '')}".strip() or label
         except (OSError, ValueError) as _swallowed:
-            logger.debug("waiting_runs: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("waiting_runs: %s", diagnostics.short_exc(_swallowed, 100))
         found.append({"signal": f"_signal_{name}", "label": label})
     return found
 
@@ -1620,18 +1818,27 @@ def _running_url() -> str:
     return ""
 
 
-def _current_runs() -> dict:
+def _current_runs(app_records=None) -> dict:
     """The runs as they actually are.
 
     A run ends in its own process, which cannot write back here if this server
     was reloaded in the meantime -- so a finished application went on being
     shown as "running" until the dashboard was restarted. Anything whose
     process is gone is settled here instead, using the tracker's status when it
-    has one.
+    has one. The index page lists the applications once and shares them through
+    Flask's request store, so the tracker is not listed twice for one page;
+    direct callers may pass records explicitly.
     """
+    with _RUNS_LOCK:
+        if not _RUNS:
+            return {}
+    records = app_records
+    if records is None and has_request_context():
+        records = getattr(g, "app_records", None)
     tracker = get_tracker()
-    app_records = tracker.list_all()
-    by_url = {r.url: r for r in app_records if r.url}
+    if records is None:
+        records = tracker.list_all()
+    by_url = {r.url: r for r in records if r.url}
     with _RUNS_LOCK:
         for url, run in _RUNS.items():
             rec = by_url.get(url)
@@ -2133,6 +2340,12 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
   <section class="dash-section" aria-labelledby="hist-h">
     <header>
       <h2 id="hist-h">Your applications <span class="count">{{ total }}</span></h2>
+      {% if queued_count %}
+      <form method="post" action="/api/auto-apply" data-auto-apply>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="ghost" title="Start the oldest queued application; you review it before anything is sent">Start next queued ({{ queued_count }})</button>
+      </form>
+      {% endif %}
     </header>
     <div class="dash-history">
       {% if apps %}
@@ -2218,6 +2431,29 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
     </div>
   </section>
 
+  <section class="dash-section" aria-labelledby="mail-h">
+    <header>
+      <h2 id="mail-h">Employer emails <span class="count">{{ inbox | length }}</span></h2>
+    </header>
+    {% if inbox %}
+      <table class="cards" id="inbox">
+        <caption class="sr-only">Recent employer emails, newest first</caption>
+        <thead><tr class="head"><th scope="col">Signal</th><th scope="col">Application</th><th scope="col" class="when">When</th></tr></thead>
+        <tbody>
+        {% for s in inbox %}
+        <tr>
+          <td><span class="pill">{{ s.label }}</span></td>
+          <td class="role"><a href="/application/{{ s.application_id }}">{{ s.title }}</a><span class="loc">{{ company_label(s.company) }}</span></td>
+          <td class="when">{{ s.created_at|local }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="dash-empty"><b>No employer emails recorded yet</b>When an employer replies to an application, the reply lands here.</div>
+    {% endif %}
+  </section>
+
   <section class="dash-section" aria-labelledby="jobs-h">
     <header>
       <div>
@@ -2230,14 +2466,48 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
         <button type="submit" class="ghost" title="Look for new postings on your job boards and on the employers you have already applied through">Find new jobs</button>
       </form>
     </header>
+    <div class="feed-hint" id="feed-hint" hidden>
+      <p class="dash-sub" style="margin:0">Tip: filter by country, company, score and workplace, and tick cards to queue or pass several at once.</p>
+      <button type="button" class="linklike" id="feed-hint-ok">Got it</button>
+    </div>
     <nav class="dash-chips" aria-label="How recently the job was posted" style="margin-bottom:10px">
       {% for key, w in job_windows.items() %}
-        <a class="dash-chip" href="/?within={{ key }}#jobs-h"{% if w.hours == job_window.hours %} aria-current="true"{% endif %}>{{ w.label }}</a>
+        <a class="dash-chip" href="/?within={{ key }}{{ kept_params }}#jobs-h"{% if w.hours == job_window.hours %} aria-current="true"{% endif %}>{{ w.label }}</a>
       {% endfor %}
     </nav>
-    <p class="dash-sub">Newest first. Jobs you have already applied to, skipped or been turned down for are not listed. A job whose site gives no posting date is not listed either; a site that dates a job only by its day (Workday) appears from "Last 24 hours" on, never under "Last hour".</p>
+    <form method="get" action="/" id="job-filters" class="filter-row" aria-label="Filter suggested jobs">
+      <input type="hidden" name="within" value="{{ within_key }}">
+      <label class="filter-field">Country
+        <select name="country" aria-label="Country">
+          <option value="">All countries</option>
+          {% for code, name in country_options %}<option value="{{ code }}"{% if code == country_code %} selected{% endif %}>{{ name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="filter-field">Company
+        <input type="search" name="company" value="{{ company }}" maxlength="64" aria-label="Company name contains" placeholder="Any employer">
+      </label>
+      <label class="filter-field">Minimum score
+        <select name="min_score" aria-label="Minimum match score">
+          {% for floor in (60, 70, 80, 85) %}<option value="{{ floor }}"{% if floor == min_score %} selected{% endif %}>{{ floor }}% and up</option>{% endfor %}
+        </select>
+      </label>
+      <label class="filter-field">Workplace
+        <select name="workplace" aria-label="Workplace">
+          <option value="all"{% if workplace == "all" %} selected{% endif %}>On-site or remote</option>
+          <option value="remote"{% if workplace == "remote" %} selected{% endif %}>Remote only</option>
+          <option value="onsite"{% if workplace == "onsite" %} selected{% endif %}>On-site only</option>
+        </select>
+      </label>
+      <button type="submit" class="small">Apply filters</button>
+    </form>
+    {% if has_filters %}
+    <p class="dash-sub">Matching {{ filter_summary }} &middot; posted {{ job_window.phrase }} &middot; <a href="/#jobs-h">Clear</a></p>
+    {% endif %}
+    <details class="how-list"><summary>How this list works</summary>
+<p class="dash-sub">Newest first. Jobs you have already applied to, skipped or been turned down for are not listed. A job whose site gives no posting date is not listed either; a site that dates a job only by its day (Workday) appears from "Last 24 hours" on, never under "Last hour".</p></details>
     {% if discovered_jobs %}
-      <div class="dash-chips" role="group" aria-label="Filter suggested jobs" style="margin-bottom:14px">
+      <div class="feed-tools">
+      <div class="dash-chips" role="group" aria-label="Narrow the loaded jobs">
         <button type="button" class="dash-chip" data-job-filter="all" aria-pressed="true">All</button>
         <button type="button" class="dash-chip" data-job-filter="top" aria-pressed="false">Best matches</button>
         <button type="button" class="dash-chip" data-job-filter="remote" aria-pressed="false">Remote</button>
@@ -2247,11 +2517,20 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
         <button type="button" class="dash-chip" data-job-filter="ashby" aria-pressed="false">Ashby</button>
         <button type="button" class="dash-chip" data-job-filter="icims" aria-pressed="false">iCIMS</button>
       </div>
+      <form method="post" action="/api/discovered/bulk" data-bulk id="bulk-form" class="bulk-bar">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <span class="muted" role="status" data-bulk-count></span>
+        <button type="submit" class="small" name="action" value="queue">Queue selected</button>
+        <button type="submit" class="linklike" name="action" value="dismiss">Pass selected</button>
+      </form>
+      </div>
       <div class="dash-jobs" id="discovered-feed">
         {% for dj in discovered_jobs %}
           {% set fit = dj.resume_score if dj.resume_score is not none else dj.match_score %}
-          <article class="job-card" data-score="{{ fit }}" data-remote="{{ dj.is_remote }}" data-ats="{{ dj.ats_type }}">
+          <article class="job-card" data-job-id="{{ dj.id }}" data-score="{{ fit }}" data-remote="{{ dj.is_remote }}" data-ats="{{ dj.ats_type }}">
             <div class="job-top">
+              <label class="bulk-pick"><input type="checkbox" form="bulk-form" name="ids" value="{{ dj.id }}"
+                data-bulk-check aria-label="Select {{ dj.job_title }} at {{ dj.company_name }}"></label>
               <div class="ring {% if fit >= 85 %}high{% elif fit >= 70 %}mid{% endif %}" style="--p:{{ fit }}"
                    role="img" aria-label="{{ 'Resume match' if dj.resume_score is not none else 'Title match' }} {{ fit }} percent"><b>{{ fit }}%</b></div>
               <div style="min-width:0">
@@ -2266,7 +2545,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
               {% elif not dj.is_remote %}<span>Location not stated</span>{% endif %}
               {% if dj.is_remote %}<span class="tag remote">Remote</span>{% endif %}
               {% if dj.is_new %}<span class="tag new">New</span>{% endif %}
-              {% if dj.age %}<span class="muted">{{ dj.age }}</span>{% endif %}
+              {% if dj.age %}<span class="muted"{% if dj.age_title %} title="{{ dj.age_title }}"{% endif %}>{{ dj.age }}</span>{% endif %}
               {% if dj.other_openings %}<span class="muted" title="The same role is listed for other places; this is the best match">+{{ dj.other_openings }} other location{{ '' if dj.other_openings == 1 else 's' }}</span>{% endif %}
               <span class="tag">{{ dj.ats_type | capitalize }}</span>
             </div>
@@ -2277,12 +2556,21 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
               <div class="job-meta"><span class="muted">No resume match: the posting's text was not read.</span></div>
               {% if dj.matched_skills %}<div class="job-meta">{% for m in dj.matched_skills[:3] %}<span class="tag">{{ m }}</span>{% endfor %}</div>{% endif %}
             {% endif %}
+            {% if dj.readiness %}
+              <div class="job-meta"><span class="muted">{{ dj.readiness }}</span></div>
+            {% elif dj.ats_type == 'greenhouse' %}
+              <form method="post" action="/api/discovered/{{ dj.id }}/readiness" data-readiness>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="linklike">Check what it asks</button>
+              </form>
+            {% endif %}
             <div class="job-foot">
-              <form method="post" action="/api/discovered/{{ dj.id }}/apply">
+              <a class="button ghost small" href="{{ dj.url }}" target="_blank" rel="noopener">Posting<span aria-hidden="true"> &nearr;</span><span class="sr-only"> (opens the posting in a new tab)</span></a>
+              <form method="post" action="/api/discovered/{{ dj.id }}/apply" data-apply-card>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button type="submit" class="small">Start application</button>
               </form>
-              <form method="post" action="/api/discovered/{{ dj.id }}/dismiss">
+              <form method="post" action="/api/discovered/{{ dj.id }}/dismiss" data-remove-card>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button type="submit" class="linklike" aria-label="Not interested in {{ dj.job_title }} at {{ dj.company_name }}">Not interested</button>
               </form>
@@ -2292,7 +2580,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
       </div>
       <div class="dash-empty" id="jobs-none" hidden><b>No jobs match that filter</b>Try another one.</div>
     {% else %}
-      <div class="dash-empty"><b>No jobs posted {{ job_window.phrase }}</b>{% if last_scan %}Try a longer time, or press <b style="display:inline">Find new jobs</b> to check again.{% else %}Press <b style="display:inline">Find new jobs</b> to check your job boards and the employers you have applied through.{% endif %}</div>
+      <div class="dash-empty">{% if has_filters %}<b>No jobs match those filters</b>{% else %}<b>No jobs posted {{ job_window.phrase }}</b>{% endif %}{% if last_scan %}Try a longer time, or press <b style="display:inline">Find new jobs</b> to check again.{% else %}Press <b style="display:inline">Find new jobs</b> to check your job boards and the employers you have applied through.{% endif %}</div>
     {% endif %}
   </section>
 </main>
@@ -2412,6 +2700,7 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
           <p><span class="pill {{ 'submitted' if dv.eligible else 'needs_user_review' }}">{{ dv.verdict }}</span>
              {% if dv.when %}<span class="muted">decided {{ dv.when|local('%d %b %Y %I:%M %p') }}</span>{% endif %}</p>
           <p class="hint">{{ dv.note }}</p>
+          {% if dv.policy %}<p class="hint">{{ dv.policy }}</p>{% endif %}
           {% if dv.reasons %}
             <ul class="plain">{% for r in dv.reasons %}<li>{{ r }}</li>{% endfor %}</ul>
           {% elif dv.no_reasons %}<p class="hint">{{ dv.no_reasons }}</p>{% endif %}

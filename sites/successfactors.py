@@ -13,6 +13,7 @@ Everything here was learned from a live IGT application on 2026-09-15:
 
 from __future__ import annotations
 
+import diagnostics
 import logging
 import re
 from pathlib import Path
@@ -26,7 +27,6 @@ logger = logging.getLogger(__name__)
 class SuccessFactorsAdapter(SiteAdapter):
     name = "successfactors"
     hosts = ("successfactors.eu", "successfactors.com", "sapsf.eu", "sapsf.com", "jobs2web.com")
-    confirmation_phrases = ("application received", "thanks for applying", "your journey with")
     portal_list_patterns = ("/portalcareer", "/applications", "/careers/applications")
 
     _ATTACHMENT_FIELD = ".attachmentField"
@@ -81,7 +81,7 @@ class SuccessFactorsAdapter(SiteAdapter):
                     return True
                 logger.warning("SuccessFactors attachment does not show as attached after the attempt (kind=%s)", kind)
             except Exception as exc:
-                logger.warning("SuccessFactors attachment upload failed: %s", str(exc).splitlines()[0][:120])
+                logger.warning("SuccessFactors attachment upload failed: %s", diagnostics.short_exc(exc, 120))
         return None
 
     def open_picker(self, page, control: dict) -> bool:
@@ -158,7 +158,7 @@ class SuccessFactorsAdapter(SiteAdapter):
                     return False
                 return True
             except Exception as exc:
-                logger.warning("Could not set the date widget: %s", str(exc).splitlines()[0][:100])
+                logger.warning("Could not set the date widget: %s", diagnostics.short_exc(exc, 100))
                 return False
         return None
 

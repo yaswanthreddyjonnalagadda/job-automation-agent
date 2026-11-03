@@ -9,6 +9,7 @@ and ingest high-fit opportunities into data/applications.db.
 
 from __future__ import annotations
 
+import diagnostics
 import hashlib
 import json
 import logging
@@ -70,6 +71,63 @@ NEGATIVE_TITLE_PATTERNS = [
 
 # What a place other than the owner's is worth when the owner is open to relocating (their own place or remote: 30).
 RELOCATION_CREDIT = 15
+#: Stored countries were first parsed by f312's reader (1); f318's reader (cities, two-letter states, alpha-2 codes)
+#: recomputes them once, tracked by a sentinel row so the refresh runs a single time.
+COUNTRY_PARSER_VERSION = 2
+#: Jobs at least this good get their application form pre-read during the scan (the same bar that notifies);
+#: the rest offer the check on their card instead.
+READINESS_SCORE = 85
+
+
+def assess_job_readiness(job: dict, user_prof) -> str:
+    """Readiness assessment JSON for a Greenhouse job, or "" when it cannot be pre-read (another system, no job
+    id in the address, no published form, or no profile to answer from). Never raises: readiness must not fail
+    a scan."""
+    try:
+        import readiness
+        if job.get("ats_type") != "greenhouse" or not user_prof:
+            return ""
+        job_id = readiness.greenhouse_job_id(job.get("url") or "")
+        if not job_id:
+            return ""
+        questions = readiness.fetch_greenhouse_questions(job.get("company_token") or "", job_id)
+        if not questions:
+            return ""
+        return json.dumps(readiness.assess(questions, user_prof, job.get("company_name") or ""))
+    except Exception as exc:
+        logger.debug("No readiness for %s: %s", job.get("url"), diagnostics.short_exc(exc, 100))
+        return ""
+
+
+def refresh_readiness(job_id: int, db_path=None):
+    """Assesses one stored job's form on demand (the card's button) and stores it; the assessment, or None when
+    the posting cannot be pre-read."""
+    import readiness
+    path = Path(db_path) if db_path is not None else DB_PATH
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    ensure_discovery_schema(conn)
+    try:
+        row = conn.execute("SELECT * FROM discovered_jobs WHERE id = ?", (job_id,)).fetchone()
+        if not row:
+            return None
+        try:
+            import config
+            user_prof = config.get_user_profile()
+        except Exception as _swallowed:
+            logger.debug("readiness profile: %s", diagnostics.short_exc(_swallowed, 100))
+            return None
+        text = assess_job_readiness(dict(row), user_prof)
+        if not text:
+            return None
+        conn.execute("UPDATE discovered_jobs SET readiness_json = ? WHERE id = ?", (text, job_id))
+        conn.commit()
+        return json.loads(text)
+    finally:
+        conn.close()
+#: The scan keeps anything this good even when the caller asked for more: suggestions filter at the display cutoff
+#: at read time, and the band between the floor and the cutoff is the near-miss list.
+STORE_FLOOR = 30
 
 
 def ensure_discovery_schema(conn: sqlite3.Connection) -> None:
@@ -95,7 +153,8 @@ def ensure_discovery_schema(conn: sqlite3.Connection) -> None:
     existing = {row[1] for row in conn.execute("PRAGMA table_info(discovered_jobs)")}
     for column, kind in (("resume_score", "INTEGER"), ("resume_matched", "TEXT DEFAULT '[]'"),
                          ("resume_missing", "TEXT DEFAULT '[]'"),
-                         ("posted_at", "TEXT"), ("posted_precision", "TEXT")):
+                         ("posted_at", "TEXT"), ("posted_precision", "TEXT"),
+                         ("country_code", "TEXT"), ("readiness_json", "TEXT")):
         if column not in existing:
             conn.execute(f"ALTER TABLE discovered_jobs ADD COLUMN {column} {kind}")
     conn.execute(
@@ -104,6 +163,36 @@ def ensure_discovery_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_discovered_score ON discovered_jobs(match_score DESC)"
     )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS board_state (
+            identity TEXT PRIMARY KEY, ats TEXT, token TEXT,
+            last_scan TEXT, last_error TEXT, jobs_seen INTEGER)"""
+    )
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(discovered_jobs)")}
+    if "country_code" in columns:
+        missing = conn.execute(
+            "SELECT rowid, location FROM discovered_jobs WHERE country_code IS NULL").fetchall()
+        if missing:
+            import geo_reference
+            for rowid, location in missing:
+                conn.execute("UPDATE discovered_jobs SET country_code = ? WHERE rowid = ?",
+                             (geo_reference.primary_country(location or ""), rowid))
+        version = conn.execute(
+            "SELECT jobs_seen FROM board_state WHERE identity = '__country_parser__'").fetchone()
+        if (version[0] if version else 0) < COUNTRY_PARSER_VERSION:
+            import geo_reference
+            for rowid, location, stored in conn.execute(
+                    "SELECT rowid, location, country_code FROM discovered_jobs"):
+                named = geo_reference.location_countries(location or "")
+                if (stored or "") not in named:
+                    fresh = next(iter(named)) if len(named) == 1 else ""
+                    conn.execute("UPDATE discovered_jobs SET country_code = ? WHERE rowid = ?",
+                                 (fresh, rowid))
+            conn.execute(
+                "INSERT INTO board_state (identity, ats, token, last_scan, last_error, jobs_seen)"
+                " VALUES ('__country_parser__', '', '', '', '', ?)"
+                " ON CONFLICT(identity) DO UPDATE SET jobs_seen = excluded.jobs_seen",
+                (COUNTRY_PARSER_VERSION,))
     conn.commit()
 
 
@@ -140,7 +229,7 @@ def load_resume_text(path=None) -> str:
         _RESUME_CACHE[key] = text
         return text
     except Exception as _swallowed:
-        logger.debug("load_resume_text: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+        logger.debug("load_resume_text: %s", diagnostics.short_exc(_swallowed, 100))
         return ""
 
 
@@ -157,18 +246,45 @@ def _home_country(name: str) -> str:
         import geo_reference
         return geo_reference.country_code(name or "") or ""
     except Exception as _swallowed:
-        logger.debug("_home_country: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+        logger.debug("_home_country: %s", diagnostics.short_exc(_swallowed, 100))
         return ""
+
+
+def _accepted_countries(home_name: str, available_places: str) -> list[str]:
+    """Every country the owner can work in: home first, then each available place that resolves -- a code, a
+    country name, or a known city ("CA", "Canada", "Toronto"). Unresolvable extras are skipped, never guessed."""
+    import geo_reference
+    accepted = []
+    home = _home_country(home_name)
+    if home:
+        accepted.append(home)
+    for chunk in re.split(r"[,;]", available_places or ""):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        code = geo_reference.country_code(chunk) or geo_reference.city_country(chunk)
+        if code and code not in accepted:
+            accepted.append(code)
+    return accepted
+
+
+def _in_reach_anywhere(location: str, accepted) -> bool:
+    """False when the location names countries and none is accepted; True when it names none or nothing is set."""
+    if not accepted:
+        return True
+    import geo_reference
+    named = geo_reference.location_countries(location)
+    return not named or bool(named & set(accepted))
 
 
 def _in_reach(location: str, home: str) -> bool:
     """False when the location names countries and the owner's is not among them ("Remote - India", "Bengaluru, India"
-    for someone living elsewhere); True when it names none ("Remote", "Palo Alto") or no home country is known."""
+    for someone living elsewhere); True when it names none ("Remote", "Palo Alto") or no home country is known.
+    A US state names the US ("Austin, TX" is in reach for a US owner)."""
     if not home:
         return True
     import geo_reference
-    named = {geo_reference.country_code(part) for part in re.split(r"[;,/|]|\s-\s", location or "") if part.strip()}
-    named.discard(None)
+    named = geo_reference.location_countries(location)
     return not named or home in named
 
 
@@ -188,6 +304,9 @@ def load_profile() -> dict[str, Any]:
             "requires_visa_sponsorship": getattr(user_prof, "requires_visa_sponsorship", True),
             # Where the owner lives, from the profile: "Remote - India" is not remote work for someone living elsewhere.
             "country_code": _home_country(getattr(user_prof, "country", "")),
+            # Every country the owner can work in: home plus the profile's extras ("Other countries you can work in").
+            "accepted_country_codes": _accepted_countries(getattr(user_prof, "country", ""),
+                                                          getattr(user_prof, "available_work_locations", "")),
             # Whether the owner will move for a job: a place other than theirs then still counts, a little less.
             "open_to_relocation": bool(getattr(user_prof, "open_to_relocation", False)),
         }
@@ -274,7 +393,8 @@ def calculate_match_score(
 
     # 2. Location match (up to 30 points)
     is_remote = bool(re.search(r"\bremote\b|\banywhere\b|\bvirtual\b|\bwork from home\b", f"{loc_lower} {title_lower}"))
-    if not _in_reach(location, profile.get("country_code", "")):
+    accepted = [c for c in (profile.get("accepted_country_codes") or [profile.get("country_code", "")]) if c]
+    if not _in_reach_anywhere(location, accepted):
         return 0, []            # a posting in another country is not a suggestion, remote or not
     if is_remote:
         score += 30
@@ -313,7 +433,7 @@ def fetch_greenhouse_feed(token: str, company: str, timeout: float = 8.0) -> lis
     """Fetches active jobs from Greenhouse public JSON API."""
     url = f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true"
     try:
-        resp = requests.get(url, headers=DEFAULT_HEADERS, timeout=timeout)
+        resp = sources.http_get(url, headers=DEFAULT_HEADERS, timeout=timeout)
         if resp.status_code != 200:
             logger.debug("Greenhouse %s returned HTTP %s", token, resp.status_code)
             return []
@@ -348,7 +468,11 @@ def fetch_lever_feed(token: str, company: str, timeout: float = 8.0) -> list[dic
     """Fetches active jobs from Lever postings API."""
     url = f"https://api.lever.co/v0/postings/{token}?mode=json"
     try:
-        resp = requests.get(url, headers=DEFAULT_HEADERS, timeout=timeout)
+        resp = sources.http_get(url, headers=DEFAULT_HEADERS, timeout=timeout)
+        if resp.status_code == 404:
+            # EU-hosted boards live on another host and 404 on the main one.
+            url = url.replace("api.lever.co", "api.eu.lever.co")
+            resp = sources.http_get(url, headers=DEFAULT_HEADERS, timeout=timeout)
         if resp.status_code != 200:
             logger.debug("Lever %s returned HTTP %s", token, resp.status_code)
             return []
@@ -395,12 +519,131 @@ def fetch_jobs_for_company(company_entry: dict[str, str], timeout: float = 8.0) 
         return sources.fetch_workday_feed(company_entry, wanted)
     elif ats == "icims":
         return sources.fetch_icims_feed(company_entry, wanted)
+    elif ats == "smartrecruiters":
+        return sources.fetch_smartrecruiters_feed(token, name, titles=wanted, timeout=timeout)
+    elif ats == "workable":
+        return sources.fetch_workable_feed(token, name, timeout=timeout)
     return []
 
 
 # -----------------------------------------------------------------------------
 # Discovery Engine Controller
 # -----------------------------------------------------------------------------
+
+def dismiss_discovered_job(job_id: int, db_path=None) -> bool:
+    """Marks one suggestion dismissed with one UPDATE and no engine: no profile, no resume (the dashboard's
+    Pass button answers at once instead of paying a full engine construction for a single row)."""
+    path = Path(db_path) if db_path is not None else DB_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    ensure_discovery_schema(conn)
+    try:
+        cur = conn.execute("UPDATE discovered_jobs SET status = 'dismissed' WHERE id = ?", (job_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def queue_discovered_job(job_id, db_path=None):
+    """Marks one suggestion queued and registers its application row: one connection, no profile, no resume.
+
+    Returns the job's details (with ``already_submitted`` when a submitted application already covers it),
+    or None when the id is not listed. The dashboard's Apply button and bulk Queue share this; the engine
+    method below delegates to it so the notification path queues identically.
+    """
+    path = Path(db_path) if db_path is not None else DB_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    ensure_discovery_schema(conn)
+    try:
+        row = conn.execute("SELECT * FROM discovered_jobs WHERE id = ?", (job_id,)).fetchone()
+        if not row:
+            return None
+        has_apps = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='applications'"
+        ).fetchone() is not None
+        if has_apps:
+            already = conn.execute(
+                """
+                    SELECT id FROM applications
+                    WHERE (url = ? OR (lower(trim(company)) = lower(trim(?)) AND lower(trim(title)) = lower(trim(?))))
+                      AND status IN ('submitted', 'already_applied')
+                    LIMIT 1
+                """,
+                (row["url"], row["company_name"], row["job_title"]),
+            ).fetchone()
+            if already:
+                conn.execute("UPDATE discovered_jobs SET status = 'submitted' WHERE id = ?", (job_id,))
+                conn.commit()
+                item = dict(row)
+                item["already_submitted"] = True
+                return item
+        conn.execute("UPDATE discovered_jobs SET status = 'queued' WHERE id = ?", (job_id,))
+        now_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            conn.execute(
+                """
+                    INSERT OR IGNORE INTO applications (
+                        dedup_key, title, company, location, source_site, url, status, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'ready_to_apply', ?, ?)
+                """,
+                (
+                    row["dedup_key"], row["job_title"], row["company_name"],
+                    row["location"], row["ats_type"], row["url"], now_iso, now_iso,
+                ),
+            )
+        except Exception as _swallowed:
+            logger.debug("queue_discovered_job: %s", diagnostics.short_exc(_swallowed, 100))
+        conn.commit()
+        item = dict(row)
+        try:
+            item["matched_skills"] = json.loads(item.get("matched_skills") or "[]")
+        except Exception:
+            item["matched_skills"] = []
+        return item
+    finally:
+        conn.close()
+
+
+def get_discovered_countries(db_path=None) -> list[str]:
+    """ISO codes of the countries naming live suggestions, sorted: the filter row lists only these.
+
+    Only suggestions at the feed's default floor (60+) count, so every option can show a card.
+    """
+    path = Path(db_path) if db_path is not None else DB_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    ensure_discovery_schema(conn)
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT country_code FROM discovered_jobs"
+            " WHERE status = 'discovered' AND match_score >= 60"
+            " AND country_code IS NOT NULL AND country_code <> ''"
+            " ORDER BY country_code"
+        ).fetchall()
+        return [row[0] for row in rows if row[0]]
+    finally:
+        conn.close()
+
+def _materialize_rows(rows) -> list:
+    """Row dicts with their skill lists parsed; unparseable lists read as empty."""
+    results = []
+    for r in rows:
+        item = dict(r)
+        try:
+            item["matched_skills"] = json.loads(item.get("matched_skills") or "[]")
+        except Exception:
+            item["matched_skills"] = []
+        for key in ("resume_matched", "resume_missing"):
+            try:
+                item[key] = json.loads(item.get(key) or "[]")
+            except Exception:
+                item[key] = []
+        results.append(item)
+    return results
 
 class JobDiscoveryEngine:
     """Manages periodic scraping, filtering, and database persistence."""
@@ -443,26 +686,42 @@ class JobDiscoveryEngine:
         companies = self.get_target_companies()
         conn = self._get_connection()
         now_iso = datetime.now(timezone.utc).isoformat()
-        stats = {"companies_scanned": 0, "total_jobs_seen": 0, "relevant_jobs_saved": 0, "expired": 0}
+        stats = {"companies_scanned": 0, "total_jobs_seen": 0, "relevant_jobs_saved": 0, "expired": 0,
+                 "boards_failed": 0}
         still_listed: dict[str, set[str]] = {}      # board token -> keys that listed and qualified in this scan
 
         titles = list(self.profile.get("target_titles") or [])
+        home_country = self.profile.get("country_code", "") or ""
+        store_at = min(min_match_threshold, STORE_FLOOR) if min_match_threshold > 0 else 0
+        user_prof = None      # the answering profile, loaded once, only when a top job needs its form read
         # Every employer's list is read at the same time (each is a separate site); the rows are then saved one by one.
         from concurrent.futures import ThreadPoolExecutor
 
         def read(entry):
             try:
-                return fetch_jobs_for_company({**entry, "titles": titles})
+                return fetch_jobs_for_company({**entry, "titles": titles}), ""
             except Exception as exc:
-                logger.warning("Could not read %s: %s", entry.get("company"), str(exc).splitlines()[0][:100])
-                return []
+                short = diagnostics.short_exc(exc, 100)
+                logger.warning("Could not read %s: %s", entry.get("company"), short)
+                return [], short
         with ThreadPoolExecutor(max_workers=16) as pool:
             listings = list(pool.map(read, companies))
 
         try:
-            for entry, jobs in zip(companies, listings):
+            import geo_reference
+            for entry, (jobs, error) in zip(companies, listings):
                 stats["companies_scanned"] += 1
                 stats["total_jobs_seen"] += len(jobs)
+                if error:
+                    stats["boards_failed"] += 1
+                conn.execute(
+                    "INSERT INTO board_state (identity, ats, token, last_scan, last_error, jobs_seen)"
+                    " VALUES (?, ?, ?, ?, ?, ?)"
+                    " ON CONFLICT(identity) DO UPDATE SET last_scan = excluded.last_scan,"
+                    " last_error = excluded.last_error, jobs_seen = excluded.jobs_seen",
+                    ("|".join(sources._identity(entry)), entry.get("ats"),
+                     entry.get("token") or entry.get("tenant") or entry.get("host") or "",
+                     now_iso, error, len(jobs)))
                 if jobs:        # a board that failed to load (empty list) says nothing about its old rows
                     still_listed.setdefault(entry.get("token") or entry.get("tenant") or entry.get("host") or "", set())
 
@@ -470,7 +729,7 @@ class JobDiscoveryEngine:
                     score, matched_skills = calculate_match_score(
                         job["job_title"], job["location"], self.profile
                     )
-                    if score < min_match_threshold:
+                    if score < store_at:
                         continue
                     if job.get("description"):
                         # The posting text is in hand: the engine's hard gates
@@ -491,6 +750,17 @@ class JobDiscoveryEngine:
                             resume_score = fit.overall_score
                             resume_matched, resume_missing = list(fit.matched_skills), list(fit.missing_skills)
 
+                    job["country_code"] = geo_reference.primary_country(job["location"], home_country)
+                    if score >= READINESS_SCORE and "readiness_json" not in job:
+                        if user_prof is None:
+                            try:
+                                import config
+                                user_prof = config.get_user_profile()
+                            except Exception as _swallowed:
+                                logger.debug("scan readiness profile: %s", diagnostics.short_exc(_swallowed, 100))
+                                user_prof = False
+                        if user_prof:
+                            job["readiness_json"] = assess_job_readiness(job, user_prof)
                     dedup_key = compute_job_hash(
                         job["company_name"], job["job_title"], job["location"], job["url"]
                     )
@@ -514,14 +784,18 @@ class JobDiscoveryEngine:
                             dedup_key, company_name, company_token, ats_type,
                             job_title, location, is_remote, url, match_score,
                             matched_skills, status, discovered_at, updated_at,
-                            resume_score, resume_matched, resume_missing, posted_at, posted_precision
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            resume_score, resume_matched, resume_missing, posted_at, posted_precision,
+                            country_code, readiness_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(dedup_key) DO UPDATE SET
                             match_score = excluded.match_score,
                             matched_skills = excluded.matched_skills,
                             resume_score = excluded.resume_score,
                             resume_matched = excluded.resume_matched,
                             resume_missing = excluded.resume_missing,
+                            country_code = excluded.country_code,
+                            readiness_json = CASE WHEN excluded.readiness_json != ''
+                                THEN excluded.readiness_json ELSE readiness_json END,
                             posted_at = CASE WHEN excluded.posted_at != '' THEN excluded.posted_at
                                              ELSE discovered_jobs.posted_at END,
                             posted_precision = CASE WHEN excluded.posted_at != '' THEN excluded.posted_precision
@@ -537,7 +811,8 @@ class JobDiscoveryEngine:
                         job["job_title"], job["location"], job["is_remote"], job["url"],
                         score, json.dumps(matched_skills), init_status, now_iso, now_iso,
                         resume_score, json.dumps(resume_matched), json.dumps(resume_missing),
-                        job.get("posted_at") or "", job.get("posted_precision") or ""
+                        job.get("posted_at") or "", job.get("posted_precision") or "",
+                        job.get("country_code") or "", job.get("readiness_json") or ""
                     ))
                     if init_status != 'submitted':
                         stats["relevant_jobs_saved"] += 1
@@ -553,7 +828,7 @@ class JobDiscoveryEngine:
                             })
                             notifications.notify_discovered_job(job_payload)
                         except Exception as _swallowed:
-                            logger.debug("scan_all: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                            logger.debug("scan_all: %s", diagnostics.short_exc(_swallowed, 100))
             # A suggestion the board no longer lists, or that the rules no longer pass, would keep its old score and be
             # shown on every refresh. Only suggestions still waiting for the owner expire; queued, submitted and
             # dismissed ones are theirs.
@@ -578,11 +853,14 @@ class JobDiscoveryEngine:
 
     def get_discovered_jobs(
         self, min_score: int = 50, status: str = "discovered", limit: int = 50, hide_applied: bool = True,
-        within_hours: Optional[float] = None,
+        within_hours: Optional[float] = None, country_code: Optional[str] = None,
+        company_like: Optional[str] = None, offset: int = 0,
+        remote_only: Optional[bool] = None,
     ) -> list[dict[str, Any]]:
         """Returns discovered jobs matching filters, ordered by highest match score -- or, with `within_hours`, only
         the jobs certainly posted inside that window (a job with no known posting date is never inside it), newest
-        first."""
+        first. With `country_code`, only jobs whose location named that country (a job whose location named no
+        country is not fetched for any country)."""
         conn = self._get_connection()
         try:
             # Exclude positions that are already submitted or already applied in applications
@@ -598,16 +876,35 @@ class JobDiscoveryEngine:
                           AND lower(trim(a.title)) = lower(trim(discovered_jobs.job_title))
                     )
                 """
+            country_filter, query_params = "", [min_score, status]
+            if country_code:
+                country_filter = "AND country_code = ?"
+                query_params.append(country_code)
+            company_filter = ""
+            if company_like:
+                company_filter = "AND company_name LIKE ? ESCAPE '\\'"
+                escaped = str(company_like).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                query_params.append(f"%{escaped}%")
+            remote_filter = ""
+            if remote_only is True:
+                remote_filter = "AND is_remote = 1"
+            elif remote_only is False:
+                remote_filter = "AND is_remote = 0"
+            query_params.extend([-1 if within_hours is not None else limit, offset])
             rows = conn.execute(f"""
                 SELECT id, dedup_key, company_name, ats_type, job_title, location,
                        is_remote, url, match_score, matched_skills, status, discovered_at,
-                       resume_score, resume_matched, resume_missing, posted_at, posted_precision
+                       resume_score, resume_matched, resume_missing, posted_at, posted_precision,
+                       country_code, readiness_json
                 FROM discovered_jobs
                 WHERE match_score >= ? AND status = ?
                 {sub_filter}
+                {country_filter}
+                {company_filter}
+                {remote_filter}
                 ORDER BY (resume_score IS NULL), resume_score DESC, match_score DESC, discovered_at DESC
-                LIMIT ?
-            """, (min_score, status, -1 if within_hours is not None else limit)).fetchall()
+                LIMIT ? OFFSET ?
+            """, query_params).fetchall()
 
             if within_hours is not None:
                 # Only jobs certainly posted inside the window, newest first: a job with no known date is never in it.
@@ -621,83 +918,41 @@ class JobDiscoveryEngine:
                 kept.sort(key=lambda pair: pair[0], reverse=True)
                 rows = [r for _at, r in kept][:limit]
 
-            results = []
-            for r in rows:
-                item = dict(r)
-                try:
-                    item["matched_skills"] = json.loads(item.get("matched_skills") or "[]")
-                except Exception:
-                    item["matched_skills"] = []
-                for key in ("resume_matched", "resume_missing"):
-                    try:
-                        item[key] = json.loads(item.get(key) or "[]")
-                    except Exception:
-                        item[key] = []
-                results.append(item)
-            return results
+            return _materialize_rows(rows)
+        finally:
+            conn.close()
+
+    def get_near_misses(self, display_threshold: int = 60, limit: int = 20,
+                      country_code: Optional[str] = None) -> list[dict[str, Any]]:
+        """Stored jobs below the display cutoff but worth a glance (STORE_FLOOR and up): the band the suggestions
+        hide, best first."""
+        conn = self._get_connection()
+        try:
+            params: list = [display_threshold, limit]
+            country_filter = ""
+            if country_code:
+                country_filter = "AND country_code = ?"
+                params.insert(1, country_code)
+            rows = conn.execute(f"""
+                SELECT id, dedup_key, company_name, ats_type, job_title, location,
+                       is_remote, url, match_score, matched_skills, status, discovered_at,
+                       resume_score, resume_matched, resume_missing, posted_at, posted_precision,
+                       country_code, readiness_json
+                FROM discovered_jobs
+                WHERE match_score >= {STORE_FLOOR} AND match_score < ? AND status = 'discovered'
+                {country_filter}
+                ORDER BY match_score DESC, discovered_at DESC
+                LIMIT ?
+            """, params).fetchall()
+            return [dict(r) for r in rows]
         finally:
             conn.close()
 
     def dismiss_job(self, job_id: int) -> bool:
         """Marks a discovered opportunity as dismissed."""
-        conn = self._get_connection()
-        try:
-            cur = conn.execute(
-                "UPDATE discovered_jobs SET status = 'dismissed' WHERE id = ?", (job_id,)
-            )
-            conn.commit()
-            return cur.rowcount > 0
-        finally:
-            conn.close()
+        return dismiss_discovered_job(job_id, self.db_path)
 
     def queue_for_application(self, job_id: int) -> Optional[dict[str, Any]]:
         """Marks a discovered job as queued, adds it to applications, and returns its details."""
-        conn = self._get_connection()
-        try:
-            row = conn.execute(
-                "SELECT * FROM discovered_jobs WHERE id = ?", (job_id,)
-            ).fetchone()
-            if not row:
-                return None
-
-            # Guard against queueing an application for an already submitted job
-            has_apps = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='applications'").fetchone() is not None
-            if has_apps:
-                already = conn.execute("""
-                    SELECT id FROM applications 
-                    WHERE (url = ? OR (lower(trim(company)) = lower(trim(?)) AND lower(trim(title)) = lower(trim(?))))
-                      AND status IN ('submitted', 'already_applied')
-                    LIMIT 1
-                """, (row["url"], row["company_name"], row["job_title"])).fetchone()
-                if already:
-                    conn.execute("UPDATE discovered_jobs SET status = 'submitted' WHERE id = ?", (job_id,))
-                    conn.commit()
-                    item = dict(row)
-                    item["already_submitted"] = True
-                    return item
-
-            conn.execute(
-                "UPDATE discovered_jobs SET status = 'queued' WHERE id = ?", (job_id,)
-            )
-            now_iso = datetime.now(timezone.utc).isoformat()
-            try:
-                conn.execute("""
-                    INSERT OR IGNORE INTO applications (
-                        dedup_key, title, company, location, source_site, url, status, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'ready_to_apply', ?, ?)
-                """, (
-                    row["dedup_key"], row["job_title"], row["company_name"],
-                    row["location"], row["ats_type"], row["url"], now_iso, now_iso
-                ))
-            except Exception as _swallowed:
-                logger.debug("queue_for_application: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
-            conn.commit()
-            item = dict(row)
-            try:
-                item["matched_skills"] = json.loads(item.get("matched_skills") or "[]")
-            except Exception:
-                item["matched_skills"] = []
-            return item
-        finally:
-            conn.close()
+        return queue_discovered_job(job_id, self.db_path)
 

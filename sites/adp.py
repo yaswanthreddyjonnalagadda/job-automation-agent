@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import diagnostics
 import re
 import time
 from pathlib import Path
@@ -93,10 +94,6 @@ class AdpAdapter(SiteAdapter):
 
     name = "adp"
     hosts = ("myjobs.adp.com", "adp.com")
-    confirmation_phrases = (
-        "thank you for applying",
-        "application submitted",
-    )
 
     @classmethod
     def matches(cls, url: str) -> bool:
@@ -217,7 +214,7 @@ class AdpAdapter(SiteAdapter):
                 loc.click(timeout=2000)
                 return True
         except Exception as _swallowed:
-            logger.debug("open_picker: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("open_picker: %s", diagnostics.short_exc(_swallowed, 100))
         return False
 
     def select_option(self, page, selector: str, value: str) -> bool:
@@ -231,7 +228,7 @@ class AdpAdapter(SiteAdapter):
                     opt.click(timeout=2000)
                     return True
         except Exception as _swallowed:
-            logger.debug("select_option: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("select_option: %s", diagnostics.short_exc(_swallowed, 100))
         return False
 
     def commit_card(self, page, card_loc) -> bool:
@@ -244,6 +241,6 @@ class AdpAdapter(SiteAdapter):
                 btn.click(timeout=3000)
                 return True
         except Exception as _swallowed:
-            logger.debug("commit_card: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("commit_card: %s", diagnostics.short_exc(_swallowed, 100))
         return False
 

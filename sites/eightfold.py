@@ -18,7 +18,6 @@ from .base import SiteAdapter
 class EightfoldAdapter(SiteAdapter):
     name = "eightfold"
     hosts = ("eightfold.ai",)
-    confirmation_phrases = ("application received", "we have received your application")
     portal_list_patterns = ("/careers/applications", "/applications", "/dashboard")
 
     @classmethod

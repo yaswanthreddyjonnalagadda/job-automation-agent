@@ -5,6 +5,7 @@ and CI environments without coupling runtime logic to a specific cloud provider.
 """
 from __future__ import annotations
 
+import diagnostics
 import json
 import os
 import platform
@@ -65,7 +66,7 @@ def detect_git_sha(base_dir: Optional[Path] = None) -> str:
         if res.returncode == 0:
             return res.stdout.strip()
     except Exception as _swallowed:
-        logger.debug("detect_git_sha: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+        logger.debug("detect_git_sha: %s", diagnostics.short_exc(_swallowed, 100))
     return "unknown"
 
 
@@ -142,7 +143,7 @@ class WorkerRegistry:
                     metadata=item.get("metadata", {}),
                 )
         except Exception as _swallowed:
-            logger.debug("_load: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_load: %s", diagnostics.short_exc(_swallowed, 100))
 
     def _save(self) -> None:
         try:
@@ -153,7 +154,7 @@ class WorkerRegistry:
                 json.dump(data, f, indent=2)
             temp.replace(self._storage_path)
         except Exception as _swallowed:
-            logger.debug("_save: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_save: %s", diagnostics.short_exc(_swallowed, 100))
 
     def register(
         self,

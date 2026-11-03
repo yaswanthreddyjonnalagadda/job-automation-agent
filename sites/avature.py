@@ -12,6 +12,7 @@ referral wrappers (Sundayy):
 
 from __future__ import annotations
 
+import diagnostics
 import re
 from typing import Optional
 from urllib.parse import parse_qs, urlsplit
@@ -27,12 +28,6 @@ class AvatureAdapter(SiteAdapter):
 
     name = "avature"
     hosts = ("avature.net", "avature.cn", "avature.com")
-    confirmation_phrases = (
-        "thank you for applying",
-        "your application has been received",
-        "application submitted",
-        "your application has been successfully submitted",
-    )
     portal_list_patterns = (
         "/careers/ApplicationMethods",
         "/careers/JobDetail",
@@ -63,7 +58,7 @@ class AvatureAdapter(SiteAdapter):
             if "/careers/applicationmethods" in path or "/careers/jobdetail" in path:
                 return True
         except Exception as _swallowed:
-            logger.debug("matches: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("matches: %s", diagnostics.short_exc(_swallowed, 100))
         return False
 
     @classmethod

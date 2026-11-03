@@ -23,6 +23,7 @@ _CORE = re.compile(
     r"|(?:we(?:['’]ve|\s+have)|our\s+team\s+has)\s+(?:successfully\s+)?received\s+your\s+(?:job\s+)?application"
     r"|(?:thank\s+you|thanks)\s+for\s+(?:applying|submitting\s+your\s+application|your\s+application)"
     r"|application\s+(?:received|submitted)(?:\s+successfully)?"
+    r"|application\s+(?:was|has\s+been)\s+(?:successfully\s+)?(?:received|submitted|sent)"
     r"|submission\s+received"
     r")",
     re.IGNORECASE)

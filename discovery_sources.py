@@ -11,6 +11,7 @@ only ever called recent when it certainly is ("within the last hour" is never cl
 from __future__ import annotations
 
 import html as html_lib
+import diagnostics
 import json
 import logging
 import re
@@ -30,6 +31,29 @@ HEADERS = {
     "Accept": "application/json, text/plain, */*",
 }
 _REMOTE = re.compile(r"\b(remote|work from home|anywhere|distributed|virtual)\b", re.IGNORECASE)
+
+#: A failure worth one more try: a timeout or a reset connection. Anything else
+#: (a refusal, a bad answer) fails at once.
+_TRANSIENT_ERRORS = (TimeoutError, ConnectionError, requests.exceptions.Timeout,
+                     requests.exceptions.ConnectionError)
+
+
+def http_get(url, **kw):
+    """One GET with one retry on a transient failure; raises only when both fail."""
+    try:
+        return requests.get(url, **kw)
+    except _TRANSIENT_ERRORS as exc:
+        logger.debug("Retrying %s: %s", url, diagnostics.short_exc(exc, 100))
+        return requests.get(url, **kw)
+
+
+def http_post(url, **kw):
+    """One read-only POST with one retry on a transient failure."""
+    try:
+        return requests.post(url, **kw)
+    except _TRANSIENT_ERRORS as exc:
+        logger.debug("Retrying %s: %s", url, diagnostics.short_exc(exc, 100))
+        return requests.post(url, **kw)
 
 
 # -- when a job was posted ---------------------------------------------------------------------------------------
@@ -110,7 +134,7 @@ def _job(company: str, token: str, ats: str, title: str, place: str, url: str, d
 def fetch_ashby_feed(token: str, company: str, timeout: float = 8.0) -> list[dict]:
     """Ashby's public job board: every listed job with the time it was published."""
     try:
-        resp = requests.get(f"https://api.ashbyhq.com/posting-api/job-board/{token}", headers=HEADERS, timeout=timeout)
+        resp = http_get(f"https://api.ashbyhq.com/posting-api/job-board/{token}", headers=HEADERS, timeout=timeout)
         if resp.status_code != 200:
             return []
         jobs = []
@@ -123,7 +147,7 @@ def fetch_ashby_feed(token: str, company: str, timeout: float = 8.0) -> list[dic
                              remote=bool(raw.get("isRemote"))))
         return jobs
     except Exception as exc:
-        logger.warning("Could not read Ashby jobs for %s: %s", token, str(exc).splitlines()[0][:100])
+        logger.warning("Could not read Ashby jobs for %s: %s", token, diagnostics.short_exc(exc, 100))
         return []
 
 
@@ -139,11 +163,11 @@ def minimal_titles(titles: Iterable[str]) -> list[str]:
 
 
 WORKDAY_PAGE = 20          # the most Workday returns for one request
-WORKDAY_MAX_PAGES = 5      # so a title is read to its first hundred results at most
+WORKDAY_MAX_PAGES = 10     # so a title is read to its first two hundred results at most
 
 
 def fetch_workday_feed(entry: dict, titles: Iterable[str], timeout: float = 15.0, now: Optional[datetime] = None,
-                       max_age_days: int = 7, max_details: int = 40) -> list[dict]:
+                       max_age_days: int = 7, max_details: int = 100) -> list[dict]:
     """A Workday employer's jobs, searched by each wanted title the way its careers page searches.
 
     Workday's list says only "Posted N Days Ago", so only jobs inside `max_age_days` are opened (for their text,
@@ -159,7 +183,7 @@ def fetch_workday_feed(entry: dict, titles: Iterable[str], timeout: float = 15.0
         # a short page says the list has ended (Rackspace's second page held as many posted this week as its first).
         for offset in range(0, WORKDAY_PAGE * WORKDAY_MAX_PAGES, WORKDAY_PAGE):
             try:
-                resp = requests.post(f"https://{host}/wday/cxs/{tenant}/{site}/jobs",
+                resp = http_post(f"https://{host}/wday/cxs/{tenant}/{site}/jobs",
                                      headers={**HEADERS, "Content-Type": "application/json"},
                                      json={"appliedFacets": {}, "limit": WORKDAY_PAGE, "offset": offset,
                                            "searchText": title},
@@ -175,19 +199,19 @@ def fetch_workday_feed(entry: dict, titles: Iterable[str], timeout: float = 15.0
                 if len(postings) < WORKDAY_PAGE:
                     break
             except Exception as exc:
-                logger.warning("Could not search %s: %s", host, str(exc).splitlines()[0][:100])
+                logger.warning("Could not search %s: %s", host, diagnostics.short_exc(exc, 100))
                 break
     jobs = []
     for path, hit in list(found.items())[:max_details]:
         item, description, url = hit["item"], "", f"https://{host}/{site}{path}"
         try:
-            detail = requests.get(f"https://{host}/wday/cxs/{tenant}/{site}{path}", headers=HEADERS, timeout=timeout)
+            detail = http_get(f"https://{host}/wday/cxs/{tenant}/{site}{path}", headers=HEADERS, timeout=timeout)
             if detail.status_code == 200:
                 info = detail.json().get("jobPostingInfo", {})
                 description = _plain(info.get("jobDescription") or "")
                 url = info.get("externalUrl") or url
         except Exception as exc:
-            logger.debug("No detail for %s: %s", path, str(exc).splitlines()[0][:100])
+            logger.debug("No detail for %s: %s", path, diagnostics.short_exc(exc, 100))
         jobs.append(_job(company, tenant, "workday", item.get("title"), item.get("locationsText"), url, description,
                          hit["posted"], remote=(item.get("remoteType") or "").lower() == "remote"))
     return jobs
@@ -199,7 +223,7 @@ _ICIMS_PLACE = re.compile(r'iCIMS_JobHeaderData"[^>]*>\s*<span[^>]*>\s*([^<]+?)\
 _ICIMS_DATE = re.compile(r'"datePosted"\s*:\s*"([^"]+)"')
 
 
-def fetch_icims_feed(entry: dict, titles: Iterable[str], timeout: float = 15.0, max_details: int = 15) -> list[dict]:
+def fetch_icims_feed(entry: dict, titles: Iterable[str], timeout: float = 15.0, max_details: int = 50) -> list[dict]:
     """An iCIMS portal's jobs matching each wanted title. The list shows no dates, so each match is opened for its own."""
     host = entry.get("host", "")
     if not host:
@@ -208,7 +232,7 @@ def fetch_icims_feed(entry: dict, titles: Iterable[str], timeout: float = 15.0, 
     cards: dict[str, tuple[str, str]] = {}
     for title in minimal_titles(titles):
         try:
-            resp = requests.get(f"https://{host}/jobs/search", headers=HEADERS, timeout=timeout,
+            resp = http_get(f"https://{host}/jobs/search", headers=HEADERS, timeout=timeout,
                                 params={"ss": 1, "searchKeyword": title, "in_iframe": 1})
             if resp.status_code != 200:
                 continue
@@ -218,12 +242,12 @@ def fetch_icims_feed(entry: dict, titles: Iterable[str], timeout: float = 15.0, 
                     place = _ICIMS_PLACE.search(card)
                     cards.setdefault(link.group(1), (_plain(link.group(2)), _plain(place.group(1)) if place else ""))
         except Exception as exc:
-            logger.warning("Could not search %s: %s", host, str(exc).splitlines()[0][:100])
+            logger.warning("Could not search %s: %s", host, diagnostics.short_exc(exc, 100))
     jobs = []
     for url, (title, place) in list(cards.items())[:max_details]:
         posted, description = None, ""
         try:
-            page = requests.get(url, headers=HEADERS, timeout=timeout, params={"in_iframe": 1})
+            page = http_get(url, headers=HEADERS, timeout=timeout, params={"in_iframe": 1})
             if page.status_code == 200:
                 date = _ICIMS_DATE.search(page.text)
                 posted = parse_posted(date.group(1)) if date else None
@@ -233,9 +257,96 @@ def fetch_icims_feed(entry: dict, titles: Iterable[str], timeout: float = 15.0, 
                 except ValueError:
                     description = ""
         except Exception as exc:
-            logger.debug("No detail for %s: %s", url, str(exc).splitlines()[0][:100])
+            logger.debug("No detail for %s: %s", url, diagnostics.short_exc(exc, 100))
         jobs.append(_job(company, host, "icims", title, place, url, description, posted))
     return jobs
+
+
+SR_PAGE = 100          # SmartRecruiters' own page size; totalFound says how many pages exist
+SR_MAX_PAGES = 5       # so one employer contributes 500 postings at most
+
+
+def _sr_text(detail: dict) -> str:
+    try:
+        sections = (detail.get("jobAd") or {}).get("sections") or {}
+        parts = [str(sec["text"]) for sec in sections.values()
+                 if isinstance(sec, dict) and sec.get("text")]
+        return _plain(" ".join(parts))
+    except Exception as exc:
+        logger.debug("SmartRecruiters detail had no readable sections: %s", diagnostics.short_exc(exc, 100))
+        return ""
+
+
+def fetch_smartrecruiters_feed(token: str, company: str, titles=(), timeout: float = 8.0,
+                               country: str | None = None, max_details: int = 40) -> list[dict]:
+    """SmartRecruiters' public Posting API: searched by title server-side (q), walked page by page (totalFound +
+    offset), the first `max_details` matches opened once for their text (the rest keep title and place, which still
+    score). `country` filters server-side where the caller knows one."""
+    found: dict[str, dict] = {}
+    for title in minimal_titles(titles) or [""]:
+        offset = 0
+        for _page in range(SR_MAX_PAGES):
+            params: dict = {"limit": SR_PAGE, "offset": offset}
+            if title:
+                params["q"] = title
+            if country:
+                params["country"] = country
+            try:
+                resp = http_get(f"https://api.smartrecruiters.com/v1/companies/{token}/postings",
+                                    headers=HEADERS, params=params, timeout=timeout)
+                if resp.status_code != 200:
+                    break
+                data = resp.json()
+                items = data.get("content") or []
+                total = data.get("totalFound", len(items))
+            except Exception as exc:
+                logger.warning("Could not search %s: %s", token, diagnostics.short_exc(exc, 100))
+                break
+            for raw in items:
+                pid = str(raw.get("id") or "")
+                if pid:
+                    found.setdefault(pid, raw)
+            offset += SR_PAGE
+            if offset >= (total or 0):
+                break
+    jobs = []
+    for index, (pid, raw) in enumerate(found.items()):
+        place = (raw.get("location") or {})
+        text = ", ".join(x for x in (place.get("city"), place.get("country")) if x)
+        description = ""
+        if index < max_details:
+            try:
+                detail = http_get(
+                    f"https://api.smartrecruiters.com/v1/companies/{token}/postings/{pid}",
+                    headers=HEADERS, timeout=timeout)
+                if detail.status_code == 200:
+                    description = _sr_text(detail.json())
+            except Exception as exc:
+                logger.debug("No detail for %s: %s", pid, diagnostics.short_exc(exc, 100))
+        jobs.append(_job(company, token, "smartrecruiters", raw.get("name"),
+                         place.get("fullLocation") or text,
+                         f"https://jobs.smartrecruiters.com/{token}/{pid}", description,
+                         parse_posted(raw.get("releasedDate")), remote=bool(place.get("remote"))))
+    return jobs
+
+
+def fetch_workable_feed(token: str, company: str, timeout: float = 8.0) -> list[dict]:
+    """Workable's public widget feed: one call (?details=true) with every job; remote is `telecommuting`."""
+    try:
+        resp = http_get(f"https://apply.workable.com/api/v1/widget/accounts/{token}",
+                            headers=HEADERS, params={"details": "true"}, timeout=timeout)
+        if resp.status_code != 200:
+            return []
+        jobs = []
+        for raw in resp.json().get("jobs", []):
+            place = ", ".join(x for x in (raw.get("city"), raw.get("country")) if x)
+            jobs.append(_job(company, token, "workable", raw.get("title"), place, raw.get("url") or "",
+                             _plain(raw.get("description") or raw.get("job_description") or ""),
+                             parse_posted(raw.get("published_on")), remote=bool(raw.get("telecommuting"))))
+        return jobs
+    except Exception as exc:
+        logger.warning("Could not read Workable jobs for %s: %s", token, diagnostics.short_exc(exc, 100))
+        return []
 
 
 # -- which companies ---------------------------------------------------------------------------------------------
@@ -264,6 +375,10 @@ def _entry(history_company: str, url: str) -> Optional[dict]:
         return {"company": history_company, "ats": "lever", "token": parts[0].lower()}
     if host.endswith(".icims.com"):
         return {"company": history_company, "ats": "icims", "host": host}
+    if host in ("jobs.smartrecruiters.com", "careers.smartrecruiters.com") and parts:
+        return {"company": history_company, "ats": "smartrecruiters", "token": parts[0].lower()}
+    if host == "apply.workable.com" and parts:
+        return {"company": history_company, "ats": "workable", "token": parts[0].lower()}
     return None
 
 
@@ -290,7 +405,7 @@ def reference_employers(path: Optional[Path] = None) -> list[dict]:
     try:
         return list(json.loads((path or REFERENCE_EMPLOYERS).read_text(encoding="utf-8")).get("employers", []))
     except (OSError, ValueError) as exc:
-        logger.warning("Could not read the reference employers: %s", str(exc).splitlines()[0][:100])
+        logger.warning("Could not read the reference employers: %s", diagnostics.short_exc(exc, 100))
         return []
 
 
