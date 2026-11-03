@@ -21,7 +21,7 @@ def test_the_saved_answers_and_the_tracker_database_are_the_tests_own():
 
 def test_tests_read_the_made_up_profile_never_the_owners():
     assert Path(config.PROFILE_PATH).parent != REAL_DATA
-    assert config.get_user_profile().full_name == "Alex Q. Example"
+    assert config.get_user_profile().full_name == "Alex Jordan Example"
 
 
 def test_learning_an_answer_in_a_test_leaves_the_real_file_as_it_was():
