@@ -110,7 +110,7 @@ class Planner:
         if "Step 1 of 2" in snapshot:
             answers = [
                 {"ref": ref_of(snapshot, "textbox", "First name *"), "question": "First name", "action": "fill",
-                 "value": "Yaswanth", "source": "profile.full_name"},
+                 "value": "Alex", "source": "profile.full_name"},
                 {"ref": ref_of(snapshot, "combobox", "Country *"), "question": "Country", "action": "choose",
                  "value": "United States", "source": "profile.country"},
                 {"ref": ref_of(snapshot, "combobox", "Will you now or in the future require visa sponsorship? *"),
@@ -483,7 +483,7 @@ def test_a_whole_application_is_read_answered_and_submitted(page, resume_file):
     owner_submits(page)
     # The agent fills his name from the profile before anyone is asked, so it
     # is the name as he writes it, not the one the page was offered.
-    assert stored(page, "first") == "Yaswanth Reddy"
+    assert stored(page, "first") == "Alex Jordan"
     assert stored(page, "country") == "United States"
     assert stored(page, "sponsor") == "Yes"
     assert stored(page, "state") == "Virginia"          # the dropdown drawn by script
@@ -978,7 +978,7 @@ def test_workday_recorded_account_signs_in_instead_of_registering(page, resume_f
     """An account already on record: sign in, even though a registration form
     is showing beside the sign-in one (the owner's rule)."""
     page.set_content('''<h2>Create Account</h2><form>
-        <label>Email <input type="email"></label><label>Password <input type="password"></label>
+        <label>Email <input type="email" value="alex.example@example.com"></label><label>Password <input type="password"></label>
         <label>Verify New Password <input type="password"></label><button>Create Account</button>
     </form><form data-automation-id="signInForm">
         <label>Password <input type="password"></label><button>Sign In</button>
@@ -1137,35 +1137,35 @@ def test_a_document_already_attached_is_not_attached_again(page, resume_file):
 def test_the_owners_name_is_given_as_they_write_it():
     import config
     profile = config.get_user_profile()
-    assert (profile.first_name, profile.middle_name, profile.last_name) == ("Yaswanth Reddy", "", "Jonnalagadda")
+    assert (profile.first_name, profile.middle_name, profile.last_name) == ("Alex Jordan", "", "Example")
 
 
 NAME_FORM = """<html><body><h1>Apply</h1>
 <form onsubmit="return false;">
-  <label for="f">First Name *</label><input id="f" value="Yaswanth">
+  <label for="f">First Name *</label><input id="f" value="Alex">
   <label for="m">Middle Name</label><input id="m">
-  <label for="l">Last Name *</label><input id="l" value="Reddy Jonnalagadda">
-  <label for="c">Company Name</label><input id="c" value="Capital One">
+  <label for="l">Last Name *</label><input id="l" value="Jordan Example">
+  <label for="c">Company Name</label><input id="c" value="Example Bank">
   <label for="p">Preferred First Name</label><input id="p">
 </form></body></html>"""
 
 
 def test_the_name_is_put_right_from_the_profile(page, resume_file):
-    """A form filled "Yaswanth" / "Reddy Jonnalagadda" is corrected to the
+    """A form filled "Alex" / "Jordan Example" is corrected to the
     owner's own first and last name."""
     page.set_content(NAME_FORM)
     agent = make_agent(Planner(), resume_file)
     controls = page_agent.parse_snapshot(agent.snapshot(page))
     agent.correct_from_profile(page, page_agent.PagePlan(), controls)
-    assert page.locator("#f").input_value() == "Yaswanth Reddy"
-    assert page.locator("#l").input_value() == "Jonnalagadda"
+    assert page.locator("#f").input_value() == "Alex Jordan"
+    assert page.locator("#l").input_value() == "Example"
     assert page.locator("#m").input_value() == ""            # no middle name: left empty
-    assert page.locator("#c").input_value() == "Capital One"  # not a name of the owner's
+    assert page.locator("#c").input_value() == "Example Bank"  # not a name of the owner's
     assert page.locator("#p").input_value() == ""
 
 
 def test_a_name_the_owner_typed_is_left_alone(page, resume_file):
-    page.set_content(NAME_FORM.replace('id="f" value="Yaswanth"', 'id="f" value="Yash"'))
+    page.set_content(NAME_FORM.replace('id="f" value="Alex"', 'id="f" value="Yash"'))
     agent = make_agent(Planner(), resume_file)
     agent.remember_page_state(page)
     page.locator("#f").fill("Yash R.")                        # the owner, while the agent waited
@@ -1443,9 +1443,9 @@ def test_known_answer_supplies_mandatory_school_position_and_employer(page, resu
     emp_box = page_agent.Control(ref="e3", role="textbox", name="Employer Name *")
     state_box = page_agent.Control(ref="e4", role="combobox", name="State/Province *")
 
-    assert agent.known_answer(school_box)[0] == "Eastern Illinois University"
+    assert agent.known_answer(school_box)[0] == "Example State University"
     assert agent.known_answer(pos_box)[0] == "Senior Network and Security Engineer"
-    assert agent.known_answer(emp_box)[0] == "Capital One"
+    assert agent.known_answer(emp_box)[0] == "Example Bank"
     assert agent.known_answer(state_box)[0] == "Virginia"
 
 
@@ -1480,17 +1480,17 @@ def test_universal_concept_synonyms_across_diverse_ats_portals(page, resume_file
     # Employer variations
     for name in ("Company Name *", "Current Company", "Organization Name", "Current Organization"):
         ctl = page_agent.Control(ref="e1", role="textbox", name=name)
-        assert agent.known_answer(ctl)[0] == "Capital One", f"Failed for {name}"
+        assert agent.known_answer(ctl)[0] == "Example Bank", f"Failed for {name}"
 
     # School variations
     for name in ("Alma Mater *", "Educational Institution", "University Name (required)", "College Name"):
         ctl = page_agent.Control(ref="s1", role="textbox", name=name)
-        assert agent.known_answer(ctl)[0] == "Eastern Illinois University", f"Failed for {name}"
+        assert agent.known_answer(ctl)[0] == "Example State University", f"Failed for {name}"
 
     # Major variations
     for name in ("Course of Study *", "Discipline", "Degree Subject", "Field of Study (required)"):
         ctl = page_agent.Control(ref="m1", role="textbox", name=name)
-        assert agent.known_answer(ctl)[0] == "Computer Technology", f"Failed for {name}"
+        assert agent.known_answer(ctl)[0] == "Computer Science", f"Failed for {name}"
 
     # Degree variations
     for name in ("Highest Level of Education *", "Degree Level", "Educational Attainment"):

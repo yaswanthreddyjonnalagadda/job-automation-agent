@@ -108,10 +108,11 @@ def test_the_resume_shows_the_phone_with_its_country_code():
     from config import get_user_profile
 
     profile = get_user_profile()
-    for written in ("(571) 354-5212", "+1 (571) 354-5212"):
-        header = f"NAME\nTitle\nFairfax, VA | {written} | x@y.com\n\nSUMMARY"
+    number = profile.phone_mobile
+    for written in (number, f"+1 {number}"):
+        header = f"NAME\nTitle\nExampleville, VA | {written} | x@y.com\n\nSUMMARY"
         line = apply_flow.normalise_contact_details(header, profile).splitlines()[2]
-        assert "+1 (571) 354-5212" in line
+        assert f"+1 {number}" in line
         assert "+1 +1" not in line
 
 
