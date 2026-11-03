@@ -71,9 +71,6 @@ NEGATIVE_TITLE_PATTERNS = [
 # What a place other than the owner's is worth when the owner is open to relocating (their own place or remote: 30).
 RELOCATION_CREDIT = 15
 
-# A tech word in a title only counts when the title is an engineering-type role.
-ENGINEERING_ROLE = re.compile(r"\b(engineer|architect|administrator|analyst|sre|developer|technician|specialist)\b")
-
 
 def ensure_discovery_schema(conn: sqlite3.Connection) -> None:
     """Creates the discovered_jobs table and indexes if not present."""
@@ -181,10 +178,10 @@ def load_profile() -> dict[str, Any]:
     try:
         user_prof = config.get_user_profile()
         return {
-            "target_titles": getattr(user_prof, "target_titles", []) or [
-                "Senior Network Engineer", "Network Engineer", "Cloud Network Engineer",
-                "Infrastructure Engineer", "DevOps Engineer", "Site Reliability Engineer"
-            ],
+            # The person's own titles (profile_setup drafts them from the resume). With none there is nothing to
+            # match, so nothing is suggested -- no one's job titles are built into the code.
+            "target_titles": list(getattr(user_prof, "target_titles", ()) or ()),
+            "avoid_title_words": list(getattr(user_prof, "avoid_title_words", ()) or ()),
             "locations": getattr(user_prof, "locations", []) or [
                 "Dallas, TX", "Austin, TX", "Irving, TX", "Plano, TX", "Ashburn, VA", "Remote"
             ],
@@ -196,10 +193,8 @@ def load_profile() -> dict[str, Any]:
         }
     except Exception:
         return {
-            "target_titles": [
-                "Senior Network Engineer", "Network Engineer", "Cloud Network Engineer",
-                "Infrastructure Engineer", "DevOps Engineer", "Site Reliability Engineer"
-            ],
+            "target_titles": [],
+            "avoid_title_words": [],
             "locations": [
                 "Dallas, TX", "Austin, TX", "Irving, TX", "Plano, TX", "Ashburn, VA", "Remote"
             ],
@@ -216,6 +211,31 @@ def is_negative_title(title: str) -> bool:
     return False
 
 
+# Disciplines that are a different career from most people's: a title naming one is left out unless the person's own
+# titles name it too (a software engineer's "Software Engineer" is theirs; a network engineer's is not -- "Software
+# Engineer, Starlink Network" matched "Network Engineer" on two words).
+OTHER_DISCIPLINES = (
+    "software", "backend", "back-end", "frontend", "front-end", "full stack", "full-stack", "mobile", "ios", "android",
+    "web developer", "data engineer", "data scientist", "data analyst", "machine learning", "ml", "research scientist",
+    "qa", "quality assurance", "game", "firmware", "hardware", "mechanical", "technical writer", "solutions architect",
+)
+
+
+def _words_in(title: str, words) -> list[str]:
+    return [w for w in words if w and re.search(rf"(?<![\w-]){re.escape(w.lower())}(?![\w-])", title.lower())]
+
+
+def is_other_discipline(title: str, profile: dict[str, Any]) -> bool:
+    """True when the title names a discipline or a word the person does not want.
+
+    A person whose own titles name a discipline (a software engineer, a data engineer) works in that field, so the
+    built-in list does not apply to them; the words they say they avoid always do, unless their own titles use them."""
+    own = " ".join(profile.get("target_titles") or [])
+    disciplines = () if _words_in(own, OTHER_DISCIPLINES) else OTHER_DISCIPLINES
+    named = _words_in(title, (*disciplines, *(profile.get("avoid_title_words") or ())))
+    return any(not _words_in(own, [w]) for w in named)
+
+
 def calculate_match_score(
     title: str, location: str, profile: dict[str, Any]
 ) -> tuple[int, list[str]]:
@@ -223,7 +243,7 @@ def calculate_match_score(
     Computes candidate match score (0-100) based on title relevance, location,
     and engineering keywords.
     """
-    if is_negative_title(title):
+    if is_negative_title(title) or is_other_discipline(title, profile):
         return 0, []
 
     score = 0
@@ -247,17 +267,8 @@ def calculate_match_score(
             matched_skills.append(target)
             break
 
-    # If no title alignment, score remains low
-    if score == 0 and ENGINEERING_ROLE.search(title_lower):
-        # No targeted title, but an engineering role with a technical word in it: a weaker match, so that a title the
-        # owner targets always ranks above it (a dozen jobs tied at 70 made the list the same on every refresh).
-        tech_keywords = ["network", "cloud", "infrastructure", "devops", "sre", "systems", "security"]
-        for kw in tech_keywords:
-            if re.search(rf"\b{kw}\b", title_lower):
-                score += 20
-                matched_skills.append(kw.capitalize())
-                break
-
+    # No title of the person's: not a suggestion. (A loose "engineer plus a technical word" match used to let
+    # "Staff Application Security Engineer" and "Senior Software Engineer, Backend" score 60 on a network profile.)
     if score == 0:
         return 0, []
 
