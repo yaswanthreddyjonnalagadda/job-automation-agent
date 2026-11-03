@@ -675,7 +675,7 @@ def test_a_questionnaires_employment_questions_are_answered(page, agent):
     agent._profile = get_user_profile()
     agent.adapter = lambda _page: __import__("sites").SiteAdapter()
     agent._answer_text_questions(page, get_user_profile())
-    assert page.input_value("#q1") == "Capital One"
+    assert page.input_value("#q1") == "Example Bank"
     assert page.input_value("#q2") == "Financial Services"
     assert page.input_value("#q3") == "February 2025 - Present"
     assert page.input_value("#q4") == "Senior Network and Security Engineer"
@@ -727,7 +727,7 @@ def test_an_address_field_is_filled_from_the_profile(page, agent):
     agent._profile = get_user_profile()
     agent.adapter = lambda _page: __import__("sites").SiteAdapter()
     agent._answer_text_questions(page, get_user_profile())
-    assert page.input_value("#addr") == "9365 Lee Hwy"
+    assert page.input_value("#addr") == get_user_profile().address_line1 == "100 Example Street"
 
 
 ADP_SOCIAL = """

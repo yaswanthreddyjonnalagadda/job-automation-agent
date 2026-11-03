@@ -1,0 +1,195 @@
+{
+  "full_name": "Alex Q. Example",
+  "first_name": "Alex",
+  "middle_name": "Q.",
+  "last_name": "Example",
+  "email": "alex.example@example.com",
+  "phone": "(555) 010-0100",
+  "phone_mobile": "(555) 010-0100",
+  "phone_home": "",
+  "phone_work": "",
+  "target_titles": [
+    "Network Engineer",
+    "Cloud Network Engineer",
+    "Senior Network Engineer"
+  ],
+  "prefix": "Mr.",
+  "address_line1": "100 Example Street",
+  "city": "Exampleville",
+  "state": "Virginia",
+  "county": "Example County",
+  "postal_code": "20001",
+  "current_location": "Exampleville, VA",
+  "locations": [
+    "Remote",
+    "Exampleville",
+    "VA"
+  ],
+  "open_to_relocation": true,
+  "salary_min": 125000,
+  "salary_max": 185000,
+  "years_experience": 6,
+  "requires_visa_sponsorship": true,
+  "linkedin_url": "https://www.linkedin.com/in/alex-example",
+  "portfolio_url": "",
+  "work_authorization": "H-1B",
+  "us_citizen": "No",
+  "country_of_citizenship": "India",
+  "security_clearance_level": "None",
+  "legally_eligible_to_work": "Yes",
+  "availability_to_start": "Immediately",
+  "willing_to_travel": "Yes",
+  "security_clearance": "No",
+  "felony_conviction": "No",
+  "previously_employed_here": "No",
+  "applied_here_before": "No",
+  "willing_to_work_weekends": "Yes",
+  "relatives_employed_here": "No",
+  "willing_drug_test_and_physical": "Yes",
+  "veteran_status": "I am not a veteran",
+  "disability_status": "No, I do not have a disability",
+  "ethnicity": "South Asian",
+  "gender": "Male",
+  "work_arrangements": [
+    "In Person Office",
+    "Remote Virtual",
+    "Hybrid"
+  ],
+  "work_type": "Full-Time",
+  "current_employer": "Example Bank",
+  "current_position_title": "Senior Network and Security Engineer",
+  "current_employer_type": "Financial Services",
+  "current_employment_dates": "February 2025 - Present",
+  "reason_for_leaving": "Contract ending",
+  "reasons_for_leaving": [
+    [
+      "Example Bank",
+      "Contract is coming to an end"
+    ],
+    [
+      "Example Mutual",
+      "Contract ended"
+    ],
+    [
+      "Example Capital Ltd.",
+      "Left to study for a master's degree"
+    ]
+  ],
+  "current_employer_location": "Exampleville, VA",
+  "employment_statuses": [
+    "Full-Time"
+  ],
+  "how_did_you_hear": "LinkedIn",
+  "preferred_contact_method": "Email",
+  "bound_by_non_compete": "No",
+  "hispanic_or_latino": "No",
+  "at_least_18": "Yes",
+  "authorized_for_any_employer": "Yes",
+  "willing_to_submit_to_pre_employment_background_check": "Yes",
+  "worked_for_occ": "No",
+  "provided_services_to_occ": "No",
+  "bonus_expectations": "5%",
+  "willing_to_work_onsite_three_days": "Yes",
+  "preferred_language": "English",
+  "people_managed": "",
+  "outside_business_interests_with_competitors": "No",
+  "education": [
+    [
+      "Master's",
+      "Computer Science",
+      "Example State University",
+      "2022"
+    ],
+    [
+      "Bachelor's",
+      "Electrical and Electronics Engineering",
+      "Example Institute of Technology",
+      "2019"
+    ]
+  ],
+  "education_dates": [
+    [
+      "Example State University",
+      "August 2021",
+      "December 2022"
+    ],
+    [
+      "Example Institute of Technology",
+      "August 2015",
+      "April 2019"
+    ]
+  ],
+  "work_history_gap": "",
+  "country": "United States",
+  "phone_country_code": "+1",
+  "accept_application_privacy_prompts": true,
+  "sign_attestations": true,
+  "check_gmail_for_confirmation": true,
+  "answer_alternatives": {
+    "Computer Science": [
+      "Computer Technology",
+      "Computer and Information Science",
+      "Computer and Information Sciences"
+    ],
+    "Computer Technology": [
+      "Computer Science",
+      "Computer and Information Science",
+      "Computer and Information Sciences"
+    ],
+    "Electrical and Electronics Engineering": [
+      "Electrical Engineering",
+      "Electrical & Electronics Engineering",
+      "Electronics and Communication Engineering"
+    ]
+  },
+  "preferred_name": "Alex",
+  "address_line2": "",
+  "gpa": "",
+  "certifications": [
+    "CCNA",
+    "AWS Certified Advanced Networking - Specialty"
+  ],
+  "languages": [
+    "English",
+    "Telugu"
+  ],
+  "skill_levels": [],
+  "gender_identity": "Man",
+  "sexual_orientation": "",
+  "transgender": "No",
+  "pronouns": "",
+  "ai_notetaker_consent": "Yes",
+  "share_data_with_partners": "No",
+  "marketing_opt_in": "No",
+  "available_work_locations": "Texas, Virginia, Florida, New York",
+  "employer_contact_permissions": [
+    [
+      "Example Bank",
+      "Yes"
+    ],
+    [
+      "Example Mutual",
+      "Yes"
+    ],
+    [
+      "Example Capital Ltd.",
+      "Yes"
+    ]
+  ],
+  "education_details": [
+    {
+      "school": "Example State University",
+      "city": "Exampleton",
+      "state": "Illinois",
+      "country": "United States",
+      "graduated": true
+    },
+    {
+      "school": "Example Institute of Technology",
+      "city": "Exampleabad",
+      "state": "Telangana",
+      "country": "India",
+      "graduated": true
+    }
+  ]
+}
