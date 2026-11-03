@@ -19,24 +19,15 @@ _STATE_PATH = re.compile(r"""^\w+\s*=\s*(?:Path\(["']data/|(?:config\.)?DATA_DIR
 for _source in sorted(TESTS_DIR.parent.glob("*.py")):
     if _STATE_PATH.search(_source.read_text(encoding="utf-8", errors="replace")):
         importlib.import_module(_source.stem)
-NO_PROFILE = "needs the owner's real profile (data/profile.json, or the PROFILE_JSON secret in CI)"
+SYNTHETIC_PROFILE = TESTS_DIR / "fixtures" / "profile.json"
 
 
 @pytest.fixture(autouse=True)
-def _skip_a_test_that_asks_for_a_profile_nobody_supplied(monkeypatch):
-    # Until the tests use synthetic fixtures (RFC-001, M2), some read the
-    # owner's real profile. Where there is none, such a test is skipped rather
-    # than failed on placeholder values. Only a call made from a test counts:
-    # production code that calls get_user_profile() keeps getting the real one.
-    real = config.get_user_profile
-
-    def guarded():
-        caller = Path(sys._getframe(1).f_code.co_filename).resolve()
-        if TESTS_DIR in caller.parents and not config.PROFILE_PATH.is_file():
-            pytest.skip(NO_PROFILE)
-        return real()
-
-    monkeypatch.setattr(config, "get_user_profile", guarded)
+def _every_test_reads_the_made_up_profile(monkeypatch):
+    # A test reads tests/fixtures/profile.json (a made-up person, "Alex Example"), never the owner's
+    # data/profile.json: a test written against one person's facts fails for the next, and the owner's data has no
+    # business in CI. A test that needs other facts writes its own profile and points config.PROFILE_PATH at it.
+    monkeypatch.setattr(config, "PROFILE_PATH", SYNTHETIC_PROFILE)
 
 
 _IN_THE_REPOSITORY_ROOT: dict[str, bool] = {}
