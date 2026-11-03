@@ -5150,7 +5150,9 @@ class JobApplicationAssistant(EmailVerificationMixin):
         """Choose creation or hold when a new employer presents a password page."""
         if not self.account_confirmed_absent():
             return None
-        if allow_create and self._create_account_control(page) is not None:
+        if not allow_create:
+            return None
+        if self._create_account_control(page) is not None:
             return self.create_account_from_link(page, email)
         self._login_paused = ("No account is recorded for this employer, and this login page "
                               "offers no usable registration path")
@@ -5693,6 +5695,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     "ACCOUNT_UNVERIFIED: Workday left registration without Candidate Home or application evidence"
                     " -- signing in with the email and password"
                 )
+                self.remember_account(page, email, "password")
                 # The owner's decision (28 September): sign in once with the email and the password. A code
                 # the site then emails is read by the code step (emailed_codes.why_not decides); a rejection
                 # -- which may only mean the email is not verified yet -- is counted by login_guard and
