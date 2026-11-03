@@ -1,0 +1,18 @@
+{
+  "id": "f308",
+  "date": "2026-11-02",
+  "class": "A matching rule built around one person's field (a default list of network titles, and technical words like network/cloud/security) lets in the wrong jobs for the owner and gives nothing to anyone else",
+  "symptom": "The suggested-jobs list held Senior Software Engineer (Backend), Staff Application Security Engineer, Sr. Data Engineer and mobile roles for a network and cloud-security engineer, and only about 114 open jobs overall.",
+  "site": "Dashboard suggested jobs (greenhouse, lever, ashby, workday boards), 2 November 2026",
+  "root_cause": "calculate_match_score gave 20 points to any title with 'engineer' plus a technical word, then added remote (30) and senior (10), reaching the cut-off with no title of the person's. Titles were few (the resume draft kept 3) and a default list of network titles lived in code.",
+  "why_tests_missed": "The ranking tests checked that a targeted title outranks a loose one, never that the loose one should not be suggested at all, and used only the owner's kind of profile.",
+  "fix": "Only a person's own target_titles match (the resume draft now proposes up to 12). Titles naming another discipline, or a word in the new avoid_title_words profile field, score 0 unless the person's titles use them; a person whose titles name a discipline is not subject to the built-in list. The default title list was removed from load_profile.",
+  "tests": [
+    "tests/test_titles_come_from_the_profile.py::test_a_job_in_another_discipline_is_not_suggested",
+    "tests/test_titles_come_from_the_profile.py::test_a_job_with_one_of_the_persons_titles_is_suggested",
+    "tests/test_titles_come_from_the_profile.py::test_a_title_the_person_does_not_have_is_not_matched_on_a_technical_word",
+    "tests/test_titles_come_from_the_profile.py::test_a_discipline_is_left_out_only_for_people_whose_own_titles_do_not_name_it",
+    "tests/test_titles_come_from_the_profile.py::test_a_person_with_no_titles_is_suggested_nothing"
+  ],
+  "prevention": "Build every matching rule from the person's profile and resume; test each rule with at least two unlike profiles (a network engineer and a software engineer), never one."
+}

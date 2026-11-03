@@ -65,6 +65,9 @@ class UserProfile:
     phone_home: str = ""
     phone_work: str = ""
     target_titles: tuple[str, ...] = ()
+    # Title words this person does not want ("Application Security"); added to the other-discipline words that
+    # job_discovery always leaves out unless the person's own titles use them.
+    avoid_title_words: tuple[str, ...] = ()
     prefix: str = ""
     address_line1: str = ""
     address_line2: str = ""       # apartment, suite, unit -- empty when there is none
