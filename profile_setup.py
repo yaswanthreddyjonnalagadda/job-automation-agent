@@ -86,7 +86,10 @@ SECTIONS: tuple[tuple[str, str, tuple[Field, ...]], ...] = (
         Field("current_employment_dates", "Dates at that job", hint="e.g. 02/2025 - Present"),
         Field("years_experience", "Years of experience", "number"),
         Field("people_managed", "People you manage", hint="A number, or leave blank."),
-        Field("target_titles", "Job titles you are applying for", "list", hint="Comma separated"),
+        Field("target_titles", "Job titles you are applying for", "list",
+              hint="Comma separated. The more real titles for your kind of work, the more jobs are found."),
+        Field("avoid_title_words", "Words in a job title you do not want", "list",
+              hint="Comma separated, e.g. Sales, Application Security. Leave blank if none."),
         Field("gpa", "GPA", hint="e.g. 3.6/4.0, or leave blank."),
         Field("certifications", "Certifications", "list",
               hint="Comma separated, e.g. CCNA, CCNP. Write None if you have none."),
@@ -221,7 +224,8 @@ _AI_SYSTEM = f"""You read a resume and copy facts out of it into JSON. Copy only
 guess or add. Leave out any key the resume does not state.
 
 Keys: {", ".join(_AI_FIELDS)}.
-- target_titles: a list with the resume's own headline title (at most 3).
+- target_titles: a list with the resume's own headline title, then the other job titles employers use for the same
+  work the resume shows (at most 12; each a real job title, never a skill).
 - education: a list of [degree level, field of study, school, year finished], newest first.
 - current_employment_dates: as written, e.g. "02/2025 - Present".
 - years_experience: a whole number, only if the resume states it.
@@ -256,7 +260,7 @@ def draft_from_resume(text: str, ask: Optional[Callable[[str, str, int], str]] =
         elif key == "target_titles":
             titles = [str(t).strip() for t in (value if isinstance(value, list) else [value]) if str(t).strip()]
             if titles:
-                draft[key] = tuple(titles[:3])
+                draft[key] = tuple(titles[:12])
         elif key == "years_experience":
             try:
                 draft[key] = int(value)
