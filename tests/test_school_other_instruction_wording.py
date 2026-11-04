@@ -78,3 +78,50 @@ def test_the_school_names_stay_alone_when_the_text_does_not_offer_other():
 def test_the_module_has_one_rule_for_it():
     source = open(workday.__file__, encoding="utf-8").read()
     assert source.count("not\s+listed") <= 1, "the wording list must live in education_text_offers_other only"
+
+
+
+@pytest.fixture(scope="module")
+def browser():
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        yield browser
+        browser.close()
+
+
+@pytest.fixture
+def page(browser):
+    context = browser.new_context()
+    page = context.new_page()
+    yield page
+    context.close()
+
+ANALOG_EDUCATION = """<div>
+  <div><h4>Education</h4>
+    <p>To enter your university or school, type the name of your institution in the text box, and press Enter. If your
+    institution does not appear in the pre-populated list, or if your highest degree is High School Diploma, type
+    &ldquo;Other,&rdquo; press Enter, and then select the appropriate country.</p>
+    <div><h5>Education 1</h5><label for="education-1--school">School or University*</label>
+      <input id="education-1--school"></div></div>
+  <div><h4>Certifications</h4><button>Add</button></div></div>"""
+
+
+def test_an_education_section_with_no_accessible_name_is_still_read(page):
+    """The Analog Devices Education block is a bare group: a heading 'Education' and its text, no aria-label. Looking
+    the section up as a group NAMED Education found nothing, so even a recognised wording never reached the rule."""
+    page.set_content(ANALOG_EDUCATION)
+    names = WorkdayAdapter._school_names(Assistant(), "JNTU Hyderabad", page=page)
+    assert names == ["JNTU Hyderabad", "Other"]
+
+
+def test_a_named_education_group_is_still_read(page):
+    page.set_content('<div role="group" aria-label="Education"><p>If your school is not listed, please select '
+                     '“Other.”</p></div><div><h4>Certifications</h4><p>Please select “Other”.</p></div>')
+    assert WorkdayAdapter._school_names(Assistant(), "X University", page=page)[-1] == "Other"
+
+
+def test_other_named_in_another_section_does_not_count(page):
+    page.set_content('<div><h4>Education</h4><p>Enter your school.</p></div>'
+                     '<div><h4>Languages</h4><p>Please select “Other” if yours is not shown.</p></div>')
+    assert WorkdayAdapter._school_names(Assistant(), "X University", page=page) == ["X University"]

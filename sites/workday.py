@@ -317,6 +317,23 @@ class WorkdayAdapter(SiteAdapter):
             return None
 
     @staticmethod
+    def _education_text(page) -> str:
+        """The words of the Education section: its group when the page names it ("Education"), else the block that
+        holds its heading. Analog Devices draws a bare group -- a heading and its text, no accessible name -- which a
+        lookup by group name never found, so none of the section's instructions reached the rules that read them (f332).
+        Empty when neither is found exactly once."""
+        try:
+            group = page.get_by_role("group", name="Education", exact=True)
+            if group.count() == 1:
+                return group.inner_text(timeout=500)
+            heading = page.get_by_role("heading", name="Education", exact=True)
+            if heading.count() == 1:
+                return heading.locator("xpath=..").inner_text(timeout=500)
+        except Exception as exc:
+            logger.debug("WORKDAY: reading the Education section: %s", diagnostics.short_exc(exc, 100))
+        return ""
+
+    @staticmethod
     def _school_names(assistant, school: str, page: Page | None = None) -> list[str]:
         """Every name the owner has for this school, record first: the profile's own spelling of it ("JNTU" in the
         work history is "JNTU Hyderabad" in the profile) and the substitutes the owner listed (answer_alternatives).
@@ -333,9 +350,7 @@ class WorkdayAdapter(SiteAdapter):
             names += [str(a) for a in (alternatives.get(name) or [])]
         if page is not None:
             try:
-                edu = page.get_by_role("group", name="Education", exact=True)
-                edu_text = edu.inner_text(timeout=500) if edu.count() == 1 else ""
-                if education_text_offers_other(edu_text):
+                if education_text_offers_other(WorkdayAdapter._education_text(page)):
                     names.append("Other")
             except Exception as exc:
                 logger.debug("WORKDAY: school Other prompt detection: %s", diagnostics.short_exc(exc, 100))
@@ -943,7 +958,6 @@ class WorkdayAdapter(SiteAdapter):
                     # search submission. Enter here requests results; the
                     # matching row must still be clicked and verified below.
                     if id_suffix.endswith("--school"):
-                        education = page.get_by_role("group", name="Education", exact=True)
                         prompt = page.locator(
                             f'[data-automation-id="responsiveMonikerPrompt"][data-associated-widget={json.dumps(multiselect_id)}]')
                         root = prompt if prompt.count() else page
@@ -955,7 +969,7 @@ class WorkdayAdapter(SiteAdapter):
                         needs_enter = (
                             not has_real_rows
                             or (field.get_attribute("enterkeyhint") or "").lower() == "search"
-                            or (education.count() == 1 and bool(re.search(r"press\s+Enter\s+to\s+search", education.inner_text(), re.I)))
+                            or bool(re.search(r"press\s+Enter\s+to\s+search", self._education_text(page), re.I))
                         )
                         if needs_enter:
                             field.press("Enter")
