@@ -1,5 +1,7 @@
 # What the assistant does, and what it never does
 
+Every suggested job carries the country its posting names (a US state counts as the US); the Suggested jobs page can show one country's jobs (`?country=US`), and a posting that names no country is left out of a country-filtered list rather than guessed into it. Jobs found before this change gain their country automatically.
+
 Labelled dropdown buttons with a nested placeholder (such as "State Select...") are recognised as unanswered questions. The agent opens the button itself through its guarded click helper, selects an offered option and verifies it; a denied click stops that attempt. Phone Type is resolved only when the primary phone uniquely matches an explicitly typed mobile, home or work number in the profile. A number without that evidence does not establish its type.
 
 ADP asynchronous dropdowns use the active widget's internal filter and offered choices. Existing offered equivalents, such as Mobile and Cell, are matched before applying a text filter. Candidate Source and Application source use the saved how-did-you-hear answer.
@@ -131,7 +133,21 @@ seven minutes. While it runs the page says so and a second press starts nothing;
 
 Each card shows how long ago the job was posted (or found, when the site gives no date),
 a "New" badge for the last three days, the first place with "+N more",
-and "Remote" once. "Not interested" is a plain link. After "Find new jobs" the page
+and "Remote" once. "Not interested" is a plain link. The posting link ("Posting") is the card's
+first action, and "Start application" starts without reloading the page: the card says
+"Applying…" in place. Each card has a tick box; ticking shows a bar that queues ("Queue
+selected") or passes ("Pass selected") every ticked card at once. Queued cards leave the
+suggestions and wait under Applications, where Start picks them up; "Start next queued (N)"
+starts the oldest queued one (the same run a Start press begins, gates unchanged). Pressing Start while
+another run is live starts nothing and the card stays put. A filter row narrows the
+suggestions by country (only countries with suggestions are listed), company name,
+minimum score and workplace (remote or on-site); the time-window chips keep every other
+filter, and while any filter is on the page says what is on with a link that clears it.
+The listing rules fold into a "How this list works" disclosure, a first-look tip points at
+the filters once, and each card's age says on hover when the scan found it and when it was
+posted. "Employer emails" lists the newest replies across applications (interview,
+rejection, offer and the rest) with a link to each one.
+After "Find new jobs" the page
 says when it last checked and how many boards. In the live panel, Stop says
 "Nothing was running" when nothing was, and "Check and continue" shows "Checking" until
 the next status update shows whether the agent carried on. There is no Pause.
@@ -1620,6 +1636,18 @@ Education is optional, the agent then leaves the section empty rather than addin
 why. A list that offers schools, even if it loads slowly, is filled as before; a school missing from a list that does
 offer others still comes to you.
 
+A school that is not in a Workday list is entered as "Other" whenever the Education section itself says to type, search
+or select "Other" for a school the list lacks -- in any wording ("not listed", "cannot find", "does not appear in the
+pre-populated list", f332). Before, only two wordings were recognised, so a third (Analog Devices) searched for the
+school alone and left the School, Degree and Field of Study of that entry failing. The section is read even when the
+site gives it no accessible name. The country that follows "Other" is answered like any other question on that entry,
+from the country in your education details: the school is chosen as "Other Institution - <your school's country>". A Field of Study
+beyond the first hundred rows of the list is found by submitting the search (Enter) when typing alone does not show it.
+
+## Export control, foreign residency, J-1 visa, and AI screening consent (f333)
+
+Export control questions listing countries across parent group containers (such as Workday's Group D list) evaluate the full container text against your citizenship rather than truncating at the split label. Permanent residency in a country outside the US (`profile.foreign_permanent_resident`) and exchange visitor J-1/J-2 visa history (`profile.held_j1_visa`) are answered deterministically from explicit profile fields with zero model calls; when either field is empty the question is left for you, never assumed "No". Consent questions for employer AI candidate screening and future job matching (`profile.ai_recruitment_consent`) use only your explicit AI-consent answer (never the general privacy-prompts permission), and remain unanswered when no profile decision is configured.
+
 ## "Yes, without restrictions" or "Yes, with company sponsorship" (f184)
 
 When a list offers both rows for a question like "Are you legally eligible to work in this country?", your answer "Yes"
@@ -1983,3 +2011,13 @@ A page headed "Review your application" (or "Review and submit", "Review") with 
 application, whatever its forward button is called (Continue, Next, Submit): the agent stops there and hands it to you, and the
 button is yours to press. Walmart's review page was pressed through as an ordinary "Continue" and the application was sent
 without your pause (f277).
+
+A posting you already submitted never comes back as a suggestion and can no longer be queued again: the feed,
+the scan, and the queue all ask the same live tracker the dashboard and the runs use, instead of a stale copy
+that still listed submitted postings as ready (f329).
+
+When a site drops keystrokes while its password boxes still render, the agent retypes the box from cleared and
+checks it settled, up to three tries, instead of stopping at the first empty read (f330).
+
+Continue is offered only while its run is actually waiting: a run proves it is alive every few seconds, and a
+waiting card whose run died quietly stops offering a button nobody would read (f331).

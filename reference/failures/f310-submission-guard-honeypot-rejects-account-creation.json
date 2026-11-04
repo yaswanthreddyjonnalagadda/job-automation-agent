@@ -1,0 +1,15 @@
+{
+  "id": "f310",
+  "date": "2026-11-03",
+  "site": "Workday candidate account creation and sign-in (Analog Devices)",
+  "class": "Submission guard credentialControl rejects forms containing bot-detection honeypot inputs",
+  "symptom": "Account creation on Workday halts with 'an earlier attempt may already have pressed Create Account on <domain> and the run stopped before the result was confirmed -- check whether the account now exists before trying again, then press Continue'.",
+  "root_cause": "Workday injects a bot-detection honeypot text input ('Enter website. This input is for robots only, do not enter if you\\'re human.') into account registration and sign-in forms. In submission_guard.py, credentialControl and candidateProfileControl required all text inputs to be passwords or emails. The unexpected honeypot field caused credentialControl to return false, blocking guard.click_account_creation. However, _mark_account_creation_dispatched had already persisted a pending action checkpoint. On recovery, the unconfirmed dispatched marker halted execution to avoid duplicate account creation.",
+  "why_tests_missed": "Existing account creation gateway tests used minimal forms with only username and password inputs, without including vendor bot-defense decoy fields.",
+  "fix": "submission_guard.py filters out decoy/honeypot inputs (matching patterns such as 'for robots only', 'do not enter/fill if you are human', 'leave blank', or 'honeypot') from inputs validated by credentialControl and candidateProfileControl.",
+  "tests": [
+    "tests/test_account_creation_gateway.py::test_account_creation_permits_form_with_honeypot_field",
+    "tests/test_account_creation_gateway.py::test_sign_in_permits_form_with_honeypot_field"
+  ],
+  "prevention": "When safeguarding form actions against unintended submission, explicitly recognize and ignore common bot-trap honeypots rather than treating them as unexpected application form fields."
+}

@@ -7,6 +7,7 @@ re-decides it.
 """
 from __future__ import annotations
 
+import diagnostics
 import logging
 import re
 import time
@@ -16,6 +17,7 @@ from urllib.parse import quote, urlparse
 from playwright.sync_api import Page
 
 import emailed_codes
+import employer_signals
 import login_guard
 import safety
 from interaction import type_text
@@ -29,11 +31,7 @@ logger = logging.getLogger("browser_automation")
 
 
 class EmailVerificationMixin:
-    _CONFIRMATION_MAIL = re.compile(
-        r"thank(s| you) for (applying|your application|your interest)|application (received|submitted|confirmation)"
-        r"|(we('ve| have)|has been) received|successfully (applied|submitted)|your application (for|to|has|was)",
-        re.IGNORECASE,
-    )
+    # Confirmation and signal patterns live in employer_signals (one home for what mail means).
 
     def gmail_shows_confirmation(self, page: Page, company: str, job_title: str = "") -> Optional[str]:
         """Looks in the Gmail this browser is already signed in to for the
@@ -51,7 +49,7 @@ class EmailVerificationMixin:
             try:
                 tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)
             except Exception as _swallowed:
-                logger.debug("gmail_shows_confirmation: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("gmail_shows_confirmation: %s", diagnostics.short_exc(_swallowed, 100))
             tab.wait_for_timeout(2_000)
             if not self._gmail_mailbox_matches(tab):
                 keep_mail_open = True
@@ -63,21 +61,22 @@ class EmailVerificationMixin:
                 main = tab.locator("[role=main]").first
                 texts = [" ".join(t.split()) for t in (main.inner_text() if main.count() else "").split("\n") if t.strip()]
             wanted = [w.lower() for w in (company, job_title) if w]
-            for text in texts:
-                low = text.lower()
-                # The job itself, not just the employer: an older application
-                # to another Schwab job was taken as this one's confirmation.
-                names_job = job_title.lower() in low if job_title else company.lower() in low
-                if names_job and self._CONFIRMATION_MAIL.search(text):
-                    logger.info("GMAIL: confirmation email found -- %s", text[:160])
-                    return text[:300]
+            # The job itself, not just the employer: an older application
+            # to another Schwab job was taken as this one's confirmation.
+            found = employer_signals.scan_rows(texts, company, job_title)
+            self._last_employer_signal = found["signal"]
+            if found["signal"]:
+                logger.info("GMAIL: employer signal %s -- %s", found["signal"][0], found["signal"][1][:160])
+            if found["confirmation"]:
+                logger.info("GMAIL: confirmation email found -- %s", found["confirmation"][:160])
+                return found["confirmation"]
             for text in texts[:5]:
                 if any(w in text.lower() for w in wanted):
                     logger.info("GMAIL: %s email not counted as a confirmation: %s", company, text[:160])
             logger.info("GMAIL: no application-confirmation email from %s yet (%d result rows)", company, len(texts))
             return None
         except Exception as exc:
-            logger.warning("GMAIL: check failed: %s", str(exc).splitlines()[0][:160])
+            logger.warning("GMAIL: check failed: %s", diagnostics.short_exc(exc, 160))
             return None
         finally:
             try:
@@ -85,7 +84,7 @@ class EmailVerificationMixin:
                     tab.close()
                     page.bring_to_front()
             except Exception as _swallowed:
-                logger.debug("gmail_shows_confirmation: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("gmail_shows_confirmation: %s", diagnostics.short_exc(_swallowed, 100))
 
     # ------------------------------------------------------------------
     # Emailed one-time passcodes (account setup / sign-in only)
@@ -111,7 +110,7 @@ class EmailVerificationMixin:
                 if self._PASSCODE_FIELD.search(label) and not (el.input_value() or "").strip():
                     return el
         except Exception as _swallowed:
-            logger.debug("_passcode_field: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_passcode_field: %s", diagnostics.short_exc(_swallowed, 100))
         return None
 
     _PLAIN_MAILBOX = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
@@ -142,7 +141,7 @@ class EmailVerificationMixin:
                 if len(addresses) == 1 and addresses[0].casefold() == email.casefold():
                     return True
             except Exception as _swallowed:
-                logger.debug("_gmail_mailbox_matches: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("_gmail_mailbox_matches: %s", diagnostics.short_exc(_swallowed, 100))
         self._login_paused = (
             "The applying Gmail account is not confirmed in this browser. "
             "Sign in to the application email in the open Google tab, then press Continue.")
@@ -185,7 +184,7 @@ class EmailVerificationMixin:
                 try:
                     tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)
                 except Exception as _swallowed:
-                    logger.debug("passcode_from_gmail: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("passcode_from_gmail: %s", diagnostics.short_exc(_swallowed, 100))
                 tab.wait_for_timeout(2_000)
                 if not self._gmail_mailbox_matches(tab):
                     keep_mail_open = True
@@ -235,7 +234,7 @@ class EmailVerificationMixin:
                 )
             return ""
         except Exception as exc:
-            logger.warning("PASSCODE: Gmail read failed: %s", str(exc).splitlines()[0][:160])
+            logger.warning("PASSCODE: Gmail read failed: %s", diagnostics.short_exc(exc, 160))
             return ""
         finally:
             try:
@@ -243,7 +242,7 @@ class EmailVerificationMixin:
                     tab.close()
                     page.bring_to_front()
             except Exception as _swallowed:
-                logger.debug("passcode_from_gmail: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("passcode_from_gmail: %s", diagnostics.short_exc(_swallowed, 100))
 
     def verification_link_from_gmail(self, page: Page, wait_seconds: int = 150) -> str:
         """The newest account-verification link (last hour) the site at `page` emailed the owner, read from the Gmail
@@ -278,7 +277,7 @@ class EmailVerificationMixin:
                 try:
                     tab.locator("tr.zA, td.TC").first.wait_for(state="attached", timeout=25_000)
                 except Exception as _swallowed:
-                    logger.debug("verification_link_from_gmail: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("verification_link_from_gmail: %s", diagnostics.short_exc(_swallowed, 100))
                 tab.wait_for_timeout(2_000)
                 if not self._gmail_mailbox_matches(tab):
                     keep_mail_open = True
@@ -327,7 +326,7 @@ class EmailVerificationMixin:
                 )
             return ""
         except Exception as exc:
-            logger.warning("VERIFY_LINK: Gmail read failed: %s", str(exc).splitlines()[0][:160])
+            logger.warning("VERIFY_LINK: Gmail read failed: %s", diagnostics.short_exc(exc, 160))
             return ""
         finally:
             try:
@@ -335,7 +334,7 @@ class EmailVerificationMixin:
                     tab.close()
                     page.bring_to_front()
             except Exception as _swallowed:
-                logger.debug("verification_link_from_gmail: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("verification_link_from_gmail: %s", diagnostics.short_exc(_swallowed, 100))
 
     def complete_emailed_passcode(self, page: Page) -> bool:
         """On a 'we've sent a one-time password to your email' step of account

@@ -182,7 +182,7 @@ class WorkerDaemon:
             for line in proc.stdout:
                 sanitized_lines.append(diagnostics.sanitize_log_line(line))
         except Exception as _swallowed:
-            logger.debug("_drain_output: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_drain_output: %s", diagnostics.short_exc(_swallowed, 100))
 
     def _execute_job(self, job: QueuedJob) -> None:
         """Executes apply.py in a dedicated subprocess for the claimed job."""

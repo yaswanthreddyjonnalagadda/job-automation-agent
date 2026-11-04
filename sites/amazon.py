@@ -24,11 +24,6 @@ _PLACEHOLDER = re.compile(r"^\s*(select an option|select|choose one)?\s*$", re.I
 class AmazonAdapter(SiteAdapter):
     name = "amazon"
     hosts = ("amazon.jobs",)
-    confirmation_phrases = (
-        "your application has been submitted",
-        "thank you for applying to amazon",
-        "we have received your application",
-    )
     portal_list_patterns = ("/applications", "/applicant/jobs")
 
     # -- questions ---------------------------------------------------------

@@ -9,6 +9,7 @@ directly and are the next thing to move.
 
 from __future__ import annotations
 
+import diagnostics
 import json
 import logging
 import re
@@ -176,10 +177,29 @@ _FIELD_HINT_PATTERNS: dict[str, list[re.Pattern]] = {
 }
 
 
+_OTHER_QUOTES = "\"'‘’“”"
+# An instruction to type, search or choose a quoted "Other": the tenant's own escape for a school its list lacks.
+_OTHER_INSTRUCTION = re.compile(
+    r"\b(?:typ|enter|search|select|choos|pick|us)\w*[^.\n]*?[" + _OTHER_QUOTES + r"]\s*other\b", re.I)
+# The older wordings, which name the missing school but leave "Other" unquoted.
+_NOT_LISTED_OTHER = re.compile(
+    r"(?:not\s+listed|cannot\s+find|can't\s+find)[^.\n]*?(?:select|choose|pick|search)[^.\n]*?[" + _OTHER_QUOTES
+    + r"]?other[" + _OTHER_QUOTES + r"]?", re.I)
+
+
+def education_text_offers_other(text: str) -> bool:
+    """True when the Education section's own words tell the applicant to enter "Other" for a school the list lacks.
+
+    Tenants word it differently ("is not listed ... select Other", "cannot find ... search other", "does not appear in
+    the pre-populated list ... type Other, press Enter", f281, f282, f332), so this asks what the text asks for -- a
+    type/search/select instruction naming a quoted "Other" -- not which sentence leads up to it."""
+    text = text or ""
+    return bool(_OTHER_INSTRUCTION.search(text) or _NOT_LISTED_OTHER.search(text))
+
+
 class WorkdayAdapter(SiteAdapter):
     name = "workday"
     hosts = ("myworkdayjobs.com", "myworkday.com", "wd1.myworkdayjobs", "wd103.myworkdayjobs")
-    confirmation_phrases = ("your application has been submitted", "application submitted", "already applied")
     portal_list_patterns = ("/candidate_home", "/applications")
 
     _REGISTRATION_ERROR = re.compile(
@@ -297,6 +317,23 @@ class WorkdayAdapter(SiteAdapter):
             return None
 
     @staticmethod
+    def _education_text(page) -> str:
+        """The words of the Education section: its group when the page names it ("Education"), else the block that
+        holds its heading. Analog Devices draws a bare group -- a heading and its text, no accessible name -- which a
+        lookup by group name never found, so none of the section's instructions reached the rules that read them (f332).
+        Empty when neither is found exactly once."""
+        try:
+            group = page.get_by_role("group", name="Education", exact=True)
+            if group.count() == 1:
+                return group.inner_text(timeout=500)
+            heading = page.get_by_role("heading", name="Education", exact=True)
+            if heading.count() == 1:
+                return heading.locator("xpath=..").inner_text(timeout=500)
+        except Exception as exc:
+            logger.debug("WORKDAY: reading the Education section: %s", diagnostics.short_exc(exc, 100))
+        return ""
+
+    @staticmethod
     def _school_names(assistant, school: str, page: Page | None = None) -> list[str]:
         """Every name the owner has for this school, record first: the profile's own spelling of it ("JNTU" in the
         work history is "JNTU Hyderabad" in the profile) and the substitutes the owner listed (answer_alternatives).
@@ -313,16 +350,19 @@ class WorkdayAdapter(SiteAdapter):
             names += [str(a) for a in (alternatives.get(name) or [])]
         if page is not None:
             try:
-                edu = page.get_by_role("group", name="Education", exact=True)
-                edu_text = edu.inner_text(timeout=500) if edu.count() == 1 else ""
-                if re.search(
-                    r"(?:not\s+listed|cannot\s+find|can't\s+find)[^.\n]*?(?:select|choose|pick|search)[^.\n]*?['\"\u201c\u201d]?other['\"\u201c\u201d]?",
-                    edu_text,
-                    re.I,
-                ):
+                if education_text_offers_other(WorkdayAdapter._education_text(page)):
+                    # Analog Devices has no row called "Other": typing it offers "Other Institution - <Country>" for
+                    # every country ("then select the appropriate country"). The school's own country comes from the
+                    # owner's education details; without one, only the plain word is tried.
+                    for row in (getattr(profile, "education_details", None) or ()):
+                        country = str(row.get("country") or "").strip() if isinstance(row, dict) else ""
+                        if country and repeated_entries._identifies(str(row.get("school") or ""), school):
+                            import geo_reference
+                            names += [f"Other Institution - {spelling}" for spelling in geo_reference.country_spellings(country)]
+                            break
                     names.append("Other")
             except Exception as exc:
-                logger.debug("WORKDAY: school Other prompt detection: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                logger.debug("WORKDAY: school Other prompt detection: %s", diagnostics.short_exc(exc, 100))
         return [n for n in dict.fromkeys(n.strip() for n in names) if n]
 
     @staticmethod
@@ -369,18 +409,18 @@ class WorkdayAdapter(SiteAdapter):
                     return False
             return True
         except Exception as exc:
-            logger.debug("Could not read the school list: %s", str(exc).splitlines()[0][:100])
+            logger.debug("Could not read the school list: %s", diagnostics.short_exc(exc, 100))
             return False
         finally:
             if typed_probe:
                 try:
                     field.fill("")
                 except Exception as exc:
-                    logger.debug("WORKDAY: clearing probe field: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                    logger.debug("WORKDAY: clearing probe field: %s", diagnostics.short_exc(exc, 100))
             try:
                 page.keyboard.press("Escape")
             except Exception as exc:
-                logger.debug("WORKDAY: Escape after the dropdown attempt failed: %s", str(exc).splitlines()[0][:100])
+                logger.debug("WORKDAY: Escape after the dropdown attempt failed: %s", diagnostics.short_exc(exc, 100))
 
     @field_timing.timed('step', lambda *a, **k: 'education section')
     def fill_education_section(self, assistant, page: Page, education: list[dict]) -> None:
@@ -442,6 +482,11 @@ class WorkdayAdapter(SiteAdapter):
                     self.fill_date_spinner(assistant, page, "education", "lastYearAttended", i, end_month, end_year)
         logger.info("Filled %d education entries", len(education))
 
+        self._correct_education_entries(assistant, page, education, has_start_year, has_completion_year, gave_up)
+
+    def _correct_education_entries(self, assistant, page: Page, education: list[dict],
+                                   has_start_year: bool, has_completion_year: bool,
+                                   gave_up: set[int]) -> None:
         # Dates belong in the correction pass too: a year that verified as
         # correct at fill time was later found showing 2922 instead of 2022,
         # the same delayed overwrite that hits titles and company names.
@@ -782,7 +827,7 @@ class WorkdayAdapter(SiteAdapter):
                 extra.close()
             except Exception as exc:
                 logger.debug("WORKDAY: could not close the extra tab %s: %s", getattr(extra, "url", "?")[:80],
-                             str(exc).splitlines()[0][:100])
+                             diagnostics.short_exc(exc, 100))
 
     def select_skills(self, assistant, page, field, values: list[str]) -> tuple[list[str], list[str]]:
         """Search each supported skill separately and verify its committed tag."""
@@ -843,7 +888,7 @@ class WorkdayAdapter(SiteAdapter):
             try:
                 field.fill("")
             except Exception as exc:
-                logger.debug("WORKDAY: school Other prompt detection: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                logger.debug("WORKDAY: school Other prompt detection: %s", diagnostics.short_exc(exc, 100))
             page.keyboard.press("Escape")
             if popup.count() and popup.is_visible():
                 heading = page.get_by_role("heading", name="Skills", exact=True)
@@ -926,8 +971,11 @@ class WorkdayAdapter(SiteAdapter):
                     # Some school catalogues fetch only after an explicit
                     # search submission. Enter here requests results; the
                     # matching row must still be clicked and verified below.
-                    if id_suffix.endswith("--school"):
-                        education = page.get_by_role("group", name="Education", exact=True)
+                    # Field of Study too (f332): its list "will alphabetically return the first 100 results and can also
+                    # return specified matches", so a subject past the first hundred ("Electrical Engineering") shows
+                    # only after Enter submits the search.
+                    if id_suffix.endswith(("--school", "--fieldOfStudy")):
+                        import option_match
                         prompt = page.locator(
                             f'[data-automation-id="responsiveMonikerPrompt"][data-associated-widget={json.dumps(multiselect_id)}]')
                         root = prompt if prompt.count() else page
@@ -939,7 +987,16 @@ class WorkdayAdapter(SiteAdapter):
                         needs_enter = (
                             not has_real_rows
                             or (field.get_attribute("enterkeyhint") or "").lower() == "search"
-                            or (education.count() == 1 and bool(re.search(r"press\s+Enter\s+to\s+search", education.inner_text(), re.I)))
+                            or bool(re.search(r"press\s+Enter\s+to\s+search", self._education_text(page), re.I))
+                            or (
+                                id_suffix.endswith("--fieldOfStudy")
+                                and option_match.best_option(visible_rows, cand) is None
+                                and (
+                                    bool(page.locator('[data-automation-id="monikerSearchBox"]').filter(has=field).count())
+                                    or bool(re.search(r"first 100 results|press\s+Enter\s+to\s+search", self._education_text(page), re.I))
+                                    or bool(page.locator('button:has-text("first 100 results"), [aria-label*="first 100 results"]').count())
+                                )
+                            )
                         )
                         if needs_enter:
                             field.press("Enter")
@@ -1002,7 +1059,7 @@ class WorkdayAdapter(SiteAdapter):
                 try:
                     field.fill("")
                 except Exception as exc:
-                    logger.debug("WORKDAY: clearing school field: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                    logger.debug("WORKDAY: clearing school field: %s", diagnostics.short_exc(exc, 100))
                 page.keyboard.press("Escape")       # none of the owner's names is in the list: left for the owner
                 self._clear_what_the_search_chose(page, field, id_suffix, multiselect_id, index, candidates)
                 return False
@@ -1057,7 +1114,7 @@ class WorkdayAdapter(SiteAdapter):
             logger.warning("WORKDAY: %s still holds %r, which is none of the owner's names",
                            id_suffix, self._multiselect_selection(page, id_suffix, multiselect_id, index))
         except Exception as exc:
-            logger.debug("WORKDAY: clearing the search's own pick: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+            logger.debug("WORKDAY: clearing the search's own pick: %s", diagnostics.short_exc(exc, 100))
 
     @staticmethod
     def _choose_scrolled_prompt(assistant, page, multiselect_id: str, wanted: str, deadline: float | None = None):
@@ -1406,7 +1463,7 @@ class WorkdayAdapter(SiteAdapter):
                         page.wait_for_timeout(1_000)
                     except Exception as exc:
                         logger.debug("WORKDAY: typing %r into the search box failed: %s", cand.split(",")[0].strip()[:40],
-                                     str(exc).splitlines()[0][:100])
+                                     diagnostics.short_exc(exc, 100))
 
                 options = assistant._open_option_texts(page)
                 if not options:
@@ -1485,10 +1542,44 @@ class WorkdayAdapter(SiteAdapter):
                 logger.warning("No dropdown button with id suffix %r at index %d", id_suffix, index)
                 return False
             question_text = assistant._question_text_for(page, btn)
-            btn.click(timeout=5_000)
-            page.wait_for_timeout(700)
+            # Another list left open (Field of Study's, Analog Devices Education 2) sits over this button and made the
+            # plain click time out five times: close whatever is open first, and click through an overlay if one stays.
+            try:
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(200)
+            except Exception as exc:
+                logger.debug("WORKDAY: closing open lists before the dropdown: %s", diagnostics.short_exc(exc, 100))
+            try:
+                btn.click(timeout=5_000)
+            except Exception as exc:
+                logger.info("WORKDAY: plain click on the dropdown failed (%s) -- clicking through", diagnostics.short_exc(exc, 80))
+                if not assistant._click_resiliently(btn):
+                    return False
+            # The rows of the list THIS button opened -- never the "items selected" lists of the School and Field of Study
+            # boxes, whose chosen values are role=option too ("Available: ['Eastern Illinois University']"). Workday draws
+            # the list a moment after the click (Education 2 read none at 700 ms, f332): rows are waited for up to three
+            # seconds, and the button is pressed once more if nothing opened.
+            def opened_rows():
+                controlled = (btn.get_attribute("aria-controls") or "").strip()
+                rows = page.locator(f"[id={json.dumps(controlled)}] [role='option']") if controlled else None
+                if rows is None or rows.count() == 0:
+                    rows = page.locator("[role='listbox']:not([aria-label*='selected']) [role='option']")
+                return rows
 
-            options = page.locator("[role='option']")
+            def wait_for_rows(seconds=3.0):
+                deadline = time.monotonic() + seconds
+                while time.monotonic() < deadline:
+                    rows = opened_rows()
+                    if rows.count():
+                        return rows
+                    page.wait_for_timeout(250)
+                return opened_rows()
+
+            options = wait_for_rows()
+            if options.count() == 0:
+                logger.info("WORKDAY: the %s list did not open -- pressing the button once more", id_suffix)
+                if assistant._click_resiliently(btn):
+                    options = wait_for_rows()
             texts = []
             for i in range(min(options.count(), 60)):
                 try:

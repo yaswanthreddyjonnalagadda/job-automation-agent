@@ -7,6 +7,7 @@ account-creation reconciliation remain the caller's responsibility.
 """
 from __future__ import annotations
 
+import diagnostics
 import json
 import logging
 from datetime import datetime, timezone
@@ -43,7 +44,7 @@ def _save(data: dict) -> None:
         scratch.write_text(json.dumps(data, indent=1), encoding="utf-8")
         scratch.replace(path)
     except Exception as exc:
-        logger.warning("Could not record the sign-in attempt: %s", str(exc).splitlines()[0][:100])
+        logger.warning("Could not record the sign-in attempt: %s", diagnostics.short_exc(exc, 100))
 
 
 

@@ -18,6 +18,7 @@ checkbox, radio, yes_no (Ashby's two aria-pressed buttons), date, file.
 """
 from __future__ import annotations
 
+import diagnostics
 import logging
 import re
 from dataclasses import dataclass, field
@@ -316,7 +317,7 @@ def inventory(page) -> list[Field]:
                 # A page that re-renders itself while being read ("Execution context was destroyed") is read again
                 # once; a frame that cannot be read (another site's captcha) is skipped.
                 logger.debug("No field inventory in frame %s (try %d): %s", number, attempt + 1,
-                             str(exc).splitlines()[0][:100])
+                             diagnostics.short_exc(exc, 100))
                 try:
                     frame.wait_for_timeout(800)
                 except Exception:
@@ -424,7 +425,7 @@ def attach_resume(page, path: Path, fields: Optional[list[Field]] = None) -> Opt
         target.locator().set_input_files(str(path), timeout=10_000)
     except Exception as exc:
         logger.info("Could not put the resume in %r: %s", target.question or target.label or target.name,
-                    str(exc).splitlines()[0][:120])
+                    diagnostics.short_exc(exc, 120))
         return None
     page.wait_for_timeout(1_500)
     if file_upload_rejected(page):
@@ -525,7 +526,7 @@ def _click_row(f: Field, index: int, timeout_ms: int) -> bool:
         row.click(timeout=timeout_ms)
         return True
     except Exception as exc:
-        logger.info("Could not click the row for %r: %s", f.question, str(exc).splitlines()[0][:100])
+        logger.info("Could not click the row for %r: %s", f.question, diagnostics.short_exc(exc, 100))
         return False
 
 
@@ -561,7 +562,7 @@ def choose(page, f: Field, answer: str, timeout_ms: int = 5_000) -> bool:
         try:
             f.locator().select_option(index=index, timeout=timeout_ms)
         except Exception as exc:
-            logger.info("Could not select %r in %r: %s", f.options[index], f.question, str(exc).splitlines()[0][:100])
+            logger.info("Could not select %r in %r: %s", f.options[index], f.question, diagnostics.short_exc(exc, 100))
             return False
         return _kept(f, f.options[index])
     if f.kind == "combobox" and _in_ant_select(f):
@@ -574,7 +575,7 @@ def choose(page, f: Field, answer: str, timeout_ms: int = 5_000) -> bool:
         button.scroll_into_view_if_needed(timeout=timeout_ms)
         button.click(timeout=timeout_ms)
     except Exception as exc:
-        logger.info("Could not open the list %r: %s", f.question, str(exc).splitlines()[0][:100])
+        logger.info("Could not open the list %r: %s", f.question, diagnostics.short_exc(exc, 100))
         return False
     frame = f.frame
     frame.wait_for_timeout(300)
@@ -615,7 +616,7 @@ def choose(page, f: Field, answer: str, timeout_ms: int = 5_000) -> bool:
         try:
             frame.keyboard.press("Escape")
         except Exception as _swallowed:
-            logger.debug("choose: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("choose: %s", diagnostics.short_exc(_swallowed, 100))
         return False
     frame.wait_for_timeout(300)
     return _kept(f, chosen)
@@ -638,12 +639,12 @@ def pick_open_row(scope, answer: str, timeout_ms: int = 3_000) -> Optional[str]:
         try:
             scope.keyboard.press("Escape")
         except Exception as _swallowed:
-            logger.debug("pick_open_row: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("pick_open_row: %s", diagnostics.short_exc(_swallowed, 100))
         return None
     try:
         rows.nth(index).click(timeout=timeout_ms)
     except Exception as exc:
-        logger.debug("Could not click the row %r: %s", texts[index], str(exc).splitlines()[0][:100])
+        logger.debug("Could not click the row %r: %s", texts[index], diagnostics.short_exc(exc, 100))
         return None
     return texts[index]
 
@@ -659,12 +660,12 @@ def read_choices(f: Field, timeout_ms: int = 4_000) -> list[str]:
         f.locator().click(timeout=timeout_ms)
         rows = _wait_for_options(f, timeout_ms)
     except Exception as exc:
-        logger.debug("Could not open the list %r to read it: %s", f.question, str(exc).splitlines()[0][:100])
+        logger.debug("Could not open the list %r to read it: %s", f.question, diagnostics.short_exc(exc, 100))
         rows = []
     try:
         f.frame.keyboard.press("Escape")
     except Exception as _swallowed:
-        logger.debug("read_choices: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+        logger.debug("read_choices: %s", diagnostics.short_exc(_swallowed, 100))
     return [r for r in rows if r and not is_placeholder(r)]
 
 
@@ -691,7 +692,7 @@ def choose_several(page, boxes: list[Field], answers: list[str]) -> list[str]:
                 box.locator().check(timeout=4_000)
             ticked.append(labels[index])
         except Exception as exc:
-            logger.info("Could not tick %r: %s", labels[index], str(exc).splitlines()[0][:100])
+            logger.info("Could not tick %r: %s", labels[index], diagnostics.short_exc(exc, 100))
     return ticked
 
 
@@ -804,7 +805,7 @@ def fill_date(page, f: Field, value: str) -> bool:
     try:
         placeholder = (f.locator().get_attribute("placeholder") or "").lower()
     except Exception as _swallowed:
-        logger.debug("fill_date: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+        logger.debug("fill_date: %s", diagnostics.short_exc(_swallowed, 100))
     text = date_text(value, f.type, placeholder)
     if text is None:
         logger.info("Not a date the agent can read: %r for %r", value, f.question)
@@ -815,7 +816,7 @@ def fill_date(page, f: Field, value: str) -> bool:
         box.dispatch_event("change")
         box.blur()
     except Exception as exc:
-        logger.info("Could not type the date into %r: %s", f.question, str(exc).splitlines()[0][:100])
+        logger.info("Could not type the date into %r: %s", f.question, diagnostics.short_exc(exc, 100))
         return False
     try:
         return (box.input_value(timeout=2_000) or "") == text

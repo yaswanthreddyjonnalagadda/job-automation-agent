@@ -14,6 +14,7 @@ an AI key is set, to draft the work history -- the same AI the person already ch
 from __future__ import annotations
 
 import dataclasses
+import diagnostics
 import json
 import logging
 import re
@@ -246,7 +247,7 @@ def draft_from_resume(text: str, ask: Optional[Callable[[str, str, int], str]] =
         match = re.search(r"\{.*\}", raw or "", re.DOTALL)
         found = json.loads(match.group(0)) if match else {}
     except Exception as exc:
-        logger.info("Could not draft the profile with the AI: %s", str(exc).splitlines()[0][:120] if str(exc) else exc)
+        logger.info("Could not draft the profile with the AI: %s", diagnostics.short_exc(exc, 120) if str(exc) else exc)
         return draft
     for key in _AI_FIELDS:
         value = found.get(key) if isinstance(found, dict) else None
@@ -265,7 +266,7 @@ def draft_from_resume(text: str, ask: Optional[Callable[[str, str, int], str]] =
             try:
                 draft[key] = int(value)
             except (TypeError, ValueError) as _swallowed:
-                logger.debug("draft_from_resume: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("draft_from_resume: %s", diagnostics.short_exc(_swallowed, 100))
         else:
             draft.setdefault(key, str(value).strip())        # what the resume plainly says comes first
     return draft

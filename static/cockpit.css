@@ -230,3 +230,22 @@ button.linklike:hover { color: var(--ink); background: none; filter: none; }
 }
 
 .dash-bar-label { margin: 14px 0 6px; font-size: 13.5px; color: var(--ink-2); }
+
+.bulk-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.bulk-bar[hidden] { display: none; }
+.bulk-pick { display: flex; align-items: center; justify-content: center; flex: none; min-width: 40px; min-height: 40px; margin: 0; cursor: pointer; }
+.bulk-pick input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.job-foot a.button { display: inline-flex; align-items: center; }
+
+.filter-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-end; margin-bottom: 6px; }
+.filter-field { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.filter-field select, .filter-field input { width: auto; min-height: 40px; font-size: 14px; }
+.filter-field input[type=search] { width: 170px; }
+
+.feed-tools { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.feed-tools .dash-chips, .feed-tools .bulk-bar { margin-bottom: 0; }
+.how-list { margin: 0 0 14px; }
+.how-list summary { cursor: pointer; font-weight: 600; color: var(--ink-2); display: inline-flex; align-items: center; min-height: 40px; }
+.how-list p { margin: 4px 0 0; }
+.feed-hint { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin-bottom: 10px; }
+.feed-hint[hidden] { display: none; }

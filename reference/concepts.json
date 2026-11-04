@@ -166,6 +166,31 @@
         "\\btemporary\\s+assistance\\s+for\\s+needy\\s+families\\b"
       ],
       "profile_field": "received_government_assistance"
+    },
+    "AI_RECRUITMENT_CONSENT": {
+      "_about": "Consent to AI tools evaluating candidate information, assessing alignment with role requirements, or comparing applications for job openings. The owner's standing decision (profile ai_recruitment_consent: Yes / No).",
+      "patterns": [
+        "\\b(?:ai|artificial intelligence)\\b.{0,80}\\b(?:evaluat\\w*|assess\\w*|screen\\w*|match\\w*|compar\\w*|recruitment|job openings?|candidacy)\\b",
+        "\\b(?:evaluat\\w*|assess\\w*|screen\\w*|match\\w*|compar\\w*)\\b.{0,80}\\b(?:ai|artificial intelligence)\\b.{0,60}\\b(?:tools?|systems?)?\\b",
+        "\\buse of (?:ai|artificial intelligence)\\b.{0,60}\\b(?:evaluate|assess|match|compare|process)\\b"
+      ],
+      "profile_field": "ai_recruitment_consent"
+    },
+    "HELD_J1_VISA": {
+      "_about": "Whether the applicant has ever held a J-1 or J-2 exchange visitor visa (profile held_j1_visa: Yes / No).",
+      "patterns": [
+        "\\b(?:ever\\s+)?(?:held|had|possessed|been on|issued)\\b.{0,40}\\bj[- ]?[12]\\b",
+        "\\b(?:ever\\s+)?(?:held|had|possessed|been on|issued)\\b.{0,40}\\bexchange visitor\\b",
+        "\\bj[- ]?[12]\\b.{0,20}\\bexchange visitor\\b"
+      ],
+      "profile_field": "held_j1_visa"
+    },
+    "FOREIGN_PERMANENT_RESIDENT": {
+      "_about": "Whether the applicant holds permanent resident status in a country outside the US (profile foreign_permanent_resident: Yes / No).",
+      "patterns": [
+        "\\b(?:permanent resident|pr status|lawful permanent resident)\\b.{0,60}\\b(?:outside (?:the )?u\\.?s\\.?|outside (?:the )?united states|other than (?:the )?u\\.?s\\.?|in a country outside|third country)\\b"
+      ],
+      "profile_field": "foreign_permanent_resident"
     }
   },
   "more_wordings": {

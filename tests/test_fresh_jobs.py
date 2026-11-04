@@ -312,7 +312,7 @@ def test_workday_paging_has_a_limit(monkeypatch):
     monkeypatch.setattr(ds.requests, "post", post)
     monkeypatch.setattr(ds.requests, "get", lambda url, **kw: reply({}, status=404))
     ds.fetch_workday_feed(WORKDAY_ENTRY, ["Network Engineer"], now=NOW, max_details=1)
-    assert len(asked) <= 5
+    assert len(asked) <= 10  # ten pages of twenty (f317 raised it from five); paging still ends
 
 
 @pytest.mark.parametrize("titles,expected", [

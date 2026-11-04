@@ -18,11 +18,14 @@ wrong default, not only the few someone wrote into an if-statement.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import unicodedata
 from functools import lru_cache
 from pathlib import Path
 from typing import Iterable, Optional
+
+logger = logging.getLogger(__name__)
 
 _DATA_PATH = Path(__file__).resolve().parent / "reference" / "geo.json"
 
@@ -84,6 +87,7 @@ def _spellings(entry: dict) -> list[str]:
 def _index(table: str) -> dict[str, str]:
     index: dict[str, str] = {}
     for code, entry in _data()[table].items():
+        index.setdefault(normalize(code), code)
         for name in _spellings(entry):
             index.setdefault(normalize(name), code)
     return index
@@ -114,9 +118,21 @@ def us_state_code(text: str) -> Optional[str]:
     return _lookup(text, _us_state_index())
 
 
+def country_codes() -> frozenset[str]:
+    """Every ISO country code the data knows (for validating codes typed in)."""
+    return frozenset(_data()["countries"])
+
+
 def country_names(code: str) -> tuple[str, ...]:
     """Every spelling of a country: ISO names first, then other forms' spellings."""
     return tuple(_spellings(_data()["countries"].get((code or "").upper(), {})))
+
+
+@lru_cache(maxsize=256)
+def display_name(code: str) -> str:
+    """The first ISO spelling of a country code for display ("US" -> "United States"), else the code."""
+    names = country_names(code)
+    return names[0] if names else (code or "").upper()
 
 
 
@@ -253,6 +269,102 @@ def places_named_in(text: str) -> list[str]:
         if country_code(code) or us_state_code(code):
             found.append(code)
     return found
+
+
+#: The country the us_states table of reference/geo.json belongs to: a state
+#: spelling always resolves to it ("Austin, TX" is a US job location).
+_US_COUNTRY = "US"
+
+_LOCATION_SPLIT = re.compile(r"[;,/|]|\s-\s")
+_TWO_LETTERS = re.compile(r"\b([A-Za-z]{2})\b")
+
+
+@lru_cache(maxsize=1)
+def _state_codes() -> frozenset[str]:
+    return frozenset(code for code in _data()["us_states"] if len(code) == 2)
+
+
+@lru_cache(maxsize=1)
+def _cities() -> dict[str, str]:
+    """Known city name (normalised) -> ISO country, from reference/cities.json."""
+    try:
+        data = json.loads((_DATA_PATH.parent / "cities.json").read_text(encoding="utf-8"))
+        return {str(name).lower(): str(code).upper() for name, code in (data.get("cities") or {}).items()}
+    except (OSError, ValueError) as exc:
+        logger.debug("City data unavailable, bare cities stay unknown: %s", exc)
+        return {}
+
+
+def city_country(name: str) -> str | None:
+    """The country of a bare city name ("Dublin" -> IE, "Palo Alto" -> US), or None. Longest match wins, so
+    "New York City" resolves before "New York" is tried."""
+    words = normalize(name).split()
+    while words:
+        hit = _cities().get(" ".join(words))
+        if hit:
+            return hit
+        words.pop()
+    return None
+
+
+def _strip_state_codes(part: str) -> tuple[str, bool]:
+    """Removes standalone two-letter US state codes from a place ("Foster City, CA" -> "Foster City"), reporting
+    whether one was found: on the scanned boards these spellings are states ("CA" is California, "IN" is Indiana),
+    even where they collide with a country code."""
+    codes = _state_codes()
+    found = False
+
+    def sub(match):
+        nonlocal found
+        if match.group(1).upper() in codes:
+            found = True
+            return " "
+        return match.group(0)
+
+    return _TWO_LETTERS.sub(sub, part), found
+
+
+def location_countries(location: str) -> frozenset[str]:
+    '''The ISO country codes a job location names ("Bengaluru, India" -> IN;
+    "Austin, TX" -> US through its state; "Palo Alto" -> US through its city;
+    "Remote" -> none: unknown, never guessed).
+
+    Each listed place sheds its two-letter state codes first (on these boards
+    "CA" is California), then reads as a country, then a state, then a city --
+    so a full country name keeps its meaning ("Georgia" stays the country).
+    A non-US "IN"/"CA" misreads as the US state; full country names and the
+    description checks stay exact.
+    '''
+    found: set[str] = set()
+    for part in _LOCATION_SPLIT.split(location or ""):
+        if not part.strip():
+            continue
+        rest, had_state = _strip_state_codes(part)
+        if had_state:
+            found.add(_US_COUNTRY)
+        code = country_code(rest)
+        if code is None and us_state_code(rest):
+            code = _US_COUNTRY
+        if code is None:
+            for chunk in rest.split(","):
+                code = city_country(chunk)
+                if code:
+                    break
+        if code:
+            found.add(code)
+    return frozenset(found)
+
+
+def primary_country(location: str, home: str = "") -> str:
+    '''The one country kept for a job: the owner's when the location names it,
+    the only country named when it names one, "" when it names none or several
+    without a home to choose by (several then say nothing certain).'''
+    named = location_countries(location)
+    if home and home in named:
+        return home
+    if len(named) == 1:
+        return next(iter(named))
+    return ""
 
 
 @lru_cache(maxsize=1)

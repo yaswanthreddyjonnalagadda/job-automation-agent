@@ -1,0 +1,22 @@
+{
+  "class": "Application Questions step halted on 5 unanswered questions: export control countries split across DOM container, foreign PR status, J-1 visa history, and AI screening/matching consent",
+  "date": "2026-11-04",
+  "fix": "Concatenated ask.container with question in answer_engine._countries and country_eligibility so export control country names embedded in the group container label are evaluated against the profile country of citizenship; added FOREIGN_PERMANENT_RESIDENT, HELD_J1_VISA, and AI_RECRUITMENT_CONSENT to reference/concepts.json and config.UserProfile, populated in data/profile.json; added deterministic j1_visa and ai_recruitment_consent resolvers in answer_engine.py with fallback to privacy permissions for consent questions. An empty foreign_permanent_resident or held_j1_visa is never answered 'No' by default: the question goes to the owner. AI-screening consent does not fall back to the general privacy-prompts permission.",
+  "id": "f333",
+  "prevention": "Never evaluate questions solely from child text nodes when the parent container holds the complete qualifier list; map all standard legal/compliance and AI consent question patterns deterministically in reference/concepts.json and answer_engine.py with zero model reliance.",
+  "root_cause": "Workday accessibility tree split the export control question across child paragraph and parent group container, leaving the 24 country names in ask.container while question ended at 'Group D ('. The remaining 4 questions (foreign permanent residency, J-1 visa history, AI recruitment evaluation consent, AI future job matching consent) lacked concept patterns and answer engine handlers, causing the application to stall on Step 3.",
+  "site": "Workday, Analog Devices Inc., Step 3 (Application Questions), 4 November 2026",
+  "symptom": "Application stopped on Step 3 with 5 unanswered questions: export control Group D check, foreign PR status, J-1 visa history, AI recruitment evaluation consent, and AI future job matching consent.",
+  "tests": [
+    "tests/test_export_control_and_ai_consent.py::test_group_d_export_control_country_list_is_answered_no",
+    "tests/test_export_control_and_ai_consent.py::test_foreign_permanent_resident_is_answered_no",
+    "tests/test_export_control_and_ai_consent.py::test_j1_exchange_visitor_visa_history_is_answered_no",
+    "tests/test_export_control_and_ai_consent.py::test_ai_recruitment_screening_consent_is_answered_yes",
+    "tests/test_export_control_and_ai_consent.py::test_ai_job_matching_consent_is_answered_yes",
+    "tests/test_export_control_and_ai_consent.py::test_unset_profile_decisions_are_never_guessed",
+    "tests/test_export_control_and_ai_consent.py::test_empty_residency_and_j1_facts_are_left_for_the_owner_not_answered_no",
+    "tests/test_export_control_and_ai_consent.py::test_owner_yes_for_foreign_permanent_residency_is_answered_yes",
+    "tests/test_export_control_and_ai_consent.py::test_general_privacy_permission_does_not_decide_ai_screening_consent"
+  ],
+  "why_tests_missed": "Existing tests for country eligibility only checked the question string alone, not accessibility group containers holding long country lists. AI recruitment and J-1 visa history questions had not been encountered on Workday application question steps in previous fixtures."
+}

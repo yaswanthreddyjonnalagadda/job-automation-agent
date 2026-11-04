@@ -26,6 +26,7 @@ import re
 from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 import json
 import logging
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -42,6 +43,12 @@ from jd_analyzer import is_tracking_query_param, submission_identity_url
 import diagnostics
 import phone_alert
 logger = logging.getLogger(__name__)
+
+#: Kept Postgres connections, one per thread per DSN: every tracker method used
+#: to pay a full TCP+auth handshake, so one dashboard page paid a dozen of
+#: them. A thread never shares a connection (psycopg connections are not
+#: thread-safe); a dead one is dropped and the next use reconnects.
+_THREAD_CONNS = threading.local()
 
 
 def is_transient_connection_error(exc: BaseException) -> bool:
@@ -174,17 +181,47 @@ class PostgresTracker:
         with self._connect() as conn:
             conn.execute(_SCHEMA)
 
+    def _cached(self) -> psycopg.Connection:
+        conns = getattr(_THREAD_CONNS, "conns", None)
+        if conns is None:
+            conns = _THREAD_CONNS.conns = {}
+        conn = conns.get(self._dsn)
+        if conn is None or conn.closed:
+            conn = psycopg.connect(self._dsn, row_factory=dict_row)
+            conns[self._dsn] = conn
+        return conn
+
+    @staticmethod
+    def _drop(dsn: str, conn: psycopg.Connection) -> None:
+        try:
+            conn.close()
+        except Exception as exc:
+            logger.debug("Dropping a dead Postgres connection: %s", diagnostics.short_exc(exc))
+        conns = getattr(_THREAD_CONNS, "conns", None)
+        if conns is not None and conns.get(dsn) is conn:
+            del conns[dsn]
+
     @contextmanager
     def _connect(self) -> Iterator[psycopg.Connection]:
-        conn = psycopg.connect(self._dsn, row_factory=dict_row)
+        """The thread's kept connection. An SQL error rolls back and keeps it; a
+        connection failure drops it (the next use reconnects, so one call fails
+        after a server restart, not every call after it)."""
+        conn = self._cached()
         try:
             yield conn
             conn.commit()
-        except Exception:
-            conn.rollback()
+        except psycopg.OperationalError:
+            self._drop(self._dsn, conn)
             raise
-        finally:
-            conn.close()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                self._drop(self._dsn, conn)
+                raise
+            if conn.closed:
+                self._drop(self._dsn, conn)
+            raise
 
     # ------------------------------------------------------------------
     # Run history: events, evidence and auto-submit audits
@@ -270,6 +307,19 @@ class PostgresTracker:
                 """SELECT e.* FROM application_events e JOIN applications a ON a.id = e.application_id
                    WHERE a.dedup_key = %s ORDER BY e.created_at DESC LIMIT %s""",
                 (dedup_key, limit),
+            ).fetchall()
+        return [diagnostics.sanitize_event(dict(r)) for r in rows]
+
+    def recent_employer_signals(self, limit: int = 20) -> list[dict]:
+        """The newest employer-email signals across applications, newest first: the dashboard's inbox."""
+        with self._connect() as conn:
+            conn.execute(self._EVENTS_DDL)
+            rows = conn.execute(
+                """SELECT e.kind, e.message, e.payload, e.created_at,
+                         a.id AS application_id, a.dedup_key, a.company, a.title, a.url
+                  FROM application_events e JOIN applications a ON a.id = e.application_id
+                  WHERE e.kind = 'employer_email' ORDER BY e.created_at DESC LIMIT %s""",
+                (limit,),
             ).fetchall()
         return [diagnostics.sanitize_event(dict(r)) for r in rows]
 

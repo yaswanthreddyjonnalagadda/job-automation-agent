@@ -10,6 +10,7 @@ Provides core physical action dispatchers:
 
 from __future__ import annotations
 
+import diagnostics
 import json
 import logging
 import os
@@ -104,7 +105,7 @@ def type_like_a_person(locator: Any, value: str, timeout: Optional[float] = None
     try:
         is_password = (locator.get_attribute("type") or "").strip().lower() == "password"
     except Exception as exc:
-        logger.warning("Could not tell whether the field is a password field (treated as not one): %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+        logger.warning("Could not tell whether the field is a password field (treated as not one): %s", diagnostics.short_exc(exc, 100))
     try:
         try:
             locator.click(timeout=1_500)
@@ -120,7 +121,7 @@ def type_like_a_person(locator: Any, value: str, timeout: Optional[float] = None
         locator.press_sequentially(value, delay=delay, timeout=type_timeout)
         shown = locator.input_value(timeout=2_000)
     except Exception as exc:
-        logger.debug("HUMAN_TYPING: could not type into the box (%s)", str(exc).splitlines()[0][:100])
+        logger.debug("HUMAN_TYPING: could not type into the box (%s)", diagnostics.short_exc(exc, 100))
         return False
     return isinstance(shown, str) and _same_text(shown, value, is_password=is_password)
 
@@ -373,13 +374,13 @@ def resolve_ant_dropdown(
             else:
                 locator.click(timeout=2_000)
         except Exception as exc:
-            logger.debug("dropdown: opening the wrapper: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+            logger.debug("dropdown: opening the wrapper: %s", diagnostics.short_exc(exc, 100))
 
     def close() -> None:
         try:
             locator.press("Escape", timeout=1_000)
         except Exception as exc:
-            logger.debug("dropdown: closing with Escape: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+            logger.debug("dropdown: closing with Escape: %s", diagnostics.short_exc(exc, 100))
 
     # 2. The list this select opened, read whole.
     token = f"jaa{time.time_ns() % 10**12}"
@@ -402,7 +403,7 @@ def resolve_ant_dropdown(
             try:
                 locator.press("ArrowDown", timeout=1_000)
             except Exception as exc:
-                logger.debug("dropdown: opening from the keyboard: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                logger.debug("dropdown: opening from the keyboard: %s", diagnostics.short_exc(exc, 100))
         page.wait_for_timeout(100)
     dropdown = page.locator(f'[data-jaa-list="{token}"]')
     try:
@@ -626,7 +627,7 @@ def wipe_and_enforce_location_sweep(
             try:
                 texts = [x.strip() for x in loc.locator("option").all_inner_texts()]
             except Exception as exc:
-                logger.debug("country/state: reading the select's options: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                logger.debug("country/state: reading the select's options: %s", diagnostics.short_exc(exc, 100))
             label = next((x for x in texts if x and same(x, wanted)), None)
             if label is None:
                 logger.info("LOCATION_SWEEP: %r is not among this list's options -- left for you", wanted)
@@ -659,7 +660,7 @@ def wipe_and_enforce_location_sweep(
                         click_resiliently(offered.nth(i))
                         break
             except Exception as exc:
-                logger.debug("country/state: clicking the offered option: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                logger.debug("country/state: clicking the offered option: %s", diagnostics.short_exc(exc, 100))
         if record_callback:
             record_callback(f"[id={json.dumps(field['id'])}]", wanted)
 
@@ -672,12 +673,12 @@ def wipe_and_enforce_location_sweep(
         try:
             page.wait_for_load_state("networkidle", timeout=7_000)
         except Exception as exc:
-            logger.debug("country/state: waiting for the page to settle: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+            logger.debug("country/state: waiting for the page to settle: %s", diagnostics.short_exc(exc, 100))
         page.wait_for_timeout(1_000)
         try:
             loc_info = page.evaluate(finder_script, scope) or loc_info
         except Exception as exc:
-            logger.debug("country/state: re-reading the field positions: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+            logger.debug("country/state: re-reading the field positions: %s", diagnostics.short_exc(exc, 100))
 
     # 3. Then the state, then the city.
     state_field = loc_info.get("state")
@@ -760,7 +761,7 @@ def commit_draft_cards(page: Page, timeout_ms: int = 4_000) -> int:
                 try:
                     page.wait_for_load_state("networkidle", timeout=3_000)
                 except Exception as exc:
-                    logger.debug("draft cards: waiting for the network to settle: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                    logger.debug("draft cards: waiting for the network to settle: %s", diagnostics.short_exc(exc, 100))
                 page.wait_for_timeout(800)
             except Exception as exc:
                 logger.debug("Failed while inspecting/clicking card button: %s", exc)
@@ -822,7 +823,7 @@ def sweep_modals_and_policies(page_or_tab: Any, profile: Any = None) -> bool:
                         logger.info("Modal contains legal attestation/certification -- leaving for user")
                         continue
                 except Exception as exc:
-                    logger.debug("draft cards: reading the modal text: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                    logger.debug("draft cards: reading the modal text: %s", diagnostics.short_exc(exc, 100))
 
                 # 1. Programmatically scroll internal text container to the bottom
                 try:
@@ -901,7 +902,7 @@ def sweep_modals_and_policies(page_or_tab: Any, profile: Any = None) -> bool:
                     try:
                         modal.wait_for(state="hidden", timeout=4_000)
                     except Exception as exc:
-                        logger.debug("draft cards: waiting for the modal to close: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                        logger.debug("draft cards: waiting for the modal to close: %s", diagnostics.short_exc(exc, 100))
 
                     backdrop_selectors = (
                         ".ant-modal-mask",
@@ -916,7 +917,7 @@ def sweep_modals_and_policies(page_or_tab: Any, profile: Any = None) -> bool:
                             if mask.count() and mask.first.is_visible():
                                 mask.first.wait_for(state="hidden", timeout=2_000)
                         except Exception as exc:
-                            logger.debug("draft cards: waiting for the mask to clear: %s", str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__)
+                            logger.debug("draft cards: waiting for the mask to clear: %s", diagnostics.short_exc(exc, 100))
 
                     if not modal.is_visible():
                         dismissed_any = True

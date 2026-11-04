@@ -15,6 +15,7 @@ the server thread only queues what the phone asked for.
 """
 from __future__ import annotations
 
+import diagnostics
 import hmac
 import html
 import ipaddress
@@ -254,7 +255,7 @@ class PhoneConsole:
                 with self._lock:
                     self._jpeg, self._shot_at, self._size = jpeg, time.time(), [width, height]
             except Exception as _swallowed:
-                logger.debug("service: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("service: %s", diagnostics.short_exc(_swallowed, 100))
 
     def _do(self, page, command: tuple) -> None:
         kind = command[0]

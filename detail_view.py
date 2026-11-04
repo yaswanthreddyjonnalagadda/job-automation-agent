@@ -1,11 +1,18 @@
 """How an application's history, answers and auto-submit decision are shown. Display only: nothing here changes a record."""
 from __future__ import annotations
 
+import diagnostics
 import html
+import json
+import logging
 from datetime import datetime, timezone
 from typing import Iterable, Optional
 
 from markupsafe import Markup
+
+import employer_signals
+
+logger = logging.getLogger(__name__)
 
 EVENT_LABELS = {
     "auto_submit": "Auto-submit check",
@@ -17,6 +24,7 @@ EVENT_LABELS = {
     "step": "Step finished",
     "action_outcome_unknown": "Outcome not confirmed",
     "invalid_authorization": "Authorization refused",
+    "employer_email": "Employer email",
 }
 
 
@@ -25,12 +33,25 @@ def event_label(kind) -> str:
     return EVENT_LABELS.get(kind) or (kind.replace("_", " ").capitalize() if kind else "Event")
 
 
+def _signal_of(payload) -> str:
+    """The recorded signal word of an employer-email event, or ""."""
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except ValueError as _swallowed:
+            logger.debug("_signal_of: %s", diagnostics.short_exc(_swallowed, 100))
+            return ""
+    return (payload or {}).get("signal", "") if isinstance(payload, dict) else ""
+
+
 def group_events(events: Iterable) -> list[dict]:
     """Consecutive events with the same kind and message become one row with a count (newest first stays newest first)."""
     grouped: list[dict] = []
     for event in events:
         get = event.get if isinstance(event, dict) else lambda key, default=None, _e=event: getattr(_e, key, default)
         kind, message = get("kind"), (get("message") or "")
+        if kind == "employer_email":
+            message = employer_signals.label(_signal_of(get("payload")))
         if grouped and grouped[-1]["kind"] == kind and grouped[-1]["message"] == message:
             row = grouped[-1]
             row["count"] += 1
@@ -92,4 +113,5 @@ def decision_view(decision: dict, status_group: str) -> dict:
         note = "Auto-submit did not send this; it is waiting for you."
     return {"verdict": "Eligible" if eligible else "Not eligible", "eligible": eligible,
             "when": _when(decision.get("decided_at")), "reasons": reasons, "note": note,
+            "policy": str(decision.get("policy") or ""),
             "no_reasons": "" if reasons or eligible else "No reasons were stored for this decision."}

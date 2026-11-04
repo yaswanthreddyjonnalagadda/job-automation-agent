@@ -1,4 +1,5 @@
 import importlib
+import os
 import re
 import sys
 from pathlib import Path
@@ -73,6 +74,14 @@ def _instant_typing_unless_a_test_asks(monkeypatch):
     # The agent types at a person's pace (interaction.type_like_a_person). Across hundreds of tests that
     # would only add waiting, so tests fill instantly; tests/test_human_typing.py turns typing back on.
     monkeypatch.setenv("HUMAN_TYPING", "0")
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_tracker_unless_a_test_asks(monkeypatch):
+    # Discovery consults the live applications tracker; without this, tests would follow .env's
+    # POSTGRES_PASSWORD onto the owner's real Postgres. Tests use temp-file SQLite unless one asks otherwise.
+    if "TRACKER" not in os.environ:
+        monkeypatch.setenv("TRACKER", "sqlite")
 
 
 _STARTS_PLAYWRIGHT: dict[str, bool] = {}

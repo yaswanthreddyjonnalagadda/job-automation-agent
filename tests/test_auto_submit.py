@@ -1,352 +1,411 @@
-"""
-Verified auto-submit: eligibility, exact matching, refusal on any uncertainty,
-evidence-based confirmation, and recovery after the user clears a CAPTCHA.
-
-Nothing here touches an employer site: pages are local HTML and the tracker is
-a stand-in.
-
-    venv\\Scripts\\python -m pytest tests -q
-"""
-
-from __future__ import annotations
-
-import json
-import sys
-from pathlib import Path
-
-import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import apply_flow  # noqa: E402
-import safety  # noqa: E402
-from browser_automation import JobApplicationAssistant  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def browser():
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as p:
-        b = p.chromium.launch(headless=True)
-        yield b
-        b.close()
-
-
-@pytest.fixture
-def page(browser):
-    pg = browser.new_page()
-    yield pg
-    pg.close()
-
-
-@pytest.fixture
-def agent():
-    a = JobApplicationAssistant.__new__(JobApplicationAssistant)
-    a.values = safety.AgentValues()
-    return a
-
-
-class Profile:
-    full_name = "Yaswanth Reddy Jonnalagadda"
-    email = "me@example.com"
-    city = "Fairfax"
-    state = "Virginia"
-
-
-class Tracker:
-    """Records what the flow asked it to store."""
-
-    def __init__(self, docs_match=True):
-        self.status = None
-        self.notes = None
-        self.events = []
-        self.submission_state = None
-        self._docs_match = docs_match
-
-    def update_status(self, key, status, notes=None):
-        self.status, self.notes = status, notes
-
-    def record_event(self, key, kind, message="", screenshot_path="", html_path="", payload=None):
-        self.events.append((kind, message, payload))
-
-    def get_submission_effect_state(self, key):
-        return self.submission_state
-
-    def begin_submission_dispatch(self, key, aliases=()):
-        if self.submission_state in {"DISPATCHED", "CONFIRMED", "UNCERTAIN"}:
-            raise RuntimeError("replay blocked")
-        self.events.append(("SUBMISSION_AUTHORIZED", "", {}))
-        self.submission_state = "DISPATCHED"
-        self.events.append(("SUBMISSION_DISPATCHED", "", {}))
-
-    def finish_submission_effect(self, key, state, *, reconciled=False, evidence_kind=None):
-        if self.submission_state != "DISPATCHED" and not (
-            self.submission_state == "UNCERTAIN" and state == "CONFIRMED" and reconciled
-        ):
-            raise RuntimeError("invalid state transition")
-        self.submission_state = state
-        self.events.append((f"SUBMISSION_{state}", "", {"evidence_kind": evidence_kind}))
-
-    def record_submission_safety_event(self, key, kind, payload=None):
-        self.events.append((kind, "", payload or {}))
-
-    def document_matches(self, key, kind, path):
-        return self._docs_match
-
-    def get(self, key):
-        class Record:
-            title, company = "Network Engineer", "Example Corp"
-            url = "https://jobs.example.com/apply/42"
-            status = "prepared"
-        return Record()
-
-
-class Job:
-    title, company, url = "Network Engineer", "Example Corp", "https://jobs.example.com/apply/42"
-
-
-def serve(page, body: str, url: str = "https://jobs.example.com/apply/42"):
-    """Puts a local page at a real URL, so URL checks behave as they do live."""
-    page.route("**/*", lambda route: route.fulfill(status=200, content_type="text/html", body=body))
-    page.goto(url)
-
-
-BASE = {"title": "Network Engineer", "company": "Example Corp", "url": "https://jobs.example.com/apply/42"}
-
-
-def decision(**overrides):
-    args = dict(
-        enabled=True, job=dict(BASE), tracked=dict(BASE), report={},
-        form_fields=[{"label": "City", "value": "Fairfax", "required": True, "source": "agent"}],
-        approved={"City": "Fairfax"},
-        uploaded_documents=["Resume_Example.pdf"], expected_documents=["Resume_Example.pdf"],
-        documents_verified=True,
-    )
-    args.update(overrides)
-    return safety.evaluate_auto_submit(**args)
-
-
-# ---------------------------------------------------------------- eligibility
-def test_everything_matching_is_eligible():
-    result = decision()
-    assert result.eligible and result.reasons == []
-    assert [c.matches for c in result.field_comparisons] == [True]
-
-
-def test_disabled_setting_alone_blocks_it():
-    result = decision(enabled=False)
-    assert not result.eligible
-    assert any("AUTO_SUBMIT_VERIFIED_ONLY" in r for r in result.reasons)
-
-
-def test_the_setting_is_off_by_default(monkeypatch):
-    from config import AppConfig
-    monkeypatch.delenv("AUTO_SUBMIT_VERIFIED_ONLY", raising=False)
-    assert AppConfig().auto_submit_verified_only is False
-
-
-@pytest.mark.parametrize("value,expected", [("true", True), ("false", False)])
-def test_auto_submit_setting_respects_explicit_configuration(monkeypatch, value, expected):
-    from config import AppConfig
-    monkeypatch.setenv("AUTO_SUBMIT_VERIFIED_ONLY", value)
-    assert AppConfig().auto_submit_verified_only is expected
-
-
-# ---------------------------------------------------------------- exact matching only
-@pytest.mark.parametrize("on_form,approved,expected", [
-    ("Fairfax", "Fairfax", True),
-    ("  fairfax ", "Fairfax", True),
-    ("(571) 354-5212", "571-354-5212", True),
-    ("Asian (Not Hispanic or Latino)", "Asian", True),
-    ("Fairfax County", "Fairfax", False),
-    ("United States Minor Outlying Islands", "United States", False),
-    ("", "Fairfax", False),
-    ("Fairfax", "", False),
-])
-def test_values_match_is_exact(on_form, approved, expected):
-    assert safety.values_match(on_form, approved) is expected
-
-
-def test_an_answer_with_no_approved_value_no_longer_blocks_submission():
-    """Owner's rule, 13 October 2026: every mandatory field filled and the form clean
-    is enough -- an answer need not equal approved data."""
-    result = decision(
-        form_fields=[{"label": "How many people did you manage?", "value": "5", "required": True}],
-        approved={},
-    )
-    assert result.eligible and result.reasons == []
-    assert [c.matches for c in result.field_comparisons] == [False]   # still recorded for the audit
-
-
-def test_a_field_differing_from_approved_data_no_longer_blocks_submission():
-    result = decision(form_fields=[{"label": "City", "value": "Richmond", "required": True}])
-    assert result.eligible
-    assert result.field_comparisons[0].approved == "Fairfax"
-
-
-# ---------------------------------------------------------------- refusal on an unfinished or flagged form
-@pytest.mark.parametrize("report_key,value", [
-    ("required_still_blank", ["State"]),
-    ("errors_shown", ["State is required"]),
-    ("legal_answer_conflicts", ["Sponsorship: the form says No, your profile says Yes"]),
-    ("attestations_pending", ["Typed Signature"]),
-    ("identity_checks", ["a one-time code step"]),
-])
-def test_an_unfinished_or_flagged_form_refuses(report_key, value):
-    result = decision(report={report_key: value})
-    assert not result.eligible and result.reasons
-
-
-@pytest.mark.parametrize("report_key,value", [
-    ("warnings_shown", ["Some sections are incomplete"]),
-    ("ambiguous_choices", ["'Race': wanted 'Asian', offered ['Other']"]),
-    ("unsupported_questions", ["Describe your ideal team"]),
-    ("unanswered_questions", ["Preferred start date"]),
-])
-def test_what_the_owner_removed_from_the_rule_no_longer_refuses(report_key, value):
-    assert decision(report={report_key: value}).eligible
-
-
-def test_a_captcha_refuses():
-    assert not decision(report={"captcha": True}).eligible
-
-
-def test_a_different_job_or_url_refuses():
-    assert not decision(job={**BASE, "title": "Senior Network Engineer"}).eligible
-    assert not decision(job={**BASE, "url": "https://jobs.example.com/apply/99"}).eligible
-    # tracking parameters are not a difference
-    assert decision(job={**BASE, "url": BASE["url"] + "?utm_source=LinkedIn"}).eligible
-
-
-def test_the_documents_no_longer_decide_the_submission():
-    """Whether the attached files are the generated ones is recorded, not enforced."""
-    assert decision(uploaded_documents=["Someone_Else.pdf"]).eligible
-    assert decision(documents_verified=False).eligible
-    assert decision(uploaded_documents=[]).eligible
-
-
-# ---------------------------------------------------------------- the flow
-def test_hand_over_records_evidence_and_does_not_submit_by_default(page, tmp_path, monkeypatch):
-    page.set_content("<label for=c>City</label><input id=c value='Fairfax'><button>Submit application</button>")
-
-    class Assistant:
-        raised = False
-        values = safety.AgentValues()
-        def validate_application(self, page, resume_name=""):
-            return {"required_still_blank": [], "errors_shown": [], "unanswered_questions": [],
-                    "attestations_pending": [], "warnings_shown": [], "ambiguous_choices": [],
-                    "unsupported_questions": [], "identity_checks": [], "attached_documents": [],
-                    "captcha": False, "resume_attached": True, "page_url": page.url}
-        def read_back_fields(self, page):
-            return [{"ref": "c", "label": "City", "value": "Fairfax", "required": True}]
-        def raise_window(self, page):
-            Assistant.raised = True
-        def find_submit_button(self, page):
-            button = page.get_by_role("button", name="Submit application")
-            return button if button.count() else None
-        def click_verified_submit(self, page, authorization):
-            raise AssertionError("must not submit while the setting is off")
-
-    tracker = Tracker()
-    summary = tmp_path / "review_summary.json"
-    summary.write_text("{}", encoding="utf-8")
-
-    class Config:
-        auto_submit_verified_only = False
-
-    status = apply_flow.hand_over(Assistant(), page, tracker, "key", Job(), tmp_path, "Resume.pdf",
-                                  summary, config=Config(), profile=Profile(),
-                                  documents={"resume": tmp_path / "Resume.pdf"})
-
-    assert status == "ready_to_submit" and tracker.status == "ready_to_submit"
-    assert Assistant.raised is True
-    audit = [e for e in tracker.events if e[0] == "auto_submit"]
-    assert audit and audit[0][2]["eligible"] is False
-    assert audit[0][2]["reason_code"] == "owner_review"
-    assert "reasons" not in audit[0][2]  # full question/answer reasons stay in live authority
-    evidence = list(tmp_path.glob("evidence_*/*"))
-    assert {p.name for p in evidence} >= {"page.png", "page.html", "comparison.json"}
-    comparison = json.loads(next(p for p in evidence if p.name == "comparison.json").read_text(encoding="utf-8"))
-    assert comparison["field_comparisons"][0]["label"] == "City"
-
-
-def test_a_page_before_the_last_is_not_called_ready_to_submit(page, tmp_path):
-    """Schwab's sign-in step was reported "ready to submit": nothing was left
-    to fill there, but there was no Submit button -- it was not the end."""
-    page.set_content("<label for=e>Email</label><input id=e value='a@b.c'>"
-                     "<input type=submit value='I Acknowledge the Privacy Notice'>")
-
-    class Assistant:
-        values = safety.AgentValues()
-        def validate_application(self, page, resume_name=""):
-            return {"required_still_blank": [], "errors_shown": [], "unanswered_questions": [],
-                    "attestations_pending": [], "warnings_shown": [], "ambiguous_choices": [],
-                    "unsupported_questions": [], "identity_checks": [], "attached_documents": [],
-                    "captcha": False, "resume_attached": None, "page_url": page.url}
-        def read_back_fields(self, page):
-            return [{"ref": "e", "label": "Email", "value": "a@b.c", "required": True}]
-        def raise_window(self, page):
-            pass
-        def find_submit_button(self, page):
-            return None
-        def click_verified_submit(self, page, authorization):
-            raise AssertionError("never on a page before the last")
-
-    class Config:
-        auto_submit_verified_only = False
-        auto_submit = True
-
-    tracker = Tracker()
-    summary = tmp_path / "review_summary.json"
-    summary.write_text("{}", encoding="utf-8")
-    status = apply_flow.hand_over(Assistant(), page, tracker, "key", Job(), tmp_path, "Resume.pdf",
-                                  summary, config=Config(), profile=Profile(), documents={})
-    assert status == "needs_user_review" and tracker.status == "needs_user_review"
-
-
-def test_submission_is_recorded_only_on_evidence(page, tmp_path):
-    class Assistant:
-        def click_verified_submit(self, page, authorization):
-            self.tracker.begin_submission_dispatch(self.application_key)
-            return True
-        def wait_for_submission_evidence(self, page, job_title="", timeout_seconds=0):
-            return None            # the site said nothing
-
-    tracker = Tracker()
-    ok = apply_flow.submit_verified(Assistant(), page, tracker, "key", Job(), tmp_path,
-                                    safety.AutoSubmitDecision(eligible=True))
-    assert ok is False and tracker.status == "needs_user_review"
-
-    class Confirming(Assistant):
-        def wait_for_submission_evidence(self, page, job_title="", timeout_seconds=0):
-            return "the page confirmed it"
-
-    tracker2 = Tracker()
-    assert apply_flow.submit_verified(Confirming(), page, tracker2, "key", Job(), tmp_path,
-                                      safety.AutoSubmitDecision(eligible=True)) is True
-    assert tracker2.status == "submitted"
-
-
-# ---------------------------------------------------------------- recovery after the user helps
-
-# ---------------------------------------------------------------- end to end, on a local form
-def test_verified_auto_submit_end_to_end(page, tmp_path, agent):
-    """With the setting ON and everything matching, the agent submits and then
-    records submitted only because the page confirmed it."""
+"""
+Verified auto-submit: eligibility, exact matching, refusal on any uncertainty,
+evidence-based confirmation, and recovery after the user clears a CAPTCHA.
+
+Nothing here touches an employer site: pages are local HTML and the tracker is
+a stand-in.
+
+    venv\\Scripts\\python -m pytest tests -q
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import apply_flow  # noqa: E402
+import safety  # noqa: E402
+from browser_automation import JobApplicationAssistant  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def browser():
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        b = p.chromium.launch(headless=True)
+        yield b
+        b.close()
+
+
+@pytest.fixture
+def page(browser):
+    pg = browser.new_page()
+    yield pg
+    pg.close()
+
+
+@pytest.fixture
+def agent():
+    a = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    a.values = safety.AgentValues()
+    return a
+
+
+class Profile:
+    full_name = "Yaswanth Reddy Jonnalagadda"
+    email = "me@example.com"
+    city = "Fairfax"
+    state = "Virginia"
+
+
+class Tracker:
+    """Records what the flow asked it to store."""
+
+    def __init__(self, docs_match=True):
+        self.status = None
+        self.notes = None
+        self.events = []
+        self.submission_state = None
+        self._docs_match = docs_match
+
+    def update_status(self, key, status, notes=None):
+        self.status, self.notes = status, notes
+
+    def record_event(self, key, kind, message="", screenshot_path="", html_path="", payload=None):
+        self.events.append((kind, message, payload))
+
+    def get_submission_effect_state(self, key):
+        return self.submission_state
+
+    def begin_submission_dispatch(self, key, aliases=()):
+        if self.submission_state in {"DISPATCHED", "CONFIRMED", "UNCERTAIN"}:
+            raise RuntimeError("replay blocked")
+        self.events.append(("SUBMISSION_AUTHORIZED", "", {}))
+        self.submission_state = "DISPATCHED"
+        self.events.append(("SUBMISSION_DISPATCHED", "", {}))
+
+    def finish_submission_effect(self, key, state, *, reconciled=False, evidence_kind=None):
+        if self.submission_state != "DISPATCHED" and not (
+            self.submission_state == "UNCERTAIN" and state == "CONFIRMED" and reconciled
+        ):
+            raise RuntimeError("invalid state transition")
+        self.submission_state = state
+        self.events.append((f"SUBMISSION_{state}", "", {"evidence_kind": evidence_kind}))
+
+    def record_submission_safety_event(self, key, kind, payload=None):
+        self.events.append((kind, "", payload or {}))
+
+    def document_matches(self, key, kind, path):
+        return self._docs_match
+
+    def get(self, key):
+        class Record:
+            title, company = "Network Engineer", "Example Corp"
+            url = "https://jobs.example.com/apply/42"
+            status = "prepared"
+        return Record()
+
+
+class Job:
+    title, company, url = "Network Engineer", "Example Corp", "https://jobs.example.com/apply/42"
+
+
+def serve(page, body: str, url: str = "https://jobs.example.com/apply/42"):
+    """Puts a local page at a real URL, so URL checks behave as they do live."""
+    page.route("**/*", lambda route: route.fulfill(status=200, content_type="text/html", body=body))
+    page.goto(url)
+
+
+BASE = {"title": "Network Engineer", "company": "Example Corp", "url": "https://jobs.example.com/apply/42"}
+
+
+def decision(**overrides):
+    args = dict(
+        enabled=True, job=dict(BASE), tracked=dict(BASE), report={},
+        form_fields=[{"label": "City", "value": "Fairfax", "required": True, "source": "agent"}],
+        approved={"City": "Fairfax"},
+        uploaded_documents=["Resume_Example.pdf"], expected_documents=["Resume_Example.pdf"],
+        documents_verified=True,
+    )
+    args.update(overrides)
+    return safety.evaluate_auto_submit(**args)
+
+
+# ---------------------------------------------------------------- eligibility
+def test_everything_matching_is_eligible():
+    result = decision()
+    assert result.eligible and result.reasons == []
+    assert [c.matches for c in result.field_comparisons] == [True]
+
+
+def test_disabled_setting_alone_blocks_it():
+    result = decision(enabled=False)
+    assert not result.eligible
+    assert any("AUTO_SUBMIT_VERIFIED_ONLY" in r for r in result.reasons)
+
+
+def test_the_setting_is_off_by_default(monkeypatch):
+    from config import AppConfig
+    monkeypatch.delenv("AUTO_SUBMIT_VERIFIED_ONLY", raising=False)
+    assert AppConfig().auto_submit_verified_only is False
+
+
+@pytest.mark.parametrize("value,expected", [("true", True), ("false", False)])
+def test_auto_submit_setting_respects_explicit_configuration(monkeypatch, value, expected):
+    from config import AppConfig
+    monkeypatch.setenv("AUTO_SUBMIT_VERIFIED_ONLY", value)
+    assert AppConfig().auto_submit_verified_only is expected
+
+
+# ---------------------------------------------------------------- exact matching only
+@pytest.mark.parametrize("on_form,approved,expected", [
+    ("Fairfax", "Fairfax", True),
+    ("  fairfax ", "Fairfax", True),
+    ("(571) 354-5212", "571-354-5212", True),
+    ("Asian (Not Hispanic or Latino)", "Asian", True),
+    ("Fairfax County", "Fairfax", False),
+    ("United States Minor Outlying Islands", "United States", False),
+    ("", "Fairfax", False),
+    ("Fairfax", "", False),
+])
+def test_values_match_is_exact(on_form, approved, expected):
+    assert safety.values_match(on_form, approved) is expected
+
+
+def test_an_answer_with_no_approved_value_no_longer_blocks_submission():
+    """Owner's rule, 13 October 2026: every mandatory field filled and the form clean
+    is enough -- an answer need not equal approved data."""
+    result = decision(
+        form_fields=[{"label": "How many people did you manage?", "value": "5", "required": True}],
+        approved={},
+    )
+    assert result.eligible and result.reasons == []
+    assert [c.matches for c in result.field_comparisons] == [False]   # still recorded for the audit
+
+
+def test_a_field_differing_from_approved_data_no_longer_blocks_submission():
+    result = decision(form_fields=[{"label": "City", "value": "Richmond", "required": True}])
+    assert result.eligible
+    assert result.field_comparisons[0].approved == "Fairfax"
+
+
+# ---------------------------------------------------------------- refusal on an unfinished or flagged form
+@pytest.mark.parametrize("report_key,value", [
+    ("required_still_blank", ["State"]),
+    ("errors_shown", ["State is required"]),
+    ("legal_answer_conflicts", ["Sponsorship: the form says No, your profile says Yes"]),
+    ("attestations_pending", ["Typed Signature"]),
+    ("identity_checks", ["a one-time code step"]),
+])
+def test_an_unfinished_or_flagged_form_refuses(report_key, value):
+    result = decision(report={report_key: value})
+    assert not result.eligible and result.reasons
+
+
+@pytest.mark.parametrize("report_key,value", [
+    ("warnings_shown", ["Some sections are incomplete"]),
+    ("ambiguous_choices", ["'Race': wanted 'Asian', offered ['Other']"]),
+    ("unsupported_questions", ["Describe your ideal team"]),
+    ("unanswered_questions", ["Preferred start date"]),
+])
+def test_what_the_owner_removed_from_the_rule_no_longer_refuses(report_key, value):
+    assert decision(report={report_key: value}).eligible
+
+
+def test_a_captcha_refuses():
+    assert not decision(report={"captcha": True}).eligible
+
+
+def test_a_different_job_or_url_refuses():
+    assert not decision(job={**BASE, "title": "Senior Network Engineer"}).eligible
+    assert not decision(job={**BASE, "url": "https://jobs.example.com/apply/99"}).eligible
+    # tracking parameters are not a difference
+    assert decision(job={**BASE, "url": BASE["url"] + "?utm_source=LinkedIn"}).eligible
+
+
+def test_the_documents_no_longer_decide_the_submission():
+    """Whether the attached files are the generated ones is recorded, not enforced."""
+    assert decision(uploaded_documents=["Someone_Else.pdf"]).eligible
+    assert decision(documents_verified=False).eligible
+    assert decision(uploaded_documents=[]).eligible
+
+
+# ---------------------------------------------------------------- the flow
+def test_hand_over_records_evidence_and_does_not_submit_by_default(page, tmp_path, monkeypatch):
+    page.set_content("<label for=c>City</label><input id=c value='Fairfax'><button>Submit application</button>")
+
+    class Assistant:
+        raised = False
+        values = safety.AgentValues()
+        def validate_application(self, page, resume_name=""):
+            return {"required_still_blank": [], "errors_shown": [], "unanswered_questions": [],
+                    "attestations_pending": [], "warnings_shown": [], "ambiguous_choices": [],
+                    "unsupported_questions": [], "identity_checks": [], "attached_documents": [],
+                    "captcha": False, "resume_attached": True, "page_url": page.url}
+        def read_back_fields(self, page):
+            return [{"ref": "c", "label": "City", "value": "Fairfax", "required": True}]
+        def raise_window(self, page):
+            Assistant.raised = True
+        def find_submit_button(self, page):
+            button = page.get_by_role("button", name="Submit application")
+            return button if button.count() else None
+        def click_verified_submit(self, page, authorization):
+            raise AssertionError("must not submit while the setting is off")
+
+    tracker = Tracker()
+    summary = tmp_path / "review_summary.json"
+    summary.write_text("{}", encoding="utf-8")
+
+    class Config:
+        auto_submit_verified_only = False
+
+    status = apply_flow.hand_over(Assistant(), page, tracker, "key", Job(), tmp_path, "Resume.pdf",
+                                  summary, config=Config(), profile=Profile(),
+                                  documents={"resume": tmp_path / "Resume.pdf"})
+
+    assert status == "ready_to_submit" and tracker.status == "ready_to_submit"
+    assert Assistant.raised is True
+    audit = [e for e in tracker.events if e[0] == "auto_submit"]
+    assert audit and audit[0][2]["eligible"] is False
+    assert audit[0][2]["reason_code"] == "owner_review"
+    assert "reasons" not in audit[0][2]  # full question/answer reasons stay in live authority
+    evidence = list(tmp_path.glob("evidence_*/*"))
+    assert {p.name for p in evidence} >= {"page.png", "page.html", "comparison.json"}
+    comparison = json.loads(next(p for p in evidence if p.name == "comparison.json").read_text(encoding="utf-8"))
+    assert comparison["field_comparisons"][0]["label"] == "City"
+
+
+def test_a_page_before_the_last_is_not_called_ready_to_submit(page, tmp_path):
+    """Schwab's sign-in step was reported "ready to submit": nothing was left
+    to fill there, but there was no Submit button -- it was not the end."""
+    page.set_content("<label for=e>Email</label><input id=e value='a@b.c'>"
+                     "<input type=submit value='I Acknowledge the Privacy Notice'>")
+
+    class Assistant:
+        values = safety.AgentValues()
+        def validate_application(self, page, resume_name=""):
+            return {"required_still_blank": [], "errors_shown": [], "unanswered_questions": [],
+                    "attestations_pending": [], "warnings_shown": [], "ambiguous_choices": [],
+                    "unsupported_questions": [], "identity_checks": [], "attached_documents": [],
+                    "captcha": False, "resume_attached": None, "page_url": page.url}
+        def read_back_fields(self, page):
+            return [{"ref": "e", "label": "Email", "value": "a@b.c", "required": True}]
+        def raise_window(self, page):
+            pass
+        def find_submit_button(self, page):
+            return None
+        def click_verified_submit(self, page, authorization):
+            raise AssertionError("never on a page before the last")
+
+    class Config:
+        auto_submit_verified_only = False
+        auto_submit = True
+
+    tracker = Tracker()
+    summary = tmp_path / "review_summary.json"
+    summary.write_text("{}", encoding="utf-8")
+    status = apply_flow.hand_over(Assistant(), page, tracker, "key", Job(), tmp_path, "Resume.pdf",
+                                  summary, config=Config(), profile=Profile(), documents={})
+    assert status == "needs_user_review" and tracker.status == "needs_user_review"
+
+
+def test_submission_is_recorded_only_on_evidence(page, tmp_path):
+    class Assistant:
+        def click_verified_submit(self, page, authorization):
+            self.tracker.begin_submission_dispatch(self.application_key)
+            return True
+        def wait_for_submission_evidence(self, page, job_title="", timeout_seconds=0):
+            return None            # the site said nothing
+
+    tracker = Tracker()
+    ok = apply_flow.submit_verified(Assistant(), page, tracker, "key", Job(), tmp_path,
+                                    safety.AutoSubmitDecision(eligible=True))
+    assert ok is False and tracker.status == "needs_user_review"
+
+    class Confirming(Assistant):
+        def wait_for_submission_evidence(self, page, job_title="", timeout_seconds=0):
+            return "the page confirmed it"
+
+    tracker2 = Tracker()
+    assert apply_flow.submit_verified(Confirming(), page, tracker2, "key", Job(), tmp_path,
+                                      safety.AutoSubmitDecision(eligible=True)) is True
+    assert tracker2.status == "submitted"
+
+
+# ---------------------------------------------------------------- recovery after the user helps
+
+# ---------------------------------------------------------------- end to end, on a local form
+def test_verified_auto_submit_end_to_end(page, tmp_path, agent):
+    """With the setting ON and everything matching, the agent submits and then
+    records submitted only because the page confirmed it."""
+    serve(page,
+          "<h2>Apply</h2>"
+          "<label for=c>City *</label><input id=c required>"
+          "<p>Attached: Resume_Example.pdf</p>"
+          "<button id=go onclick=\"document.body.innerHTML='<h1>Application Received!</h1>'\">"
+          "Submit application</button>")
+    agent.employer = "Example Corp"
+    agent.set_value(page, "[id='c']", "Fairfax", "City *", source="profile:city")
+
+    class Tracker2(Tracker):
+        def document_matches(self, key, kind, path):
+            return True
+
+    tracker = Tracker2()
+    summary = tmp_path / "review_summary.json"
+    summary.write_text("{}", encoding="utf-8")
+    resume = tmp_path / "Resume_Example.pdf"
+    resume.write_bytes(b"%PDF-1.4")
+
+    class Config:
+        auto_submit_verified_only = True
+
+    status = apply_flow.hand_over(agent, page, tracker, "key", Job(), tmp_path, resume.name, summary,
+                                  config=Config(), profile=Profile(), documents={"resume": resume})
+
+    assert status == "submitted", tracker.notes
+    assert tracker.status == "submitted" and "confirmed" in (tracker.notes or "")
+    assert page.locator("text=Application Received!").count() == 1
+    audit = [e for e in tracker.events if e[0] == "auto_submit"]
+    assert audit and audit[0][2]["eligible"] is True
+
+
+def test_verified_auto_submit_goes_ahead_when_one_field_is_unapproved(page, tmp_path, agent):
+    """Same page, but a field holds something no approved source supports. Owner's rule
+    (13 October 2026): every mandatory field filled and the form clean is enough, so it
+    submits -- and the unapproved answer is still counted in the audit, never named."""
+    serve(page,
+          "<label for=c>City *</label><input id=c required>"
+          "<label for=q>Notice period *</label><input id=q value='2 weeks' required>"
+          "<p>Attached: Resume_Example.pdf</p>"
+          "<button onclick=\"document.body.innerHTML='<h1>Application Received!</h1>'\">"
+          "Submit application</button>")
+    agent.employer = "Example Corp"
+    agent.set_value(page, "[id='c']", "Fairfax", "City *", source="profile:city")
+
+    tracker = Tracker()
+    summary = tmp_path / "review_summary.json"
+    summary.write_text("{}", encoding="utf-8")
+    resume = tmp_path / "Resume_Example.pdf"
+    resume.write_bytes(b"%PDF-1.4")
+
+    class Config:
+        auto_submit_verified_only = True
+
+    status = apply_flow.hand_over(agent, page, tracker, "key", Job(), tmp_path, resume.name, summary,
+                                  config=Config(), profile=Profile(), documents={"resume": resume})
+
+    assert status == "submitted", tracker.notes
+    assert page.locator("text=Application Received!").count() == 1
+    audit = [e for e in tracker.events if e[0] == "auto_submit"][0][2]
+    assert audit["eligible"] is True and audit["unapproved_field_count"] == 1
+    assert "Notice period" not in json.dumps(audit) and "2 weeks" not in json.dumps(audit)
+# ---------------------------------------------------------------- submit modes (f320)
+def test_review_mode_holds_an_eligible_application(page, tmp_path, agent, monkeypatch):
+    """SUBMIT_MODE=review: the safety verdict says eligible, policy says wait."""
     serve(page,
-          "<h2>Apply</h2>"
           "<label for=c>City *</label><input id=c required>"
           "<p>Attached: Resume_Example.pdf</p>"
-          "<button id=go onclick=\"document.body.innerHTML='<h1>Application Received!</h1>'\">"
+          "<button onclick=\"document.body.innerHTML='<h1>Application Received!</h1>'\">"
           "Submit application</button>")
     agent.employer = "Example Corp"
     agent.set_value(page, "[id='c']", "Fairfax", "City *", source="profile:city")
-
-    class Tracker2(Tracker):
-        def document_matches(self, key, kind, path):
-            return True
-
-    tracker = Tracker2()
+    tracker = Tracker()
     summary = tmp_path / "review_summary.json"
     summary.write_text("{}", encoding="utf-8")
     resume = tmp_path / "Resume_Example.pdf"
@@ -355,30 +414,36 @@ def test_verified_auto_submit_end_to_end(page, tmp_path, agent):
     class Config:
         auto_submit_verified_only = True
 
+    monkeypatch.setenv("SUBMIT_MODE", "review")
     status = apply_flow.hand_over(agent, page, tracker, "key", Job(), tmp_path, resume.name, summary,
                                   config=Config(), profile=Profile(), documents={"resume": resume})
 
-    assert status == "submitted", tracker.notes
-    assert tracker.status == "submitted" and "confirmed" in (tracker.notes or "")
-    assert page.locator("text=Application Received!").count() == 1
-    audit = [e for e in tracker.events if e[0] == "auto_submit"]
-    assert audit and audit[0][2]["eligible"] is True
+    from job_tracker import STATUS_NEEDS_USER_REVIEW
+    assert status == STATUS_NEEDS_USER_REVIEW
+    assert "held" in (tracker.notes or "").lower()
+    assert page.locator("text=Application Received!").count() == 0
 
 
-def test_verified_auto_submit_goes_ahead_when_one_field_is_unapproved(page, tmp_path, agent):
-    """Same page, but a field holds something no approved source supports. Owner's rule
-    (13 October 2026): every mandatory field filled and the form clean is enough, so it
-    submits -- and the unapproved answer is still counted in the audit, never named."""
+def test_hybrid_mode_holds_at_the_daily_cap(page, tmp_path, agent, monkeypatch):
+    """SUBMIT_MODE=hybrid with a full cap: eligible, but today is spent."""
+    from datetime import datetime
+
     serve(page,
           "<label for=c>City *</label><input id=c required>"
-          "<label for=q>Notice period *</label><input id=q value='2 weeks' required>"
           "<p>Attached: Resume_Example.pdf</p>"
           "<button onclick=\"document.body.innerHTML='<h1>Application Received!</h1>'\">"
           "Submit application</button>")
     agent.employer = "Example Corp"
     agent.set_value(page, "[id='c']", "Fairfax", "City *", source="profile:city")
 
-    tracker = Tracker()
+    class CappedTracker(Tracker):
+        def list_all(self):
+            class Record:
+                status = "submitted"
+                updated_at = datetime.now().date().isoformat()
+            return [Record() for _ in range(10)]
+
+    tracker = CappedTracker()
     summary = tmp_path / "review_summary.json"
     summary.write_text("{}", encoding="utf-8")
     resume = tmp_path / "Resume_Example.pdf"
@@ -387,11 +452,12 @@ def test_verified_auto_submit_goes_ahead_when_one_field_is_unapproved(page, tmp_
     class Config:
         auto_submit_verified_only = True
 
+    monkeypatch.setenv("SUBMIT_MODE", "hybrid")
+    monkeypatch.setenv("AUTO_SUBMIT_DAILY_CAP", "10")
     status = apply_flow.hand_over(agent, page, tracker, "key", Job(), tmp_path, resume.name, summary,
                                   config=Config(), profile=Profile(), documents={"resume": resume})
 
-    assert status == "submitted", tracker.notes
-    assert page.locator("text=Application Received!").count() == 1
-    audit = [e for e in tracker.events if e[0] == "auto_submit"][0][2]
-    assert audit["eligible"] is True and audit["unapproved_field_count"] == 1
-    assert "Notice period" not in json.dumps(audit) and "2 weeks" not in json.dumps(audit)
+    from job_tracker import STATUS_NEEDS_USER_REVIEW
+    assert status == STATUS_NEEDS_USER_REVIEW
+    assert "cap" in (tracker.notes or "").lower()
+    assert page.locator("text=Application Received!").count() == 0

@@ -13,3 +13,6 @@ httpx>=0.27.0
 # lets tests/test_no_place_literals.py recognise any province or region.
 # Pinned: geo.json is generated from this version; bump the two together.
 pycountry==26.2.16
+
+# Style and bug checks, run by CI and the pre-commit hook (ruff.toml). Pinned so a new release cannot fail a build alone.
+ruff==0.17.3

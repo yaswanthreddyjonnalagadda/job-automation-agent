@@ -19,6 +19,7 @@ How an answer is made:
 """
 from __future__ import annotations
 
+import diagnostics
 import json
 import logging
 import re
@@ -274,7 +275,7 @@ def _answer_from(raw: str) -> str:
         try:
             return str(json.loads(match.group(0)).get("answer") or "").strip()
         except (ValueError, AttributeError) as _swallowed:
-            logger.debug("_answer_from: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_answer_from: %s", diagnostics.short_exc(_swallowed, 100))
     return raw
 
 

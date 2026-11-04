@@ -1,0 +1,13 @@
+# Style and bug checks (3 November 2026 review: the tree carried "# noqa" and "# type: ignore" markers for tools that
+# never ran, and an invalid "\e" escape warned on every test collection).
+#
+# Only the rules that find real bugs are on: syntax errors, undefined names, misused format strings, invalid escape
+# sequences, f-strings with nothing to fill. Each has zero findings today, so CI fails on any new one.
+# Not yet on, each with a count to work down (python -m ruff check --select <rule> --statistics):
+#   F401 unused import, F811 redefined name (mostly pytest fixtures), F841 unused variable, F402 import shadowed by a
+#   loop variable (`field`, in safety.py among others -- safety.py changes only with the owner's approval).
+target-version = "py313"
+extend-exclude = ["output", "data", "venv", ".venv", "agent_v2"]
+
+[lint]
+select = ["E9", "F63", "F7", "F82", "W605", "F541"]

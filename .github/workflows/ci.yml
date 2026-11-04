@@ -59,5 +59,8 @@ jobs:
       - name: Place data matches its source
         run: python reference/build_geo.py --check
 
+      - name: Ruff (bugs a test would only find by luck)
+        run: python -m ruff check .
+
       - name: Tests
         run: python -m pytest -q -rs -n auto

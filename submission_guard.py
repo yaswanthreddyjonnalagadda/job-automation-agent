@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import confirmation_text
+import diagnostics
 import json
 import logging
 import re
@@ -150,6 +152,12 @@ def _guard_script(capability: str) -> str:
         : Array.from(form.elements).some(element => Boolean(finalControl(element)));
       // Account helpers may authorize one dedicated credential form. A label
       // alone never exempts a button from final-submission containment.
+      const isHoneypot = e => /for robots only|do not (?:enter|fill)[^.]{0,30}if you['’ a]re (?:a )?human|leave (?:this (?:field )?)?blank|honeypot/i.test([
+        e.getAttribute('aria-label'), e.name, e.id, e.getAttribute('data-automation-id'),
+        e.placeholder, ...Array.from(e.labels || []).map(l => l.innerText),
+        ...(e.getAttribute('aria-labelledby') || '').split(/\s+/)
+          .map(id => document.getElementById(id)?.innerText || '')
+      ].join(' '));
       const credentialForm = element => element.form || element.closest('form');
       const credentialControl = (element, action) => {
         if (!(element instanceof Element)
@@ -165,7 +173,7 @@ def _guard_script(capability: str) -> str:
         if (controls.some(e => e.matches?.('input[type=file],textarea,select'))
             || form.querySelector('[contenteditable=true]')) return false;
         const inputs = controls.filter(e => e instanceof HTMLInputElement
-          && !e.disabled && e.type !== 'hidden' && e.getClientRects().length);
+          && !e.disabled && e.type !== 'hidden' && e.getClientRects().length && !isHoneypot(e));
         const passwords = inputs.filter(e => e.type === 'password');
         const visibleEmails = inputs.filter(e => e.type !== 'password' && e.type !== 'checkbox'
           && (e.type === 'email' || /e-?mail|user ?name/i.test([
@@ -204,7 +212,7 @@ def _guard_script(capability: str) -> str:
         const controls = [...new Set([...form.elements, ...form.querySelectorAll('[role=button]')])];
         if (form.querySelector('[contenteditable=true]')) return false;
         const inputs = controls.filter(e => e instanceof HTMLInputElement
-          && !e.disabled && e.type !== 'hidden' && e.getClientRects().length);
+          && !e.disabled && e.type !== 'hidden' && e.getClientRects().length && !isHoneypot(e));
         const passwords = inputs.filter(e => e.type === 'password');
         if (passwords.length < 1 || !passwords[0].value) return false;
         if (passwords.length >= 2 && passwords[0].value !== passwords[1].value) return false;
@@ -635,7 +643,7 @@ class SubmissionGuardV0:
                 ) > before
             return SubmissionGuardV0.click_denial_count(locator) > before
         except Exception as exc:
-            reason = str(exc).splitlines()[0][:120] if str(exc) else type(exc).__name__
+            reason = diagnostics.short_exc(exc, 120)
             if frame is not None and any(text in reason for text in (
                     "Execution context was destroyed", "Frame was detached", "frame was detached")):
                 return False    # the document itself changed; a refused click leaves it exactly as it was
@@ -667,14 +675,14 @@ class SubmissionGuardV0:
             locator.click(timeout=10_000)
             return self.denial_count(page) <= before
         except PlaywrightError as exc:
-            logger.warning("Intermediate iCIMS click failed: %s", str(exc).splitlines()[0][:120])
+            logger.warning("Intermediate iCIMS click failed: %s", diagnostics.short_exc(exc, 120))
             return False
         finally:
             for frame in page.frames:
                 try:
                     frame.evaluate(f"token => window.{_GUARD_NAME}?.clearAuthorization(token)", self._capability)
                 except PlaywrightError as exc:
-                    logger.debug("clearAuthorization on a frame failed: %s", str(exc).splitlines()[0][:100])
+                    logger.debug("clearAuthorization on a frame failed: %s", diagnostics.short_exc(exc, 100))
 
     def click_intermediate_icims_packet(self, page: Any) -> bool:
         """Submit one signed portal packet only when iCIMS shows another packet follows."""
@@ -742,7 +750,7 @@ class SubmissionGuardV0:
                 try:
                     frame.evaluate(f"token => window.{_GUARD_NAME}?.clearAuthorization(token)", self._capability)
                 except PlaywrightError as _swallowed:
-                    logger.debug("_click_credentials: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("_click_credentials: %s", diagnostics.short_exc(_swallowed, 100))
 
     @staticmethod
     def _valid_authorization(decision: Any) -> bool:
@@ -846,7 +854,7 @@ class SubmissionGuardV0:
                 return False
             return True
         except PlaywrightError as exc:
-            logger.error("SUBMISSION_GUARD_V0_DENIED: verified submit click failed: %s", str(exc).splitlines()[0][:120])
+            logger.error("SUBMISSION_GUARD_V0_DENIED: verified submit click failed: %s", diagnostics.short_exc(exc, 120))
             if dispatched:
                 self._mark_uncertain(tracker, dedup_key)
             return False
@@ -876,7 +884,7 @@ class SubmissionGuardV0:
                     self._capability,
                 )
             except PlaywrightError as _swallowed:
-                logger.debug("submit_verified: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                logger.debug("submit_verified: %s", diagnostics.short_exc(_swallowed, 100))
 
 
 class SubmissionProbe:
@@ -887,19 +895,17 @@ class SubmissionProbe:
         state = tracker.get_submission_effect_state(dedup_key)
         application = application_tracker.get(dedup_key) if application_tracker is not None else None
         body = page.locator("body").inner_text(timeout=5_000).lower()
-        confirmation_phrases = (
-            "thank you for applying", "application submitted", "thanks for applying",
-            "we have received your application", "your application has been submitted",
-            "submission received", "application received", "application has been sent",
-            "application was sent", "applied on", "date applied", "submitted on",
+        blocks = [block.strip() for block in re.split(r"\n+", body) if block.strip()]
+        confirmation = next(
+            (block for block in blocks if len(block) <= 400 and confirmation_text.says_received(block)),
+            "",
         )
-        confirmation_text = next((phrase for phrase in confirmation_phrases if phrase in body), "")
         return {
             "state": state,
             "application_status": getattr(application, "status", None),
             "url": page.url,
             "title": page.title(),
-            "confirmation_text": confirmation_text,
+            "confirmation_text": confirmation,
             "application_id": page.evaluate("""() => {
               const element = document.querySelector(
                 '[data-application-id], [data-applicationid], [data-testid="application-id"]'

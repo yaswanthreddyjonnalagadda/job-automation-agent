@@ -656,7 +656,28 @@ class JobTracker:
                 try:
                     item["payload"] = json.loads(item["payload"])
                 except (TypeError, ValueError) as _swallowed:
-                    logger.debug("events: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+                    logger.debug("events: %s", diagnostics.short_exc(_swallowed, 100))
+            found.append(diagnostics.sanitize_event(item))
+        return found
+
+    def recent_employer_signals(self, limit: int = 20) -> list[dict]:
+        """The newest employer-email signals across applications, newest first: the dashboard's inbox."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT e.kind, e.message, e.payload, e.created_at,
+                         a.id AS application_id, a.dedup_key, a.company, a.title, a.url
+                  FROM application_events e JOIN applications a ON a.id = e.application_id
+                  WHERE e.kind = 'employer_email' ORDER BY e.created_at DESC, e.id DESC LIMIT ?""",
+                (limit,)).fetchall()
+        found = []
+        for row in rows:
+            item = dict(row)
+            item["created_at"] = _when(item.get("created_at"))
+            if item.get("payload"):
+                try:
+                    item["payload"] = json.loads(item["payload"])
+                except (TypeError, ValueError) as _swallowed:
+                    logger.debug("recent_employer_signals: %s", diagnostics.short_exc(_swallowed, 100))
             found.append(diagnostics.sanitize_event(item))
         return found
 

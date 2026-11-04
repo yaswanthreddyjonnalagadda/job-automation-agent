@@ -10,6 +10,7 @@ lives, its file inputs, and its confirmation wording.
 from __future__ import annotations
 
 from .base import SiteAdapter
+import diagnostics
 import logging
 
 logger = logging.getLogger('browser_automation')
@@ -38,7 +39,6 @@ POSTING_ENTRY_JS = r"""element => {
 class GreenhouseAdapter(SiteAdapter):
     name = "greenhouse"
     hosts = ("greenhouse.io", "boards.greenhouse.io", "job-boards.greenhouse.io")
-    confirmation_phrases = ("thank you for applying", "your application has been submitted")
     portal_list_patterns = ()
 
     @classmethod
@@ -53,7 +53,7 @@ class GreenhouseAdapter(SiteAdapter):
                 if "greenhouse.io" in (getattr(frame, "url", "") or "").lower():
                     return frame
         except Exception as _swallowed:
-            logger.debug("_scope: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_scope: %s", diagnostics.short_exc(_swallowed, 100))
         return page
 
     def attachment_is_empty(self, page, kind: str):
