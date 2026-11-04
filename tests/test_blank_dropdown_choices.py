@@ -130,7 +130,7 @@ def test_a_box_that_never_offers_a_list_costs_nothing_and_is_left_alone(page):
 
 
 def test_a_prompt_named_dropdown_is_still_read_as_before(page):
-    page.set_content(select_page().replace(f"aria-labelledby=\"lbl\"", "aria-label=\"Choose an option\""))
+    page.set_content(select_page().replace("aria-labelledby=\"lbl\"", "aria-label=\"Choose an option\""))
     assert "'Never Employed by Praxis'" in read(make_agent(), page, only=[])
 
 
