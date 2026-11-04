@@ -129,3 +129,4 @@ def generate_cover_letter(
     except Exception as exc:
         logger.error("Claude API cover letter failed: %s", exc)
         return "", 0, 0.0
+

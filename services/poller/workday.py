@@ -93,3 +93,4 @@ def poll_workday(board_url: str, max_jobs: int = 100, session: Optional[requests
             break
 
     return jobs
+

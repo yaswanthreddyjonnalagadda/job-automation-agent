@@ -64,3 +64,4 @@ def poll_greenhouse(slug: str, session: Optional[requests.Session] = None) -> Li
             "posted_at": item.get("updated_at"),
         })
     return jobs
+

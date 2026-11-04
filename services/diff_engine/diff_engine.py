@@ -63,3 +63,4 @@ def process_poll_batch(batch: Dict[str, Any], storage: JobStorage) -> Dict[str, 
         "still_active_count": len(still_active),
         "new_job_ids": new_job_ids,
     }
+

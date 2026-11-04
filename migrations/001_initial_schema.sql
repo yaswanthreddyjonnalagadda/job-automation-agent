@@ -83,3 +83,4 @@ CREATE TABLE IF NOT EXISTS applications (
 
 CREATE INDEX IF NOT EXISTS idx_app_status ON applications(status);
 CREATE INDEX IF NOT EXISTS idx_app_submitted ON applications(submitted_at);
+

@@ -66,3 +66,4 @@ def mine_ats_slugs(ats_platform: str, limit: int = 100) -> Set[str]:
         if slug and len(slug) >= 2 and slug not in ("jobs", "api", "v1", "embed"):
             slugs.add(slug.lower())
     return slugs
+

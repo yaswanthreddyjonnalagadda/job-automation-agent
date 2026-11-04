@@ -70,3 +70,4 @@ def poll_ashby(org: str, session: Optional[requests.Session] = None) -> List[Dic
             "posted_at": item.get("publishedAt"),
         })
     return jobs
+

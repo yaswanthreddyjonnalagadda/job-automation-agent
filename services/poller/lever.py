@@ -58,3 +58,4 @@ def poll_lever(company: str, session: Optional[requests.Session] = None) -> List
             "posted_at": item.get("createdAt"),
         })
     return jobs
+

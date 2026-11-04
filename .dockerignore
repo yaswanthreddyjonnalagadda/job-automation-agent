@@ -1,0 +1,8 @@
+# Allowlist: the service images only need services/, config/ + requirements.txt
+# (verified: `services/**` imports nothing from the repo root, and the
+# root otherwise holds secrets, caches, venvs and pip/pytest scratch dirs
+# that must never enter an image layer).
+*
+!services/**
+!config/**
+!requirements.txt

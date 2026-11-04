@@ -3,7 +3,7 @@
 2. Poller Service (Greenhouse, Lever, Ashby, Workday mock parsing)
 3. Diff Engine (new, removed, active job detection)
 4. Matcher & Resume Tailor (scoring algorithm, disqualifier gates, plain verbs)
-5. Applicator (runner queue handling)
+5. Applicator (runner queue handling, rate limiting, and daily caps)
 """
 from __future__ import annotations
 
@@ -144,3 +144,102 @@ def test_applicator_runner_batch_execution(temp_storage):
     runner = ApplicatorRunner(temp_storage)
     processed = runner.run_batch(limit=5)
     assert processed == 0  # No queued apps initially
+
+
+def test_end_to_end_diff_match_and_apply_flow(temp_storage):
+    # 1. Diff engine detects new job
+    batch = {
+        "ats_platform": "greenhouse",
+        "company_slug": "stripe",
+        "jobs": [
+            {
+                "external_id": "job_e2e_100",
+                "title": "Senior Network Engineer",
+                "location": "Remote",
+                "salary_min": 140000,
+                "salary_max": 170000,
+                "description": "Cloud network infrastructure engineer with Cisco and Python experience.",
+                "apply_url": "https://boards.greenhouse.io/stripe/jobs/job_e2e_100",
+            }
+        ],
+    }
+    diff_res = process_poll_batch(batch, temp_storage)
+    assert diff_res["new_count"] == 1
+    job_id = diff_res["new_job_ids"][0]
+
+    # Verify job initially has no match score
+    unmatched = temp_storage.get_unmatched_jobs(limit=10)
+    assert any(j["id"] == job_id for j in unmatched)
+
+    # 2. Matcher processes job
+    job = temp_storage.get_job_by_id(job_id)
+    profile = load_user_profile()
+    scoring_res = score_job(job, profile)
+    assert scoring_res["status"] == "queue"
+    temp_storage.update_match_score(job_id, scoring_res["score"])
+
+    # Create queued application
+    app_id = temp_storage.create_application({
+        "job_id": job_id,
+        "match_score": scoring_res["score"],
+        "resume_version": "storage/resumes/stripe_resume.pdf",
+        "cover_letter": "I am excited to apply...",
+        "tailoring_prompt": "Tailor for Stripe",
+        "claude_tokens_used": 1500,
+        "claude_cost_usd": 0.045,
+        "status": "queued",
+        "portal_used": "greenhouse",
+    })
+    assert app_id > 0
+
+    # 3. Applicator processes queued application
+    runner = ApplicatorRunner(temp_storage, max_apps_per_day=10)
+    processed = runner.run_batch(limit=5)
+    assert processed == 1
+
+    # Verify application is submitted
+    cur = temp_storage._conn.cursor()
+    cur.execute("SELECT status, submitted_at, notes FROM applications WHERE id = ?", (app_id,))
+    row = dict(cur.fetchone())
+    assert row["status"] == "submitted"
+    assert row["submitted_at"] is not None
+
+    # Verify job status is updated to applied
+    updated_job = temp_storage.get_job_by_id(job_id)
+    assert updated_job["status"] == "applied"
+
+
+def test_applicator_runner_respects_daily_limit(temp_storage):
+    # Setup job
+    job_id = temp_storage.insert_job({
+        "external_id": "job_limit_1",
+        "ats_platform": "lever",
+        "company_slug": "netflix",
+        "title": "Network Engineer",
+        "location": "Remote",
+        "apply_url": "https://jobs.lever.co/netflix/1",
+        "status": "active",
+    })
+    # Create 2 queued applications
+    for i in range(2):
+        temp_storage.create_application({
+            "job_id": job_id,
+            "match_score": 85.0,
+            "resume_version": "res.pdf",
+            "cover_letter": "letter",
+            "tailoring_prompt": "prompt",
+            "claude_tokens_used": 100,
+            "claude_cost_usd": 0.005,
+            "status": "queued",
+            "portal_used": "lever",
+        })
+
+    # Set runner daily limit to 1
+    runner = ApplicatorRunner(temp_storage, max_apps_per_day=1)
+    first_run = runner.run_batch(limit=5)
+    assert first_run == 1
+    assert runner.count_today_applications() == 1
+
+    # Second batch attempt should be blocked by daily limit
+    second_run = runner.run_batch(limit=5)
+    assert second_run == 0

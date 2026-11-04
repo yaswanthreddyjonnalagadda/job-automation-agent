@@ -90,3 +90,4 @@ def seed_directory(storage: JobStorage) -> int:
         storage.register_company(comp)
         count += 1
     return count
+

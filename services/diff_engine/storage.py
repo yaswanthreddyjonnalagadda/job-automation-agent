@@ -213,3 +213,61 @@ class JobStorage:
         cur.execute(sql, tuple(params))
         rows = cur.fetchall()
         return [dict(r) for r in rows]
+
+    def create_application(self, app_data: Dict[str, Any]) -> int:
+        keys = [
+            "job_id", "match_score", "resume_version", "cover_letter",
+            "tailoring_prompt", "claude_tokens_used", "claude_cost_usd",
+            "status", "portal_used"
+        ]
+        values = [app_data.get(k) for k in keys]
+        if self.is_sqlite:
+            placeholders = ", ".join(["?"] * len(keys))
+            sql = f"INSERT INTO applications ({', '.join(keys)}) VALUES ({placeholders})"
+            with self._conn:
+                cur = self._conn.cursor()
+                cur.execute(sql, values)
+                return cur.lastrowid
+        else:
+            placeholders = ", ".join(["%s"] * len(keys))
+            sql = f"INSERT INTO applications ({', '.join(keys)}) VALUES ({placeholders}) RETURNING id"
+            with self._conn.cursor() as cur:
+                cur.execute(sql, values)
+                row = cur.fetchone()
+                self._conn.commit()
+                return row["id"] if isinstance(row, dict) else row[0]
+
+    def get_job_by_id(self, job_id: int) -> Optional[Dict[str, Any]]:
+        sql = "SELECT * FROM jobs WHERE id = ?"
+        if not self.is_sqlite:
+            sql = sql.replace("?", "%s")
+        cur = self.storage_cursor() if hasattr(self, 'storage_cursor') else self._conn.cursor()
+        cur.execute(sql, (job_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    def update_application_status(self, app_id: int, status: str, notes: Optional[str] = None) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        sql = "UPDATE applications SET status = ?, notes = ?, updated_at = ?"
+        params = [status, notes, now]
+        if status == "submitted":
+            sql += ", submitted_at = ?"
+            params.append(now)
+        sql += " WHERE id = ?"
+        params.append(app_id)
+        if not self.is_sqlite:
+            sql = sql.replace("?", "%s")
+        with self._conn:
+            cur = self._conn.cursor()
+            cur.execute(sql, tuple(params))
+
+    def update_job_status(self, job_id: int, status: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        sql = "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?"
+        params = [status, now, job_id]
+        if not self.is_sqlite:
+            sql = sql.replace("?", "%s")
+        with self._conn:
+            cur = self._conn.cursor()
+            cur.execute(sql, tuple(params))
+
