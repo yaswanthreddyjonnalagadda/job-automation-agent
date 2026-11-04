@@ -202,3 +202,33 @@ def test_the_school_search_chooses_the_other_institution_row_of_the_right_countr
     control = next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.role == "textbox")
     assert a.do(page, page_agent.Answer(control.ref, control.question, "fill", "JNTU Hyderabad", "profile.education"), control)
     assert page.locator("[data-automation-id=selectedItem]").inner_text() == "Other Institution - India"
+
+
+# --- Field of Study: the first 100 rows show until the search is submitted (f332) -------------------------------------
+
+def test_field_of_study_beyond_the_first_hundred_rows_is_found_by_submitting_the_search(page):
+    """Workday's Field of Study 'will alphabetically return the first 100 results and can also return specified
+    matches': typing alone leaves the A-to-C start on screen, and a subject further down ('Electrical Engineering', the
+    Analog Devices Bachelor's) appears only once Enter submits the search. The first entry's 'Computer Science' sits in
+    the first hundred, which is why only the second entry failed."""
+    page.set_content('''<div><h4>Education</h4>
+      <label for="education-1--fieldOfStudy">Field of Study*</label>
+      <div data-automation-id="multiSelectContainer"><div data-automation-id="monikerSearchBox">
+        <input id="education-1--fieldOfStudy" data-uxi-widget-type="selectinput" data-uxi-multiselect-id="field-picker"
+          onkeydown="if(event.key==='Enter'){window.fieldSearch(this.value);event.preventDefault();}">
+      </div><span data-automation-id="selectedItem"></span>
+      <div id="results" data-automation-id="responsiveMonikerPrompt" data-associated-widget="field-picker"></div>
+      </div></div><script>
+        const box=document.getElementById('results');
+        const show=labels=>{box.innerHTML='';labels.forEach(label=>{const row=document.createElement('div');
+          row.setAttribute('data-automation-id','promptOption');row.setAttribute('data-automation-label',label);
+          row.textContent=label;
+          row.onclick=()=>{document.querySelector('[data-automation-id=selectedItem]').textContent=label;
+            document.querySelector('input').value='';box.hidden=true;};box.appendChild(row);});};
+        show(['Accounting','Actuarial Science','Advertising']);
+        window.fieldSearch=q=>show(/electrical/i.test(q)?['Electrical Engineering','Electrical Engineering Technology']:[]);
+      </script>''')
+    a = _agent()
+    control = next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.role == "textbox")
+    assert a.do(page, page_agent.Answer(control.ref, control.question, "fill", "Electrical Engineering", "profile.education"), control)
+    assert page.locator("[data-automation-id=selectedItem]").inner_text() == "Electrical Engineering"

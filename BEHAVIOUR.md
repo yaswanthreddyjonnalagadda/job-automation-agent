@@ -1641,7 +1641,8 @@ or select "Other" for a school the list lacks -- in any wording ("not listed", "
 pre-populated list", f332). Before, only two wordings were recognised, so a third (Analog Devices) searched for the
 school alone and left the School, Degree and Field of Study of that entry failing. The section is read even when the
 site gives it no accessible name. The country that follows "Other" is answered like any other question on that entry,
-from the country in your education details (not changed here).
+from the country in your education details: the school is chosen as "Other Institution - <your school's country>". A Field of Study
+beyond the first hundred rows of the list is found by submitting the search (Enter) when typing alone does not show it.
 
 ## "Yes, without restrictions" or "Yes, with company sponsorship" (f184)
 

@@ -966,7 +966,11 @@ class WorkdayAdapter(SiteAdapter):
                     # Some school catalogues fetch only after an explicit
                     # search submission. Enter here requests results; the
                     # matching row must still be clicked and verified below.
-                    if id_suffix.endswith("--school"):
+                    # Field of Study too (f332): its list "will alphabetically return the first 100 results and can also
+                    # return specified matches", so a subject past the first hundred ("Electrical Engineering") shows
+                    # only after Enter submits the search.
+                    if id_suffix.endswith(("--school", "--fieldOfStudy")):
+                        import option_match
                         prompt = page.locator(
                             f'[data-automation-id="responsiveMonikerPrompt"][data-associated-widget={json.dumps(multiselect_id)}]')
                         root = prompt if prompt.count() else page
@@ -979,6 +983,7 @@ class WorkdayAdapter(SiteAdapter):
                             not has_real_rows
                             or (field.get_attribute("enterkeyhint") or "").lower() == "search"
                             or bool(re.search(r"press\s+Enter\s+to\s+search", self._education_text(page), re.I))
+                            or (id_suffix.endswith("--fieldOfStudy") and option_match.best_option(visible_rows, cand) is None)
                         )
                         if needs_enter:
                             field.press("Enter")
