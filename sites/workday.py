@@ -988,7 +988,15 @@ class WorkdayAdapter(SiteAdapter):
                             not has_real_rows
                             or (field.get_attribute("enterkeyhint") or "").lower() == "search"
                             or bool(re.search(r"press\s+Enter\s+to\s+search", self._education_text(page), re.I))
-                            or (id_suffix.endswith("--fieldOfStudy") and option_match.best_option(visible_rows, cand) is None)
+                            or (
+                                id_suffix.endswith("--fieldOfStudy")
+                                and option_match.best_option(visible_rows, cand) is None
+                                and (
+                                    bool(page.locator('[data-automation-id="monikerSearchBox"]').filter(has=field).count())
+                                    or bool(re.search(r"first 100 results|press\s+Enter\s+to\s+search", self._education_text(page), re.I))
+                                    or bool(page.locator('button:has-text("first 100 results"), [aria-label*="first 100 results"]').count())
+                                )
+                            )
                         )
                         if needs_enter:
                             field.press("Enter")
