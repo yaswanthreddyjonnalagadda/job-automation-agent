@@ -31,42 +31,33 @@ def _parse_simple_yaml(text: str) -> Dict[str, Any]:
     except ImportError:
         pass
     data: Dict[str, Any] = {}
-    current_section = None
+    current_key = None
     for line in text.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        indent = len(line) - len(line.lstrip())
         if stripped.startswith("- "):
             val = stripped[2:].strip().strip('"').strip("'")
-            target = data.get(current_section) if current_section in data and isinstance(data[current_section], list) else None
-            if target is None:
-                data[current_section] = [val]
-            else:
-                target.append(val)
+            if current_key:
+                if not isinstance(data.get(current_key), list):
+                    data[current_key] = []
+                data[current_key].append(val)
         elif ":" in stripped:
             k, _, v = stripped.partition(":")
             k = k.strip()
             v = v.strip().strip('"').strip("'")
-            parsed_val: Any = v
+            current_key = k
             if v:
                 if v.isdigit():
-                    parsed_val = int(v)
+                    data[k] = int(v)
                 elif v.lower() == "true":
-                    parsed_val = True
+                    data[k] = True
                 elif v.lower() == "false":
-                    parsed_val = False
-
-            if indent > 0 and current_section:
-                if not isinstance(data.get(current_section), dict):
-                    data[current_section] = {}
-                data[current_section][k] = parsed_val
-            else:
-                current_section = k
-                if v:
-                    data[k] = parsed_val
+                    data[k] = False
                 else:
-                    data[k] = {}
+                    data[k] = v
+            else:
+                data[k] = []
     return data
 
 
@@ -142,10 +133,7 @@ def score_job(job: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> 
 
     # 3. Salary match (0-15 points)
     salary_cfg = prof.get("salary_range", {})
-    if isinstance(salary_cfg, dict):
-        min_target = salary_cfg.get("min", 120000)
-    else:
-        min_target = prof.get("min", 120000)
+    min_target = salary_cfg.get("min", 120000)
     job_min = job.get("salary_min")
     job_max = job.get("salary_max")
 

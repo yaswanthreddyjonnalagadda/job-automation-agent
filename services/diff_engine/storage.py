@@ -271,3 +271,4 @@ class JobStorage:
             cur = self._conn.cursor()
             cur.execute(sql, tuple(params))
 
+
