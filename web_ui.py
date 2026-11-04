@@ -1770,6 +1770,9 @@ def _rest_line(runs: dict) -> str:
     return f"Last run: {run.get('state') or 'ended'}" + (f" · {who}" if who else "")
 
 
+_WAITING_NOTE_STALE_AFTER_SECONDS = 300.0
+
+
 def waiting_runs(data_dir: Path) -> list[dict]:
     """The runs waiting for the owner, each with the signal file its Continue writes and a readable label.
 
@@ -1778,6 +1781,13 @@ def waiting_runs(data_dir: Path) -> list[dict]:
     Continue button at all (Rackspace, 29 September)."""
     found = []
     for note in sorted(Path(data_dir).glob("_waiting_*.txt")):
+        # A live run touches its note every poll; a note untouched for five minutes
+        # belongs to a dead run, and offering Continue on it strands the owner.
+        try:
+            if time.time() - note.stat().st_mtime > _WAITING_NOTE_STALE_AFTER_SECONDS:
+                continue
+        except OSError:
+            continue
         name = note.name.replace("_waiting_", "", 1)
         label = name[:-4].replace("_", " ")
         try:

@@ -240,6 +240,16 @@ def waiting_note_for(signal_path: Path) -> Path:
     return note if note != signal_path else signal_path.with_name("_waiting_" + signal_path.name)
 
 
+def _touch_waiting_note(signal_path) -> None:
+    """Refreshes the waiting note timestamp: proof its run is still alive (a dead run fossilizes)."""
+    try:
+        note = waiting_note_for(signal_path)
+        if note.exists():
+            note.touch()
+    except OSError as _swallowed:
+        logger.debug("_touch_waiting_note: %s", diagnostics.short_exc(_swallowed, 100))
+
+
 POSTING_WORDS = re.compile(
     r"responsibilities|qualifications|requirements|job description|about the (role|job|position)|"
     r"what you('ll| will) do|who you are|job (id|number|requisition)|posted",
@@ -258,6 +268,24 @@ def looks_like_posting_text(text: str) -> bool:
     text = text or ""
     return bool(POSTING_WORDS.search(text)) and not APPLICATION_REVIEW_WORDS.search(text)
 
+
+def _type_password_box_until_kept(page, box, password: str, tries: int = 3) -> bool:
+    """Types the password into one box until a read-back shows it kept, or the tries run out.
+
+    Some forms (observed: Workday) drop keystrokes that arrive before their script is ready;
+    a single type-and-read mistook that for a refusal and stopped the run. Retries retype
+    from a cleared box; the value itself is never logged.
+    """
+    for _ in range(max(1, tries)):
+        box.click()
+        box.press("Control+A")
+        box.press("Backspace")
+        box.press_sequentially(password, delay=25)
+        box.press("Tab")
+        page.wait_for_timeout(250)
+        if (box.input_value() or "") == password:
+            return True
+    return False
 
 class JobApplicationAssistant(EmailVerificationMixin):
     """One instance = one long-lived, visible browser session that persists
@@ -5469,13 +5497,9 @@ class JobApplicationAssistant(EmailVerificationMixin):
             if not self._email_kept(self._email_boxes(page) or email_fields, email):
                 logger.warning("ACCOUNT_CREATE_FAILED: the email box did not keep the address -- not submitting")
                 return self._account_form_failed("the email box did not keep the address typed into it")
-            for box in pw_fields:
-                box.click()
-                box.press("Control+A")
-                box.press("Backspace")
-                box.press_sequentially(password, delay=25)
-                box.press("Tab")
-                page.wait_for_timeout(250)
+            for index, box in enumerate(pw_fields, start=1):
+                if not _type_password_box_until_kept(page, box, password):
+                    return self._account_form_failed(f"password box {index} did not keep its entry")
             password_values = [(box.input_value() or "") for box in pw_fields]
             if not self._password_pair_matches(password_values, password):
                 logger.warning("ACCOUNT_CREATE_FAILED: password confirmation did not retain both entries")
@@ -7890,6 +7914,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 break
             self._sleep_for_phone(poll_seconds, page)
             waited += poll_seconds
+            _touch_waiting_note(signal_path)
             # Checked first: the page checks below can `continue`, and a skipped
             # timeout left a run on a sign-in page waiting forever.
             if waited >= timeout_seconds:

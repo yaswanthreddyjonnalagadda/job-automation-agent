@@ -11,7 +11,7 @@ Whenever **Claude Code**, **Codex**, or **Antigravity** starts a task in this re
 
 1. **Run the Pre-Flight Status Check First (`python scripts/agent_status.py`)**:
    - At the start of every session or task, run `python scripts/agent_status.py`.
-   - It reports in `<0.5s`: current branch & recent commits, **uncommitted working-tree files**, **pending branches & stashes**, the **latest failure ID (`fNNN`)**, **pending/stopped applications in `data/applications.db`**, the **latest saved page run in `output/`**, and the **open backlog items** in this file.
+   - It reports in `<0.5s`: current branch & recent commits, **uncommitted working-tree files**, **pending branches & stashes**, the **latest failure ID (`fNNN`)**, **pending/stopped applications on the live tracker** (SQLite shadow only as a labelled fallback -- f329), the **latest saved page run in `output/`**, and the **open backlog items** in this file.
    - **Never revert or overwrite another agent's in-flight edits** (`git checkout`, `git restore`, etc.). If another agent has staged or unstaged work, read `git diff` and build on top of it cleanly.
    - Check the highest failure number in `reference/failures/f*.json` (reported by `agent_status.py`) before assigning a new `fNNN` ID so two agents never collide.
 
@@ -49,6 +49,8 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 ---
 
 ## 3. Current Repository State
+
+- **Muse: Analog run resolution + discovery tracker split (3 November 2026, f329-f331)**: Analog Devices pg #641 is the only live pending row (needs_user_review, `account_creation_dispatched` marker from the f310 honeypot refusal blocks retries by design; owner must verify account existence + press Continue on a fresh run -- runs 0957-2150 each re-stopped correctly). Discovery guarded+registered against the SQLite shadow while runs/dashboard track Postgres: queue/scan/list now use tracking.open_tracker (f329, +scripts/rekey_f329.py run on the 5 shadow rows, backup kept; shadow rows left inert, DO NOT delete -- sqlite #134 Palantir review state lives only there); passwords retype-until-settled x3 (f330); waiting notes heartbeat with 5-min staleness filter (f331); agent_status reads live-first; tests default TRACKER=sqlite. Tests: test_queue_live_tracker (4) + queue_identity/password_settle/heartbeat + neighbours green. Branch `feat/muse-f312-f328-discovery-dashboard` (commit 90e0e26 + uncommitted f329-f331), push/PR still blocked on expired gh token. Next failure ID `f332`.
 
 - **Muse: employer inbox Slice 5 (3 November 2026, f328)**: RESURRECTION -- f321's signals never survived: `EVENT_KINDS` rewrote `employer_email` to `other` and the message (carrying the signal) is always replaced, proven by round-trip; the f321 test used a fake tracker. Now the kind + `signal` enum survive sanitization (free text still cannot pass), detail History reads the word, both trackers gained `recent_employer_signals` (Postgres mirrors SQLite; no server here, needs CI/owner run), and the dashboard lists the newest ten with links. The f321 test's message-shape assertion updated to the payload contract with rationale. Tests: `tests/test_employer_inbox.py` (9 pass). Next failure ID `f329`. Still on branch `fix/honeypot-account-creation`, uncommitted, owner to review/commit.
 

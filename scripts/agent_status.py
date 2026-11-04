@@ -89,29 +89,46 @@ def main() -> int:
     else:
         print("\n[4] FAILURE CATALOGUE: none found")
 
-    # 5. Pending Application Runs & Unanswered Questions (Fast SQLite direct read)
-    db_path = ROOT / "data" / "applications.db"
+    # 5. Pending Application Runs & Unanswered Questions (live tracker first: the SQLite
+    # applications table is a fall-back-era shadow that still receives no live writes -- f329)
     print("\n[5] APPLICATION TRACKER & LATEST STOPPED RUNS:")
-    if db_path.is_file():
-        try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1.0)
-            rows = conn.execute(
-                "SELECT status, company, title, COALESCE(notes, '') "
-                "FROM applications ORDER BY updated_at DESC"
-            ).fetchall()
-            conn.close()
-            pending = [
-                r for r in rows
-                if r[0] not in ("submitted", "skipped", "already_applied", "job_not_found")
-            ]
-            print(f"    Total tracked applications: {len(rows)} | Pending/Active: {len(pending)}")
-            for status, company, title, notes in pending[:8]:
-                short_note = " ".join(notes.split())[:110]
-                print(f"    * [{status}] {company} -- {title}")
-                if short_note:
-                    print(f"      reason: {short_note}")
-        except Exception as exc:
-            print(f"    (Could not read data/applications.db: {exc})")
+    rows: list = []
+    stale_shadow = ""
+    try:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        import tracking
+        tracker = tracking.open_tracker()
+        rows = [(a.status, a.company, a.title, a.notes or "") for a in tracker.list_all()]
+    except Exception as exc:
+        stale_shadow = f"live tracker unreachable ({exc}); SQLite shadow below, MAY BE STALE"
+        db_path = ROOT / "data" / "applications.db"
+        if db_path.is_file():
+            try:
+                conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1.0)
+                rows = [
+                    (r[0], r[1], r[2], r[3] or "")
+                    for r in conn.execute(
+                        "SELECT status, company, title, COALESCE(notes, '') "
+                        "FROM applications ORDER BY updated_at DESC"
+                    ).fetchall()
+                ]
+                conn.close()
+            except Exception as exc2:
+                print(f"    (Could not read data/applications.db: {exc2})")
+    if stale_shadow:
+        print(f"    ({stale_shadow})")
+    pending = [
+        r for r in rows
+        if r[0] not in ("submitted", "skipped", "already_applied", "job_not_found",
+                        "rejected", "DISQUALIFIED_POLICY_MISMATCH", "disqualified_policy_mismatch")
+    ]
+    print(f"    Total tracked applications: {len(rows)} | Pending/Active: {len(pending)}")
+    for status, company, title, notes in pending[:8]:
+        short_note = " ".join(notes.split())[:110]
+        print(f"    * [{status}] {company} -- {title}")
+        if short_note:
+            print(f"      reason: {short_note}")
 
     out_dir = ROOT / "output"
     if out_dir.is_dir():

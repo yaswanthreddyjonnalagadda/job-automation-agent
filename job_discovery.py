@@ -17,6 +17,7 @@ import os
 import re
 import sqlite3
 import time
+import tracking
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -546,12 +547,49 @@ def dismiss_discovered_job(job_id: int, db_path=None) -> bool:
         conn.close()
 
 
+def _submitted_cover(tracker) -> tuple[set, set]:
+    """The postings the live tracker already holds a submitted application for: urls, and company/title pairs."""
+    urls, pairs = set(), set()
+    for app in tracker.list_all():
+        if getattr(app, "status", "") not in ("submitted", "already_applied"):
+            continue
+        if (getattr(app, "url", "") or "").strip():
+            urls.add((getattr(app, "url", "") or "").strip())
+        pairs.add((str(getattr(app, "company", "") or "").strip().lower(),
+                   str(getattr(app, "title", "") or "").strip().lower()))
+    return urls, pairs
+
+
+def _covered_by(url, company, title, cover) -> bool:
+    """Whether a posting falls under a submitted cover: same url, or same company and title."""
+    urls, pairs = cover
+    if (url or "").strip() and (url or "").strip() in urls:
+        return True
+    return (str(company or "").strip().lower(), str(title or "").strip().lower()) in pairs
+
+
+def _ingest_status(job, cover) -> str:
+    """A scanned job's initial feed status: 'submitted' when the live tracker already covers it."""
+    if _covered_by(job.get("url"), job.get("company_name"), job.get("job_title"), cover):
+        return "submitted"
+    return "discovered"
+
+
+def _live_submitted(tracker, url, company, title) -> bool:
+    """Whether the live tracker already holds a submitted application for this posting."""
+    return _covered_by(url, company, title, _submitted_cover(tracker))
+
+
 def queue_discovered_job(job_id, db_path=None):
-    """Marks one suggestion queued and registers its application row: one connection, no profile, no resume.
+    """Marks one suggestion queued and registers its application row: no profile, no resume.
 
     Returns the job's details (with ``already_submitted`` when a submitted application already covers it),
     or None when the id is not listed. The dashboard's Apply button and bulk Queue share this; the engine
     method below delegates to it so the notification path queues identically.
+
+    The suggestion feed lives in SQLite, but the guard and the registration go to the live tracker
+    (tracking.open_tracker): runs and the dashboard read only the live copy, so a row registered in the
+    feed file's shadow applications table would be re-queued after submitting and never shown.
     """
     path = Path(db_path) if db_path is not None else DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -562,42 +600,26 @@ def queue_discovered_job(job_id, db_path=None):
         row = conn.execute("SELECT * FROM discovered_jobs WHERE id = ?", (job_id,)).fetchone()
         if not row:
             return None
-        has_apps = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='applications'"
-        ).fetchone() is not None
-        if has_apps:
-            already = conn.execute(
-                """
-                    SELECT id FROM applications
-                    WHERE (url = ? OR (lower(trim(company)) = lower(trim(?)) AND lower(trim(title)) = lower(trim(?))))
-                      AND status IN ('submitted', 'already_applied')
-                    LIMIT 1
-                """,
-                (row["url"], row["company_name"], row["job_title"]),
-            ).fetchone()
-            if already:
-                conn.execute("UPDATE discovered_jobs SET status = 'submitted' WHERE id = ?", (job_id,))
-                conn.commit()
-                item = dict(row)
-                item["already_submitted"] = True
-                return item
+        tracker = tracking.open_tracker(path)
+        if _live_submitted(tracker, row["url"], row["company_name"], row["job_title"]):
+            conn.execute("UPDATE discovered_jobs SET status = 'submitted' WHERE id = ?", (job_id,))
+            conn.commit()
+            item = dict(row)
+            item["already_submitted"] = True
+            return item
         conn.execute("UPDATE discovered_jobs SET status = 'queued' WHERE id = ?", (job_id,))
-        now_iso = datetime.now(timezone.utc).isoformat()
-        try:
-            conn.execute(
-                """
-                    INSERT OR IGNORE INTO applications (
-                        dedup_key, title, company, location, source_site, url, status, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'ready_to_apply', ?, ?)
-                """,
-                (
-                    row["dedup_key"], row["job_title"], row["company_name"],
-                    row["location"], row["ats_type"], row["url"], now_iso, now_iso,
-                ),
-            )
-        except Exception as _swallowed:
-            logger.debug("queue_discovered_job: %s", diagnostics.short_exc(_swallowed, 100))
         conn.commit()
+        # The row carries the run's own key (sha256 of the URL, apply_flow:2006): a discovered-hash key
+        # would leave every handoff, note and checkpoint the run writes under a key with no row.
+        from jd_analyzer import dedup_key_for_url
+        app_key = dedup_key_for_url(row["url"]) if row["url"] else row["dedup_key"]
+        tracker.create(dedup_key=app_key, title=row["job_title"] or "", company=row["company_name"] or "",
+                       location=row["location"] or "", source_site=row["ats_type"] or "", url=row["url"] or "")
+        current = tracker.get(app_key)
+        # create() leaves an existing row's status alone; only a freshly prepared row becomes queued --
+        # re-queueing an application the owner is already reviewing must not drag it back.
+        if current is not None and (current.status or "") == "prepared":
+            tracker.update_status(app_key, "ready_to_apply")
         item = dict(row)
         try:
             item["matched_skills"] = json.loads(item.get("matched_skills") or "[]")
@@ -664,6 +686,15 @@ class JobDiscoveryEngine:
         ensure_discovery_schema(conn)
         return conn
 
+    @property
+    def _live_tracker(self):
+        """The applications tracker runs and the dashboard read (lazily opened: tests point it at a temp file)."""
+        tracker = getattr(self, "_tracker", None)
+        if tracker is None:
+            tracker = tracking.open_tracker(self.db_path)
+            self._tracker = tracker
+        return tracker
+
     def get_target_companies(self) -> list[dict[str, str]]:
         """The owner's own list, then the multinational employers the project ships with (reference/employers.json),
         then every employer an application was already made through (Workday, Ashby, iCIMS, Greenhouse and Lever
@@ -689,6 +720,9 @@ class JobDiscoveryEngine:
         stats = {"companies_scanned": 0, "total_jobs_seen": 0, "relevant_jobs_saved": 0, "expired": 0,
                  "boards_failed": 0}
         still_listed: dict[str, set[str]] = {}      # board token -> keys that listed and qualified in this scan
+        # What the live tracker already holds submitted, read once: a scanned job it covers is stored
+        # 'submitted', never re-offered. The feed file's own shadow applications table is not consulted.
+        submitted_cover = _submitted_cover(self._live_tracker)
 
         titles = list(self.profile.get("target_titles") or [])
         home_country = self.profile.get("country_code", "") or ""
@@ -766,18 +800,7 @@ class JobDiscoveryEngine:
                     )
                     still_listed.setdefault(job["company_token"], set()).add(dedup_key)
 
-                    # Check if already submitted or applied
-                    has_apps = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='applications'").fetchone() is not None
-                    init_status = 'discovered'
-                    if has_apps:
-                        already = conn.execute("""
-                            SELECT 1 FROM applications 
-                            WHERE (url = ? OR (lower(trim(company)) = lower(trim(?)) AND lower(trim(title)) = lower(trim(?))))
-                              AND status IN ('submitted', 'already_applied')
-                            LIMIT 1
-                        """, (job["url"], job["company_name"], job["job_title"])).fetchone()
-                        if already:
-                            init_status = 'submitted'
+                    init_status = _ingest_status(job, submitted_cover)
 
                     cur = conn.execute("""
                         INSERT INTO discovered_jobs (
@@ -863,19 +886,9 @@ class JobDiscoveryEngine:
         country is not fetched for any country)."""
         conn = self._get_connection()
         try:
-            # Exclude positions that are already submitted or already applied in applications
-            has_apps = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='applications'").fetchone() is not None
-            sub_filter = ""
-            if has_apps and hide_applied:
-                sub_filter = """
-                    AND url NOT IN (SELECT url FROM applications WHERE status IN ('submitted', 'already_applied'))
-                    AND NOT EXISTS (
-                        SELECT 1 FROM applications a 
-                        WHERE a.status IN ('submitted', 'already_applied')
-                          AND lower(trim(a.company)) = lower(trim(discovered_jobs.company_name))
-                          AND lower(trim(a.title)) = lower(trim(discovered_jobs.job_title))
-                    )
-                """
+            # Already-submitted postings hide by the LIVE tracker's cover, filtered in Python after the
+            # query (like within_hours): the feed file's shadow applications table is not consulted.
+            hide_cover = _submitted_cover(self._live_tracker) if hide_applied else None
             country_filter, query_params = "", [min_score, status]
             if country_code:
                 country_filter = "AND country_code = ?"
@@ -890,7 +903,8 @@ class JobDiscoveryEngine:
                 remote_filter = "AND is_remote = 1"
             elif remote_only is False:
                 remote_filter = "AND is_remote = 0"
-            query_params.extend([-1 if within_hours is not None else limit, offset])
+            unbounded = within_hours is not None or hide_cover is not None
+            query_params.extend([-1 if unbounded else limit, 0 if hide_cover is not None else offset])
             rows = conn.execute(f"""
                 SELECT id, dedup_key, company_name, ats_type, job_title, location,
                        is_remote, url, match_score, matched_skills, status, discovered_at,
@@ -898,13 +912,17 @@ class JobDiscoveryEngine:
                        country_code, readiness_json
                 FROM discovered_jobs
                 WHERE match_score >= ? AND status = ?
-                {sub_filter}
                 {country_filter}
                 {company_filter}
                 {remote_filter}
                 ORDER BY (resume_score IS NULL), resume_score DESC, match_score DESC, discovered_at DESC
                 LIMIT ? OFFSET ?
             """, query_params).fetchall()
+            if hide_cover is not None:
+                rows = [r for r in rows
+                        if not _covered_by(r["url"], r["company_name"], r["job_title"], hide_cover)]
+                if within_hours is None:
+                    rows = rows[offset:offset + limit]
 
             if within_hours is not None:
                 # Only jobs certainly posted inside the window, newest first: a job with no known date is never in it.

@@ -68,25 +68,9 @@ def test_compute_job_hash():
 
 def test_engine_queue_and_dismiss_flow(tmp_path):
     db_file = tmp_path / "test_flow.db"
-    conn = sqlite3.connect(str(db_file))
-    # Create applications table mock
-    conn.execute("""
-        CREATE TABLE applications (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            dedup_key TEXT UNIQUE,
-            title TEXT,
-            company TEXT,
-            location TEXT,
-            source_site TEXT,
-            url TEXT,
-            status TEXT,
-            notes TEXT,
-            created_at TEXT,
-            updated_at TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+    # The live tracker owns the applications schema; the feed never hand-builds it.
+    from job_tracker import JobTracker
+    JobTracker(db_file)
 
     engine = JobDiscoveryEngine(db_path=db_file)
     conn = engine._get_connection()
@@ -118,7 +102,9 @@ def test_engine_queue_and_dismiss_flow(tmp_path):
 
     # Check inserted in applications table
     conn = engine._get_connection()
-    app = conn.execute("SELECT * FROM applications WHERE dedup_key = 'k1'").fetchone()
+    from jd_analyzer import dedup_key_for_url  # row keys match the run scheme (f329)
+    app = conn.execute("SELECT * FROM applications WHERE dedup_key = ?",
+                       (dedup_key_for_url("https://example.com/job1"),)).fetchone()
     assert app is not None
     assert app["title"] == "Senior Network Engineer"
     assert app["status"] == "ready_to_apply"
@@ -129,30 +115,12 @@ def test_engine_queue_and_dismiss_flow(tmp_path):
 def test_already_submitted_jobs_are_excluded_from_discovery_and_queue(tmp_path):
     """Jobs already submitted in applications must never appear in discovered opportunities or queue duplicates."""
     db_file = tmp_path / "test_submitted_exclusion.db"
-    conn = sqlite3.connect(str(db_file))
-    conn.execute("""
-        CREATE TABLE applications (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            dedup_key TEXT UNIQUE,
-            title TEXT,
-            company TEXT,
-            location TEXT,
-            source_site TEXT,
-            url TEXT,
-            status TEXT,
-            notes TEXT,
-            created_at TEXT,
-            updated_at TEXT
-        )
-    """)
-    # Insert an already-submitted Coinbase application
-    conn.execute("""
-        INSERT INTO applications (dedup_key, title, company, url, status, created_at, updated_at)
-        VALUES ('app_cb', 'Senior Network Engineer', 'Coinbase', 'https://example.com/coinbase-job', 'submitted',
-                '2026-10-22T00:00:00Z', '2026-10-22T01:00:00Z')
-    """)
-    conn.commit()
-    conn.close()
+    # The live tracker owns the applications schema; the submitted Coinbase row is seeded through it.
+    from job_tracker import JobTracker
+    tracker = JobTracker(db_file)
+    tracker.create(dedup_key="app_cb", title="Senior Network Engineer", company="Coinbase",
+                   url="https://example.com/coinbase-job")
+    tracker.update_status("app_cb", "submitted")
 
     engine = JobDiscoveryEngine(db_path=db_file)
     conn = engine._get_connection()

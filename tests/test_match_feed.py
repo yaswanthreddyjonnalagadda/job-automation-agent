@@ -7,6 +7,7 @@ Pass several cards at once (queued cards leave the feed and wait under
 Applications, where Start picks them up); the posting link is the card's
 first action. Plain forms still redirect for no-JavaScript.
 """
+import hashlib
 import sqlite3
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -27,19 +28,13 @@ def seed(path, count=3, submitted_urls=()):
             " ?, 90, 't', 't')",
             (f"k{n}", f"Network Engineer {n}", f"https://x.example/{n}"),
         )
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS applications (id INTEGER PRIMARY KEY, dedup_key TEXT, title TEXT,"
-        " company TEXT, location TEXT, source_site TEXT, url TEXT, status TEXT, notes TEXT,"
-        " created_at TEXT, updated_at TEXT)"
-    )
-    for url in submitted_urls:
-        conn.execute(
-            "INSERT INTO applications (dedup_key, title, company, url, status)"
-            " VALUES ('old', 'Network Engineer 1', 'Acme', ?, 'submitted')",
-            (url,),
-        )
     conn.commit()
     conn.close()
+    from job_tracker import JobTracker
+    tracker = JobTracker(path)  # the live tracker owns the applications schema; the feed never hand-builds it
+    for url in submitted_urls:
+        tracker.create(dedup_key=f"old-{url}", title="Network Engineer 1", company="Acme", url=url)
+        tracker.update_status(f"old-{url}", "submitted")
 
 
 def client(monkeypatch, tmp_path, **seed_kw):
@@ -140,8 +135,10 @@ def test_the_engine_queue_still_marks_and_registers(monkeypatch, tmp_path):
     assert queued["matched_skills"] == [] and status_of(db, 1) == "queued"
     conn = sqlite3.connect(db)
     try:
-        app = conn.execute("SELECT status FROM applications WHERE dedup_key = 'k1'").fetchone()
+        # The row carries the run's URL-hash key (f329), not the discovered key.
+        app = conn.execute("SELECT status, dedup_key FROM applications").fetchone()
         assert app[0] == "ready_to_apply"
+        assert app[1] == hashlib.sha256(b"https://x.example/1").hexdigest()
     finally:
         conn.close()
 

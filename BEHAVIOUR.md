@@ -1999,3 +1999,13 @@ A page headed "Review your application" (or "Review and submit", "Review") with 
 application, whatever its forward button is called (Continue, Next, Submit): the agent stops there and hands it to you, and the
 button is yours to press. Walmart's review page was pressed through as an ordinary "Continue" and the application was sent
 without your pause (f277).
+
+A posting you already submitted never comes back as a suggestion and can no longer be queued again: the feed,
+the scan, and the queue all ask the same live tracker the dashboard and the runs use, instead of a stale copy
+that still listed submitted postings as ready (f329).
+
+When a site drops keystrokes while its password boxes still render, the agent retypes the box from cleared and
+checks it settled, up to three tries, instead of stopping at the first empty read (f330).
+
+Continue is offered only while its run is actually waiting: a run proves it is alive every few seconds, and a
+waiting card whose run died quietly stops offering a button nobody would read (f331).
