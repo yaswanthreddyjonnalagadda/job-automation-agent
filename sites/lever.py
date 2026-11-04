@@ -17,5 +17,4 @@ from .base import SiteAdapter
 class LeverAdapter(SiteAdapter):
     name = "lever"
     hosts = ("lever.co",)
-    confirmation_phrases = ("thank you for applying", "application received")
     portal_list_patterns = ()

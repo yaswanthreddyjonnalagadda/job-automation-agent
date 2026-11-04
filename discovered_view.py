@@ -4,10 +4,17 @@ Display only: nothing here changes a job, a tracker record or a decision. The tr
 """
 from __future__ import annotations
 
+import diagnostics
+import json
+import logging
 import math
 import re
 from datetime import datetime, timezone
 from typing import Iterable, Optional
+
+import readiness
+
+logger = logging.getLogger(__name__)
 
 NEW_WITHIN_DAYS = 3
 _SPLIT_LOCATIONS = re.compile(r"\s*(?:;|\||\s/\s|\sor\s)\s*", re.IGNORECASE)
@@ -80,6 +87,28 @@ def posted_label(posted_at, precision, now: Optional[datetime] = None) -> str:
     return f"posted {int(hours // 24)} days ago"
 
 
+def _day(moment) -> str:
+    return f"{moment.day} {moment.strftime('%b %Y')}"
+
+
+def age_title(discovered_at, posted_at) -> str:
+    """The card's age tooltip: the day the scan found the job and, when the site dated it, the day it was
+    posted.
+    """
+    found = _parsed(discovered_at) if discovered_at else None
+    posted = _parsed(posted_at) if posted_at else None
+    if found is None and posted is None:
+        return ""
+    if found is not None and posted is not None and found.date() == posted.date():
+        return f"Found {_day(found)}"
+    bits = []
+    if found is not None:
+        bits.append(f"Found {_day(found)}")
+    if posted is not None:
+        bits.append(f"Posted {_day(posted)}")
+    return " \u00b7 ".join(bits)
+
+
 def short_location(location, is_remote=False) -> tuple[str, int]:
     """(first place, how many more) for a long list; a bare 'Remote' entry is dropped when the Remote tag shows."""
     places = [p for p in _SPLIT_LOCATIONS.split(str(location or "")) if p.strip()]
@@ -108,6 +137,17 @@ def _one_per_role(jobs: Iterable[dict]) -> list[dict]:
     return out
 
 
+def readiness_line(stored) -> Optional[str]:
+    """The card's readiness line from the stored assessment, or None when unchecked."""
+    if not stored:
+        return None
+    try:
+        return readiness.summarize(json.loads(stored))
+    except (ValueError, TypeError) as _swallowed:
+        logger.debug("readiness_line: %s", diagnostics.short_exc(_swallowed, 100))
+        return None
+
+
 def prepare(jobs: Iterable[dict], applications: Iterable, now: Optional[datetime] = None,
             newest_first: bool = False) -> list[dict]:
     """The suggested jobs as the page shows them: nothing the owner has already dealt with, one card per role, the best
@@ -119,7 +159,9 @@ def prepare(jobs: Iterable[dict], applications: Iterable, now: Optional[datetime
         job.setdefault("resume_missing", [])
         found, job["is_new"] = posting_age(job.get("discovered_at"), now)
         job["age"] = posted_label(job.get("posted_at"), job.get("posted_precision"), now) or found
+        job["age_title"] = age_title(job.get("discovered_at"), job.get("posted_at"))
         job["place"], job["more_places"] = short_location(job.get("location"), job.get("is_remote"))
+        job["readiness"] = readiness_line(job.get("readiness_json"))
         shown.append(job)
     if newest_first:
         shown.sort(key=lambda j: str(j.get("posted_at") or ""), reverse=True)

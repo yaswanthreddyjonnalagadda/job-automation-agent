@@ -14,6 +14,7 @@ answer bank rebuilt from the smaller one). Set TRACKER=sqlite to use SQLite on p
 """
 from __future__ import annotations
 
+import diagnostics
 import os
 import logging
 
@@ -26,7 +27,7 @@ def chosen() -> str:
         from dotenv import load_dotenv
         load_dotenv()
     except Exception as _swallowed:
-        logger.debug("chosen: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+        logger.debug("chosen: %s", diagnostics.short_exc(_swallowed, 100))
     wanted = (os.getenv("TRACKER") or "").strip().lower()
     if wanted in ("postgres", "sqlite"):
         return wanted
@@ -48,7 +49,7 @@ def open_tracker(db_path=None):
         return db.get_tracker()
     except Exception as exc:
         if db.is_transient_connection_error(exc):
-            raise RuntimeError(f"Postgres is configured but not reachable: {str(exc).splitlines()[0][:120]}. "
+            raise RuntimeError(f"Postgres is configured but not reachable: {diagnostics.short_exc(exc, 120)}. "
                                "Start it with `docker compose up -d`, or set TRACKER=sqlite to use SQLite "
                                "on purpose.") from exc
         raise RuntimeError(f"Postgres tracking failed; refusing to fall back to SQLite: {exc}") from exc

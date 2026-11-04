@@ -6,6 +6,7 @@ same names that call these, so callers and tests are unchanged.
 """
 from __future__ import annotations
 
+import diagnostics
 import logging
 import os
 import re
@@ -56,7 +57,7 @@ def agent_chrome_pids(profile_dir) -> set[int]:
             capture_output=True, text=True, timeout=15)
         return {int(x) for x in res.stdout.strip().split(",") if x.strip().isdigit()}
     except Exception as _swallowed:
-        logger.debug("Could not list the agent's Chrome processes: %s", str(_swallowed).splitlines()[0][:80])
+        logger.debug("Could not list the agent's Chrome processes: %s", diagnostics.short_exc(_swallowed, 80))
         return set()
 
 

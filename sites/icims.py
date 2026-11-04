@@ -9,6 +9,7 @@ all candidate interaction must be scoped to the iCIMS iframe.
 
 from __future__ import annotations
 
+import diagnostics
 import logging
 import re
 from pathlib import Path
@@ -22,13 +23,6 @@ logger = logging.getLogger("sites.icims")
 class IcimsAdapter(SiteAdapter):
     name = "icims"
     hosts = ("icims.com", "icims.eu")
-    confirmation_phrases = (
-        "thank you for submitting your application",
-        "your application has been submitted",
-        "your profile has been successfully submitted",
-        "application submitted",
-        "thank you for your interest",
-    )
     portal_list_patterns = ("/jobs/my-profile", "/jobs/dashboard", "/dashboard")
 
     def dismiss_optional_passkey_enrollment(self, page) -> bool:
@@ -137,7 +131,7 @@ class IcimsAdapter(SiteAdapter):
             if uploaded.count() > 0:
                 return False
         except Exception as _swallowed:
-            logger.debug("attachment_is_empty: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("attachment_is_empty: %s", diagnostics.short_exc(_swallowed, 100))
         return None
 
     def candidate_account_state(self, page) -> str:
@@ -166,6 +160,6 @@ class IcimsAdapter(SiteAdapter):
                     from interaction import type_text
                     type_text(login_box, email)
         except Exception as _swallowed:
-            logger.debug("create_account_extras: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("create_account_extras: %s", diagnostics.short_exc(_swallowed, 100))
 
 

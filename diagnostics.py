@@ -83,6 +83,24 @@ def safe_label(text) -> str:
     return text.strip() if normal in SAFE_LABELS else PLACEHOLDER
 
 
+def short_exc(exc, limit: int = 100) -> str:
+    """An exception as one bounded line for a log: its first line, or the type
+    name when it says nothing (the inline form this replaces raised IndexError
+    on an empty message)."""
+    text = str(exc)
+    if not text:
+        return type(exc).__name__
+    return text.splitlines()[0][:limit]
+
+
+def probe(func):
+    """Marks a deliberately silent handler's function: a probe whose failure is
+    the answer (False/None/continue), not a swallowed error. The
+    no-silent-handlers audit exempts @probe functions; anything else must log
+    or raise."""
+    return func
+
+
 def sanitize_dom(raw: str, context: PrivacyContext | None = None) -> str:
     soup = BeautifulSoup(raw, 'html.parser')
     for node in list(soup.find_all('script style template noscript meta link iframe object embed svg canvas img video audio'.split())):
@@ -238,6 +256,8 @@ EVENT_ENUMS = {
                      'blocked_validation_loop','no_sponsorship'},
     'portal': {'workday','greenhouse','lever','ashby','successfactors','icims','unknown',
                'amazon','eightfold','generic'},
+    'signal': {'rejection','offer','interview','assessment','verification','recruiter','reminder',
+               'confirmation'},
 }
 
 
@@ -733,7 +753,7 @@ class PrivateRunLog:
             self.text = self.text[-TEXT_LIMIT//2:]
         write_safe_text(self.path,self.text)
 
-EVENT_KINDS = frozenset("note status status_change error evidence auto_submit resume_attached action_outcome_unknown action_validation_failed handoff_started handoff_required other".split())
+EVENT_KINDS = frozenset("note status status_change error evidence auto_submit resume_attached action_outcome_unknown action_validation_failed handoff_started handoff_required employer_email other".split())
 
 
 def sanitize_event(event):

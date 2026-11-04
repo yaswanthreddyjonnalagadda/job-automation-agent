@@ -34,6 +34,7 @@ The decisions built on this live in safety.py. This module only observes.
 
 from __future__ import annotations
 
+import diagnostics
 import logging
 from typing import Any, Optional
 
@@ -128,7 +129,7 @@ def set_agent_busy(page: Any, busy: bool) -> None:
         try:
             frame.evaluate("b => { if (window.__jaaProvenance) window.__jaaProvenance.agentBusy = b; }", bool(busy))
         except Exception as _swallowed:
-            logger.debug("set_agent_busy: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("set_agent_busy: %s", diagnostics.short_exc(_swallowed, 100))
 
 
 def owner_edited(target: Any, selector: str = "") -> Optional[bool]:
@@ -172,5 +173,5 @@ def _frames(page: Any) -> list:
         try:
             return list(frames)
         except Exception as _swallowed:
-            logger.debug("_frames: %s", str(_swallowed).splitlines()[0][:100] if str(_swallowed) else type(_swallowed).__name__)
+            logger.debug("_frames: %s", diagnostics.short_exc(_swallowed, 100))
     return [page]

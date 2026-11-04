@@ -23,6 +23,5 @@ logger = logging.getLogger("browser_automation")
 class AshbyAdapter(SiteAdapter):
     name = "ashby"
     hosts = ("ashbyhq.com",)
-    confirmation_phrases = ("application was successfully submitted", "thanks for applying")
     portal_list_patterns = ("/applications",)
 

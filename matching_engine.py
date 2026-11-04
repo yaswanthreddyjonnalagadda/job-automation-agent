@@ -33,6 +33,11 @@ _CLEARANCE = re.compile(
 )
 _ONSITE = re.compile(r"\b(?:on-?site|in[- ]office|in[- ]person)\b", re.IGNORECASE)
 _REMOTE = re.compile(r"\bremote\b|\bwork from home\b|\banywhere\b", re.IGNORECASE)
+_RIGHTS = re.compile(
+    r"\b(?:must be (?:based|located) in|based in|located in|reside in|residing in|live in|work in|"
+    r"authorized to work in|authorised to work in|eligible to work in)\b(.{1,80}?)(?:\.|;|,|\n|$)",
+    re.IGNORECASE,
+)
 _PREFERRED_HEAD = re.compile(
     r"^\W*(?:preferred|nice to have|bonus|a plus|desired|good to have|"
     r"preferred qualifications|what would make you stand out)\b.*$",
@@ -63,6 +68,34 @@ class MatchResult:
     summary: str = ""
 
 
+def _rights_country(fragment: str):
+    import geo_reference
+    cleaned = re.sub(r"^(the|a)\s+", "", (fragment or "").strip(), flags=re.IGNORECASE)
+    words = cleaned.split()
+    for end in range(len(words), 0, -1):
+        phrase = " ".join(words[:end])
+        code = geo_reference.country_code(phrase) or geo_reference.city_country(phrase)
+        if code:
+            return code
+    return None
+
+
+def _work_rights_exclusion(text: str, profile: Any) -> Optional[str]:
+    """A posting that demands presence or work rights in a country the owner cannot work in is out ("must be
+    based in India", "must reside in Canada"); one that names an accepted country -- or no resolvable country
+    at all ("work in a fast-paced team") -- passes."""
+    accepted = [c for c in (_get(profile, "accepted_country_codes", None)
+                            or [_get(profile, "country_code", "")]) if c]
+    if not accepted:
+        return None
+    for match in _RIGHTS.finditer(text or ""):
+        options = re.split(r",|/|\bor\b|\band\b", match.group(1))
+        codes = {_rights_country(option) for option in options} - {None}
+        if codes and not (codes & set(accepted)):
+            return f"Posting requires presence or work rights in {match.group(1).strip()[:60]}"
+    return None
+
+
 def _get(profile: Any, key: str, default: Any = None) -> Any:
     if isinstance(profile, dict):
         return profile.get(key, default)
@@ -85,6 +118,10 @@ def check_hard_gates(
     clearance = _CLEARANCE.search(text)
     if clearance:
         return False, f"Posting requires a security clearance: {clearance.group(0).strip()[:120]}"
+
+    rights = _work_rights_exclusion(text, profile)
+    if rights:
+        return False, rights
 
     places = [str(p) for p in (_get(profile, "locations", []) or [])]
     where = f"{job_location} {text[:400]}" if job_location else ""

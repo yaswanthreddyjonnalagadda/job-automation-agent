@@ -22,8 +22,6 @@ class SiteAdapter:
     name = "generic"
     # Hosts this adapter recognises (substring match on the URL's host).
     hosts: tuple[str, ...] = ()
-    # Extra wording for a page that confirms an application was received.
-    confirmation_phrases: tuple[str, ...] = ()
     # URL fragments of the candidate's own applications list on this platform.
     portal_list_patterns: tuple[str, ...] = ("/applications", "my-applications", "/dashboard")
     # Values a picker shows while it holds no answer.

@@ -1,0 +1,10 @@
+# Ruff: syntax errors only (E9). The repository's own audit tests already cover
+# what matters here (swallowed exceptions, place literals, catalogue shape,
+# silent handlers, health ratchets); widen this list only after a clean CI
+# run proves the tree passes the new rules. NOTE: `ruff format --check` (in
+# CI) needs one `ruff format` pass first -- run it where ruff installs.
+target-version = "py313"
+line-length = 120
+
+[lint]
+select = ["E9"]

@@ -33,6 +33,7 @@ data/*.doc
 
 # Editor/tool scratch.
 .pytest_cache/
+pytest-of-jonna/
 .hypothesis/
 .vscode/
 
