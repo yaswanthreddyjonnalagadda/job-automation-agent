@@ -4,9 +4,9 @@
   "site": "Workday candidate account creation and sign-in (Analog Devices)",
   "class": "Account creation sign-in fallback paused by new-employer login route when allow_create is false",
   "symptom": "After successfully creating a new ATS account on Workday, the wizard stops with 'sign-in on <host> is paused to protect the account: No account is recorded for this employer, and this login page offers no usable registration path'.",
-  "root_cause": "When Workday left registration and redirected to the Sign-In page, fill_create_account_form did not call remember_account before calling attempt_auto_login(..., create_if_missing=False). In attempt_auto_login, _new_employer_login_route saw that account_confirmed_absent was true and allow_create was false, and falsely asserted that the login page offered no usable registration path, pausing sign-in instead of allowing login with the newly created credentials.",
+  "root_cause": "When Workday left registration and redirected to the Sign-In page, fill_create_account_form calls attempt_auto_login(..., create_if_missing=False). In attempt_auto_login, _new_employer_login_route saw that account_confirmed_absent was true and allow_create was false, and falsely asserted that the login page offered no usable registration path, pausing sign-in instead of allowing login with the newly created credentials.",
   "why_tests_missed": "Existing unverified sign-in tests (test_after_creating_the_account_it_signs_in_with_the_email_and_password) used a test assistant without a tracker attached, so account_confirmed_absent evaluated to false and bypassed _new_employer_login_route.",
-  "fix": "1. In browser_automation.py fill_create_account_form, call self.remember_account(page, email, 'password') as soon as account creation has completed so the new account is recorded on file. 2. In _new_employer_login_route, return None when allow_create is False so caller-directed sign-ins are not falsely blocked.",
+  "fix": "In _new_employer_login_route, return None when allow_create is False so caller-directed sign-ins are not falsely blocked.",
   "tests": [
     "tests/test_account_dialog_scope.py::test_new_employer_login_route_bypassed_when_creation_not_allowed",
     "tests/test_account_email_first.py::test_after_creating_the_account_it_signs_in_with_the_email_and_password"

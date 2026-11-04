@@ -5695,7 +5695,6 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     "ACCOUNT_UNVERIFIED: Workday left registration without Candidate Home or application evidence"
                     " -- signing in with the email and password"
                 )
-                self.remember_account(page, email, "password")
                 # The owner's decision (28 September): sign in once with the email and the password. A code
                 # the site then emails is read by the code step (emailed_codes.why_not decides); a rejection
                 # -- which may only mean the email is not verified yet -- is counted by login_guard and

@@ -52,7 +52,7 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 
 - **Antigravity: Unverified account sign-in paused by new-employer login route (3 November 2026, f311)** (branch `fix/honeypot-account-creation`):
   - **Account Creation Sign-in Fallback Blocked (`browser_automation.py`, f311)**: When Workday created a new account and redirected to the Sign-In page, `fill_create_account_form` did not call `remember_account` before attempting sign-in with `attempt_auto_login(..., create_if_missing=False)`. `_new_employer_login_route` observed `account_confirmed_absent` as True and `allow_create` as False, falsely claiming that the login page offered no usable registration path and pausing sign-in.
-  - **Fix**: 1. `fill_create_account_form` calls `remember_account` once the account form is submitted so the account is saved on file. 2. `_new_employer_login_route` returns `None` when `allow_create` is False so caller-directed sign-ins are permitted.
+  - **Fix**: `_new_employer_login_route` returns `None` when `allow_create` is False so caller-directed sign-ins are permitted.
   - **Tests**: `tests/test_account_dialog_scope.py::test_new_employer_login_route_bypassed_when_creation_not_allowed`, `tests/test_account_email_first.py::test_after_creating_the_account_it_signs_in_with_the_email_and_password`. Next failure ID `f312`.
 
 - **Antigravity: Workday candidate registration honeypot field rejection (3 November 2026, f310)** (branch `fix/honeypot-account-creation`):
