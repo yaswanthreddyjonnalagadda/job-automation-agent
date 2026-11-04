@@ -36,7 +36,11 @@ class ApplicatorRunner:
         cur = self.storage._conn.cursor()
         cur.execute(sql, (today_start,))
         row = cur.fetchone()
-        return (row[0] if isinstance(row, (tuple, list)) else row.get("count", 0)) if row else 0
+        if not row:
+            return 0
+        if isinstance(row, dict):
+            return row.get("count", 0)
+        return row[0]
 
     def run_batch(self, limit: int = 5) -> int:
         apps_today = self.count_today_applications()

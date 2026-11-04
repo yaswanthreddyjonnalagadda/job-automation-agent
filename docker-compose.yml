@@ -10,7 +10,7 @@ services:
     ports:
       - "5433:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - five_services_pgdata:/var/lib/postgresql/data
       - ./migrations:/docker-entrypoint-initdb.d:ro
 
   redis:
@@ -65,4 +65,4 @@ services:
       - ./storage:/app/storage
 
 volumes:
-  pgdata:
+  five_services_pgdata:

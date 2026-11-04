@@ -1,5 +1,5 @@
 """Database storage abstraction for company directory, jobs, and applications.
-Supports PostgreSQL (via psycopg2/psycopg) with automatic SQLite fallback for lightweight testing/local usage.
+Supports PostgreSQL (via psycopg 3) with automatic SQLite fallback for lightweight testing/local usage.
 """
 from __future__ import annotations
 
@@ -20,9 +20,9 @@ class JobStorage:
             self._conn.row_factory = sqlite3.Row
             self._init_sqlite()
         else:
-            import psycopg2
-            from psycopg2.extras import RealDictCursor
-            self._conn = psycopg2.connect(self.dsn, cursor_factory=RealDictCursor)
+            import psycopg
+            from psycopg.rows import dict_row
+            self._conn = psycopg.connect(self.dsn, row_factory=dict_row)
             self._init_postgres()
 
     def _init_sqlite(self):
@@ -125,31 +125,40 @@ class JobStorage:
             "apply_url", "salary_min", "salary_max", "salary_currency",
             "employment_type", "remote", "posted_at", "status"
         ]
-        values = [job.get(k) for k in keys]
         if self.is_sqlite:
+            values = [int(bool(job.get("remote"))) if k == "remote" else job.get(k) for k in keys]
             placeholders = ", ".join(["?"] * len(keys))
-            sql = f"INSERT INTO jobs ({', '.join(keys)}) VALUES ({placeholders})"
+            sql = f"INSERT OR REPLACE INTO jobs ({', '.join(keys)}) VALUES ({placeholders})"
             with self._conn:
                 cur = self._conn.cursor()
                 cur.execute(sql, values)
                 return cur.lastrowid
         else:
+            values = [bool(job.get(k)) if k == "remote" else job.get(k) for k in keys]
             placeholders = ", ".join(["%s"] * len(keys))
-            sql = f"INSERT INTO jobs ({', '.join(keys)}) VALUES ({placeholders}) RETURNING id"
-            with self._conn.cursor() as cur:
-                cur.execute(sql, values)
-                row = cur.fetchone()
-                self._conn.commit()
-                return row["id"] if isinstance(row, dict) else row[0]
+            sql = f"INSERT INTO jobs ({', '.join(keys)}) VALUES ({placeholders}) ON CONFLICT (ats_platform, external_id) DO UPDATE SET updated_at = NOW(), last_seen_at = NOW() RETURNING id"
+            try:
+                with self._conn.cursor() as cur:
+                    cur.execute(sql, values)
+                    row = cur.fetchone()
+                    self._conn.commit()
+                    return row["id"] if isinstance(row, dict) else row[0]
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def mark_removed(self, external_id: str, ats_platform: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
         sql = "UPDATE jobs SET status = 'removed', removed_at = ?, updated_at = ? WHERE external_id = ? AND ats_platform = ?"
-        if not self.is_sqlite:
+        if self.is_sqlite:
+            with self._conn:
+                cur = self._conn.cursor()
+                cur.execute(sql, (now, now, external_id, ats_platform))
+        else:
             sql = sql.replace("?", "%s")
-        with self._conn:
-            cur = self._conn.cursor()
-            cur.execute(sql, (now, now, external_id, ats_platform))
+            with self._conn.cursor() as cur:
+                cur.execute(sql, (now, now, external_id, ats_platform))
+            self._conn.commit()
 
     def bulk_update_last_seen(self, external_ids: Set[str], ats_platform: str) -> None:
         if not external_ids:
@@ -167,11 +176,15 @@ class JobStorage:
     def update_match_score(self, job_id: int, score: float) -> None:
         now = datetime.now(timezone.utc).isoformat()
         sql = "UPDATE jobs SET match_score = ?, matched_at = ?, updated_at = ? WHERE id = ?"
-        if not self.is_sqlite:
+        if self.is_sqlite:
+            with self._conn:
+                cur = self._conn.cursor()
+                cur.execute(sql, (score, now, now, job_id))
+        else:
             sql = sql.replace("?", "%s")
-        with self._conn:
-            cur = self._conn.cursor()
-            cur.execute(sql, (score, now, now, job_id))
+            with self._conn.cursor() as cur:
+                cur.execute(sql, (score, now, now, job_id))
+            self._conn.commit()
 
     def get_unmatched_jobs(self, limit: int = 50) -> List[Dict[str, Any]]:
         sql = "SELECT * FROM jobs WHERE match_score IS NULL AND status = 'active' ORDER BY id ASC LIMIT ?"
@@ -255,20 +268,28 @@ class JobStorage:
             params.append(now)
         sql += " WHERE id = ?"
         params.append(app_id)
-        if not self.is_sqlite:
+        if self.is_sqlite:
+            with self._conn:
+                cur = self._conn.cursor()
+                cur.execute(sql, tuple(params))
+        else:
             sql = sql.replace("?", "%s")
-        with self._conn:
-            cur = self._conn.cursor()
-            cur.execute(sql, tuple(params))
+            with self._conn.cursor() as cur:
+                cur.execute(sql, tuple(params))
+            self._conn.commit()
 
     def update_job_status(self, job_id: int, status: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
         sql = "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?"
         params = [status, now, job_id]
-        if not self.is_sqlite:
+        if self.is_sqlite:
+            with self._conn:
+                cur = self._conn.cursor()
+                cur.execute(sql, tuple(params))
+        else:
             sql = sql.replace("?", "%s")
-        with self._conn:
-            cur = self._conn.cursor()
-            cur.execute(sql, tuple(params))
+            with self._conn.cursor() as cur:
+                cur.execute(sql, tuple(params))
+            self._conn.commit()
 
 

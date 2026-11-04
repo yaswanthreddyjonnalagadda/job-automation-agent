@@ -54,7 +54,7 @@ def poll_lever(company: str, session: Optional[requests.Session] = None) -> List
             "salary_max": None,
             "salary_currency": "USD",
             "employment_type": commitment,
-            "remote": 1 if is_remote else 0,
+            "remote": bool(is_remote),
             "posted_at": item.get("createdAt"),
         })
     return jobs

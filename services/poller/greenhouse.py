@@ -60,7 +60,7 @@ def poll_greenhouse(slug: str, session: Optional[requests.Session] = None) -> Li
             "salary_max": None,
             "salary_currency": "USD",
             "employment_type": "full-time",
-            "remote": 1 if is_remote else 0,
+            "remote": bool(is_remote),
             "posted_at": item.get("updated_at"),
         })
     return jobs

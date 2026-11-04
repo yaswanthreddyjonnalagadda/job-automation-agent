@@ -83,7 +83,7 @@ def poll_workday(board_url: str, max_jobs: int = 100, session: Optional[requests
                 "salary_max": None,
                 "salary_currency": "USD",
                 "employment_type": "full-time",
-                "remote": 1 if is_remote else 0,
+                "remote": bool(is_remote),
                 "posted_at": posted_on,
             })
 

@@ -66,7 +66,7 @@ def poll_ashby(org: str, session: Optional[requests.Session] = None) -> List[Dic
             "salary_max": max_sal,
             "salary_currency": currency,
             "employment_type": employment_type,
-            "remote": 1 if is_remote else 0,
+            "remote": bool(is_remote),
             "posted_at": item.get("publishedAt"),
         })
     return jobs
