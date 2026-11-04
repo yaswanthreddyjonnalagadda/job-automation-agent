@@ -125,3 +125,80 @@ def test_other_named_in_another_section_does_not_count(page):
     page.set_content('<div><h4>Education</h4><p>Enter your school.</p></div>'
                      '<div><h4>Languages</h4><p>Please select “Other” if yours is not shown.</p></div>')
     assert WorkdayAdapter._school_names(Assistant(), "X University", page=page) == ["X University"]
+
+
+# --- "Other" is a family of rows, one per country: "Other Institution - India" -----------------------------------------
+
+from types import SimpleNamespace
+
+import config
+import page_agent
+import safety
+from browser_automation import JobApplicationAssistant
+
+OWNER = SimpleNamespace(
+    education=(("Master's", "Computer Science", "Eastern Illinois University", "2022"),
+               ("Bachelor's", "Electrical and Electronics Engineering", "JNTU Hyderabad", "2019")),
+    education_details=[{"school": "Eastern Illinois University", "country": "United States"},
+                       {"school": "JNTU Hyderabad", "country": "India"}],
+    answer_alternatives={})
+
+
+class Owner(Assistant):
+    _profile = OWNER
+
+
+def test_other_is_offered_first_as_the_row_for_the_schools_own_country():
+    """Analog Devices lists no row called 'Other': typing Other offers 'Other Institution - <Country>' for each country
+    ('then select the appropriate country'). The country is the school's, from the owner's education details."""
+    names = WorkdayAdapter._school_names(Owner(), "JNTU Hyderabad", page=FakePage(OFFERS[0]))
+    assert names == ["JNTU Hyderabad", "Other Institution - India", "Other Institution - Republic of India", "Other"]
+
+
+def test_without_a_country_in_the_details_only_plain_other_is_offered():
+    class NoCountry(Assistant):
+        _profile = SimpleNamespace(education=OWNER.education, education_details=[], answer_alternatives={})
+    names = WorkdayAdapter._school_names(NoCountry(), "JNTU Hyderabad", page=FakePage(OFFERS[0]))
+    assert names == ["JNTU Hyderabad", "Other"]
+
+
+def test_a_school_in_the_list_does_not_get_other_rows():
+    names = WorkdayAdapter._school_names(Owner(), "Eastern Illinois University", page=FakePage(DOES_NOT[0]))
+    assert names == ["Eastern Illinois University"]
+
+
+def _agent():
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant.values = safety.AgentValues()
+    assistant._profile = OWNER
+    return page_agent.PageAgent(assistant, SimpleNamespace(), SimpleNamespace(auto_submit=False),
+                               config.UserProfile(full_name="Example Candidate"),
+                               SimpleNamespace(raw_text=""), SimpleNamespace(url="https://jobs.example.com"))
+
+
+def test_the_school_search_chooses_the_other_institution_row_of_the_right_country(page):
+    page.set_content('''<div><h4>Education</h4>
+      <p>If your institution does not appear in the pre-populated list, type &ldquo;Other,&rdquo; press Enter, and then
+      select the appropriate country.</p>
+      <label for="education-1--school">School or University*</label>
+      <div data-automation-id="multiSelectContainer"><div data-automation-id="monikerSearchBox">
+        <input id="education-1--school" enterkeyhint="search" data-uxi-widget-type="selectinput"
+          data-uxi-multiselect-id="school-picker"
+          onkeydown="if(event.key==='Enter'){window.schoolSearch(this.value);event.preventDefault();}">
+      </div><span data-automation-id="selectedItem"></span>
+      <div id="results" data-automation-id="responsiveMonikerPrompt" data-associated-widget="school-picker"></div>
+      </div></div><script>window.schoolSearch=(query)=>{
+        const box=document.getElementById('results');
+        const rows=/other/i.test(query)?['Other Institution - Armenia','Other Institution - India','Other Institution - Japan']:[];
+        box.innerHTML=rows.length?'':'<div data-automation-id="promptOption">No Items.</div>';
+        rows.forEach(label=>{const row=document.createElement('div');
+          row.setAttribute('data-automation-id','promptOption');row.setAttribute('data-automation-label',label);
+          row.textContent=label;
+          row.onclick=()=>{document.querySelector('[data-automation-id=selectedItem]').textContent=label;
+            document.querySelector('input').value='';box.hidden=true;};
+          box.appendChild(row);});
+      };</script>''')
+    a = _agent()
+    control = next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.role == "textbox")
+    assert a.do(page, page_agent.Answer(control.ref, control.question, "fill", "JNTU Hyderabad", "profile.education"), control)
+    assert page.locator("[data-automation-id=selectedItem]").inner_text() == "Other Institution - India"

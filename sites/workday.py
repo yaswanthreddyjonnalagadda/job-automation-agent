@@ -351,6 +351,15 @@ class WorkdayAdapter(SiteAdapter):
         if page is not None:
             try:
                 if education_text_offers_other(WorkdayAdapter._education_text(page)):
+                    # Analog Devices has no row called "Other": typing it offers "Other Institution - <Country>" for
+                    # every country ("then select the appropriate country"). The school's own country comes from the
+                    # owner's education details; without one, only the plain word is tried.
+                    for row in (getattr(profile, "education_details", None) or ()):
+                        country = str(row.get("country") or "").strip() if isinstance(row, dict) else ""
+                        if country and repeated_entries._identifies(str(row.get("school") or ""), school):
+                            import geo_reference
+                            names += [f"Other Institution - {spelling}" for spelling in geo_reference.country_spellings(country)]
+                            break
                     names.append("Other")
             except Exception as exc:
                 logger.debug("WORKDAY: school Other prompt detection: %s", diagnostics.short_exc(exc, 100))
