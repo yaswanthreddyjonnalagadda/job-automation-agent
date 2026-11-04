@@ -50,6 +50,15 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 
 ## 3. Current Repository State
 
+- **Antigravity: Autonomous 5-Service Architecture Implementation (4 November 2026)** (branch `feat/five-service-architecture`):
+  - **Directory Builder (`services/directory_builder/`)**: Common Crawl index miner (`cdx-api.commoncrawl.org`) for slug extraction across Greenhouse, Lever, Ashby, Workday, SmartRecruiters; bootstrap seed catalog for top employers.
+  - **Poller Service (`services/poller/`)**: Standalone API pollers for Greenhouse, Lever, Ashby, and Workday with polite rate-limiting, concurrency guards, and retry backoff.
+  - **Diff Engine & Storage (`services/diff_engine/`)**: Tracks job lifecycle (new, still_active, removed) in PostgreSQL (`company_directory`, `jobs`, `applications`) with SQLite dual-mode support; updates freshness timestamps.
+  - **Matcher & Tailor (`services/matcher/`)**: 6-stage scoring algorithm against `config/user_profile.yaml` (title, location, salary, keywords, disqualifier check, freshness bonus); Claude API resume tailoring with plain verbs (Developed, Built, Worked; never Spearheaded/Orchestrated) and under-300-word cover letter generator.
+  - **Applicator Runner (`services/applicator/`)**: Queued application dispatcher with rate limiting and screenshot proof hooks.
+  - **Docker Compose (`docker-compose.yml`)**: Multi-container stack (PostgreSQL 16, Redis 7, poller, matcher, applicator) and SQL migrations (`migrations/001_initial_schema.sql`).
+  - Tests: `tests/test_five_services_architecture.py` (7/7 passed).
+
 - **Antigravity: Export control container parsing, foreign PR, J-1 visa, and AI screening consent (4 November 2026, f333)** (branch `fix/export-control-ai-consent-f333`):
   - **Export control country list in group container**: Fixed in `answer_engine.py` by concatenating `ask.container` with question text (`full_text = f"{q} {clean(ask.container)}"`). Countries listed in parent group container labels are now evaluated against applicant citizenship rather than truncating on split nodes.
   - **Foreign PR status and J-1 exchange visitor visa history**: Added explicit handlers in `answer_engine.py` and concepts in `reference/concepts.json` (`FOREIGN_PERMANENT_RESIDENT`, `HELD_J1_VISA`), with profile backing in `config.py` and `data/profile.json` (India citizenship, no foreign PR, no J-1 visa).

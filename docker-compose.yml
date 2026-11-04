@@ -1,31 +1,68 @@
-# Postgres for the job application tracker.
-#
-#   docker compose up -d      start
-#   docker compose down       stop (data survives)
-#   docker compose down -v    stop AND delete all data
-#
-# The password comes from POSTGRES_PASSWORD in .env, which is generated
-# locally and never committed.
 services:
-  db:
-    image: postgres:16
-    container_name: job-agent-db
-    restart: unless-stopped
+  postgres:
+    image: postgres:16-alpine
+    container_name: jobagent_postgres
+    restart: always
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-job_agent}
-      POSTGRES_USER: ${POSTGRES_USER:-job_agent}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${DB_NAME:-jobagent}
+      POSTGRES_USER: ${DB_USER:-agent}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-agent_secret}
     ports:
-      # Bound to loopback on purpose: this database holds the user's resume,
-      # address and phone number, so it must not be reachable from the LAN.
-      - "127.0.0.1:5432:5432"
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-job_agent} -d ${POSTGRES_DB:-job_agent}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+
+  redis:
+    image: redis:7-alpine
+    container_name: jobagent_redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+  poller:
+    build:
+      context: .
+      dockerfile: services/poller/Dockerfile
+    container_name: jobagent_poller
+    depends_on:
+      - postgres
+      - redis
+    restart: always
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-agent}:${DB_PASSWORD:-agent_secret}@postgres:5432/${DB_NAME:-jobagent}
+      REDIS_URL: redis://redis:6379/0
+
+  matcher:
+    build:
+      context: .
+      dockerfile: services/matcher/Dockerfile
+    container_name: jobagent_matcher
+    depends_on:
+      - postgres
+      - redis
+    restart: always
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-agent}:${DB_PASSWORD:-agent_secret}@postgres:5432/${DB_NAME:-jobagent}
+      REDIS_URL: redis://redis:6379/0
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    volumes:
+      - ./storage:/app/storage
+
+  applicator:
+    build:
+      context: .
+      dockerfile: services/applicator/Dockerfile
+    container_name: jobagent_applicator
+    depends_on:
+      - postgres
+      - redis
+    restart: always
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-agent}:${DB_PASSWORD:-agent_secret}@postgres:5432/${DB_NAME:-jobagent}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./storage:/app/storage
 
 volumes:
   pgdata:
