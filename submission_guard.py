@@ -150,6 +150,12 @@ def _guard_script(capability: str) -> str:
         : Array.from(form.elements).some(element => Boolean(finalControl(element)));
       // Account helpers may authorize one dedicated credential form. A label
       // alone never exempts a button from final-submission containment.
+      const isHoneypot = e => /for robots only|do not (?:enter|fill)[^.]{0,30}if you['’ a]re (?:a )?human|leave (?:this (?:field )?)?blank|honeypot/i.test([
+        e.getAttribute('aria-label'), e.name, e.id, e.getAttribute('data-automation-id'),
+        e.placeholder, ...Array.from(e.labels || []).map(l => l.innerText),
+        ...(e.getAttribute('aria-labelledby') || '').split(/\s+/)
+          .map(id => document.getElementById(id)?.innerText || '')
+      ].join(' '));
       const credentialForm = element => element.form || element.closest('form');
       const credentialControl = (element, action) => {
         if (!(element instanceof Element)
@@ -165,7 +171,7 @@ def _guard_script(capability: str) -> str:
         if (controls.some(e => e.matches?.('input[type=file],textarea,select'))
             || form.querySelector('[contenteditable=true]')) return false;
         const inputs = controls.filter(e => e instanceof HTMLInputElement
-          && !e.disabled && e.type !== 'hidden' && e.getClientRects().length);
+          && !e.disabled && e.type !== 'hidden' && e.getClientRects().length && !isHoneypot(e));
         const passwords = inputs.filter(e => e.type === 'password');
         const visibleEmails = inputs.filter(e => e.type !== 'password' && e.type !== 'checkbox'
           && (e.type === 'email' || /e-?mail|user ?name/i.test([
@@ -204,7 +210,7 @@ def _guard_script(capability: str) -> str:
         const controls = [...new Set([...form.elements, ...form.querySelectorAll('[role=button]')])];
         if (form.querySelector('[contenteditable=true]')) return false;
         const inputs = controls.filter(e => e instanceof HTMLInputElement
-          && !e.disabled && e.type !== 'hidden' && e.getClientRects().length);
+          && !e.disabled && e.type !== 'hidden' && e.getClientRects().length && !isHoneypot(e));
         const passwords = inputs.filter(e => e.type === 'password');
         if (passwords.length < 1 || !passwords[0].value) return false;
         if (passwords.length >= 2 && passwords[0].value !== passwords[1].value) return false;

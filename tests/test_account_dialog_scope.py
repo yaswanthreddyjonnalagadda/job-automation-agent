@@ -157,3 +157,13 @@ def test_sign_in_heading_identifies_continue_form(page):
                      '<input type=email><input type=password><button>Continue</button></form></section>')
     assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
     assert assistant._sign_in_scope(page) is not None
+
+
+def test_new_employer_login_route_bypassed_when_creation_not_allowed(page):
+    from browser_automation import JobApplicationAssistant
+
+    page.set_content('<h1>Sign In</h1><form><input type=password><button>Log In</button></form>')
+    assistant = JobApplicationAssistant.__new__(JobApplicationAssistant)
+    assistant.account_on_record = lambda: False
+    assistant.applied_before = lambda: False
+    assert assistant._new_employer_login_route(page, "owner@example.com", allow_create=False) is None

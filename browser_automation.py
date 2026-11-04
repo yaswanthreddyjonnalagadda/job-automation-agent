@@ -5150,7 +5150,9 @@ class JobApplicationAssistant(EmailVerificationMixin):
         """Choose creation or hold when a new employer presents a password page."""
         if not self.account_confirmed_absent():
             return None
-        if allow_create and self._create_account_control(page) is not None:
+        if not allow_create:
+            return None
+        if self._create_account_control(page) is not None:
             return self.create_account_from_link(page, email)
         self._login_paused = ("No account is recorded for this employer, and this login page "
                               "offers no usable registration path")

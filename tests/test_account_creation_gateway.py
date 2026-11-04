@@ -221,3 +221,26 @@ def test_sign_in_gateway_allows_followup_after_prevented_submit(page):
     assert guard.click_account_sign_in(page,page.get_by_role('button',name='LOG IN'))
     page.wait_for_timeout(160)
     assert page.evaluate('window.submits')==1
+
+
+def test_account_creation_permits_form_with_honeypot_field(page):
+    serve(page, '<form onsubmit="window.created=true;return false">'
+          '<input type="text" aria-label="Enter website. This input is for robots only, do not enter if you\'re human.">'
+          '<input type="email" value="alex@example.com">'
+          '<input type="password" value="Synthetic-Password1!">'
+          '<input type="password" value="Synthetic-Password1!">'
+          '<input type="checkbox" checked>'
+          '<button type="submit">Create Account</button></form>')
+    guard=SubmissionGuardV0(page.context)
+    assert guard.click_account_creation(page,page.get_by_role('button',name='Create Account'))
+    assert page.evaluate('window.created')
+
+def test_sign_in_permits_form_with_honeypot_field(page):
+    serve(page, '<form onsubmit="window.signedin=true;return false">'
+          '<input type="text" aria-label="Enter website. This input is for robots only, do not enter if you\'re human.">'
+          '<input type="email" value="alex@example.com">'
+          '<input type="password" value="Synthetic-Password1!">'
+          '<button type="submit">Sign In</button></form>')
+    guard=SubmissionGuardV0(page.context)
+    assert guard.click_account_sign_in(page,page.get_by_role('button',name='Sign In'))
+    assert page.evaluate('window.signedin')
