@@ -1529,10 +1529,28 @@ class WorkdayAdapter(SiteAdapter):
                 logger.warning("No dropdown button with id suffix %r at index %d", id_suffix, index)
                 return False
             question_text = assistant._question_text_for(page, btn)
-            btn.click(timeout=5_000)
+            # Another list left open (Field of Study's, Analog Devices Education 2) sits over this button and made the
+            # plain click time out five times: close whatever is open first, and click through an overlay if one stays.
+            try:
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(200)
+            except Exception as exc:
+                logger.debug("WORKDAY: closing open lists before the dropdown: %s", diagnostics.short_exc(exc, 100))
+            try:
+                btn.click(timeout=5_000)
+            except Exception as exc:
+                logger.info("WORKDAY: plain click on the dropdown failed (%s) -- clicking through", diagnostics.short_exc(exc, 80))
+                if not assistant._click_resiliently(btn):
+                    return False
             page.wait_for_timeout(700)
 
-            options = page.locator("[role='option']")
+            # The rows of the list THIS button opened -- never the "items selected" lists of the School and Field of Study
+            # boxes, whose chosen values are role=option too ("Available: ['Eastern Illinois University']").
+            controlled = (btn.get_attribute("aria-controls") or "").strip()
+            options = page.locator(f"[id={json.dumps(controlled)}] [role='option']") if controlled else page.locator(
+                "[role='listbox']:not([aria-label*='selected']) [role='option']")
+            if controlled and options.count() == 0:
+                options = page.locator("[role='listbox']:not([aria-label*='selected']) [role='option']")
             texts = []
             for i in range(min(options.count(), 60)):
                 try:

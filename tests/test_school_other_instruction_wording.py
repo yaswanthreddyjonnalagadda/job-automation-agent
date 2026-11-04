@@ -232,3 +232,34 @@ def test_field_of_study_beyond_the_first_hundred_rows_is_found_by_submitting_the
     control = next(c for c in page_agent.parse_snapshot(a.snapshot(page)) if c.role == "textbox")
     assert a.do(page, page_agent.Answer(control.ref, control.question, "fill", "Electrical Engineering", "profile.education"), control)
     assert page.locator("[data-automation-id=selectedItem]").inner_text() == "Electrical Engineering"
+
+
+# --- Degree: another list left open over the button, and options read from the right list (f332) ---------------------
+
+DEGREE_PAGE = '''<div>
+  <ul aria-label="items selected" role="listbox"><li role="option">Eastern Illinois University</li></ul>
+  <button id="education-2--degree" name="degree" aria-haspopup="listbox" aria-label="Degree Select One Required"
+    type="button" onclick="openDegree(this)">Select One</button>
+  <div id="field-popup" style="position:fixed;left:0;top:0;width:100%;height:100%;z-index:50;background:#ddd">
+    Field of Study list, left open</div>
+  </div><script>
+    document.addEventListener('keydown',e=>{if(e.key==='Escape'){const p=document.getElementById('field-popup');if(p)p.remove();}});
+    function openDegree(button){
+      const ul=document.createElement('ul');ul.setAttribute('role','listbox');ul.id='pop';
+      ['Select One','Associate of Science (AS)','Bachelor of Science (BS)','Bachelor of Arts (BA)','Bachelor - Other',
+       'Master of Science (MS)'].forEach(t=>{const li=document.createElement('li');li.setAttribute('role','option');
+        li.innerHTML='<div>'+t+'</div>';li.onclick=()=>{button.textContent=t;ul.remove();};ul.appendChild(li);});
+      document.body.appendChild(ul);button.setAttribute('aria-controls','pop');
+    }</script>'''
+
+
+def test_a_degree_button_under_another_open_list_is_still_opened_and_the_right_row_chosen(page):
+    """Analog Devices Education 2: the Field of Study list stayed open over the Degree button, so a plain click timed out
+    ('Locator.click: Timeout 5000ms exceeded', five times) and the Degree stayed 'Select One'. Whatever list was left
+    open is closed first, and the row is read from the list this button opened, not from the schools' selected items."""
+    from sites.workday import _degree_candidates
+    page.set_content(DEGREE_PAGE)
+    a = _agent()
+    ok = WorkdayAdapter().select_from_button_dropdown(a.assistant, page, "--degree", 0, _degree_candidates("Bachelor of Technology (BTech)"))
+    assert ok
+    assert page.locator("#education-2--degree").inner_text() == "Bachelor of Science (BS)"
