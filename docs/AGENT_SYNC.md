@@ -351,6 +351,7 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 Any agent (**Claude Code**, **Codex**, **Antigravity**) picking up work should check this list, coordinate with uncommitted changes, and mark items `[x]` as they land with tests:
 
 ### Priority 0 — Immediate Form & Option Accuracy (Workday + Universal)
+- [x] **f332 -- school "Other" escape recognised by what it asks (`sites/workday.education_text_offers_other`)**: Analog Devices Education 2 (JNTU Hyderabad) says "does not appear in the pre-populated list ... type Other, press Enter"; only "not listed"/"cannot find" were recognised (f281/f282), so the school search failed three times and Degree/Field of Study after it. One function now owns the rule. NOT done: choosing the country that follows "Other" (the page says "then select the appropriate country") -- check on the next live run.
 - [x] **P0-4: Evidence-backed open-answer generation and acceptance (`f209`)** — Restore original resume context; review final fitted drafts and page-plan fallback answers for factual support and coverage; preserve exact known answers.
 - [x] **P0-1: Numerical Salary & Expected Earnings Recognition (`concept_matcher.py`, `reference/concepts.json`)** — *Done (`f187`)*
   - *Evidence*: Invesco Step 3 (`output/Invesco.../pages/20261017_183133/page_06.txt`) asked *"What would you expect to earn per year in the position for which you have applied? Please provide a numerical value.\*"*. `match_concept()` returned `None` and the AI typed a 45-word paragraph instead of `125000`.

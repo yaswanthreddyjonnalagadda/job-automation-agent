@@ -1636,6 +1636,12 @@ Education is optional, the agent then leaves the section empty rather than addin
 why. A list that offers schools, even if it loads slowly, is filled as before; a school missing from a list that does
 offer others still comes to you.
 
+A school that is not in a Workday list is entered as "Other" whenever the Education section itself says to type, search
+or select "Other" for a school the list lacks -- in any wording ("not listed", "cannot find", "does not appear in the
+pre-populated list", f332). Before, only two wordings were recognised, so a third (Analog Devices) searched for the
+school alone and left the School, Degree and Field of Study of that entry failing. The country that follows "Other" is
+not chosen by this change.
+
 ## "Yes, without restrictions" or "Yes, with company sponsorship" (f184)
 
 When a list offers both rows for a question like "Are you legally eligible to work in this country?", your answer "Yes"

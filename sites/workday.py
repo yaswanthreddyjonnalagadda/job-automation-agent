@@ -177,6 +177,26 @@ _FIELD_HINT_PATTERNS: dict[str, list[re.Pattern]] = {
 }
 
 
+_OTHER_QUOTES = "\"'‘’“”"
+# An instruction to type, search or choose a quoted "Other": the tenant's own escape for a school its list lacks.
+_OTHER_INSTRUCTION = re.compile(
+    r"\b(?:typ|enter|search|select|choos|pick|us)\w*[^.\n]*?[" + _OTHER_QUOTES + r"]\s*other\b", re.I)
+# The older wordings, which name the missing school but leave "Other" unquoted.
+_NOT_LISTED_OTHER = re.compile(
+    r"(?:not\s+listed|cannot\s+find|can't\s+find)[^.\n]*?(?:select|choose|pick|search)[^.\n]*?[" + _OTHER_QUOTES
+    + r"]?other[" + _OTHER_QUOTES + r"]?", re.I)
+
+
+def education_text_offers_other(text: str) -> bool:
+    """True when the Education section's own words tell the applicant to enter "Other" for a school the list lacks.
+
+    Tenants word it differently ("is not listed ... select Other", "cannot find ... search other", "does not appear in
+    the pre-populated list ... type Other, press Enter", f281, f282, f332), so this asks what the text asks for -- a
+    type/search/select instruction naming a quoted "Other" -- not which sentence leads up to it."""
+    text = text or ""
+    return bool(_OTHER_INSTRUCTION.search(text) or _NOT_LISTED_OTHER.search(text))
+
+
 class WorkdayAdapter(SiteAdapter):
     name = "workday"
     hosts = ("myworkdayjobs.com", "myworkday.com", "wd1.myworkdayjobs", "wd103.myworkdayjobs")
@@ -315,11 +335,7 @@ class WorkdayAdapter(SiteAdapter):
             try:
                 edu = page.get_by_role("group", name="Education", exact=True)
                 edu_text = edu.inner_text(timeout=500) if edu.count() == 1 else ""
-                if re.search(
-                    r"(?:not\s+listed|cannot\s+find|can't\s+find)[^.\n]*?(?:select|choose|pick|search)[^.\n]*?['\"\u201c\u201d]?other['\"\u201c\u201d]?",
-                    edu_text,
-                    re.I,
-                ):
+                if education_text_offers_other(edu_text):
                     names.append("Other")
             except Exception as exc:
                 logger.debug("WORKDAY: school Other prompt detection: %s", diagnostics.short_exc(exc, 100))
