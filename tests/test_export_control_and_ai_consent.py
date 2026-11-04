@@ -130,3 +130,10 @@ def test_owner_yes_for_foreign_permanent_residency_is_answered_yes():
     q = "2. Do you hold Legal Permanent Resident Status in a country outside the US?"
     val, src = ae.answer(ae.Ask(question=q, options=["Yes", "No"], role="combobox", profile=profile))
     assert (val, src) == ("Yes", "profile.foreign_permanent_resident")
+
+
+def test_general_privacy_permission_does_not_decide_ai_screening_consent():
+    profile = config.UserProfile(accept_application_privacy_prompts=True)
+    q = "Do you consent to AI tools evaluating your candidate information?"
+    val, _src = ae.answer(ae.Ask(question=q, options=["Yes", "No"], role="combobox", profile=profile))
+    assert val == ""

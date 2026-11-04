@@ -261,9 +261,6 @@ def ai_recruitment_consent(ask: Ask, q: str):
     if fact is None:
         fact = _yes(_say(ask.profile, "ai_notetaker_consent"))
     if fact is None:
-        if getattr(ask.profile, "accept_application_privacy_prompts", False):
-            fact = True
-    if fact is None:
         return None
     return yes_no(ask, fact, "profile.ai_recruitment_consent")
 
