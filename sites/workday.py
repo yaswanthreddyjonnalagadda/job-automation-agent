@@ -1542,15 +1542,31 @@ class WorkdayAdapter(SiteAdapter):
                 logger.info("WORKDAY: plain click on the dropdown failed (%s) -- clicking through", diagnostics.short_exc(exc, 80))
                 if not assistant._click_resiliently(btn):
                     return False
-            page.wait_for_timeout(700)
-
             # The rows of the list THIS button opened -- never the "items selected" lists of the School and Field of Study
-            # boxes, whose chosen values are role=option too ("Available: ['Eastern Illinois University']").
-            controlled = (btn.get_attribute("aria-controls") or "").strip()
-            options = page.locator(f"[id={json.dumps(controlled)}] [role='option']") if controlled else page.locator(
-                "[role='listbox']:not([aria-label*='selected']) [role='option']")
-            if controlled and options.count() == 0:
-                options = page.locator("[role='listbox']:not([aria-label*='selected']) [role='option']")
+            # boxes, whose chosen values are role=option too ("Available: ['Eastern Illinois University']"). Workday draws
+            # the list a moment after the click (Education 2 read none at 700 ms, f332): rows are waited for up to three
+            # seconds, and the button is pressed once more if nothing opened.
+            def opened_rows():
+                controlled = (btn.get_attribute("aria-controls") or "").strip()
+                rows = page.locator(f"[id={json.dumps(controlled)}] [role='option']") if controlled else None
+                if rows is None or rows.count() == 0:
+                    rows = page.locator("[role='listbox']:not([aria-label*='selected']) [role='option']")
+                return rows
+
+            def wait_for_rows(seconds=3.0):
+                deadline = time.monotonic() + seconds
+                while time.monotonic() < deadline:
+                    rows = opened_rows()
+                    if rows.count():
+                        return rows
+                    page.wait_for_timeout(250)
+                return opened_rows()
+
+            options = wait_for_rows()
+            if options.count() == 0:
+                logger.info("WORKDAY: the %s list did not open -- pressing the button once more", id_suffix)
+                if assistant._click_resiliently(btn):
+                    options = wait_for_rows()
             texts = []
             for i in range(min(options.count(), 60)):
                 try:

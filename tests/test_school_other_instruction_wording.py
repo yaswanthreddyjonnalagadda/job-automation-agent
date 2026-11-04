@@ -263,3 +263,20 @@ def test_a_degree_button_under_another_open_list_is_still_opened_and_the_right_r
     ok = WorkdayAdapter().select_from_button_dropdown(a.assistant, page, "--degree", 0, _degree_candidates("Bachelor of Technology (BTech)"))
     assert ok
     assert page.locator("#education-2--degree").inner_text() == "Bachelor of Science (BS)"
+
+
+SLOW_DEGREE_PAGE = DEGREE_PAGE.replace("function openDegree(button){", "function openDegree(button){\n      window.clicks=(window.clicks||0)+1;\n      if(window.clicks<%CLICKS%)return;\n      setTimeout(()=>{").replace(
+    "button.setAttribute('aria-controls','pop');\n    }", "button.setAttribute('aria-controls','pop');},%DELAY%);\n    }")
+
+
+@pytest.mark.parametrize("clicks_needed,delay_ms", [(1, 1800), (2, 100), (2, 1800)])
+def test_a_degree_list_that_opens_late_or_on_the_second_click_is_still_read(page, clicks_needed, delay_ms):
+    """Analog Devices Education 2: 'DROPDOWN_OPTIONS[--degree][1]: []' -- the list had not drawn 700 ms after the click
+    (or the click only dismissed something), so no row was ever read and the Degree stayed blank. The rows are waited
+    for, and the button is pressed once more when nothing opened."""
+    from sites.workday import _degree_candidates
+    page.set_content(SLOW_DEGREE_PAGE.replace("%CLICKS%", str(clicks_needed)).replace("%DELAY%", str(delay_ms)))
+    a = _agent()
+    ok = WorkdayAdapter().select_from_button_dropdown(a.assistant, page, "--degree", 0, _degree_candidates("Bachelor's"))
+    assert ok
+    assert page.locator("#education-2--degree").inner_text() == "Bachelor of Science (BS)"
