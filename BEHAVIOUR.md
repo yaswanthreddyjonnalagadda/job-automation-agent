@@ -1644,6 +1644,10 @@ site gives it no accessible name. The country that follows "Other" is answered l
 from the country in your education details: the school is chosen as "Other Institution - <your school's country>". A Field of Study
 beyond the first hundred rows of the list is found by submitting the search (Enter) when typing alone does not show it.
 
+## Export control, foreign residency, J-1 visa, and AI screening consent (f333)
+
+Export control questions listing countries across parent group containers (such as Workday's Group D list) evaluate the full container text against your citizenship rather than truncating at the split label. Permanent residency in a country outside the US (`profile.foreign_permanent_resident`) and exchange visitor J-1/J-2 visa history (`profile.held_j1_visa`) are answered deterministically from explicit profile fields with zero model calls; when either field is empty the question is left for you, never assumed "No". Consent questions for employer AI candidate screening and future job matching (`profile.ai_recruitment_consent`) use only your explicit AI-consent answer (never the general privacy-prompts permission), and remain unanswered when no profile decision is configured.
+
 ## "Yes, without restrictions" or "Yes, with company sponsorship" (f184)
 
 When a list offers both rows for a question like "Are you legally eligible to work in this country?", your answer "Yes"

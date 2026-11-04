@@ -150,8 +150,11 @@ class UserProfile:
     # (reference/concepts.json: AI_NOTETAKER_CONSENT, SHARE_DATA_WITH_PARTNERS, MARKETING_OPT_IN). "Yes" or "No";
     # empty = the question comes to the owner, never guessed.
     ai_notetaker_consent: str = ""
+    ai_recruitment_consent: str = ""
     share_data_with_partners: str = ""
     marketing_opt_in: str = ""
+    foreign_permanent_resident: str = ""
+    held_j1_visa: str = ""
     # Places the owner is available to work, as they gave them (answers "In what cities are you available to work?").
     available_work_locations: str = ""
     # What the answer engine says to "do you have N years of X?" when the resume does not show X: "No" (the default;
