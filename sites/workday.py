@@ -482,6 +482,11 @@ class WorkdayAdapter(SiteAdapter):
                     self.fill_date_spinner(assistant, page, "education", "lastYearAttended", i, end_month, end_year)
         logger.info("Filled %d education entries", len(education))
 
+        self._correct_education_entries(assistant, page, education, has_start_year, has_completion_year, gave_up)
+
+    def _correct_education_entries(self, assistant, page: Page, education: list[dict],
+                                   has_start_year: bool, has_completion_year: bool,
+                                   gave_up: set[int]) -> None:
         # Dates belong in the correction pass too: a year that verified as
         # correct at fill time was later found showing 2922 instead of 2022,
         # the same delayed overwrite that hits titles and company names.

@@ -77,7 +77,7 @@ def test_the_school_names_stay_alone_when_the_text_does_not_offer_other():
 
 def test_the_module_has_one_rule_for_it():
     source = open(workday.__file__, encoding="utf-8").read()
-    assert source.count("not\s+listed") <= 1, "the wording list must live in education_text_offers_other only"
+    assert source.count(r"not\s+listed") <= 1, "the wording list must live in education_text_offers_other only"
 
 
 
