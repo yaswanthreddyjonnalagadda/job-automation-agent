@@ -212,19 +212,60 @@ def _countries(text: str) -> list[str]:
 
 def country_eligibility(ask: Ask, q: str):
     profile = ask.profile
-    if _WORK_IN.search(q):
-        named = _countries(q)
+    full_text = f"{q} {clean(ask.container)}"
+    if _WORK_IN.search(full_text):
+        named = _countries(full_text)
         home = geo_reference.country_code(_say(profile, "country") or "")
         authorized = (_yes(_say(profile, "legally_eligible_to_work")) or _yes(_say(profile, "authorized_for_any_employer")))
         if not named or not home or authorized is None:
             return None
         return yes_no(ask, bool(authorized) and home in named, "profile.legally_eligible_to_work")
-    if _NATIONALITY.search(q):
-        named = _countries(q)
+    if _NATIONALITY.search(full_text):
+        if re.search(r"\b(?:permanent resident|pr status|lawful permanent resident)\b.{0,60}\b(?:outside (?:the )?u\.?s\.?|outside (?:the )?united states|other than (?:the )?u\.?s\.?|in a country outside|third country)\b", full_text):
+            held = _yes(_say(profile, "foreign_permanent_resident"))
+            return None if held is None else yes_no(ask, held, "profile.foreign_permanent_resident")
+        named = _countries(full_text)
         citizen_of = geo_reference.country_code(_say(profile, "country_of_citizenship") or "")
         if named and citizen_of:
             return yes_no(ask, citizen_of in named, "profile.country_of_citizenship")
     return None
+
+
+_J1_VISA = re.compile(
+    r"\b(?:ever\s+)?(?:held|had|possessed|been on|issued)\b.{0,40}\bj[- ]?[12]\b"
+    r"|\b(?:ever\s+)?(?:held|had|possessed|been on|issued)\b.{0,40}\bexchange visitor\b"
+    r"|\bj[- ]?[12]\b.{0,20}\bexchange visitor\b",
+    re.I
+)
+
+
+def j1_visa(ask: Ask, q: str):
+    full_text = f"{q} {clean(ask.container)}"
+    if not _J1_VISA.search(full_text):
+        return None
+    held = _yes(_say(ask.profile, "held_j1_visa"))
+    return None if held is None else yes_no(ask, held, "profile.held_j1_visa")
+
+
+_AI_RECRUITMENT = re.compile(
+    r"\b(?:ai|artificial intelligence)\b.{0,80}\b(?:evaluat\w*|assess\w*|screen\w*|match\w*|compar\w*|recruitment|job openings?|candidacy)\b"
+    r"|\b(?:evaluat\w*|assess\w*|screen\w*|match\w*|compar\w*)\b.{0,80}\b(?:ai|artificial intelligence)\b"
+)
+
+
+def ai_recruitment_consent(ask: Ask, q: str):
+    full_text = f"{q} {clean(ask.container)}"
+    if not _AI_RECRUITMENT.search(full_text):
+        return None
+    fact = _yes(_say(ask.profile, "ai_recruitment_consent"))
+    if fact is None:
+        fact = _yes(_say(ask.profile, "ai_notetaker_consent"))
+    if fact is None:
+        if getattr(ask.profile, "accept_application_privacy_prompts", False):
+            fact = True
+    if fact is None:
+        return None
+    return yes_no(ask, fact, "profile.ai_recruitment_consent")
 
 
 _RELATIVES = re.compile(r"\b(?:family members?|relatives?|familial|spouse|close relative)\b[^?]{0,90}\b(?:employ\w*|work\w*|vendor|supplier|business\s+partner|partner\s+(?:at|of|with))\b"
@@ -504,7 +545,7 @@ def acknowledgement(ask: Ask, q: str):
     return acks[0], "profile.accept_application_privacy_prompts"
 
 
-FAMILIES = (employer_name, names, current_location, available_locations, office_applying_for, language_fluency, country_eligibility, ties_to_the_company, degree,
+FAMILIES = (employer_name, names, current_location, available_locations, office_applying_for, language_fluency, country_eligibility, j1_visa, ai_recruitment_consent, ties_to_the_company, degree,
             how_heard, communication, work_arrangement, marketing_alerts, optional_name_extra, clearance, programming_language,
             years_bins, experience, acknowledgement)
 
