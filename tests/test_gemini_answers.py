@@ -140,9 +140,9 @@ def test_a_screenshot_goes_as_an_image_beside_the_goal(google, client):
 
 
 def test_the_checks_on_a_dropdown_answer_are_the_same_with_gemini(google, client):
-    google.default = ok_reply(json.dumps({"choice": "Masters", "equivalent": True, "reason": "same level"}))
+    google.default = ok_reply(json.dumps({"grounded": True, "choice": "Masters", "answer": "Masters", "equivalent": True, "reason": "same level"}))
     assert client.choose_option("Masters of Science", ["Bachelors", "Masters"], "Degree")["choice"] == "Masters"
-    google.default = ok_reply(json.dumps({"choice": "Doctorate", "equivalent": True, "reason": "x"}))
+    google.default = ok_reply(json.dumps({"grounded": True, "choice": "Doctorate", "answer": "Doctorate", "equivalent": True, "reason": "x"}))
     refused = client.choose_option("Masters of Science", ["Bachelors", "Masters"], "Highest degree")
     assert refused["choice"] == "" and refused["equivalent"] is False        # not on the page: never trusted
 
@@ -162,7 +162,7 @@ def test_a_choose_option_reply_that_is_not_json_is_asked_again(google, client):
     """Unlike plan_page (which already asks again on a reply it can't read), choose_option used to have no
     retry at all for a malformed reply: one bad parse failed the question outright."""
     google.script.append(ok_reply("not json at all"))
-    google.script.append(ok_reply(json.dumps({"choice": "Masters", "equivalent": True, "reason": "same level"})))
+    google.script.append(ok_reply(json.dumps({"grounded": True, "choice": "Masters", "answer": "Masters", "equivalent": True, "reason": "same level"})))
     result = client.choose_option("Masters of Science", ["Bachelors", "Masters"], "Degree")
     assert result["choice"] == "Masters"
     assert len(google.requests) == 2
@@ -175,7 +175,7 @@ def test_answer_single_question_sees_profile_fields_beyond_the_hand_picked_list(
     -- a fact that lives on any other field (here, linkedin_url) was invisible to the AI even though it was
     right there on the profile. plan_page sees the whole profile already (page_agent.facts() dumps it via
     asdict()); this is the narrower per-question path, which didn't."""
-    google.default = ok_reply(json.dumps({"answer": "https://linkedin.com/in/pat"}))
+    google.default = ok_reply(json.dumps({"grounded": True, "answer": "https://linkedin.com/in/pat"}))
     profile = config.UserProfile(full_name="Pat Lee", linkedin_url="https://linkedin.com/in/pat")
     client.answer_single_question("What is your LinkedIn profile URL?", profile=profile)
     sent = google.requests[0]["body"]["contents"][0]["parts"][0]["text"]

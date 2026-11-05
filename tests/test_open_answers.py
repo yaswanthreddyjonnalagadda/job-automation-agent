@@ -161,9 +161,9 @@ class Model:
     def __call__(self, system, user, tokens):
         if system == open_answers._REVIEW_SYSTEM:
             # These are style/length tests; semantic rejection has its own regression suite.
-            return json.dumps({"supported": True, "complete": True, "issues": []})
+            return json.dumps({"grounded": True, "supported": True, "complete": True, "issues": []})
         self.calls.append((system, user))
-        return json.dumps({"answer": self.replies.pop(0)}) if self.replies else "{}"
+        return json.dumps({"grounded": True, "answer": self.replies.pop(0)}) if self.replies else "{}"
 
 
 def test_an_ai_sounding_draft_is_sent_back_once_with_its_problems():
@@ -253,5 +253,5 @@ def test_answer_single_question_writes_an_open_answer_inside_the_limit():
 
 def test_a_question_with_choices_is_not_written_as_an_essay():
     client = ClaudeClient.__new__(ClaudeClient)
-    client._call = lambda system, user_message, max_tokens: '{"answer": "Yes"}'
+    client._call = lambda system, user_message, max_tokens: '{"grounded": true, "answer": "Yes"}'
     assert client.answer_single_question("Why not? Are you over 18?", options=["Yes", "No"]) == "Yes"

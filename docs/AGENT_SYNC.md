@@ -50,6 +50,15 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 
 ## 3. Current Repository State
 
+- **Antigravity: Task 2 Answers Pipeline — Grounded AI Answer Contract & Optional Field Leaving Blank (5 November 2026)** (branch `answers/2`):
+  - **Structured Grounded Contract (`claude_integration.py`, `gemini_integration.py`, `openai_integration.py`)**: All answering calls (`answer_single_question`, `choose_option`, `answer_screening_questions`) instruct models to answer ONLY from given candidate facts; if facts do not support an answer, return `{"grounded": false, "answer": ""}`. A response without `"grounded"` strictly counts as false.
+  - **AnswerResult Datatype**: Created `AnswerResult(str)` supporting structured dictionary and attribute access (`res["grounded"]`, `res["answer"]`, `res.grounded`, `res.answer`, `res.get(...)`) with complete backward compatibility with string operations (`len`, `==`, `words`).
+  - **Open Answers Grounded Verification (`open_answers.py`)**: `write()` drops ungrounded drafts; `review()` verifies groundedness against evidence and returns `"answer is not grounded in candidate facts"` if ungrounded.
+  - **Optional vs Required Handoff (`page_agent.py`)**: On ungrounded or empty answers or unoffered options:
+    - If field is optional (`_open_is_required` is false): removed from `still_open` and left blank without escalating to owner.
+    - If field is required: kept in `still_open` and added to `required_left`, halting for owner assistance without guessing.
+  - **Offline Verification**: Added 12/12 unit tests in `tests/test_grounded_ai_answers.py`. Verified `tests/test_legal_answers.py` (9/9), `tests/test_gemini_answers.py` (39/39), `tests/test_open_answers.py` (49/49), ratchets (4/4), no place literals (7/7). Replay guard verified 1,109 saved pages (828 distinct) read identically before and after.
+
 - **Antigravity: Task 1 Answers Pipeline — Legal Questions Profile Isolation, Decline Fallback & AI Routing (5 November 2026)** (branch nswers/1):
   - **Legal Questions Taxonomy & Folding (
 eference/legal_questions.json, legal_questions.py)**: Extracted all legal and self-identification question categories (work_authorization, sponsorship, citizenship, 

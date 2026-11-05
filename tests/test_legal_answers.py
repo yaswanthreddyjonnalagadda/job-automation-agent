@@ -87,7 +87,7 @@ def test_ai_prompt_for_legal_question_holds_no_other_profile_data():
 
     def mock_call_json(system, user_message, max_tokens=600):
         captured_messages.append({"system": system, "user_message": user_message})
-        return {"answer": "No"}
+        return {"grounded": True, "answer": "No"}
 
     client._call_json = mock_call_json
 
@@ -127,7 +127,7 @@ def test_normal_unknown_question_reaches_ai():
 
     def mock_call_json(system, user_message, max_tokens=600):
         captured_messages.append({"system": system, "user_message": user_message})
-        return {"answer": "Python"}
+        return {"grounded": True, "answer": "Python"}
 
     client._call_json = mock_call_json
 
@@ -172,14 +172,15 @@ def test_eeo_question_with_no_profile_fact_and_no_decline_waits():
         options=["Male", "Female"],
         profile=profile,
     )
-    assert ans == ""
+    assert ans.get("grounded") is False
+    assert ans.get("answer") == ""
 
 
 def test_sponsorship_question_answers_from_profile_fact():
     """Sponsorship question with profile fact answers accurately."""
     profile = UserProfile(requires_visa_sponsorship=True)
     client = ClaudeClient(MagicMock(anthropic_api_key="test-key"))
-    client._call_json = MagicMock(return_value={"answer": "Yes"})
+    client._call_json = MagicMock(return_value={"grounded": True, "answer": "Yes"})
 
     ans = client.answer_single_question(
         question="Will you now or in the future require visa sponsorship?",

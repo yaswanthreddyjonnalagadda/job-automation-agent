@@ -95,6 +95,26 @@ class ClaudeIntegrationError(RuntimeError):
     pass
 
 
+class AnswerResult(dict):
+    """Structured answer reply with grounded (bool) and answer (str)."""
+
+    def __init__(self, grounded: bool = False, answer: str = ""):
+        super().__init__(grounded=grounded, answer=answer)
+        self.grounded = grounded
+        self.answer = answer
+
+    def __bool__(self):
+        return bool(self.grounded and self.answer)
+
+    def __str__(self):
+        return self.answer
+
+    def __eq__(self, other):
+        if isinstance(other, str):
+            return self.answer == other
+        return super().__eq__(other)
+
+
 # A model's way of saying it does not know, which must never be typed into a form as the answer.
 _NON_ANSWER = re.compile(
     r"(?:n/?a|none|null|unknown|not applicable|no answer|-+|"
@@ -408,11 +428,11 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
             "below. If a question cannot be answered truthfully from that material "
             "(e.g. it asks about something not in the resume, or requires a "
             "subjective legal declaration like work authorization you're not certain "
-            "of), OMIT it from your JSON response entirely rather than guessing or "
+            "of), return grounded=false for it rather than guessing or "
             "fabricating -- a human will fill those in by hand. For 'select' or "
             "'radio' questions, your answer text must exactly match one of the given "
-            "options. Respond with ONLY a JSON object mapping each question_text you "
-            "can answer to its answer string, no markdown fences, no commentary."
+            "options. Respond with ONLY a JSON object mapping each question_text to an "
+            'object: {"grounded": true|false, "answer": "<exact option or concise answer>"}'
         )
         # Build a comprehensive profile summary with ALL available fields
         # so Claude can answer simple dropdowns like "country code", "how did you hear?"
@@ -452,14 +472,23 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
         # A select/radio answer that isn't one of the offered options would be
         # a guess; drop it and let the user answer instead.
         by_text = {q.get("question_text", ""): q for q in questions}
-        checked: dict[str, str] = {}
-        for question_text, answer in (answers or {}).items():
+        checked: dict[str, AnswerResult] = {}
+        for question_text, item in (answers or {}).items():
+            if isinstance(item, dict):
+                grounded = bool(item.get("grounded", False))
+                ans = str(item.get("answer") or "").strip()
+            else:
+                grounded = False
+                ans = str(item or "").strip()
             options = (by_text.get(question_text, {}) or {}).get("options") or []
-            if options and answer not in options:
-                logger.warning("Dropping %r -- %r is not one of the offered options",
-                               question_text[:60], str(answer)[:40])
-                continue
-            checked[question_text] = answer
+            if options and ans:
+                if ans not in options:
+                    match = next((o for o in options if o.strip().lower() == ans.lower()), "")
+                    ans = match
+            if not ans:
+                grounded = False
+            if grounded:
+                checked[question_text] = AnswerResult(grounded=True, answer=ans)
         return checked
 
     def choose_option(
@@ -483,20 +512,13 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
         system = (
             "You map a value onto a dropdown option on a real job application. "
             "Return the option that means the SAME THING as the intended value, "
-            "differing only in wording or granularity (e.g. 'Masters of Science' "
-            "and 'Masters' are the same qualification level; 'Company Career Site' "
-            "and 'Corporate Website' are the same source).\n\n"
-            "Set equivalent=false, and choice to the empty string, whenever the "
-            "nearest option would CHANGE the claim rather than reword it. That "
-            "includes: a different factual or legal status (veteran status, "
-            "criminal history, work authorization, disability); a yes/no answer "
-            "where the options instead demand a degree or amount of commitment; "
-            "or anything that would overstate a qualification. A wrong answer here "
-            "becomes a false statement on someone's real job application, so "
-            "refusing is always better than approximating.\n\n"
+            "differing only in wording or granularity. Answer only from the options given; "
+            "if they do not support an answer, return grounded=false.\n\n"
+            "Set equivalent=false and grounded=false, and answer to empty string, whenever the "
+            "nearest option would CHANGE the claim rather than reword it.\n\n"
             "Respond with ONLY a JSON object: "
-            '{"choice": "<exact option text, copied verbatim, or empty string>", '
-            '"equivalent": true|false, "reason": "<one short sentence>"}'
+            '{"grounded": true|false, "answer": "<exact option text, copied verbatim, or empty string>", '
+            '"reason": "<one short sentence>"}'
         )
         user_message = (
             f"QUESTION ON THE FORM: {question or '(not captured)'}\n"
@@ -506,14 +528,20 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
         )
         result = self._call_json(system=system, user_message=user_message, max_tokens=500)
 
-        choice = (result.get("choice") or "").strip()
+        grounded = bool(result.get("grounded", False))
+        choice = (result.get("answer") or result.get("choice") or "").strip()
         # Never trust a returned string that isn't actually on the page.
         if choice and choice not in options:
             match = next((o for o in options if o.strip().lower() == choice.lower()), "")
             choice = match
+        if not choice:
+            grounded = False
+        equivalent = bool(grounded and choice)
         return {
-            "choice": choice,
-            "equivalent": bool(result.get("equivalent")) and bool(choice),
+            "grounded": equivalent,
+            "answer": choice if equivalent else "",
+            "choice": choice if equivalent else "",
+            "equivalent": equivalent,
             "reason": (result.get("reason") or "").strip(),
         }
 
@@ -541,26 +569,25 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
         `box` is what open_answers.read_box saw on the page.
         """
         if not question:
-            return ""
+            return AnswerResult(grounded=False, answer="")
         import safety
         import legal_questions
         if safety.is_attestation(question):
-            return ""
+            return AnswerResult(grounded=False, answer="")
         legal_category = legal_questions.classify_legal_question(question)
         if legal_category is None and safety.is_legal_status_question(question):
-            return ""
+            return AnswerResult(grounded=False, answer="")
         if legal_category:
             category_facts = legal_questions.get_category_facts(legal_category, profile)
             if not category_facts:
                 decline_opt = legal_questions.find_decline_option(list(options or []))
-                return decline_opt or ""
+                return AnswerResult(grounded=bool(decline_opt), answer=decline_opt or "")
             facts_lines = [f"{k}: {v}" for k, v in category_facts.items()]
             system = (
                 "You answer legal and compliance screening questions on behalf of a real candidate. "
-                "Answer ONLY using the candidate facts provided below. "
+                "Answer ONLY using the candidate facts provided below. If the facts do not support an answer, return grounded=false. "
                 "If options are provided, your answer must be an exact string from the options list. "
-                "If the facts do not support an answer, return {\"answer\": \"\"}. "
-                "Respond with ONLY JSON: {\"answer\": \"<your concise answer>\"}"
+                "Respond with ONLY JSON: {\"grounded\": true|false, \"answer\": \"<your concise answer>\"}"
             )
             user_message = (
                 f"FACTS:\n{chr(10).join(facts_lines)}\n\n"
@@ -573,28 +600,34 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
                 user_message += f"\nAVAILABLE OPTIONS (choose exactly one):\n{json.dumps(options, indent=2)}"
             try:
                 data = self._call_json(system=system, user_message=user_message, max_tokens=600)
+                grounded = bool(data.get("grounded", False))
                 if several and options:
                     import option_match
-                    return "; ".join(option_match.several_offered(list(options), data.get("answer")))
-                ans = str(data.get("answer") or "").strip()
+                    ans = "; ".join(option_match.several_offered(list(options), data.get("answer")))
+                else:
+                    ans = str(data.get("answer") or "").strip()
                 if options and ans:
                     import option_match
                     idx = option_match.best_option(list(options), ans)
-                    return options[idx] if idx is not None else ""
-                return ans
+                    ans = options[idx] if idx is not None else ""
+                if not ans:
+                    grounded = False
+                return AnswerResult(grounded=grounded, answer=ans if grounded else "")
             except Exception as exc:
                 logger.warning("Could not answer legal question %r: %s", question[:60], exc)
-                return ""
+                return AnswerResult(grounded=False, answer="")
 
         box = box or {}
         if not options:
             import open_answers
             if open_answers.is_open(question, box.get("multiline", False)):
-                return self._open_answer(question, resume_text, profile, job_title, company, job_text, box)
+                ans_text = self._open_answer(question, resume_text, profile, job_title, company, job_text, box)
+                return AnswerResult(grounded=bool(ans_text), answer=ans_text)
 
         system = (
             "You answer application questions for a real candidate. "
             "Answer ONLY using truthful facts from their profile and resume. "
+            "If the facts given do not support an answer, return grounded=false. "
             "The JOB POSTING says what the employer is asking about -- use it to understand the question and the "
             "role, never as a fact about the candidate: a skill, tool or years of experience counts only if the "
             "resume or profile shows it. "
@@ -609,12 +642,12 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
             "pronunciation, a nickname), answer No. "
             "If it is a text/essay question (e.g. 'Why are you interested in this role?'), provide a "
             "concise, professional 1-3 sentence response grounded in their background. "
-            "Respond with ONLY JSON: {\"answer\": \"<your concise answer>\"}"
+            "Respond with ONLY JSON: {\"grounded\": true|false, \"answer\": \"<your concise answer>\"}"
         )
         if several and options:
             system += (
                 " THIS QUESTION ALLOWS SEVERAL ANSWERS (a group of tick boxes): answer with every option the resume "
-                "or profile genuinely shows, as a JSON list of exact option strings -- {\"answer\": [\"<option>\", ...]}"
+                "or profile genuinely shows, as a JSON list of exact option strings -- {\"grounded\": true|false, \"answer\": [\"<option>\", ...]}"
                 " -- and never an option they do not support. A 'none of these' option is only for when no other "
                 "option applies, and is never combined with another."
             )
@@ -651,29 +684,36 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
 
         try:
             data = self._call_json(system=system, user_message=user_message, max_tokens=600)
+            grounded = bool(data.get("grounded", False))
             if several and options:
                 import option_match
-                # Only boxes the page has, joined as the box-ticking step reads them; nothing real means no answer.
-                return "; ".join(option_match.several_offered(list(options), data.get("answer")))
-            ans = str(data.get("answer") or "").strip()
+                ans = "; ".join(option_match.several_offered(list(options), data.get("answer")))
+            else:
+                ans = str(data.get("answer") or "").strip()
             if is_non_answer(ans):
-                # "Not provided in the resume" is the model saying it does not know; typed into Steelcase's
-                # Work Phone box (29 September) it would have gone to the employer as the owner's phone number.
                 logger.info("AI had no answer for %r (%r) -- left for the owner", question[:50], ans[:60])
-                return ""
+                grounded = False
+                ans = ""
             if options and ans:
                 import concept_matcher
                 import option_match
                 needs = getattr(profile, "requires_visa_sponsorship", None)
-                return option_match.resolve_offered(
+                resolved = option_match.resolve_offered(
                     list(options), ans,
                     needs_sponsorship=None if needs is None else concept_matcher._is_yes(needs),
                     availability=concept_matcher.match_concept(question=question) == "NOTICE_PERIOD",
                 )
-            return ans
+                if not resolved:
+                    grounded = False
+                    ans = ""
+                else:
+                    ans = resolved
+            if not ans:
+                grounded = False
+            return AnswerResult(grounded=grounded, answer=ans if grounded else "")
         except Exception as exc:
-            logger.info("Could not answer single question %r: %s", question[:50], exc)
-            return ""
+            logger.info("Could not answer single question %r: %s", question[:60], exc)
+            return AnswerResult(grounded=False, answer="")
 
     @staticmethod
     def _open_answer_facts(profile) -> str:

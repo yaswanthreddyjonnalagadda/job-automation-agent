@@ -4128,17 +4128,22 @@ class PageAgent:
                                     box=box,
                                     **several,
                                 )
-                                if val:
+                                is_req = _open_is_required(ctrl.question, controls, required)
+                                grounded = bool(getattr(val, "grounded", False) if hasattr(val, "grounded")
+                                                else (val.get("grounded", False) if isinstance(val, dict) else False))
+                                ans_str = str(getattr(val, "answer", "") if hasattr(val, "answer")
+                                              else (val.get("answer", "") if isinstance(val, dict) else (val if isinstance(val, str) else ""))).strip()
+                                if grounded and ans_str:
                                     action = "fill" if ctrl.role in ("textbox", "searchbox", "spinbutton") else "choose"
                                     source = "ai_legal" if legal_cat else "ai"
                                     if legal_cat and not legal_questions.get_category_facts(legal_cat, self.profile):
                                         source = "declined"
-                                    ans = Answer(ctrl.ref, ctrl.question, action, val, source)
+                                    ans = Answer(ctrl.ref, ctrl.question, action, ans_str, source)
                                     if self.do(page, ans, ctrl):
                                         newly_answered += 1
-                                        self.written[ctrl.question] = val
+                                        self.written[ctrl.question] = ans_str
                                         self._remember(ctrl, ans)
-                                        logger.info("AI_ANSWERED_QUESTION (%s): %r = %r", source, ctrl.question[:50], val[:50])
+                                        logger.info("AI_ANSWERED_QUESTION (%s): %r = %r", source, ctrl.question[:50], ans_str[:50])
                                         if not ctrl.options and open_answers.is_open(ctrl.question,
                                                                                      box.get("multiline", False)):
                                             # Written in the owner's name: the hand-over says to read it.
@@ -4147,6 +4152,13 @@ class PageAgent:
                                                 written = self.assistant.written_answers = []
                                             if ctrl.question not in written:
                                                 written.append(ctrl.question)
+                                elif not is_req:
+                                    still_open = [q for q in still_open if not _same_question(ctrl.question, q)]
+                                    logger.info("OPTIONAL_LEFT_BLANK: %r left blank (AI not grounded)", ctrl.question[:50])
+                                else:
+                                    if ctrl.question not in self.required_left:
+                                        self.required_left.append(ctrl.question)
+                                    logger.info("REQUIRED_FIELD_UNANSWERED: %r cannot be grounded -- waiting for owner", ctrl.question[:50])
                             except Exception as exc:
                                 # Said out loud: at debug level a broken call (a missing function)
                                 # left every question blank with no word in the run's log.

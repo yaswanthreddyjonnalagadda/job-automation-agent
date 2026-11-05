@@ -1,5 +1,11 @@
 # What the assistant does, and what it never does
 
+### Grounded AI answering contract and optional field handling (5 November 2026)
+
+Every AI answering call (`claude_integration.py` `answer_single_question`, `choose_option`, `answer_screening_questions`; `open_answers.py` `write()`, `review()`) enforces a strict grounded contract across Claude, Gemini, and OpenAI clients. Models are instructed to answer only from the provided candidate facts and to return a structured JSON response containing `{"grounded": true/false, "answer": "<answer>"}`. Any response where `grounded` is missing or false, where the returned answer is empty, or where an option is not in the offered choices is treated as ungrounded:
+- If the field is optional: it is removed from open questions and left blank rather than filling a guess or hallucination.
+- If the field is required: the agent does not fill a fabricated answer; the question remains open and is escalated to the owner via handoff (`required_left` / `owner_needed`).
+
 ### Legal screening questions and profile isolation (5 November 2026)
 
 Legal, compliance, and EEO questions (work authorization, sponsorship, citizenship, residency, criminal history, EEO gender, EEO race, EEO veteran, EEO disability) are classified via reference/legal_questions.json. Any question remaining after deterministic profile and rule matching goes to the AI unless form-answer mode is profile. When an AI model is queried for a legal question, the prompt is strictly isolated to include ONLY the profile facts for that category (no candidate name, location, other categories, or resume text). If the profile holds no facts for that legal category, the agent automatically selects an offered option that means decline / prefer not to say when present (recorded with source declined); if no decline option exists, the question is left unanswered to wait for the owner handoff rather than guessing. Normal non-legal questions continue to reach the AI with candidate context. Answers explicitly record their source: profile, rule, ai, ai_legal, or declined.
