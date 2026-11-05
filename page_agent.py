@@ -4073,11 +4073,14 @@ class PageAgent:
                                 continue
                             if ctrl.role in ("group", "radiogroup", "region"):
                                 continue            # the box around a question's choices holds its name, not an answer
-                            if safety.is_attestation(ctrl.question) or safety.is_legal_status_question(ctrl.question):
+                            if safety.is_attestation(ctrl.question):
                                 continue
-                            if concept_matcher.is_self_identification(
-                                    f"{ctrl.question} {ctrl.container} {ctrl.context}"):
-                                continue            # who the owner is: never the AI's to answer
+                            import legal_questions
+                            legal_cat = legal_questions.classify_legal_question(ctrl.question)
+                            if legal_cat is None and (safety.is_legal_status_question(ctrl.question)
+                                    or concept_matcher.is_self_identification(
+                                        f"{ctrl.question} {ctrl.container} {ctrl.context}")):
+                                continue
                             if self._optional_entry_box(ctrl, still_open):
                                 continue            # an optional box of a job or degree: left blank, not written up
                             if self._profile_says_none(self.known_answer(ctrl)[1]):
@@ -4117,7 +4120,7 @@ class PageAgent:
                                 val = self.claude.answer_single_question(
                                     question=self._question_for(ctrl),
                                     options=ctrl.options,
-                                    resume_text=resume_text,
+                                    resume_text="" if legal_cat else resume_text,
                                     profile=self.profile,
                                     job_title=getattr(self.job, "title", ""),
                                     company=getattr(self.job, "company", ""),
@@ -4127,12 +4130,15 @@ class PageAgent:
                                 )
                                 if val:
                                     action = "fill" if ctrl.role in ("textbox", "searchbox", "spinbutton") else "choose"
-                                    ans = Answer(ctrl.ref, ctrl.question, action, val, "ai_single_question")
+                                    source = "ai_legal" if legal_cat else "ai"
+                                    if legal_cat and not legal_questions.get_category_facts(legal_cat, self.profile):
+                                        source = "declined"
+                                    ans = Answer(ctrl.ref, ctrl.question, action, val, source)
                                     if self.do(page, ans, ctrl):
                                         newly_answered += 1
                                         self.written[ctrl.question] = val
                                         self._remember(ctrl, ans)
-                                        logger.info("AI_ANSWERED_QUESTION: %r = %r", ctrl.question[:50], val[:50])
+                                        logger.info("AI_ANSWERED_QUESTION (%s): %r = %r", source, ctrl.question[:50], val[:50])
                                         if not ctrl.options and open_answers.is_open(ctrl.question,
                                                                                      box.get("multiline", False)):
                                             # Written in the owner's name: the hand-over says to read it.

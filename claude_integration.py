@@ -543,11 +543,49 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
         if not question:
             return ""
         import safety
-        # is_attestation covers signatures too. (This called safety.is_signature_prompt, which does not
-        # exist: every call raised AttributeError, the caller logged it at debug level, and no question
-        # was ever answered this way.)
-        if safety.is_attestation(question) or safety.is_legal_status_question(question):
+        import legal_questions
+        if safety.is_attestation(question):
             return ""
+        legal_category = legal_questions.classify_legal_question(question)
+        if legal_category is None and safety.is_legal_status_question(question):
+            return ""
+        if legal_category:
+            category_facts = legal_questions.get_category_facts(legal_category, profile)
+            if not category_facts:
+                decline_opt = legal_questions.find_decline_option(list(options or []))
+                return decline_opt or ""
+            facts_lines = [f"{k}: {v}" for k, v in category_facts.items()]
+            system = (
+                "You answer legal and compliance screening questions on behalf of a real candidate. "
+                "Answer ONLY using the candidate facts provided below. "
+                "If options are provided, your answer must be an exact string from the options list. "
+                "If the facts do not support an answer, return {\"answer\": \"\"}. "
+                "Respond with ONLY JSON: {\"answer\": \"<your concise answer>\"}"
+            )
+            user_message = (
+                f"FACTS:\n{chr(10).join(facts_lines)}\n\n"
+                f"QUESTION: {question}\n"
+            )
+            if options and several:
+                user_message += (f"\nAVAILABLE OPTIONS (choose EVERY one that applies; answer with a JSON list of them):\n"
+                                 f"{json.dumps(options, indent=2)}")
+            elif options:
+                user_message += f"\nAVAILABLE OPTIONS (choose exactly one):\n{json.dumps(options, indent=2)}"
+            try:
+                data = self._call_json(system=system, user_message=user_message, max_tokens=600)
+                if several and options:
+                    import option_match
+                    return "; ".join(option_match.several_offered(list(options), data.get("answer")))
+                ans = str(data.get("answer") or "").strip()
+                if options and ans:
+                    import option_match
+                    idx = option_match.best_option(list(options), ans)
+                    return options[idx] if idx is not None else ""
+                return ans
+            except Exception as exc:
+                logger.warning("Could not answer legal question %r: %s", question[:60], exc)
+                return ""
+
         box = box or {}
         if not options:
             import open_answers

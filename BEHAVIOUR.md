@@ -1,5 +1,9 @@
 # What the assistant does, and what it never does
 
+### Legal screening questions and profile isolation (5 November 2026)
+
+Legal, compliance, and EEO questions (work authorization, sponsorship, citizenship, residency, criminal history, EEO gender, EEO race, EEO veteran, EEO disability) are classified via reference/legal_questions.json. Any question remaining after deterministic profile and rule matching goes to the AI unless form-answer mode is profile. When an AI model is queried for a legal question, the prompt is strictly isolated to include ONLY the profile facts for that category (no candidate name, location, other categories, or resume text). If the profile holds no facts for that legal category, the agent automatically selects an offered option that means decline / prefer not to say when present (recorded with source declined); if no decline option exists, the question is left unanswered to wait for the owner handoff rather than guessing. Normal non-legal questions continue to reach the AI with candidate context. Answers explicitly record their source: profile, rule, ai, ai_legal, or declined.
+
 Every suggested job carries the country its posting names (a US state counts as the US); the Suggested jobs page can show one country's jobs (`?country=US`), and a posting that names no country is left out of a country-filtered list rather than guessed into it. Jobs found before this change gain their country automatically.
 
 Labelled dropdown buttons with a nested placeholder (such as "State Select...") are recognised as unanswered questions. The agent opens the button itself through its guarded click helper, selects an offered option and verifies it; a denied click stops that attempt. Phone Type is resolved only when the primary phone uniquely matches an explicitly typed mobile, home or work number in the profile. A number without that evidence does not establish its type.

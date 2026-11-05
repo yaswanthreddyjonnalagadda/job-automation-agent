@@ -50,6 +50,16 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 
 ## 3. Current Repository State
 
+- **Antigravity: Task 1 Answers Pipeline — Legal Questions Profile Isolation, Decline Fallback & AI Routing (5 November 2026)** (branch nswers/1):
+  - **Legal Questions Taxonomy & Folding (
+eference/legal_questions.json, legal_questions.py)**: Extracted all legal and self-identification question categories (work_authorization, sponsorship, citizenship, 
+esidency, criminal_history, eeo_gender, eeo_race, eeo_veteran, eeo_disability) into external reference data matching against concept_matcher.clean_text normalized fold.
+  - **Category-Scoped AI Prompt Isolation (claude_integration.py)**: When an unanswered question belongs to a legal category, nswer_single_question supplies ONLY the explicit profile facts for that category. Candidate name, location, other categories, and resume excerpts are strictly omitted.
+  - **EEO Decline Option Selection**: If the profile has no fact for a legal category, the agent automatically detects and selects an offered decline option (such as 'prefer not to say', 'decline to state') with source 'declined'. If no decline option exists, the question is left unanswered to wait for owner handoff.
+  - **Standardized Answer Source Provenance (page_agent.py)**: Records the provenance of every answered question across the 5 canonical buckets: 'profile', 'rule', 'ai', 'ai_legal', and 'declined'.
+  - **Offline Regression & Safety Verification**: Added 9/9 unit tests in 	ests/test_legal_answers.py. Verified 	est_code_health_ratchets.py passed 4/4, 	est_no_place_literals.py passed 7/7, and 
+eplay_guard.py ran with zero diffs across 1,109 saved pages.
+
 - **Antigravity: Finish Card 0 of Job Source Plan — Resilient HTTP Client, Error Codes & Provider Fixtures (5 November 2026)** (branch `jobsource/card0-finish`):
   - **Provider-Scoped HTTP Client (`services/poller/http.py`)**: Added `make_session(provider)` creating dedicated sessions with isolated headers (User-Agent identifying project, custom JSON headers for Workday/Lever/Ashby without leaking between providers). Added `get_json` and `post_json` with exponential backoff (`[1, 2, 4, 8, 16, 32]` s or `Retry-After`) across statuses 403, 429, 500, 502, 503, 504.
   - **Explicit Error Classification**: Classified errors into typed exceptions (`BoardNotFound` on 404 with no retry, `HttpError(status)`, `BadJson`, `HttpTimeout`).

@@ -1,0 +1,171 @@
+{
+  "_about": "Legal and self-identification question categories, phrases, profile fields, and decline options.",
+  "categories": {
+    "sponsorship": {
+      "profile_fields": [
+        "requires_visa_sponsorship"
+      ],
+      "phrases": [
+        "visa sponsorship",
+        "require sponsorship",
+        "need sponsorship",
+        "require immigration sponsorship",
+        "sponsorship now or in the future",
+        "will you require sponsorship",
+        "sponsorship for employment visa",
+        "future sponsorship",
+        "require visa sponsorship",
+        "require employment sponsorship"
+      ]
+    },
+    "work_authorization": {
+      "profile_fields": [
+        "legally_eligible_to_work",
+        "authorized_for_any_employer",
+        "work_authorization",
+        "foreign_permanent_resident",
+        "held_j1_visa"
+      ],
+      "phrases": [
+        "authorized to work",
+        "legally eligible to work",
+        "legal right to work",
+        "employment authorization",
+        "work authorization",
+        "authorized for any employer",
+        "lawfully authorized to work",
+        "proof of employment eligibility",
+        "employment eligibility verification",
+        "eligible to work in the united states",
+        "legally authorized to work",
+        "work authorization status",
+        "employment eligibility",
+        "legally permitted to work"
+      ]
+    },
+    "citizenship": {
+      "profile_fields": [
+        "us_citizen",
+        "country_of_citizenship"
+      ],
+      "phrases": [
+        "u s citizen",
+        "us citizen",
+        "united states citizen",
+        "citizenship status",
+        "country of citizenship",
+        "are you a citizen",
+        "are you a us citizen",
+        "citizen of the united states"
+      ]
+    },
+    "residency": {
+      "profile_fields": [
+        "country",
+        "state",
+        "city",
+        "current_location",
+        "foreign_permanent_resident"
+      ],
+      "phrases": [
+        "country of residence",
+        "current residence",
+        "legal resident",
+        "permanent resident",
+        "state of residence",
+        "lawful permanent resident",
+        "permanent residency",
+        "residency status"
+      ]
+    },
+    "criminal_history": {
+      "profile_fields": [
+        "felony_conviction"
+      ],
+      "phrases": [
+        "criminal record",
+        "convicted of a felony",
+        "felony conviction",
+        "criminal conviction",
+        "convicted of a crime",
+        "misdemeanor or felony",
+        "pending criminal charges",
+        "criminal history"
+      ]
+    },
+    "eeo_gender": {
+      "profile_fields": [
+        "gender",
+        "gender_identity",
+        "transgender",
+        "pronouns"
+      ],
+      "phrases": [
+        "gender",
+        "gender identity",
+        "biological sex",
+        "pronouns",
+        "transgender"
+      ]
+    },
+    "eeo_race": {
+      "profile_fields": [
+        "ethnicity",
+        "hispanic_or_latino"
+      ],
+      "phrases": [
+        "race",
+        "ethnicity",
+        "racial background",
+        "ethnic background",
+        "hispanic or latino",
+        "race ethnicity",
+        "race or ethnicity"
+      ]
+    },
+    "eeo_veteran": {
+      "profile_fields": [
+        "veteran_status"
+      ],
+      "phrases": [
+        "veteran status",
+        "protected veteran",
+        "military service",
+        "armed forces",
+        "active duty wartime"
+      ]
+    },
+    "eeo_disability": {
+      "profile_fields": [
+        "disability_status"
+      ],
+      "phrases": [
+        "disability status",
+        "have a disability",
+        "physical or mental impairment",
+        "record of a disability",
+        "voluntary self identification of disability",
+        "disability"
+      ]
+    }
+  },
+  "decline_phrases": [
+    "prefer not to say",
+    "prefer not to answer",
+    "prefer not to disclose",
+    "choose not to disclose",
+    "decline to say",
+    "decline to state",
+    "decline to self identify",
+    "decline to answer",
+    "i decline to state",
+    "i choose not to self identify",
+    "i do not wish to answer",
+    "i do not wish to disclose",
+    "do not wish to disclose",
+    "do not wish to answer",
+    "opt out",
+    "not disclosed",
+    "i do not wish to provide this information"
+  ]
+}
