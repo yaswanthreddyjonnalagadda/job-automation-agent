@@ -77,23 +77,27 @@ def run_query_discovery_cycle(storage: JobStorage, titles: Optional[List[str]] =
     from services.poller.ats_resolver import resolve_and_seed_job
 
     target_titles = titles
-    if not target_titles:
-        profile_path = Path(__file__).resolve().parent.parent.parent / "config" / "user_profile.yaml"
-        if profile_path.exists():
-            try:
-                from services.matcher.scoring import _parse_simple_yaml
-                data = _parse_simple_yaml(profile_path.read_text(encoding="utf-8")) or {}
-                target_titles = data.get("target_roles", [])
-            except Exception:
-                pass
-    if not target_titles:
-        target_titles = ["Network Engineer", "Cloud Network Engineer", "Senior Network Engineer"]
+    search_spec = storage.get_active_search_spec()
+    if not search_spec:
+        try:
+            from services.matcher.search_spec_parser import bootstrap_search_spec_from_profile
+            search_spec = bootstrap_search_spec_from_profile()
+            storage.save_search_spec(search_spec)
+        except Exception as exc:
+            logger.debug("Could not bootstrap SearchSpec: %s", exc)
+
+    if search_spec:
+        query_pairs = search_spec.get_expanded_queries(max_queries=12)
+    else:
+        query_pairs = [{"title": t, "location": "Remote", "is_remote": True} for t in (target_titles or ["Network Engineer"])]
 
     total_discovered = 0
-    for title in target_titles[:4]:
+    for q in query_pairs[:8]:
+        title = q["title"]
+        loc = q["location"]
         try:
-            logger.info("Executing 4-hour background query discovery for '%s'...", title)
-            jobs = search_all_fresh_jobs(keywords=title, location="United States", past_24_hours=True, limit=25)
+            logger.info("Executing 4-hour background query discovery for '%s' in '%s'...", title, loc)
+            jobs = search_all_fresh_jobs(keywords=title, location=loc, past_24_hours=True, limit=25)
             for j in jobs:
                 resolved = resolve_and_seed_job(j.company_name, j.url)
                 storage.upsert_company(

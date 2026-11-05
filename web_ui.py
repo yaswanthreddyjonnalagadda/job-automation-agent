@@ -72,6 +72,9 @@ import web_guard  # noqa: E402
 web_guard.install(app)
 ui_shell.install(app)
 
+from services.web_control_panel import control_panel_bp
+app.register_blueprint(control_panel_bp)
+
 
 # ----------------------------------------------------------------------
 # Links to files the agent wrote (logs, screenshots, page captures)

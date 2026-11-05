@@ -459,3 +459,110 @@ def search_all_fresh_jobs(
         _add_jobs(arbeit_jobs)
 
     return all_jobs[:limit]
+
+
+def search_linkedin_guest_jobs_paginated(
+    keywords: str,
+    location: str = "",
+    past_24_hours: bool = True,
+    max_pages: int = 4,
+    limit_per_page: int = 25,
+    timeout: float = 12.0,
+) -> List[DiscoveredQueryJob]:
+    """Exhaustive pagination over LinkedIn public guest endpoint across start=0, 25, 50..."""
+    all_jobs: List[DiscoveredQueryJob] = []
+    seen_urls: set[str] = set()
+
+    for page in range(max_pages):
+        start = page * limit_per_page
+        jobs = search_linkedin_guest_jobs(
+            keywords=keywords,
+            location=location,
+            past_24_hours=past_24_hours,
+            start=start,
+            max_results=limit_per_page,
+            timeout=timeout,
+        )
+        if not jobs:
+            break
+
+        new_on_page = 0
+        for j in jobs:
+            if j.url and j.url not in seen_urls:
+                seen_urls.add(j.url)
+                all_jobs.append(j)
+                new_on_page += 1
+
+        if new_on_page == 0:
+            break
+
+    return all_jobs
+
+
+def search_all_fresh_jobs_at_scale(
+    keywords: str,
+    location: str = "",
+    past_24_hours: bool = True,
+    rapidapi_key: Optional[str] = None,
+    max_pages: int = 3,
+) -> tuple[List[DiscoveredQueryJob], Dict[str, Dict[str, Any]]]:
+    """
+    Multi-source query with per-source isolation.
+    If one source fails or gets rate-limited, all other sources continue normally.
+    Returns (jobs, stats_by_source).
+    """
+    stats: Dict[str, Dict[str, Any]] = {
+        "linkedin_guest": {"count": 0, "error": False},
+        "jsearch": {"count": 0, "error": False},
+        "jobicy": {"count": 0, "error": False},
+        "arbeitnow": {"count": 0, "error": False},
+    }
+    all_jobs: List[DiscoveredQueryJob] = []
+    seen: set[str] = set()
+
+    def _add(j_list: List[DiscoveredQueryJob], src: str):
+        cnt = 0
+        for j in j_list:
+            key = f"{j.company_name.lower().strip()}:{j.title.lower().strip()}"
+            if key not in seen:
+                seen.add(key)
+                all_jobs.append(j)
+                cnt += 1
+        stats[src]["count"] = cnt
+
+    # 1. LinkedIn with pagination & isolation
+    try:
+        li = search_linkedin_guest_jobs_paginated(keywords, location=location, past_24_hours=past_24_hours, max_pages=max_pages)
+        _add(li, "linkedin_guest")
+    except Exception as exc:
+        logger.warning("LinkedIn guest search failed: %s", exc)
+        stats["linkedin_guest"]["error"] = True
+
+    # 2. JSearch (optional API key)
+    key = rapidapi_key or os.environ.get("RAPIDAPI_KEY")
+    if key:
+        try:
+            js = search_jsearch_rapidapi(f"{keywords} in {location}", rapidapi_key=key, date_posted="today")
+            _add(js, "jsearch")
+        except Exception as exc:
+            logger.warning("JSearch query failed: %s", exc)
+            stats["jsearch"]["error"] = True
+
+    # 3. Jobicy remote feed
+    try:
+        jb = search_jobicy_jobs(keywords, max_results=30)
+        _add(jb, "jobicy")
+    except Exception as exc:
+        logger.warning("Jobicy query failed: %s", exc)
+        stats["jobicy"]["error"] = True
+
+    # 4. Arbeitnow remote feed
+    try:
+        ar = search_arbeitnow_jobs(keywords, max_results=30)
+        _add(ar, "arbeitnow")
+    except Exception as exc:
+        logger.warning("Arbeitnow query failed: %s", exc)
+        stats["arbeitnow"]["error"] = True
+
+    return all_jobs, stats
+

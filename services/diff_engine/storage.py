@@ -97,6 +97,22 @@ class JobStorage:
                 created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at          TEXT DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS search_specs (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                version             INTEGER NOT NULL,
+                spec_json           TEXT NOT NULL,
+                raw_instructions    TEXT NOT NULL,
+                is_active           INTEGER DEFAULT 1,
+                created_at          TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS job_sources (
+                job_id              INTEGER NOT NULL,
+                source_name         TEXT NOT NULL,
+                seen_at             TEXT DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (job_id, source_name)
+            );
             """)
 
     def _init_postgres(self):
@@ -105,6 +121,23 @@ class JobStorage:
             if os.path.exists(migration_path):
                 with open(migration_path, "r", encoding="utf-8") as f:
                     cur.execute(f.read())
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS search_specs (
+                id                  BIGSERIAL PRIMARY KEY,
+                version             INTEGER NOT NULL,
+                spec_json           JSONB NOT NULL,
+                raw_instructions    TEXT NOT NULL,
+                is_active           BOOLEAN DEFAULT true,
+                created_at          TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS job_sources (
+                job_id              BIGINT NOT NULL,
+                source_name         TEXT NOT NULL,
+                seen_at             TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (job_id, source_name)
+            );
+            """)
             self._conn.commit()
 
     def get_active_job_ids(self, ats_platform: str, company_slug: str) -> Set[str]:
@@ -291,5 +324,124 @@ class JobStorage:
             with self._conn.cursor() as cur:
                 cur.execute(sql, tuple(params))
             self._conn.commit()
+
+    def save_search_spec(self, spec: Any) -> int:
+        """Saves a new SearchSpec, marks older versions as inactive, and returns the new ID."""
+        import json
+        from services.matcher.search_spec import SearchSpec
+        if not isinstance(spec, SearchSpec):
+            spec = SearchSpec.model_validate(spec)
+
+        spec_data = spec.model_dump(mode="json")
+        spec_json_str = json.dumps(spec_data)
+        now = datetime.now(timezone.utc).isoformat()
+
+        if self.is_sqlite:
+            with self._conn:
+                cur = self._conn.cursor()
+                # Deactivate older specs
+                cur.execute("UPDATE search_specs SET is_active = 0 WHERE is_active = 1")
+                cur.execute(
+                    "INSERT INTO search_specs (version, spec_json, raw_instructions, is_active, created_at) "
+                    "VALUES (?, ?, ?, 1, ?)",
+                    (spec.version, spec_json_str, spec.raw_instructions, now),
+                )
+                return cur.lastrowid
+        else:
+            with self._conn.cursor() as cur:
+                cur.execute("UPDATE search_specs SET is_active = false WHERE is_active = true")
+                cur.execute(
+                    "INSERT INTO search_specs (version, spec_json, raw_instructions, is_active, created_at) "
+                    "VALUES (%s, %s, %s, true, %s) RETURNING id",
+                    (spec.version, spec_json_str, spec.raw_instructions, now),
+                )
+                row = cur.fetchone()
+                self._conn.commit()
+                return row["id"] if isinstance(row, dict) else row[0]
+
+    def get_active_search_spec(self) -> Optional[Any]:
+        """Loads the current active SearchSpec from database storage."""
+        import json
+        from services.matcher.search_spec import SearchSpec
+        query = "SELECT spec_json FROM search_specs WHERE is_active = ? ORDER BY version DESC LIMIT 1"
+        if self.is_sqlite:
+            cur = self._conn.cursor()
+            cur.execute(query, (1,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            data = json.loads(row["spec_json"] if isinstance(row, dict) or hasattr(row, "keys") else row[0])
+            return SearchSpec.model_validate(data)
+        else:
+            query = "SELECT spec_json FROM search_specs WHERE is_active = true ORDER BY version DESC LIMIT 1"
+            with self._conn.cursor() as cur:
+                cur.execute(query)
+                row = cur.fetchone()
+                if not row:
+                    return None
+                raw_json = row["spec_json"] if isinstance(row, dict) else row[0]
+                data = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
+                return SearchSpec.model_validate(data)
+
+    def list_search_spec_versions(self) -> List[Dict[str, Any]]:
+        """Returns all historical SearchSpec versions for auditing."""
+        query = "SELECT id, version, raw_instructions, is_active, created_at FROM search_specs ORDER BY version DESC"
+        cur = self._conn.cursor() if self.is_sqlite else self._conn.cursor()
+        cur.execute(query)
+        rows = cur.fetchall()
+        return [dict(r) for r in rows]
+
+    def insert_or_merge_job(self, job: Dict[str, Any], source: str = "direct") -> int:
+        """Inserts a job or merges it if an identical posting exists, updating source tracking."""
+        norm_title = (job.get("title") or "").strip().lower()
+        company_slug = (job.get("company_slug") or job.get("company_name") or "").strip().lower()
+        location = (job.get("location") or "").strip().lower()
+
+        cur = self._conn.cursor()
+        find_sql = """
+        SELECT id FROM jobs 
+        WHERE (ats_platform = ? AND external_id = ?)
+           OR (LOWER(company_slug) = ? AND LOWER(title) = ? AND LOWER(location) = ?)
+        LIMIT 1
+        """
+        if not self.is_sqlite:
+            find_sql = find_sql.replace("?", "%s")
+        cur.execute(find_sql, (
+            job.get("ats_platform", ""),
+            str(job.get("external_id", "")),
+            company_slug,
+            norm_title,
+            location,
+        ))
+        row = cur.fetchone()
+        if row:
+            job_id = row["id"] if isinstance(row, dict) or hasattr(row, "keys") else row[0]
+        else:
+            job_id = self.insert_job(job)
+
+        src_sql = "INSERT OR IGNORE INTO job_sources (job_id, source_name) VALUES (?, ?)"
+        if not self.is_sqlite:
+            src_sql = "INSERT INTO job_sources (job_id, source_name) VALUES (%s, %s) ON CONFLICT DO NOTHING"
+        if self.is_sqlite:
+            with self._conn:
+                cur.execute(src_sql, (job_id, source))
+        else:
+            with self._conn.cursor() as cur:
+                cur.execute(src_sql, (job_id, source))
+            self._conn.commit()
+
+        return job_id
+
+    def get_job_sources(self, job_id: int) -> List[str]:
+        """Returns all distinct sources that yielded this job posting."""
+        sql = "SELECT source_name FROM job_sources WHERE job_id = ?"
+        if not self.is_sqlite:
+            sql = sql.replace("?", "%s")
+        cur = self._conn.cursor()
+        cur.execute(sql, (job_id,))
+        rows = cur.fetchall()
+        return [r["source_name"] if isinstance(r, dict) or hasattr(r, "keys") else r[0] for r in rows]
+
+
 
 

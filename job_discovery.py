@@ -882,6 +882,19 @@ class JobDiscoveryEngine:
         )
         return stats
 
+    def load_search_spec(self) -> Any:
+        """Loads the active SearchSpec, falling back to bootstrapping from profile."""
+        try:
+            from services.diff_engine.storage import JobStorage
+            storage = JobStorage()
+            spec = storage.get_active_search_spec()
+            if spec:
+                return spec
+        except Exception as exc:
+            logger.debug("Failed loading active search spec from storage: %s", exc)
+        from services.matcher.search_spec_parser import bootstrap_search_spec_from_profile
+        return bootstrap_search_spec_from_profile()
+
     def scan_fresh_query_jobs(
         self,
         keywords: Optional[list[str]] = None,
@@ -896,7 +909,8 @@ class JobDiscoveryEngine:
         from services.poller.ats_resolver import resolve_and_seed_job
         import geo_reference
 
-        titles_to_query = keywords or (self.profile.get("target_titles") or [])[:3]
+        spec = self.load_search_spec()
+        titles_to_query = keywords or spec.all_wanted_titles()[:6]
         if not titles_to_query:
             return {"total_jobs_seen": 0, "relevant_jobs_saved": 0}
 
