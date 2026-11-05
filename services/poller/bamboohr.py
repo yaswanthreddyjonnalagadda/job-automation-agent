@@ -11,8 +11,16 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 import requests
 
-from services.poller.query_discovery import _http_get_resilient, clean_location_string
+from services.poller.query_discovery import clean_location_string
 from services.poller.reader_result import ReaderResult
+from services.poller.http import (
+    make_session,
+    get_json,
+    BoardNotFound,
+    HttpError,
+    BadJson,
+    HttpTimeout,
+)
 
 logger = logging.getLogger("bamboohr_poller")
 
@@ -60,7 +68,7 @@ def parse_bamboohr_response(data: Any, company_slug: str = "", company_name: str
     elif isinstance(data, list):
         items = data
     else:
-        return ReaderResult(postings=[], complete=False, error="Malformed response: expected dict or list")
+        return ReaderResult(postings=[], complete=False, error="bad_json")
 
     jobs: List[Dict[str, Any]] = []
     for raw in items:
@@ -79,31 +87,34 @@ def read_bamboohr_board(
     session: Optional[requests.Session] = None,
 ) -> ReaderResult:
     """Read BambooHR board from JSON endpoints, returning ReaderResult."""
-    # Try primary embed2List endpoint
-    url = f"https://{company_slug}.bamboohr.com/jobs/embed2List/?json=true"
-    text = _http_get_resilient(url, timeout=timeout)
+    s = session or make_session("bamboohr")
+    urls = [
+        f"https://{company_slug}.bamboohr.com/jobs/embed2List/?json=true",
+        f"https://{company_slug}.bamboohr.com/careers/list",
+    ]
+
     data = None
+    last_error_code = "board_not_found"
 
-    if text:
+    for url in urls:
         try:
-            parsed = json.loads(text)
-            data = parsed.get("result", []) or parsed.get("jobs", [])
-        except Exception:
-            data = None
+            data = get_json(s, url)
+            break
+        except BoardNotFound:
+            last_error_code = "board_not_found"
+            continue
+        except HttpError as exc:
+            last_error_code = f"http_{exc.status}"
+            continue
+        except (requests.exceptions.Timeout, HttpTimeout):
+            last_error_code = "timeout"
+            continue
+        except (BadJson, json.JSONDecodeError):
+            last_error_code = "bad_json"
+            continue
 
-    # Fallback to /careers/list endpoint
     if data is None:
-        fallback_url = f"https://{company_slug}.bamboohr.com/careers/list"
-        text = _http_get_resilient(fallback_url, timeout=timeout)
-        if text:
-            try:
-                parsed = json.loads(text)
-                data = parsed.get("result", []) or parsed.get("jobs", [])
-            except Exception:
-                data = None
-
-    if data is None:
-        return ReaderResult(postings=[], complete=False, error=f"Could not load postings from BambooHR: {company_slug}")
+        return ReaderResult(postings=[], complete=False, error=last_error_code)
 
     return parse_bamboohr_response(data, company_slug=company_slug, company_name=company_name)
 

@@ -50,6 +50,14 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 
 ## 3. Current Repository State
 
+- **Antigravity: Finish Card 0 of Job Source Plan — Resilient HTTP Client, Error Codes & Provider Fixtures (5 November 2026)** (branch `jobsource/card0-finish`):
+  - **Provider-Scoped HTTP Client (`services/poller/http.py`)**: Added `make_session(provider)` creating dedicated sessions with isolated headers (User-Agent identifying project, custom JSON headers for Workday/Lever/Ashby without leaking between providers). Added `get_json` and `post_json` with exponential backoff (`[1, 2, 4, 8, 16, 32]` s or `Retry-After`) across statuses 403, 429, 500, 502, 503, 504.
+  - **Explicit Error Classification**: Classified errors into typed exceptions (`BoardNotFound` on 404 with no retry, `HttpError(status)`, `BadJson`, `HttpTimeout`).
+  - **Standardized Reader Integration**: Converted `read_<ats>_board` across all 6 ATS readers (`greenhouse`, `lever`, `ashby`, `smartrecruiters`, `bamboohr`, `workday`) to use `http.py` returning `ReaderResult(postings=<what it got>, complete=False, error=code)` with codes `"board_not_found"`, `"http_<status>"`, `"timeout"`, and `"bad_json"`.
+  - **Workday Clean Session Scoping**: Removed shared header mutation in `workday.py`, replacing with `make_session("workday")`.
+  - **Organized Job Source Fixtures**: Moved responses to `tests/fixtures/job_source/<provider>/` and added `empty.json` (`complete=True`, 0 postings) and `truncated.json` (`complete=False`, `error="bad_json"`) for all 6 ATS engines.
+  - **TDD Offline Test Suite**: 25/25 unit tests passing in `tests/test_ats_reader_results.py` with 100% offline network blocks. Code health ratchets passed 4/4. Replay guard verified 1,109 saved pages clean.
+
 - **Antigravity: Step 0 Job Source Service Plan — Shared ReaderResult, Real Fixtures & Offline Tests (5 November 2026)** (branch `feat/five-service-architecture`, commits `004b006`, `4d793f0`):
   - **Shared Reader Result (`services/poller/reader_result.py`)**: Defined typed dataclass `ReaderResult(postings=..., complete=..., error=...)` standardizing public ATS board reader returns across the 6 major platforms (Greenhouse, Lever, Ashby, SmartRecruiters, BambooHR, Workday).
   - **Reader Parser Decoupling**: Added `parse_<ats>_response` and `read_<ats>_board` to all 6 readers in `services/poller/`, preserving backward compatibility for existing `poll_<ats>` callers. Workday and SmartRecruiters accurately set `complete=False` when total requisitions exceed the batch/page size.

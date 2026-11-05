@@ -3,11 +3,20 @@ from __future__ import annotations
 
 import logging
 import html
+import json
 import re
 from typing import Any, Dict, List, Optional
 import requests
 
 from services.poller.reader_result import ReaderResult
+from services.poller.http import (
+    make_session,
+    get_json,
+    BoardNotFound,
+    HttpError,
+    BadJson,
+    HttpTimeout,
+)
 
 logger = logging.getLogger("poller.greenhouse")
 
@@ -53,7 +62,7 @@ def _parse_greenhouse_item(item: Dict[str, Any], slug: str = "") -> Dict[str, An
 def parse_greenhouse_response(data: Any, slug: str = "") -> ReaderResult:
     """Parse Greenhouse board response into standardized ReaderResult."""
     if not isinstance(data, dict) or "jobs" not in data:
-        return ReaderResult(postings=[], complete=False, error="Malformed response: missing 'jobs' key")
+        return ReaderResult(postings=[], complete=False, error="bad_json")
 
     jobs: List[Dict[str, Any]] = []
     for item in data.get("jobs", []):
@@ -66,17 +75,18 @@ def read_greenhouse_board(slug: str, session: Optional[requests.Session] = None)
     GET https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true
     """
     url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
-    s = session or requests.Session()
+    s = session or make_session("greenhouse")
     try:
-        resp = s.get(url, timeout=15)
-        if resp.status_code == 404:
-            logger.warning("Greenhouse slug not found: %s", slug)
-            return ReaderResult(postings=[], complete=False, error=f"404 Not Found: {slug}")
-        resp.raise_for_status()
-        return parse_greenhouse_response(resp.json(), slug=slug)
-    except Exception as exc:
-        logger.error("Error polling Greenhouse slug %s: %s", slug, exc)
-        return ReaderResult(postings=[], complete=False, error=str(exc))
+        data = get_json(s, url)
+        return parse_greenhouse_response(data, slug=slug)
+    except BoardNotFound:
+        return ReaderResult(postings=[], complete=False, error="board_not_found")
+    except HttpError as exc:
+        return ReaderResult(postings=[], complete=False, error=f"http_{exc.status}")
+    except (requests.exceptions.Timeout, HttpTimeout):
+        return ReaderResult(postings=[], complete=False, error="timeout")
+    except (BadJson, json.JSONDecodeError):
+        return ReaderResult(postings=[], complete=False, error="bad_json")
 
 
 def poll_greenhouse(slug: str, session: Optional[requests.Session] = None) -> List[Dict[str, Any]]:

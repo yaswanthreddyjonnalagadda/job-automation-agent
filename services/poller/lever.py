@@ -2,11 +2,20 @@
 from __future__ import annotations
 
 import logging
+import json
 import re
 from typing import Any, Dict, List, Optional
 import requests
 
 from services.poller.reader_result import ReaderResult
+from services.poller.http import (
+    make_session,
+    get_json,
+    BoardNotFound,
+    HttpError,
+    BadJson,
+    HttpTimeout,
+)
 
 logger = logging.getLogger("poller.lever")
 
@@ -49,7 +58,7 @@ def _parse_lever_item(item: Dict[str, Any], company: str = "") -> Dict[str, Any]
 def parse_lever_response(data: Any, company: str = "") -> ReaderResult:
     """Parse Lever postings response into standardized ReaderResult."""
     if not isinstance(data, list):
-        return ReaderResult(postings=[], complete=False, error="Malformed response: expected list of postings")
+        return ReaderResult(postings=[], complete=False, error="bad_json")
 
     jobs: List[Dict[str, Any]] = []
     for item in data:
@@ -63,21 +72,18 @@ def read_lever_board(company: str, session: Optional[requests.Session] = None) -
     GET https://api.lever.co/v0/postings/{company}
     """
     url = f"https://api.lever.co/v0/postings/{company}"
-    s = session or requests.Session()
-    s.headers.setdefault(
-        "User-Agent",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-    )
+    s = session or make_session("lever")
     try:
-        resp = s.get(url, headers={"Accept": "application/json"}, timeout=15)
-        if resp.status_code == 404:
-            logger.warning("Lever company not found: %s", company)
-            return ReaderResult(postings=[], complete=False, error=f"404 Not Found: {company}")
-        resp.raise_for_status()
-        return parse_lever_response(resp.json(), company=company)
-    except Exception as exc:
-        logger.error("Error polling Lever company %s: %s", company, exc)
-        return ReaderResult(postings=[], complete=False, error=str(exc))
+        data = get_json(s, url)
+        return parse_lever_response(data, company=company)
+    except BoardNotFound:
+        return ReaderResult(postings=[], complete=False, error="board_not_found")
+    except HttpError as exc:
+        return ReaderResult(postings=[], complete=False, error=f"http_{exc.status}")
+    except (requests.exceptions.Timeout, HttpTimeout):
+        return ReaderResult(postings=[], complete=False, error="timeout")
+    except (BadJson, json.JSONDecodeError):
+        return ReaderResult(postings=[], complete=False, error="bad_json")
 
 
 def poll_lever(company: str, session: Optional[requests.Session] = None) -> List[Dict[str, Any]]:

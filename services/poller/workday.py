@@ -2,11 +2,20 @@
 from __future__ import annotations
 
 import logging
+import json
 import re
 from typing import Any, Dict, List, Optional
 import requests
 
 from services.poller.reader_result import ReaderResult
+from services.poller.http import (
+    make_session,
+    post_json,
+    BoardNotFound,
+    HttpError,
+    BadJson,
+    HttpTimeout,
+)
 
 logger = logging.getLogger("poller.workday")
 
@@ -55,7 +64,7 @@ def _parse_workday_item(item: Dict[str, Any], host: str = "", site: str = "", bo
 def parse_workday_response(data: Any, host: str = "", site: str = "", board_url: str = "") -> ReaderResult:
     """Parse Workday CXS response page into standardized ReaderResult."""
     if not isinstance(data, dict) or "jobPostings" not in data:
-        return ReaderResult(postings=[], complete=False, error="Malformed response: missing 'jobPostings' key")
+        return ReaderResult(postings=[], complete=False, error="bad_json")
 
     postings: List[Dict[str, Any]] = []
     items = data.get("jobPostings", [])
@@ -78,20 +87,14 @@ def read_workday_board(
     parsed = parse_workday_url(board_url)
     if not parsed:
         logger.warning("Invalid Workday board URL: %s", board_url)
-        return ReaderResult(postings=[], complete=False, error=f"Invalid Workday board URL: {board_url}")
+        return ReaderResult(postings=[], complete=False, error="board_not_found")
 
     host = parsed["host"]
     tenant = parsed["tenant"]
     site = parsed["site"]
     api_url = f"https://{host}/wday/cxs/{tenant}/{site}/jobs"
 
-    s = session or requests.Session()
-    s.headers.update({
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    })
-
+    s = session or make_session("workday")
     jobs: List[Dict[str, Any]] = []
     offset = 0
     limit = 20
@@ -101,14 +104,15 @@ def read_workday_board(
     while offset < max_jobs:
         payload = {"appliedFacets": {}, "limit": limit, "offset": offset, "searchText": ""}
         try:
-            resp = s.post(api_url, json=payload, timeout=20)
-            if resp.status_code == 404:
-                return ReaderResult(postings=jobs, complete=False, error=f"404 Not Found: {board_url}")
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as exc:
-            logger.error("Error polling Workday %s at offset %d: %s", board_url, offset, exc)
-            return ReaderResult(postings=jobs, complete=False, error=str(exc))
+            data = post_json(s, api_url, body=payload)
+        except BoardNotFound:
+            return ReaderResult(postings=jobs, complete=False, error="board_not_found")
+        except HttpError as exc:
+            return ReaderResult(postings=jobs, complete=False, error=f"http_{exc.status}")
+        except (requests.exceptions.Timeout, HttpTimeout):
+            return ReaderResult(postings=jobs, complete=False, error="timeout")
+        except (BadJson, json.JSONDecodeError):
+            return ReaderResult(postings=jobs, complete=False, error="bad_json")
 
         page_result = parse_workday_response(data, host=host, site=site, board_url=board_url)
         if page_result.error:

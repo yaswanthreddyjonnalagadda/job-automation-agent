@@ -2,11 +2,20 @@
 from __future__ import annotations
 
 import logging
+import json
 import re
 from typing import Any, Dict, List, Optional
 import requests
 
 from services.poller.reader_result import ReaderResult
+from services.poller.http import (
+    make_session,
+    get_json,
+    BoardNotFound,
+    HttpError,
+    BadJson,
+    HttpTimeout,
+)
 
 logger = logging.getLogger("poller.smartrecruiters")
 
@@ -53,7 +62,7 @@ def _parse_smartrecruiters_item(item: Dict[str, Any], slug: str = "") -> Dict[st
 def parse_smartrecruiters_response(data: Any, slug: str = "") -> ReaderResult:
     """Parse SmartRecruiters postings response into standardized ReaderResult."""
     if not isinstance(data, dict) or "content" not in data:
-        return ReaderResult(postings=[], complete=False, error="Malformed response: missing 'content' key")
+        return ReaderResult(postings=[], complete=False, error="bad_json")
 
     postings: List[Dict[str, Any]] = []
     content = data.get("content", [])
@@ -73,17 +82,18 @@ def read_smartrecruiters_board(slug: str, session: Optional[requests.Session] = 
     GET https://api.smartrecruiters.com/v1/companies/{slug}/postings
     """
     url = f"https://api.smartrecruiters.com/v1/companies/{slug}/postings"
-    s = session or requests.Session()
+    s = session or make_session("smartrecruiters")
     try:
-        resp = s.get(url, timeout=15)
-        if resp.status_code == 404:
-            logger.warning("SmartRecruiters company slug not found: %s", slug)
-            return ReaderResult(postings=[], complete=False, error=f"404 Not Found: {slug}")
-        resp.raise_for_status()
-        return parse_smartrecruiters_response(resp.json(), slug=slug)
-    except Exception as exc:
-        logger.error("Error polling SmartRecruiters slug %s: %s", slug, exc)
-        return ReaderResult(postings=[], complete=False, error=str(exc))
+        data = get_json(s, url)
+        return parse_smartrecruiters_response(data, slug=slug)
+    except BoardNotFound:
+        return ReaderResult(postings=[], complete=False, error="board_not_found")
+    except HttpError as exc:
+        return ReaderResult(postings=[], complete=False, error=f"http_{exc.status}")
+    except (requests.exceptions.Timeout, HttpTimeout):
+        return ReaderResult(postings=[], complete=False, error="timeout")
+    except (BadJson, json.JSONDecodeError):
+        return ReaderResult(postings=[], complete=False, error="bad_json")
 
 
 def poll_smartrecruiters(slug: str, session: Optional[requests.Session] = None) -> List[Dict[str, Any]]:
