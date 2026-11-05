@@ -1827,6 +1827,20 @@ class PageAgent:
     def locate(self, page, ref: str):
         return self.tab(page).locator(f"aria-ref={ref}")
 
+    def _record_key(self, page, control: Control) -> str:
+        """The key verified auto-submit's field comparison looks a control up by: its live DOM id or
+        name, the same "ref" browser_automation.read_back_fields() reports -- not the accessibility
+        snapshot ref this class answers controls by. Those are two different id spaces; a value recorded
+        under the wrong one is invisible to safety.approved_values() and verified auto-submit can never
+        confirm that field, however good the answer (f334)."""
+        try:
+            locator = self.locate(page, control.ref)
+            dom_id = locator.get_attribute("id") or locator.get_attribute("name") or ""
+        except Exception as _swallowed:
+            logger.debug("_record_key: %s", diagnostics.short_exc(_swallowed, 100))
+            dom_id = ""
+        return f"[id={json.dumps(dom_id)}]" if dom_id else f"aria:{control.question}"
+
     # How long a page's network is waited on to go quiet. A site that has not gone quiet in this long, on this
     # host, is not waited on for that long again (Workday keeps polling, so every settle of a run paid all of it:
     # settle(800 ms) took 8.8 s, Rackspace, 2 November).
@@ -3240,8 +3254,9 @@ class PageAgent:
             owned = concept_matcher.match_concept(question=question, container=control.container,
                                                   context=control.context, name=control.name)
             if owned in _PROFILE_OWNS:
+                is_sev = getattr(control, "multiple", False) or getattr(control, "several", False) or getattr(control, "kind", "") in ("checkbox_group", "multiselect")
                 val, src = concept_matcher.resolve_profile_value(concept=owned, profile=self.profile,
-                                                                 options=control.options, question=question)
+                                                                 options=control.options, question=question, several=is_sev)
                 if val:
                     return val, src
             return explicit, "profile.answer_library"
@@ -3267,11 +3282,13 @@ class PageAgent:
         if concept == "VISA_SPONSORSHIP" and _asks_for_detail_in_text(control, question):
             concept = None      # "please specify the type" wants the type, not Yes or No (f285)
         if concept:
+            is_sev = getattr(control, "multiple", False) or getattr(control, "several", False) or getattr(control, "kind", "") in ("checkbox_group", "multiselect")
             val, src = concept_matcher.resolve_profile_value(
                 concept=concept,
                 profile=self.profile,
                 options=control.options,
                 question=question,
+                several=is_sev,
             )
             if val:
                 return val, src
@@ -4469,7 +4486,7 @@ class PageAgent:
                     answer.value = instead
                 given.append((answer, control))
                 self.written[control.question or answer.question] = answer.value
-                self.assistant.values.record(self.tab(page), f"aria:{control.question}", answer.value,
+                self.assistant.values.record(self.tab(page), self._record_key(page, control), answer.value,
                                              answer.source or "agent")
                 logger.info('FIELD_ACTION: application field handled')
                 self._remember(control, answer)
@@ -6152,7 +6169,14 @@ class PageAgent:
                 logger.info("No choice matching %r for %r among %s", value, control.question[:50], control.options[:8])
                 return False
             try:
-                loc.select_option(label=control.options[index], timeout=5_000)
+                if (getattr(control, "multiple", False) or ";" in str(value)) and ";" in str(value):
+                    labels = [control.options[best(control.options, [p.strip()])] for p in str(value).split(";") if best(control.options, [p.strip()]) is not None]
+                    if labels:
+                        loc.select_option(label=labels, timeout=5_000)
+                    else:
+                        loc.select_option(label=control.options[index], timeout=5_000)
+                else:
+                    loc.select_option(label=control.options[index], timeout=5_000)
                 self._choice_methods[control.ref] = "native_select"
                 # Verify the option actually committed (Phase 0-B4) rather than trusting that
                 # select_option() not throwing means it did -- form_fields.choose()'s own

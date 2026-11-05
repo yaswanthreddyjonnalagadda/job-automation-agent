@@ -35,6 +35,9 @@ def _git(*args: str) -> str:
             errors="replace",
             timeout=20,
         )
+        if res.returncode != 0:
+            err = res.stderr.strip() or res.stdout.strip() or f"exit code {res.returncode}"
+            return f"<git error: {err}>"
         return res.stdout.strip()
     except Exception as exc:
         return f"<git error: {exc}>"
@@ -46,33 +49,47 @@ def main() -> int:
     print("=" * 76)
 
     # 1. Branch & Recent Commits
-    branch = _git("branch", "--show-current") or "(detached HEAD)"
-    tracking = _git("status", "-sb").splitlines()[0] if _git("status", "-sb") else branch
+    branch_out = _git("branch", "--show-current")
+    branch = branch_out if not branch_out.startswith("<git error:") else "(unknown branch)"
+    status_sb = _git("status", "-sb")
+    tracking = status_sb.splitlines()[0] if status_sb and not status_sb.startswith("<git error:") else branch
     print(f"\n[1] BRANCH & RECENT COMMITS: {tracking}")
-    for line in _git("log", "-n", "5", "--oneline").splitlines():
+    log_out = _git("log", "-n", "5", "--oneline")
+    for line in log_out.splitlines():
         print(f"    {line}")
 
     # 2. Uncommitted Work (Working Tree & Index)
-    status_lines = [
-        line for line in _git("status", "-s").splitlines()
-        if not line.strip().endswith(".claude/")
-    ]
-    print(f"\n[2] UNCOMMITTED WORK IN WORKING TREE ({len(status_lines)} item(s)):")
-    if status_lines:
-        print("    WARNING: Uncommitted changes present! Inspect `git diff` before editing:")
-        for line in status_lines:
-            print(f"      {line}")
+    raw_status = _git("status", "-s")
+    if raw_status.startswith("<git error:"):
+        print("\n[2] UNCOMMITTED WORK IN WORKING TREE (UNKNOWN):")
+        print(f"    ERROR: Could not query git status: {raw_status}")
     else:
-        print("    Working tree is clean.")
+        status_lines = [
+            line for line in raw_status.splitlines()
+            if not line.strip().endswith(".claude/")
+        ]
+        print(f"\n[2] UNCOMMITTED WORK IN WORKING TREE ({len(status_lines)} item(s)):")
+        if status_lines:
+            print("    WARNING: Uncommitted changes present! Inspect `git diff` before editing:")
+            for line in status_lines:
+                print(f"      {line}")
+        else:
+            print("    Working tree is clean.")
 
     # 3. Pending Branches & Stashes
-    unmerged = _git("branch", "--no-merged", "HEAD").splitlines()
-    stashes = _git("stash", "list").splitlines()
-    print(f"\n[3] PENDING BRANCHES ({len(unmerged)}) & STASHES ({len(stashes)}):")
-    for b in unmerged[:8]:
-        print(f"    unmerged branch: {b.strip()}")
-    for s in stashes[:5]:
-        print(f"    {s.strip()}")
+    unmerged_raw = _git("branch", "--no-merged", "HEAD")
+    unmerged = [b for b in unmerged_raw.splitlines() if not b.startswith("<git error:")]
+    stashes_raw = _git("stash", "list")
+    stashes = [s for s in stashes_raw.splitlines() if not s.startswith("<git error:")]
+    if unmerged_raw.startswith("<git error:"):
+        print(f"\n[3] PENDING BRANCHES (ERROR) & STASHES:")
+        print(f"    {unmerged_raw}")
+    else:
+        print(f"\n[3] PENDING BRANCHES ({len(unmerged)}) & STASHES ({len(stashes)}):")
+        for b in unmerged[:8]:
+            print(f"    unmerged branch: {b.strip()}")
+        for s in stashes[:5]:
+            print(f"    {s.strip()}")
 
     # 4. Failure Catalogue State
     failures_dir = ROOT / "reference" / "failures"

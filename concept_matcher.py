@@ -581,6 +581,11 @@ def best_option_match(desired: str, options: list[str]) -> Optional[str]:
     """Find the best match from a select/dropdown's options."""
     if not desired or not options:
         return None
+    if ";" in desired:
+        for part in desired.split(";"):
+            m = best_option_match(part.strip(), options)
+            if m:
+                return m
     desired_clean = clean_text(desired)
     desired_lower = desired.strip().lower()
     import option_match
@@ -684,6 +689,7 @@ def resolve_profile_value(
     profile: Any,
     options: Optional[list[str]] = None,
     question: str = "",
+    several: bool = False,
 ) -> tuple[str, str]:
     """Retrieve the value and source for a given concept from the user profile.
 
@@ -829,7 +835,11 @@ def resolve_profile_value(
                     if re.search(r"\byes\b|^hispanic\b", opt, re.IGNORECASE) and not re.search(r"\bnot\b", opt, re.IGNORECASE):
                         return opt, src
     elif concept == "ETHNICITY_RACE":
-        val = str(getattr(profile, "ethnicity", "") or "").strip()
+        raw = getattr(profile, "ethnicity", "")
+        if isinstance(raw, (list, tuple)):
+            val = "; ".join(str(item).strip() for item in raw if str(item).strip())
+        else:
+            val = str(raw or "").strip()
         src = "profile.ethnicity"
     elif concept == "LEGAL_AGE_18":
         val = "Yes" if _is_yes(getattr(profile, "at_least_18", True), default=True) else "No"
@@ -963,6 +973,11 @@ def resolve_profile_value(
         val = _date_part(val, part.group(1), options) or val
 
     if val and options:
+        if several or (question and re.search(r"\b(?:select|check|tick|choose)\s+all\b", question, re.I)):
+            import option_match
+            picked = option_match.several_offered(options, val)
+            if picked:
+                return "; ".join(picked), src
         matched_opt = best_option_match(val, options)
         if matched_opt:
             return matched_opt, src

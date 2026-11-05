@@ -46,6 +46,8 @@ services:
       DATABASE_URL: postgresql://${DB_USER:-agent}:${DB_PASSWORD:-agent_secret}@postgres:5432/${DB_NAME:-jobagent}
       REDIS_URL: redis://redis:6379/0
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
     volumes:
       - ./storage:/app/storage
 

@@ -10,6 +10,7 @@ without a profile here first.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 from flask import Blueprint, redirect, render_template_string, request, url_for
@@ -90,6 +91,13 @@ def _profile_page(values, note="", error="", drafted=(), saved=False):
         field = profile_setup.FIELDS.get(name)
         if field and field.kind == "list":
             value = ", ".join(value or ())
+        elif field and field.kind == "multi_choice":
+            if isinstance(value, (list, tuple, set)):
+                value = [str(x).strip() for x in value if str(x).strip()]
+            elif isinstance(value, str) and value:
+                value = [p.strip() for p in re.split(r"[;,\n]", value) if p.strip()]
+            else:
+                value = [str(value).strip()] if value else []
         elif field and field.kind == "lines":
             value = "\n".join(" | ".join(row) for row in (value or ()))
         elif field and field.kind == "number":
@@ -178,6 +186,9 @@ PROFILE_HTML = ui_shell.page("Your profile", """
 .profile .check { margin:14px 0 0; }
 .drafted { background:var(--accent-soft) !important; }
 .req { color:var(--bad); }
+select[multiple] { height:auto; min-height:110px; padding:6px; border:1px solid var(--line); border-radius:var(--radius-sm); width:100%; }
+select[multiple] option { padding:6px 10px; border-radius:4px; margin:2px 0; }
+select[multiple] option:checked { background:var(--accent); color:var(--accent-ink); }
 .bar { position:sticky; bottom:0; background:var(--bg); padding:12px 0; border-top:1px solid var(--line);
        display:flex; gap:12px; align-items:center; }
 </style>
@@ -208,6 +219,11 @@ PROFILE_HTML = ui_shell.page("Your profile", """
           {% if f.kind == "choice" %}
             <select id="{{ f.name }}" name="{{ f.name }}" class="{% if f.name in drafted %}drafted{% endif %}">
               {% for c in f.choices %}<option value="{{ c }}" {% if c == v %}selected{% endif %}>{{ c or "Ask me each time" }}</option>{% endfor %}
+            </select>
+          {% elif f.kind == "multi_choice" %}
+            <select id="{{ f.name }}" name="{{ f.name }}" multiple size="4" class="multiselect {% if f.name in drafted %}drafted{% endif %}">
+              {% for c in f.choices %}<option value="{{ c }}" {% if c in (v or []) %}selected{% endif %}>{{ c }}</option>{% endfor %}
+              {% for extra in (v or []) %}{% if extra and extra not in f.choices %}<option value="{{ extra }}" selected>{{ extra }}</option>{% endif %}{% endfor %}
             </select>
           {% elif f.kind == "lines" %}
             <textarea id="{{ f.name }}" name="{{ f.name }}" rows="3" class="{% if f.name in drafted %}drafted{% endif %}">{{ v or "" }}</textarea>

@@ -530,6 +530,22 @@ class JobApplicationAssistant(EmailVerificationMixin):
             return []
         return [f"--remote-debugging-port={int(raw)}", "--remote-debugging-address=127.0.0.1"]
 
+    @staticmethod
+    def _extension_args() -> list[str]:
+        """Loads one extension into the agent's own isolated profile, so it can be watched
+        read-only from outside (a second claude-in-chrome browser, never the owner's Chrome).
+
+        Off unless CLAUDE_EXTENSION_PATH names a real, existing directory (the unpacked
+        extension -- e.g. an installed copy's versioned folder under Chrome's own
+        ``User Data\\<Profile>\\Extensions\\<id>\\<version>``). Loading only this one
+        extension, nothing else: it must not change what an employer's form sees any
+        other way, and it never touches the owner's own Chrome profile or its sign-ins.
+        """
+        raw = os.getenv("CLAUDE_EXTENSION_PATH", "").strip()
+        if not raw or not Path(raw).is_dir():
+            return []
+        return [f"--disable-extensions-except={raw}", f"--load-extension={raw}"]
+
     def _launch(self, channel: str, profile_dir: Path):
         kwargs = {"channel": channel} if channel and channel != "chromium" else {}
         return self._playwright.chromium.launch_persistent_context(
@@ -553,7 +569,7 @@ class JobApplicationAssistant(EmailVerificationMixin):
                   # Not announced as automated (f181): Google refuses to sign anyone in on a browser that says it
                   # is automated, and the owner signs in to Gmail here so the agent can read a verification email.
                   "--disable-blink-features=AutomationControlled",
-                  *self._debug_port_args()],
+                  *self._debug_port_args(), *self._extension_args()],
             ignore_default_args=["--enable-automation"],
             # Deny browser-level permission requests (push notifications, location, etc.)
             # so they don't block the application mid-form

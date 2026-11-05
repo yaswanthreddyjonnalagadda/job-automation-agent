@@ -440,7 +440,7 @@ def test_hybrid_mode_holds_at_the_daily_cap(page, tmp_path, agent, monkeypatch):
         def list_all(self):
             class Record:
                 status = "submitted"
-                updated_at = datetime.now().date().isoformat()
+                updated_at = datetime.now(timezone.utc).date().isoformat()
             return [Record() for _ in range(10)]
 
     tracker = CappedTracker()
