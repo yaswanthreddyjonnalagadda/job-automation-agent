@@ -1,9 +1,7 @@
-"""What counts as a marketing opt-in on an account form (f276).
+"""What counts as a marketing opt-in on an account form (f276, reversed by f336).
 
-The owner's rule for creating an account is that marketing opt-ins are never the agent's to give. The code that fills a
-create-account form left such a box alone, which assumed the site draws it unticked. Walmart's sign-up form draws
-"Send me emails about new arrivals, hot items, daily savings and more." already ticked, and the agent would have pressed
-Continue with it ticked. One definition of the wording, used to leave a box unticked and to untick one the site ticked.
+The detector identifies marketing opt-in phrases (newsletters, promotions, updates, job alerts).
+Under f336 (Task 3), marketing opt-ins are automatically accepted/ticked to avoid unnecessary stops.
 """
 from __future__ import annotations
 

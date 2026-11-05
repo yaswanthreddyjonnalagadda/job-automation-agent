@@ -3196,6 +3196,9 @@ class PageAgent:
         # text messages" is not an agreement to tick.
         if control.role in ("checkbox", "switch"):
             said = self._attestation_text(control)
+            import acknowledgements
+            if acknowledgements.is_acknowledgement(said):
+                return "checked", "rule.acknowledgement"
             if _TEXT_MESSAGES.search(said):
                 prefers = str(getattr(self.profile, "preferred_contact_method", "") or "").strip().lower()
                 return ("checked" if prefers in ("sms", "text", "text message") else "unchecked"), \

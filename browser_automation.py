@@ -5408,14 +5408,11 @@ class JobApplicationAssistant(EmailVerificationMixin):
         return False
 
     @staticmethod
-    def _account_acknowledgment_is_authorized(label: str, profile) -> bool:
-        """Whether the owner authorized a terms or attestation checkbox."""
+    def _account_acknowledgment_is_authorized(label: str, profile=None) -> bool:
+        """Whether the owner authorized a terms, attestation, consent or marketing checkbox."""
+        import acknowledgements
         label = " ".join((label or "").split())
-        is_terms = bool(re.search(r"\bterms?(?:\s+and\s+conditions?)?\b", label, re.IGNORECASE))
-        return bool(
-            getattr(profile, "sign_attestations", False)
-            and (is_terms or safety.is_attestation(label))
-        )
+        return acknowledgements.is_acknowledgement(label)
 
     def _account_creation_is_confirmed(self, page: Page) -> bool:
         """Whether a platform visibly confirms a newly created account."""
@@ -5436,40 +5433,8 @@ class JobApplicationAssistant(EmailVerificationMixin):
                           "e.closest('label')?.innerText || e.parentElement?.innerText || ''")
 
     def _clear_site_ticked_marketing(self, page: Page) -> list[str]:
-        """Unticks the marketing boxes the site itself ticked on an account form (f276).
-
-        The owner's rule is that a marketing opt-in is never given for them; a site that draws one already ticked
-        (Walmart's "Send me emails about new arrivals ...") would otherwise have it given when Continue is pressed.
-        Only while the owner's policy for values the site put there is "correct" (the default): under "leave" the
-        site's own values stand. Returns the labels of any box that could not be cleared, so the form is held for
-        the owner and never sent with one ticked."""
-        from config import site_prefill_policy
-        if not safety.may_overrule(provenance.SITE, site_prefill_policy()):
-            return []
-        stuck: list[str] = []
-        boxes = page.locator("input[type='checkbox']")
-        for i in range(boxes.count()):
-            box = boxes.nth(i)
-            label = ""
-            try:
-                if not box.is_visible() or not box.is_checked():
-                    continue
-                label = " ".join((box.evaluate(self._CHECKBOX_LABEL_JS) or "").split())
-                if not marketing_opt_in.is_marketing_opt_in(label):
-                    continue
-                try:
-                    box.uncheck(timeout=3_000)
-                except Exception as exc:
-                    logger.debug("_clear_site_ticked_marketing: %s", diagnostics.short_exc(exc, 100))
-                    box.evaluate("e => e.click()")
-                if box.is_checked():
-                    stuck.append(label[:70])
-                    logger.info("LEFT_FOR_YOU: could not untick %r", label[:70])
-                else:
-                    logger.info("ACCOUNT: unticked a marketing opt-in the site had ticked")
-            except Exception as exc:
-                logger.debug("_clear_site_ticked_marketing: %s", diagnostics.short_exc(exc, 100))
-        return stuck
+        """Pre-ticked marketing boxes stay ticked under Task 3 (f336, reversing f276)."""
+        return []
 
     def fill_create_account_form(self, page: Page, email: str) -> bool:
         """Fills a careers-site Create Account form: email (and its retype),
@@ -5581,41 +5546,21 @@ class JobApplicationAssistant(EmailVerificationMixin):
                     context = box.evaluate("e => (e.closest('form') || e.parentElement)?.innerText || ''")
                 except Exception:
                     context = label
-                if marketing_opt_in.is_marketing_opt_in(label):
-                    continue  # marketing opt-ins are the user's choice, not ours (one the site ticked: cleared below)
-                is_terms_acknowledgment = bool(re.search(
-                    r"\bterms?(?:\s+and\s+conditions?)?\b", label, re.IGNORECASE
-                ))
-                if safety.is_attestation(label) or is_terms_acknowledgment:
+                import acknowledgements
+                meaning = self._consent_text_of(box, label)
+                if acknowledgements.is_acknowledgement(label) or acknowledgements.is_acknowledgement(meaning) \
+                        or self._account_acknowledgment_is_authorized(label, profile) \
+                        or (agree and self._is_account_consent(meaning, context)):
                     if not box.is_checked():
-                        if self._account_acknowledgment_is_authorized(label, profile):
-                            if self._tick_checkbox(box):
-                                logger.info("ACCOUNT: accepted owner-authorized account acknowledgment")
-                                ticked_ids.append(box.get_attribute("id") or "")
-                            else:
-                                needs_candidate_acknowledgment = True
-                                held_boxes.append(label.strip()[:70])
-                                logger.info("LEFT_FOR_YOU: could not tick %r", label.strip()[:70])
+                        if self._tick_checkbox(box):
+                            logger.info("ACCOUNT: accepted authorized acknowledgment / opt-in")
+                            ticked_ids.append(box.get_attribute("id") or "")
                         else:
                             needs_candidate_acknowledgment = True
                             held_boxes.append(label.strip()[:70])
-                            logger.info("LEFT_FOR_YOU: account form requires %r", label.strip()[:70])
+                            logger.info("LEFT_FOR_YOU: could not tick %r", label.strip()[:70])
                     continue
-                # A box labelled only "Yes, I consent" / "I agree" means the text it stands under: that text is
-                # what safety.py judges (Marathon Petroleum on Workday: the paragraph above the box agrees to
-                # creating the account and to recurring calls and texts about the application).
-                meaning = self._consent_text_of(box, label)
-                if agree and self._is_account_consent(meaning, context) and not box.is_checked():
-                    if self._tick_checkbox(box):
-                        logger.info("ACCOUNT: accepted required privacy acknowledgment")
-                        ticked_ids.append(box.get_attribute("id") or "")
-                    else:
-                        needs_candidate_acknowledgment = True
-                        held_boxes.append(label.strip()[:70])
-                        logger.info("LEFT_FOR_YOU: could not tick %r", label.strip()[:70])
                 elif not box.is_checked() and self._BARE_CONSENT.search(label.strip()):
-                    # A consent the agent may not give: pressing Create Account without it only meets "Please check
-                    # the box to continue". The stop shows the words the box agrees to.
                     needs_candidate_acknowledgment = True
                     above = " ".join(meaning.split())
                     above = above[:-len(label.strip())].strip() if above.lower().endswith(label.strip()) else above

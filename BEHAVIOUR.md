@@ -1,5 +1,9 @@
 # What the assistant does, and what it never does
 
+### Standing consent, acknowledgements, and marketing opt-ins (5 November 2026)
+
+Reversing the f276 rule in marketing_opt_in.py, the agent always accepts agreements, terms and conditions, privacy notices, data processing terms, truthful certifications ('I certify / attest the information is true'), background check consents, e-signatures, at-will declarations, arbitration clauses, communication preferences, and marketing opt-ins (reference/acknowledgements.json, acknowledgements.py). Matching checkboxes are ticked, agree buttons on consent dialogs are pressed, and pre-ticked boxes (including Walmart's 'new arrivals' email opt-in) stay ticked. Checkboxes that represent legal status or eligibility answers (such as US work authorization or visa sponsorship) remain classified as legal questions under Task 1 and are never auto-ticked blindly as acknowledgements.
+
 ### Grounded AI answering contract and optional field handling (5 November 2026)
 
 Every AI answering call (`claude_integration.py` `answer_single_question`, `choose_option`, `answer_screening_questions`; `open_answers.py` `write()`, `review()`) enforces a strict grounded contract across Claude, Gemini, and OpenAI clients. Models are instructed to answer only from the provided candidate facts and to return a structured JSON response containing `{"grounded": true/false, "answer": "<answer>"}`. Any response where `grounded` is missing or false, where the returned answer is empty, or where an option is not in the offered choices is treated as ungrounded:

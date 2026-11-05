@@ -1,0 +1,178 @@
+{
+  "categories": {
+    "terms": {
+      "phrases": [
+        "terms of use",
+        "terms and conditions",
+        "terms of service",
+        "user agreement",
+        "terms & conditions",
+        "terms and policies",
+        "general terms",
+        "agree to the terms",
+        "accept the terms",
+        "abide by the terms"
+      ]
+    },
+    "privacy": {
+      "phrases": [
+        "privacy policy",
+        "privacy statement",
+        "privacy notice",
+        "privacy agreement",
+        "read and accept the privacy",
+        "agree to the privacy",
+        "privacy practices",
+        "candidate privacy",
+        "applicant privacy"
+      ]
+    },
+    "data_processing": {
+      "phrases": [
+        "data processing",
+        "processing of personal data",
+        "processing my personal",
+        "consent to data",
+        "transfer of personal data",
+        "data transfer",
+        "processing and transfer",
+        "data protection",
+        "personal data"
+      ]
+    },
+    "certifications": {
+      "phrases": [
+        "i certify",
+        "i attest",
+        "information is true",
+        "true and complete",
+        "accurate and complete",
+        "to the best of my knowledge",
+        "true and correct",
+        "certify that all information",
+        "certify that the information",
+        "attest that the information",
+        "certify that all statements",
+        "i declare under penalty of perjury",
+        "true, correct and complete",
+        "under penalty of perjury",
+        "certify that answers given",
+        "statements are true"
+      ]
+    },
+    "background_check": {
+      "phrases": [
+        "background check",
+        "background investigation",
+        "consumer report",
+        "investigative consumer report",
+        "consent to background",
+        "background screening",
+        "pre-employment screening",
+        "pre-employment background",
+        "criminal background check",
+        "authorize a background"
+      ]
+    },
+    "e_signature": {
+      "phrases": [
+        "electronic signature",
+        "e-signature",
+        "sign electronically",
+        "electronic signature consent",
+        "by typing my name",
+        "binding electronic signature",
+        "acknowledge this electronic signature"
+      ]
+    },
+    "at_will": {
+      "phrases": [
+        "at-will",
+        "at will employment",
+        "employment at will",
+        "at-will employment",
+        "understand that employment is at-will"
+      ]
+    },
+    "arbitration": {
+      "phrases": [
+        "arbitration",
+        "arbitration agreement",
+        "mandatory arbitration",
+        "binding arbitration",
+        "arbitration clause",
+        "dispute resolution",
+        "agreement to arbitrate",
+        "mutual agreement to arbitrate"
+      ]
+    },
+    "contact_consent": {
+      "phrases": [
+        "sms",
+        "text message",
+        "text messages",
+        "receive texts",
+        "receive text messages",
+        "consent to receive sms",
+        "consent to receive text",
+        "contact me by email",
+        "contact me via text",
+        "receive communications",
+        "agree to receive text",
+        "automated text messages",
+        "recruiting communications",
+        "updates regarding my application"
+      ]
+    },
+    "marketing_opt_ins": {
+      "phrases": [
+        "hear more",
+        "newsletter",
+        "newsletters",
+        "campaign",
+        "campaigns",
+        "marketing",
+        "job alerts",
+        "promotions",
+        "promotional",
+        "new arrivals",
+        "daily savings",
+        "hot items",
+        "special offers",
+        "exclusive offers",
+        "great deals",
+        "deals",
+        "send me emails",
+        "send me offers",
+        "send me updates",
+        "send me news",
+        "send me texts",
+        "send me messages",
+        "email me about upcoming"
+      ]
+    }
+  },
+  "agree_buttons": [
+    "i agree",
+    "agree",
+    "i accept",
+    "accept",
+    "i acknowledge",
+    "acknowledge",
+    "agree and continue",
+    "accept and continue",
+    "acknowledge and continue",
+    "agree & continue",
+    "accept & continue",
+    "acknowledge & continue",
+    "save and continue",
+    "save & continue",
+    "continue",
+    "ok",
+    "got it",
+    "confirm",
+    "proceed",
+    "yes, i agree",
+    "yes, i accept"
+  ]
+}

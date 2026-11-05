@@ -50,6 +50,13 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 
 ## 3. Current Repository State
 
+- **Antigravity: Task 3 Answers Pipeline — Always Accept Acknowledgements, Consents, Certifications, and Marketing Opt-Ins (5 November 2026)** (branch `answers/3`):
+  - **Shared Acknowledgements Catalog (`reference/acknowledgements.json`, `acknowledgements.py`)**: Extracted all terms, privacy, data processing, certifications ('I certify/attest the information is true'), background check consents, e-signatures, at-will declarations, arbitration clauses, SMS/email communications, and marketing opt-ins into external reference data matched via `concept_matcher.clean_text` fold.
+  - **Reversal of f276 Marketing Rule (`marketing_opt_in.py`, `browser_automation.py`)**: Pre-ticked marketing boxes (such as Walmart's 'new arrivals' email opt-in) stay ticked (`_clear_site_ticked_marketing` no longer unticks them), and unticked marketing boxes are ticked. Recorded failure note `reference/failures/f336-always-accept-acknowledgements-and-marketing.json`.
+  - **Un-gated Account Acknowledgments (`browser_automation.py`)**: `_account_acknowledgment_is_authorized` returns `True` for all matching acknowledgement, consent, and marketing labels without profile flags.
+  - **Page Agent Checkbox Automation (`page_agent.py`)**: Checkboxes matching acknowledgements are answered with `'checked'` (`rule.acknowledgement`). Legal eligibility checkboxes (sponsorship, work authorization, citizenship) remain excluded under Task 1 and are never auto-ticked blindly.
+  - **Offline Verification**: Added unit tests in `tests/test_acknowledgements.py` (7/7 passed), updated `tests/test_site_ticked_marketing.py` (19/19 passed) and `tests/test_account_creation_consent.py` (22/22 passed), verified ratchets (4/4 passed), no place literals (7/7 passed), and replay guard.
+
 - **Antigravity: Task 2 Answers Pipeline — Grounded AI Answer Contract & Optional Field Leaving Blank (5 November 2026)** (branch `answers/2`):
   - **Structured Grounded Contract (`claude_integration.py`, `gemini_integration.py`, `openai_integration.py`)**: All answering calls (`answer_single_question`, `choose_option`, `answer_screening_questions`) instruct models to answer ONLY from given candidate facts; if facts do not support an answer, return `{"grounded": false, "answer": ""}`. A response without `"grounded"` strictly counts as false.
   - **AnswerResult Datatype**: Created `AnswerResult(str)` supporting structured dictionary and attribute access (`res["grounded"]`, `res["answer"]`, `res.grounded`, `res.answer`, `res.get(...)`) with complete backward compatibility with string operations (`len`, `==`, `words`).

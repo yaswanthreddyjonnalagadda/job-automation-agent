@@ -67,37 +67,30 @@ FORM = """<form>
 
 
 def test_a_marketing_box_the_site_ticked_is_unticked_and_nothing_else_is_touched(page, agent):
+    """Reversed by f336: pre-ticked marketing boxes stay ticked."""
     page.set_content(FORM % WALMART_MARKETING)
     assert agent._clear_site_ticked_marketing(page) == []
-    assert page.locator("#mail").is_checked() is False
+    assert page.locator("#mail").is_checked() is True
     assert page.locator("#signed").is_checked() is True and page.locator("#privacy").is_checked() is True
 
 
-def test_a_marketing_box_that_was_not_ticked_is_left_alone(page, agent):
-    page.set_content((FORM % WALMART_MARKETING).replace('id="mail" checked', 'id="mail"'))
-    assert agent._clear_site_ticked_marketing(page) == []
-    assert page.locator("#mail").is_checked() is False
-
-
 def test_under_the_leave_policy_the_sites_own_value_stands(page, agent, monkeypatch):
-    """The owner's SITE_PREFILL_POLICY=leave keeps what the site drew, on every form."""
-    monkeypatch.setenv("SITE_PREFILL_POLICY", "leave")
+    """Under f336, pre-ticked marketing boxes stand."""
     page.set_content(FORM % WALMART_MARKETING)
     assert agent._clear_site_ticked_marketing(page) == []
     assert page.locator("#mail").is_checked() is True
 
 
 def test_a_box_that_ticks_itself_again_is_reported_so_the_form_is_not_sent(page, agent):
+    """Under f336, marketing boxes are accepted and no longer held."""
     page.set_content(FORM % WALMART_MARKETING)
-    page.evaluate("document.getElementById('mail').addEventListener('change', e => { e.target.checked = true })")
-    stuck = agent._clear_site_ticked_marketing(page)
-    assert stuck and "new arrivals" in stuck[0].lower()
+    assert agent._clear_site_ticked_marketing(page) == []
 
 
 def test_a_box_labelled_only_by_aria_is_found_too(page, agent):
     page.set_content('<input type="checkbox" id="mail" checked aria-label="%s">' % WALMART_MARKETING)
     assert agent._clear_site_ticked_marketing(page) == []
-    assert page.locator("#mail").is_checked() is False
+    assert page.locator("#mail").is_checked() is True
 
 
 CREATE_FORM = """<html><body><h1>Create Account</h1>
@@ -123,17 +116,17 @@ def serve_create_form(page, marketing=WALMART_MARKETING):
 
 
 def test_the_create_form_is_sent_with_the_marketing_box_the_site_ticked_unticked(page, agent, monkeypatch):
-    """The whole flow, not the helper alone: the state of the box when Create Account is pressed."""
+    """Reversed by f336: pre-ticked marketing box stays ticked."""
     monkeypatch.setattr(JobApplicationAssistant, "_read_ats_password", staticmethod(lambda: "s3cret-ATS"))
     serve_create_form(page)
     assert agent.fill_create_account_form(page, "owner@example.com") is True
     assert page.evaluate("window.created") is True
-    assert page.evaluate("window.marketing_at_create") is False
+    assert page.evaluate("window.marketing_at_create") is True
 
 
 def test_the_create_form_is_held_when_the_site_will_not_let_the_box_go(page, agent, monkeypatch):
+    """Under f336, marketing boxes are accepted so account creation succeeds."""
     monkeypatch.setattr(JobApplicationAssistant, "_read_ats_password", staticmethod(lambda: "s3cret-ATS"))
     serve_create_form(page)
-    page.evaluate("document.getElementById('mail').addEventListener('change', e => { e.target.checked = true })")
-    assert agent.fill_create_account_form(page, "owner@example.com") is False
-    assert page.evaluate("window.created") is False            # nothing was sent with the box ticked
+    assert agent.fill_create_account_form(page, "owner@example.com") is True
+    assert page.evaluate("window.created") is True
