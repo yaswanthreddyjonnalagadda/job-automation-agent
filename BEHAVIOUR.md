@@ -1,5 +1,11 @@
 # What the assistant does, and what it never does
 
+### Clear receipt requirement for submission status (5 November 2026)
+
+An application is marked `submitted` only on clear, unambiguous receipt evidence (`confirmation_text.says_received` or `f307` modal receipt dialog). If a page displays conditional wording, future promises ("once you verify your email your application will be submitted"), advice to complete further steps, or has no receipt evidence, the application is not marked submitted:
+- In `page_agent.py` `_site_confirms`, detection verifies `confirmation_text.says_received` across page blocks, checks modal receipt dialogs (`_a_box_says_it_was_received`), and verifies that `confirmation_text.STILL_TO_DO` does not match. Pages with conditional or deferred verification steps are rejected as receipts.
+- In `apply_flow.py`, user-directed submissions (`submitted_by_user`) require actual receipt evidence from the page or email; without observed receipt evidence, the application status is recorded as `unconfirmed` instead of fabricating `"the page confirmed it"` and recording `submitted`.
+
 ### Standing consent, acknowledgements, and marketing opt-ins (5 November 2026)
 
 Reversing the f276 rule in marketing_opt_in.py, the agent always accepts agreements, terms and conditions, privacy notices, data processing terms, truthful certifications ('I certify / attest the information is true'), background check consents, e-signatures, at-will declarations, arbitration clauses, communication preferences, and marketing opt-ins (reference/acknowledgements.json, acknowledgements.py). Matching checkboxes are ticked, agree buttons on consent dialogs are pressed, and pre-ticked boxes (including Walmart's 'new arrivals' email opt-in) stay ticked. Checkboxes that represent legal status or eligibility answers (such as US work authorization or visa sponsorship) remain classified as legal questions under Task 1 and are never auto-ticked blindly as acknowledgements.

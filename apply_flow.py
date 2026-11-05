@@ -1363,8 +1363,15 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             agent._ensure_state()
             agent.forget_sign_in_attempts(owner_acted=(decision == "continue"))
             if decision == "submitted_by_user":
-                evidence = getattr(assistant, "_confirmation_evidence", "") or "the page confirmed it"
-                status, note = safety.verification_status(evidence)
+                evidence = getattr(assistant, "_confirmation_evidence", "")
+                if not evidence and hasattr(assistant, "_a_box_says_it_was_received") and assistant._a_box_says_it_was_received(page):
+                    evidence = "the page confirmed it in a dialog"
+                elif not evidence and hasattr(assistant, "submission_confirmed") and assistant.submission_confirmed(page, getattr(job, "title", "")):
+                    evidence = "the page confirmed it"
+                if evidence:
+                    status, note = safety.verification_status(evidence)
+                else:
+                    status, note = "unconfirmed", "Submitted by user; unconfirmed (no receipt on page or email)"
                 tracker.update_status(key, status, notes=note)
                 logger.info("SUBMITTED_BY_USER: %s", note)
                 if RuntimeEvent is not None:
@@ -1481,8 +1488,15 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                     except Exception as exc:
                         logger.warning("Could not clear pending account creation on continue: %s", exc)
         if decision == "submitted_by_user":
-            evidence = getattr(assistant, "_confirmation_evidence", "") or "the page confirmed it"
-            status, note = safety.verification_status(evidence)
+            evidence = getattr(assistant, "_confirmation_evidence", "")
+            if not evidence and hasattr(assistant, "_a_box_says_it_was_received") and assistant._a_box_says_it_was_received(page):
+                evidence = "the page confirmed it in a dialog"
+            elif not evidence and hasattr(assistant, "submission_confirmed") and assistant.submission_confirmed(page, getattr(job, "title", "")):
+                evidence = "the page confirmed it"
+            if evidence:
+                status, note = safety.verification_status(evidence)
+            else:
+                status, note = "unconfirmed", "Submitted by user; unconfirmed (no receipt on page or email)"
             tracker.update_status(key, status, notes=note)
             logger.info("SUBMITTED_BY_USER: %s", note)
             if RuntimeEvent is not None:
@@ -2444,11 +2458,17 @@ def main() -> None:
                     diagnostics.capture_safe_screenshot(page, job_dir / "submitted_confirmation.png")
                 except Exception as exc:
                     logger.warning("Could not capture confirmation screenshot: %s", exc)
-                evidence = getattr(assistant, "_confirmation_evidence", "") or \
-                    "the page confirmed it (see submitted_confirmation.png)"
-                status, note = safety.verification_status(evidence)
-                if status == STATUS_SUBMITTED:
-                    delete_screenshots(job_dir)
+                evidence = getattr(assistant, "_confirmation_evidence", "")
+                if not evidence and hasattr(assistant, "_a_box_says_it_was_received") and assistant._a_box_says_it_was_received(page):
+                    evidence = "the page confirmed it in a dialog"
+                elif not evidence and hasattr(assistant, "submission_confirmed") and assistant.submission_confirmed(page, getattr(job, "title", "")):
+                    evidence = "the page confirmed it"
+                if evidence:
+                    status, note = safety.verification_status(evidence)
+                    if status == STATUS_SUBMITTED:
+                        delete_screenshots(job_dir)
+                else:
+                    status, note = "unconfirmed", "Submitted by user; unconfirmed (no receipt on page or email)"
                 tracker.update_status(key, status, notes=note)
                 remember_progress(tracker, key, page, "submitted by the user", assistant=assistant)
                 logger.info("SUBMITTED_BY_USER: confirmation seen on %s", page.url)

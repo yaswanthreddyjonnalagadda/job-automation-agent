@@ -50,6 +50,14 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 
 ## 3. Current Repository State
 
+- **Antigravity: Task 4 Answers Pipeline — Clear Receipt Verification & Unconfirmed Submission Guard (5 November 2026)** (branch `answers/4`):
+  - **Comprehensive Submission Audit**: Audited all places that mark an application submitted (`apply_flow.py`, `page_agent.py`, `safety.py`, `browser_automation.py`) and documented the evidence used by each.
+  - **Receipt Condition Enforcement (`confirmation_text.py`, `page_agent.py`)**:
+    - Extended `confirmation_text.STILL_TO_DO` to detect deferred verification requirements (e.g. 'once you verify your email your application will be submitted').
+    - Updated `page_agent.py` `_site_confirms` to verify `confirmation_text.says_received` on page blocks and check `self.assistant._a_box_says_it_was_received(tab)` (f307 modal receipt check), eliminating the gap where loose regex matching took deferred verification pages as confirmed receipts.
+  - **Unconfirmed Fallback Resolution (`apply_flow.py`)**: Removed the fabricated `"the page confirmed it"` fallback in `submitted_by_user` branches; if neither the page nor inbox provides verified confirmation evidence, the application status is recorded as `"unconfirmed"` rather than prematurely marking `"submitted"`.
+  - **Verification**: Added offline unit tests in `tests/test_clear_receipt_requirement.py` testing `no receipt -> unconfirmed`, `"thank you for applying" -> submitted`, and `"once you verify your email your application will be submitted" -> unconfirmed`. Replay guard (1,109 saved pages) and full regression suite pass cleanly.
+
 - **Antigravity: Task 3 Answers Pipeline — Always Accept Acknowledgements, Consents, Certifications, and Marketing Opt-Ins (5 November 2026)** (branch `answers/3`):
   - **Shared Acknowledgements Catalog (`reference/acknowledgements.json`, `acknowledgements.py`)**: Extracted all terms, privacy, data processing, certifications ('I certify/attest the information is true'), background check consents, e-signatures, at-will declarations, arbitration clauses, SMS/email communications, and marketing opt-ins into external reference data matched via `concept_matcher.clean_text` fold.
   - **Reversal of f276 Marketing Rule (`marketing_opt_in.py`, `browser_automation.py`)**: Pre-ticked marketing boxes (such as Walmart's 'new arrivals' email opt-in) stay ticked (`_clear_site_ticked_marketing` no longer unticks them), and unticked marketing boxes are ticked. Recorded failure note `reference/failures/f336-always-accept-acknowledgements-and-marketing.json`.

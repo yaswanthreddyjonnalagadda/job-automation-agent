@@ -35,7 +35,9 @@ _NOT_YET = re.compile(r"\b(?:once|when|whenever|if|after|until|before|unless|onl
 # The words that say something is still to be done before the application counts.
 STILL_TO_DO = re.compile(
     r"\b(to|and|then) (complete|finish|continue|submit) (your|the|this) application\b|"
-    r"\bbefore (your|the) application (is|can be) (complete|submitted|considered)", re.IGNORECASE)
+    r"\bbefore (your|the) application (is|can be) (complete|submitted|considered)|"
+    r"\b(?:once|when|after|if)\b[^.\n]*\b(?:verify|confirm|activate)\b[^.\n]*\bapplication\s+will\s+be\b",
+    re.IGNORECASE)
 
 # A statement that opens with these (or with nothing) is the page's own: "Thank you. Your application was received."
 _LEAD_IN = re.compile(r"^(?:thank\s+you|thanks|success|great|congratulations|done|all\s+set|and)?[\s,!.:;-]*$",

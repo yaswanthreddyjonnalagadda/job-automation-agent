@@ -7618,6 +7618,12 @@ class PageAgent:
         """True only for a page that says the application was received in a
         confirmation's own words AND asks for nothing more. A page that still shows
         a password box or a form to fill in is not a confirmation, whatever it says."""
+        if hasattr(self.assistant, "_a_box_says_it_was_received"):
+            try:
+                if self.assistant._a_box_says_it_was_received(tab):
+                    return True
+            except Exception as _swallowed:
+                logger.debug("_site_confirms receipt box: %s", diagnostics.short_exc(_swallowed, 100))
         try:
             from sites import adapter_for
             if adapter_for(getattr(tab, "url", "")).submission_confirmed(tab):
@@ -7625,11 +7631,15 @@ class PageAgent:
         except Exception as _swallowed:
             logger.debug("_site_confirms: %s", diagnostics.short_exc(_swallowed, 100))
         try:
+            import confirmation_text
             frames = [f for f in tab.frames[1:]
                       if (f.url or "").startswith("http") and not safety.is_captcha_frame(f.url)]
             texts = [tab.inner_text("body", timeout=5_000)]
             texts += [f.locator("body").inner_text(timeout=3_000) for f in frames]
-            if not any(CONFIRMATION_TEXT.search(t or "") for t in texts):
+            if any(confirmation_text.STILL_TO_DO.search(t or "") for t in texts):
+                return False
+            blocks = [p.strip() for t in texts for p in (t or "").splitlines() if p.strip()]
+            if not any(confirmation_text.says_received(b) for b in blocks):
                 return False
             if not any(self._asks_for_input(part) for part in [tab, *frames]):
                 return True
