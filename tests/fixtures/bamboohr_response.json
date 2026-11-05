@@ -1,0 +1,64 @@
+{
+  "result": [
+    {
+      "id": "9",
+      "jobOpeningName": "Senior Network Engineer",
+      "departmentId": null,
+      "departmentLabel": null,
+      "employmentStatusLabel": "Full-Time",
+      "employmentType": null,
+      "location": {
+        "city": "Sterling",
+        "state": "Virginia"
+      },
+      "atsLocation": {
+        "country": null,
+        "state": null,
+        "province": null,
+        "city": null
+      },
+      "isRemote": null,
+      "locationType": "0"
+    },
+    {
+      "id": "20",
+      "jobOpeningName": "Network Engineer - Mid",
+      "departmentId": "18715",
+      "departmentLabel": "DOT",
+      "employmentStatusLabel": "Full-Time",
+      "employmentType": null,
+      "location": {
+        "city": "Sterling ",
+        "state": "Virginia"
+      },
+      "atsLocation": {
+        "country": null,
+        "state": null,
+        "province": null,
+        "city": null
+      },
+      "isRemote": null,
+      "locationType": "0"
+    },
+    {
+      "id": "49",
+      "jobOpeningName": "Career Fair ",
+      "departmentId": null,
+      "departmentLabel": null,
+      "employmentStatusLabel": "Full-Time",
+      "employmentType": null,
+      "location": {
+        "city": "Sterling",
+        "state": "Virginia"
+      },
+      "atsLocation": {
+        "country": null,
+        "state": null,
+        "province": null,
+        "city": null
+      },
+      "isRemote": null,
+      "locationType": "0"
+    }
+  ]
+}
