@@ -50,6 +50,13 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 
 ## 3. Current Repository State
 
+- **Antigravity: Step 0 Job Source Service Plan — Shared ReaderResult, Real Fixtures & Offline Tests (5 November 2026)** (branch `feat/five-service-architecture`, commits `004b006`, `4d793f0`):
+  - **Shared Reader Result (`services/poller/reader_result.py`)**: Defined typed dataclass `ReaderResult(postings=..., complete=..., error=...)` standardizing public ATS board reader returns across the 6 major platforms (Greenhouse, Lever, Ashby, SmartRecruiters, BambooHR, Workday).
+  - **Reader Parser Decoupling**: Added `parse_<ats>_response` and `read_<ats>_board` to all 6 readers in `services/poller/`, preserving backward compatibility for existing `poll_<ats>` callers. Workday and SmartRecruiters accurately set `complete=False` when total requisitions exceed the batch/page size.
+  - **Sanitized Real Fixtures (`tests/fixtures/`)**: Captured real JSON responses for each ATS with zero personal data: `greenhouse_response.json` (Cloudflare), `lever_response.json` (Palantir), `ashby_response.json` (Linear), `smartrecruiters_response.json` (SmartRecruiters), `bamboohr_response.json` (Secunetics), and `workday_response.json` (Copart CXS).
+  - **100% Offline Test Suite (`tests/test_ats_reader_results.py`)**: 18/18 tests passing with network requests blocked via autouse fixture. Covers successful parsing, incomplete pagination checks, malformed payloads, and 404/error handling.
+  - **Verification**: `test_code_health_ratchets.py` passed 4/4; `replay_guard.py` verified 1,109 saved pages 100% stable; `job-agent-db` container strictly untouched at 92 applications.
+
 - **Antigravity: Direct ATS Aggregator Resolution & Web UI Safe Dispatch (5 November 2026)** (branch `feat/five-service-architecture`, commit `18f2968`):
   - **Aggregator-to-Direct-Careers Resolution (`services/poller/ats_resolver.py`)**: Resolved the broken loop where jobs discovered on aggregators (LinkedIn Guest API, Indeed, etc.) were saved with raw social URLs, causing `apply.py` to abort with exit code 1 ("social site blocked: apply on employer site"). Added `is_aggregator_url`, `extract_aggregator_posting_details` (extracts Schema.org JSON-LD requisition IDs, hiring organization, and embedded direct application links), and `resolve_direct_career_url` (automatic PageUp / higher-ed and employer direct portal mapping).
   - **Safe UI Dispatch (`web_ui.py`)**: Updated `apply_discovered(job_id)` to automatically resolve aggregator URLs to direct ATS career endpoints before spawning `apply.py`. If an aggregator URL cannot be resolved automatically, provides an explicit warning message guiding the user to the direct employer portal rather than silently failing.
