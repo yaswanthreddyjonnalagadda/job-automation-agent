@@ -955,7 +955,7 @@ class JobDiscoveryEngine:
         if score < store_at:
             return
 
-        resolved = resolve_and_seed_job(item.company_name, item.url)
+        resolved = resolve_and_seed_job(item.company_name, item.url, job_title=item.title)
         canonical_url = resolved["canonical_url"]
         ats_type = resolved["ats_type"]
         company_token = resolved["company_token"]

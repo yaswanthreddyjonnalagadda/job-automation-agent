@@ -44,6 +44,122 @@ ATS_PATTERNS = [
     (r"careers-([^/?#]+)\.icims\.com", "icims"),
 ]
 
+AGGREGATOR_DOMAINS = (
+    "linkedin.com",
+    "indeed.com",
+    "dice.com",
+    "glassdoor.com",
+    "ziprecruiter.com",
+    "simplyhired.com",
+)
+
+
+def is_aggregator_url(url: str) -> bool:
+    """Returns True if the URL points to a known aggregator or social job board."""
+    if not url:
+        return False
+    host = (urlparse(url).netloc or "").lower()
+    return any(host == domain or host.endswith("." + domain) for domain in AGGREGATOR_DOMAINS)
+
+
+def extract_aggregator_posting_details(
+    url: str,
+    session: Optional[requests.Session] = None,
+) -> Dict[str, Any]:
+    """
+    Extracts requisition ID, organization, and embedded direct apply/career links
+    from an aggregator job posting using Schema.org JSON-LD or DOM heuristics.
+    """
+    details: Dict[str, Any] = {
+        "job_id": "",
+        "organization": "",
+        "direct_url": "",
+        "description": "",
+    }
+    if not url:
+        return details
+
+    s = session or requests.Session()
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/128.0.0.0 Safari/537.36"
+        )
+    }
+    try:
+        resp = s.get(url, headers=headers, timeout=8.0)
+        if resp.status_code != 200 or not resp.text:
+            return details
+
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for script in soup.find_all("script", type="application/ld+json"):
+            try:
+                data = json.loads(script.string or "")
+                items = data if isinstance(data, list) else [data]
+                for item in items:
+                    if isinstance(item, dict) and item.get("@type") == "JobPosting":
+                        ident = item.get("identifier")
+                        if isinstance(ident, dict):
+                            details["job_id"] = str(ident.get("value") or "").strip()
+                        elif isinstance(ident, (str, int)):
+                            details["job_id"] = str(ident).strip()
+
+                        org = item.get("hiringOrganization")
+                        if isinstance(org, dict):
+                            details["organization"] = str(org.get("name") or "").strip()
+                        elif isinstance(org, str):
+                            details["organization"] = org.strip()
+
+                        desc = str(item.get("description") or "")
+                        details["description"] = desc
+                        url_match = re.search(
+                            r'https?://[^\s"\'<>]+(?:careers|jobs|apply|pageup|massachusetts)[^\s"\'<>]*',
+                            desc,
+                            re.I
+                        )
+                        if url_match:
+                            details["direct_url"] = url_match.group(0).rstrip(".,;)")
+            except Exception:
+                continue
+    except Exception as exc:
+        logger.debug("Failed extracting aggregator details from %s: %s", url, exc)
+
+    return details
+
+
+def resolve_direct_career_url(
+    company: str,
+    title: str = "",
+    raw_url: str = "",
+    session: Optional[requests.Session] = None,
+) -> Optional[str]:
+    """
+    Attempts to resolve an aggregator posting to a direct employer careers/ATS URL.
+    """
+    if not raw_url:
+        return None
+
+    details = extract_aggregator_posting_details(raw_url, session=session)
+    if details.get("direct_url"):
+        return details["direct_url"]
+
+    job_id = details.get("job_id")
+    org = details.get("organization") or company
+
+    # Higher Education / PageUp ATS resolution for UMass / Massachusetts
+    if job_id and ("umass" in org.lower() or "massachusetts" in org.lower()):
+        slug = re.sub(r"[^a-zA-Z0-9]+", "-", title.lower()).strip("-")
+        candidate_url = (
+            f"https://careers.massachusetts.edu/mob/en-us/job/{job_id}/{slug}"
+            if slug else f"https://careers.massachusetts.edu/mob/en-us/job/{job_id}"
+        )
+        return candidate_url
+
+    return None
+
+
 
 def detect_ats_from_url(url: str) -> Tuple[Optional[str], Optional[str]]:
     """
@@ -153,25 +269,36 @@ def register_discovered_company(
 def resolve_and_seed_job(
     company_name: str,
     raw_url: str,
+    job_title: str = "",
     session: Optional[requests.Session] = None,
 ) -> Dict[str, Any]:
     """
-    Unrolls redirect links, identifies the destination ATS, and seeds the company.
+    Unrolls redirect links, resolves aggregators to direct careers, identifies the destination ATS, and seeds the company.
     Returns a dict with:
-        'canonical_url': unrolled destination URL
-        'ats_type': detected ATS or 'unknown'
+        'canonical_url': unrolled/direct destination URL
+        'ats_type': detected ATS or 'external'
         'company_token': extracted slug or slugified company name
         'is_newly_seeded': True if added to target_companies.json
+        'is_direct_careers': True if pointing to an employer direct portal
     """
     final_url = unroll_url(raw_url, session=session)
     ats_type, slug = detect_ats_from_url(final_url)
+
+    is_direct = bool(ats_type and slug)
+
+    if not is_direct and is_aggregator_url(final_url):
+        direct_url = resolve_direct_career_url(company_name, job_title, final_url, session=session)
+        if direct_url:
+            final_url = direct_url
+            ats_type, slug = detect_ats_from_url(final_url)
+            is_direct = True
 
     seeded = False
     if ats_type and slug:
         token = slug
         seeded = register_discovered_company(company_name, slug, ats_type)
     else:
-        ats_type = "external"
+        ats_type = "external" if not is_direct else "generic"
         token = re.sub(r"[^a-zA-Z0-9]+", "-", company_name.lower()).strip("-")
 
     return {
@@ -179,4 +306,5 @@ def resolve_and_seed_job(
         "ats_type": ats_type,
         "company_token": token,
         "is_newly_seeded": seeded,
+        "is_direct_careers": is_direct,
     }

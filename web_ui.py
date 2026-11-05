@@ -403,8 +403,19 @@ def apply_discovered(job_id: int):
         if wants_json:
             return jsonify({"ok": False, "error": error})
         return redirect(url_for("index", error=error))
-    if job.get("url"):
-        threading.Thread(target=_run_apply, args=(job["url"].strip(),), daemon=True).start()
+    target_url = (job.get("url") or "").strip()
+    if target_url:
+        from services.poller.ats_resolver import is_aggregator_url, resolve_direct_career_url
+        if is_aggregator_url(target_url):
+            direct_url = resolve_direct_career_url(job.get("company_name", ""), job.get("job_title", ""), target_url)
+            if direct_url:
+                target_url = direct_url
+            else:
+                error = f"Aggregator posting on {target_url.split('/')[2]}. Open posting directly to apply on employer portal."
+                if wants_json:
+                    return jsonify({"ok": False, "error": error})
+                return redirect(url_for("index", error=error))
+        threading.Thread(target=_run_apply, args=(target_url,), daemon=True).start()
     if wants_json:
         return jsonify({"ok": True, "started": True, "job_id": job_id,
                         "title": job.get("job_title"), "company": job.get("company_name")})
