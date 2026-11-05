@@ -33,6 +33,12 @@ def poll_single_company(company: Dict[str, Any], session: Optional[requests.Sess
         return poll_ashby(slug, session=session)
     elif platform == "workday":
         return poll_workday(board_url or company.get("api_endpoint", ""), session=session)
+    elif platform == "smartrecruiters":
+        from services.poller.smartrecruiters import poll_smartrecruiters
+        return poll_smartrecruiters(slug, session=session)
+    elif platform in ("generic", "custom", "html"):
+        from services.poller.generic_scraper import scrape_career_page
+        return scrape_career_page(board_url or company.get("api_endpoint", ""), session=session)
     else:
         logger.warning("Unsupported ATS platform: %s for %s", platform, slug)
         return []

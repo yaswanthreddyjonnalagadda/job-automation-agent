@@ -65,3 +65,5 @@ data/*.bak
 
 .agents/
 frontend/
+pip-*
+tmp*

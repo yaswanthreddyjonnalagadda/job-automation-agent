@@ -15,8 +15,9 @@ def poll_lever(company: str, session: Optional[requests.Session] = None) -> List
     """
     url = f"https://api.lever.co/v0/postings/{company}"
     s = session or requests.Session()
+    s.headers.setdefault("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
     try:
-        resp = s.get(url, timeout=15)
+        resp = s.get(url, headers={"Accept": "application/json"}, timeout=15)
         if resp.status_code == 404:
             logger.warning("Lever company not found: %s", company)
             return []
