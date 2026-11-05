@@ -3,8 +3,15 @@ target_roles:
   - "Network Engineer"
   - "Senior Network Engineer"
   - "Cloud Network Engineer"
+  - "Network Deployment Engineer"
+  - "Network Automation Engineer"
+  - "Network Security Engineer"
+  - "SD-WAN Engineer"
+  - "Data Center Network Engineer"
+  - "Network Infrastructure Engineer"
+  - "Network Architect"
   - "NAC Engineer"
-  - "Cloud Infrastructure Engineer"
+  - "Firewall Engineer"
 
 preferred_locations:
   - "Remote"
@@ -22,7 +29,7 @@ employment_type: "full-time"
 
 must_have_keywords:
   - "network"
-  - "cloud"
+  - "cisco"
   - "infrastructure"
 
 nice_to_have_keywords:
@@ -34,7 +41,9 @@ nice_to_have_keywords:
   - "Terraform"
   - "Ansible"
   - "Python"
-  - "Kubernetes"
+  - "BGP"
+  - "OSPF"
+  - "SD-WAN"
 
 disqualifiers:
   - "security clearance"
@@ -47,4 +56,3 @@ disqualifiers:
 visa_sponsorship_required: true
 
 max_applications_per_day: 50
-

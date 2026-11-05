@@ -996,7 +996,7 @@ class JobDiscoveryEngine:
         self, min_score: int = 50, status: str = "discovered", limit: int = 50, hide_applied: bool = True,
         within_hours: Optional[float] = None, country_code: Optional[str] = None,
         company_like: Optional[str] = None, offset: int = 0,
-        remote_only: Optional[bool] = None,
+        remote_only: Optional[bool] = None, title_like: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         """Returns discovered jobs matching filters, ordered by highest match score -- or, with `within_hours`, only
         the jobs certainly posted inside that window (a job with no known posting date is never inside it), newest
@@ -1016,6 +1016,11 @@ class JobDiscoveryEngine:
                 company_filter = "AND company_name LIKE ? ESCAPE '\\'"
                 escaped = str(company_like).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
                 query_params.append(f"%{escaped}%")
+            title_filter = ""
+            if title_like:
+                title_filter = "AND job_title LIKE ? ESCAPE '\\'"
+                escaped_title = str(title_like).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                query_params.append(f"%{escaped_title}%")
             remote_filter = ""
             if remote_only is True:
                 remote_filter = "AND is_remote = 1"
@@ -1032,6 +1037,7 @@ class JobDiscoveryEngine:
                 WHERE match_score >= ? AND status = ?
                 {country_filter}
                 {company_filter}
+                {title_filter}
                 {remote_filter}
                 ORDER BY (resume_score IS NULL), resume_score DESC, match_score DESC, discovered_at DESC
                 LIMIT ? OFFSET ?

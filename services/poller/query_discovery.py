@@ -128,12 +128,12 @@ def clean_location_string(loc_raw: str) -> str:
     for pat in noise_patterns:
         cleaned = re.sub(pat, "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s+", " ", cleaned).strip(", ").strip()
-    return cleaned or "United States"
+    return cleaned
 
 
 def search_linkedin_guest_jobs(
     keywords: str,
-    location: str = "United States",
+    location: str = "",
     past_24_hours: bool = True,
     start: int = 0,
     max_results: int = 25,
@@ -253,14 +253,13 @@ def search_arbeitnow_jobs(
     max_results: int = 50,
 ) -> List[DiscoveredQueryJob]:
     """Fetches jobs from Arbeitnow's public keyless API."""
-    s = session or requests.Session()
     params = {}
     try:
-        resp = s.get(ARBEITNOW_API_URL, params=params, headers=DEFAULT_HEADERS, timeout=timeout)
-        if resp.status_code != 200:
+        text = _http_get_resilient(ARBEITNOW_API_URL, params=params, timeout=timeout)
+        if not text:
             return []
 
-        data = resp.json().get("data", [])
+        data = json.loads(text).get("data", [])
         jobs: List[DiscoveredQueryJob] = []
         q_lower = query.lower() if query else ""
 
@@ -309,17 +308,16 @@ def search_jobicy_jobs(
     max_results: int = 50,
 ) -> List[DiscoveredQueryJob]:
     """Fetches remote tech jobs from Jobicy's public keyless API."""
-    s = session or requests.Session()
     params: Dict[str, Any] = {"count": max_results}
     if query:
         params["tag"] = query
 
     try:
-        resp = s.get(JOBICY_API_URL, params=params, headers=DEFAULT_HEADERS, timeout=timeout)
-        if resp.status_code != 200:
+        text = _http_get_resilient(JOBICY_API_URL, params=params, timeout=timeout)
+        if not text:
             return []
 
-        data = resp.json().get("jobs", [])
+        data = json.loads(text).get("jobs", [])
         jobs: List[DiscoveredQueryJob] = []
 
         for item in data:

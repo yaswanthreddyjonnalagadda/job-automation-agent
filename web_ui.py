@@ -1606,6 +1606,7 @@ def _feed_filter_context(args) -> dict:
     if within_key not in JOB_WINDOWS:
         within_key = DEFAULT_JOB_WINDOW
     company = (args.get("company", "") or "").strip()[:64] or None
+    title = (args.get("title", "") or "").strip()[:64] or None
     try:
         min_score = int(args.get("min_score", 60))
     except (TypeError, ValueError) as _swallowed:
@@ -1620,6 +1621,8 @@ def _feed_filter_context(args) -> dict:
         kept["country"] = country_code
     if company:
         kept["company"] = company
+    if title:
+        kept["title"] = title
     if min_score != 60:
         kept["min_score"] = str(min_score)
     if workplace != "all":
@@ -1627,7 +1630,7 @@ def _feed_filter_context(args) -> dict:
     from urllib.parse import urlencode
     return {
         "country_code": country_code, "within_key": within_key, "window": JOB_WINDOWS[within_key],
-        "company": company, "min_score": min_score, "workplace": workplace,
+        "company": company, "title": title, "min_score": min_score, "workplace": workplace,
         "remote_only": {"remote": True, "onsite": False}.get(workplace),
         "kept_params": ("&" + urlencode(kept)) if kept else "",
     }
@@ -1645,7 +1648,8 @@ def _suggested_jobs(apps, filters) -> tuple:
                                                  within_hours=filters["window"]["hours"],
                                                  country_code=filters["country_code"],
                                                  company_like=filters["company"],
-                                                 remote_only=filters["remote_only"]), apps, newest_first=True)
+                                                 remote_only=filters["remote_only"],
+                                                 title_like=filters.get("title")), apps, newest_first=True)
     except Exception as _swallowed:
         logger.debug("suggested jobs: %s", diagnostics.short_exc(_swallowed, 100))
         jobs = []
@@ -1664,6 +1668,8 @@ def _filter_summary(filters, country_options) -> tuple:
     bits = []
     if filters["country_code"]:
         bits.append(dict(country_options).get(filters["country_code"], filters["country_code"]))
+    if filters.get("title"):
+        bits.append('Role "%s"' % filters["title"])
     if filters["company"]:
         bits.append('"%s"' % filters["company"])
     if filters["min_score"] != 60:
@@ -1754,6 +1760,7 @@ def index():
         job_windows=JOB_WINDOWS, job_window=filters["window"], scanning=scan_running(),
         scan_started=_SCAN["started"], country_code=filters["country_code"] or "",
         country_options=country_options, company=filters["company"] or "",
+        title=filters.get("title") or "",
         min_score=filters["min_score"], workplace=filters["workplace"],
         within_key=filters["within_key"], kept_params=filters["kept_params"],
         has_filters=has_filters, filter_summary=filter_summary,
@@ -2488,14 +2495,17 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
     </nav>
     <form method="get" action="/" id="job-filters" class="filter-row" aria-label="Filter suggested jobs">
       <input type="hidden" name="within" value="{{ within_key }}">
+      <label class="filter-field">Role / Title
+        <input type="search" name="title" value="{{ title }}" maxlength="64" aria-label="Job title contains" placeholder="e.g. Network Engineer">
+      </label>
+      <label class="filter-field">Company
+        <input type="search" name="company" value="{{ company }}" maxlength="64" aria-label="Company name contains" placeholder="Any employer">
+      </label>
       <label class="filter-field">Country
         <select name="country" aria-label="Country">
           <option value="">All countries</option>
           {% for code, name in country_options %}<option value="{{ code }}"{% if code == country_code %} selected{% endif %}>{{ name }}</option>{% endfor %}
         </select>
-      </label>
-      <label class="filter-field">Company
-        <input type="search" name="company" value="{{ company }}" maxlength="64" aria-label="Company name contains" placeholder="Any employer">
       </label>
       <label class="filter-field">Minimum score
         <select name="min_score" aria-label="Minimum match score">
