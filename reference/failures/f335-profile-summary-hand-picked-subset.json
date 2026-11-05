@@ -1,0 +1,15 @@
+{
+  "id": "f335",
+  "date": "2026-11-04",
+  "class": "A per-question answering method's hand-picked profile summary silently excluded most of UserProfile's fields, so a fact on an excluded field was invisible to the AI even though it was true and already on the profile",
+  "symptom": "No live incident yet -- found auditing the Q&A answering engine. answer_screening_questions and answer_single_question each build their own 'CANDIDATE PROFILE' / 'FACTS' block naming about 20-25 of UserProfile's 70+ fields (e.g. linkedin_url, portfolio_url, gpa, certifications, preferred_name, salary_min/max, and every consent/compliance field added since were absent); a question about any of them would be declined or omitted by the AI's own 'never guess' instruction, then logged to data/unanswered_questions.json, even though the value already existed on the profile.",
+  "site": "Not site-specific -- shared answering engine (claude_integration.py). plan_page, the primary full-page path, is unaffected: page_agent.facts() already passes it the whole profile via dataclasses.asdict(). Only the two narrower per-question fallback paths were affected.",
+  "root_cause": "answer_screening_questions and answer_single_question each build their profile summary as a literal f-string naming specific UserProfile attributes, written when the profile had far fewer fields. Every field added to UserProfile since (the profile has grown past 70 fields) needed a matching, easily-forgotten edit in both f-strings; neither was ever updated.",
+  "why_tests_missed": "No test asserted that a profile fact outside the hand-picked list actually reached the model's prompt; existing tests only checked the fields already named in the f-strings, which always passed trivially.",
+  "fix": "Added claude_integration._other_profile_facts(profile) -- every dataclasses.fields(profile) entry not already named in the two f-strings (_SUMMARIZED_PROFILE_FIELDS) or structured/nested (_STRUCTURED_PROFILE_FIELDS, formatted elsewhere, e.g. education), as 'Label: value' lines. Appended (never substituted) after each method's existing summary as an 'OTHER PROFILE FACTS' block, so no field already covered changes wording -- only fields that were previously invisible gain visibility.",
+  "tests": [
+    "tests/test_gemini_answers.py::test_answer_single_question_sees_profile_fields_beyond_the_hand_picked_list",
+    "tests/test_gemini_answers.py::test_answer_screening_questions_sees_profile_fields_beyond_the_hand_picked_list"
+  ],
+  "prevention": "A profile summary sent to the AI should be built from the full UserProfile schema (dataclasses.fields), not a hand-maintained literal list of field names, so a newly added field is visible by default rather than requiring every call site to be remembered and edited."
+}

@@ -354,6 +354,22 @@ so the whole set can be carried to the next project. Nothing personal is written
 into the reasons (emails and phone numbers are masked), and a file that is
 damaged or cannot be written never stops a run.
 
+### A wider view of your profile, and fewer answers lost to a bad reply (4 November 2026)
+
+Two of the places that answer one question at a time (not the full-page
+planner, which already saw your whole profile) used to describe you to the AI
+from a short, hand-picked list of about twenty fields. A fact that lived
+anywhere else on your profile -- a LinkedIn URL, a GPA, a certification, a
+salary expectation -- was invisible to it even though it was right there, so
+that question was left for you unnecessarily. Both now also get every other
+fact your profile holds.
+
+Separately, if the AI's reply came back garbled or in an unexpected shape
+(which happened occasionally and, for one of these call sites, could stop the
+page outright), it is now asked again automatically, the same way the
+full-page planner already does for a reply cut off mid-answer, before the
+question is ever left for you.
+
 ## Values the site filled in
 
 Many forms arrive partly filled: a resume parser guesses a country, or a list
