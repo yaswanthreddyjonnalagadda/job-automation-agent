@@ -274,7 +274,7 @@ button.linklike {
   background: none; border: 0; box-shadow: none;
   color: var(--muted); text-decoration: none;
   font-weight: 500; font-size: 13px;
-  padding: 0 2px; min-height: 36px;
+  padding: 0 2px; min-height: 40px;
 }
 button.linklike:hover { color: var(--bad); background: none; filter: none; }
 .job-card.is-applied { opacity: .8; }
@@ -292,7 +292,7 @@ button.linklike:hover { color: var(--bad); background: none; filter: none; }
   border-radius: 99px;
   font-size: 13px;
   font-weight: 500;
-  min-height: 36px;
+  min-height: 40px;
 }
 .dash-chip:hover { background: var(--surface-2); filter: none; }
 .dash-chip[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
@@ -347,7 +347,7 @@ button.linklike:hover { color: var(--bad); background: none; filter: none; }
 .feed-tools { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .feed-tools .dash-chips, .feed-tools .bulk-bar { margin-bottom: 0; }
 .how-list { margin: 0 0 10px; }
-.how-list summary { cursor: pointer; font-weight: 600; color: var(--ink-2); display: inline-flex; align-items: center; min-height: 36px; }
+.how-list summary { cursor: pointer; font-weight: 600; color: var(--ink-2); display: inline-flex; align-items: center; min-height: 40px; }
 .how-list p { margin: 4px 0 0; }
 .feed-hint { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin-bottom: 8px; }
 .feed-hint[hidden] { display: none; }

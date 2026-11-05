@@ -385,10 +385,7 @@ def _resume_with_current_email(path: Path, profile, job, job_dir: Path) -> Path:
     text = parse_resume(path).raw_text
     emails = re.findall(r"[\w.+-]+@[\w-]+\.[\w.]+", text)
     if not profile.email or not any(email.casefold() != profile.email.casefold() for email in emails):
-        if not target.exists() and path.exists():
-            import shutil
-            shutil.copy2(path, target)
-        return target if target.exists() else path
+        return path
     updated = re.sub(r"[\w.+-]+@[\w-]+\.[\w.]+", profile.email, text)
     text_path = target.with_suffix(".txt")
     text_path.write_text(ensure_resume_header(updated, profile, job), encoding="utf-8")

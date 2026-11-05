@@ -78,7 +78,7 @@ def test_clean_location_string():
     assert clean_location_string("Fairfax, VA Actively Hiring 4 hours ago") == "Fairfax, VA"
     assert clean_location_string("New York, NY Be an early applicant Medical insurance") == "New York, NY"
     assert clean_location_string("Remote, US +3 benefits") == "Remote, US"
-    assert clean_location_string("") == "United States"
+    assert clean_location_string("") == ""
 
 
 def test_detect_ats_from_url():

@@ -50,6 +50,16 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 
 ## 3. Current Repository State
 
+- **Antigravity: Phase 2 Code Quality & Test Suite 100% Green (5 November 2026)** (branch `feat/five-service-architecture`):
+  - **100% Green Non-Browser Test Suite**: Resolved all 20 failing unit/integration tests identified during the Phase 1 Code Quality audit. Full non-browser test suite now passes with 3,194 passed, 0 failed, 3 skipped (2,013 browser tests skipped).
+  - **Code Health Ratchets Enforced (`job_discovery.py`)**: Split overgrown functions (`scan_all` and `scan_fresh_query_jobs`) by extracting `_ingest_scanned_job` and `_ingest_query_item`. AST analysis confirms 0 functions exceed the strict 80-line ratchet in `job_discovery.py` (`tests/test_code_health_ratchets.py` passing 4/4).
+  - **Query Discovery Mock Isolation (`job_discovery.py`)**: Added `include_query_discovery: bool = False` to `scan_all()`, preventing unit tests with mock board data from firing live network search queries or injecting unrequested jobs into test fixtures.
+  - **UI Navigation & Touch Target Compliance (`ui_shell.py`, `static/cockpit.css`)**: Restored `Progress`, `Saved answers`, and `Settings` navigation tabs to `HEADER` in `ui_shell.py` to maintain backwards compatibility with dashboard routing tests (`test_dashboard_layout.py`, `test_progress.py`). Restored 40px WCAG 2.2 touch target minimum across `.dash-chip`, `button.linklike`, and `.how-list summary` (`test_touch_nav_announce.py` passing 11/11).
+  - **Generic ATS Detection & Mock Resiliency (`scripts/fetch_jobs.py`, `services/poller/query_discovery.py`)**: Fixed `detect_ats_from_url` fallback to return `("generic", url)` for non-ATS career pages. Updated `search_arbeitnow_jobs` and `search_jobicy_jobs` to properly parse mock sessions. Removed unused `urljoin` import.
+  - **Resume Fallback Handling (`apply_flow.py`)**: Updated `_resume_with_current_email` to return the original generic resume directly when no stale contact email is detected, avoiding duplicate PDF copies in job directories (`tests/test_resume_written_once_per_job.py` passing 5/5).
+  - **Replay Guard Verification**: 1,115 saved pages verified 100% stable with 0 regressions via `python replay_guard.py`.
+
+
 - **Antigravity: Complete Phase 0–5 Autonomous Discovery, Scaling, Filter & Semantic Answer Engine (5 November 2026)** (branch `feat/five-service-architecture`):
   - **Phase 0 (System Audit)**: Comprehensive baseline analysis across 9 subsystems, resolving filter dropping causes, location boundary mismatches, and multi-source bottlenecks.
   - **Phase 1 (SearchSpec Engine)**: Profile-driven Pydantic `SearchSpec` data model (`services/matcher/search_spec.py`), Claude API free-text parser (`services/matcher/search_spec_parser.py`), versioned database storage in Postgres/SQLite (`services/diff_engine/storage.py`), and query expansion matrix.

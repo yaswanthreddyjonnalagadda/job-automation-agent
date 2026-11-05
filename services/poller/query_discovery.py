@@ -20,7 +20,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote_plus, urljoin, urlparse
+from urllib.parse import quote_plus, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -255,11 +255,13 @@ def search_arbeitnow_jobs(
     """Fetches jobs from Arbeitnow's public keyless API."""
     params = {}
     try:
-        text = _http_get_resilient(ARBEITNOW_API_URL, params=params, timeout=timeout)
-        if not text:
-            return []
-
-        data = json.loads(text).get("data", [])
+        if session is not None:
+            resp = session.get(ARBEITNOW_API_URL, params=params, timeout=timeout)
+            raw_data = resp.json() if hasattr(resp, "json") and callable(resp.json) else json.loads(getattr(resp, "text", "") or "{}")
+        else:
+            text = _http_get_resilient(ARBEITNOW_API_URL, params=params, timeout=timeout)
+            raw_data = json.loads(text) if text else {}
+        data = raw_data.get("data", []) if isinstance(raw_data, dict) else []
         jobs: List[DiscoveredQueryJob] = []
         q_lower = query.lower() if query else ""
 
@@ -313,11 +315,13 @@ def search_jobicy_jobs(
         params["tag"] = query
 
     try:
-        text = _http_get_resilient(JOBICY_API_URL, params=params, timeout=timeout)
-        if not text:
-            return []
-
-        data = json.loads(text).get("jobs", [])
+        if session is not None:
+            resp = session.get(JOBICY_API_URL, params=params, timeout=timeout)
+            raw_data = resp.json() if hasattr(resp, "json") and callable(resp.json) else json.loads(getattr(resp, "text", "") or "{}")
+        else:
+            text = _http_get_resilient(JOBICY_API_URL, params=params, timeout=timeout)
+            raw_data = json.loads(text) if text else {}
+        data = raw_data.get("jobs", []) if isinstance(raw_data, dict) else []
         jobs: List[DiscoveredQueryJob] = []
 
         for item in data:

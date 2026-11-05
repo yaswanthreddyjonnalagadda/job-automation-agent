@@ -39,11 +39,19 @@ from services.poller.workday import poll_workday
 from services.poller.smartrecruiters import poll_smartrecruiters
 from services.poller.generic_scraper import scrape_career_page, build_resilient_session
 from services.poller.query_discovery import search_all_fresh_jobs, DiscoveredQueryJob
-from services.poller.ats_resolver import resolve_and_seed_job, detect_ats_from_url
+from services.poller.ats_resolver import resolve_and_seed_job, detect_ats_from_url as _detect_ats_from_url
 import geo_reference
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("fetch_jobs")
+
+
+def detect_ats_from_url(url: str) -> tuple[str, str]:
+    """Inspects a career URL to detect the ATS platform and extract the company slug."""
+    ats, slug = _detect_ats_from_url(url)
+    if ats:
+        return ats, slug or url
+    return "generic", url
 
 
 def fetch_jobs_from_source(

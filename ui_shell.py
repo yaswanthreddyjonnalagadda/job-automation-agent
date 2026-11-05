@@ -325,12 +325,15 @@ HEADER = """
   <a class="brand" href="/">""" + LOGO_SVG + """<span>Job Agent<small>{{ brand_tagline() }}</small></span></a>
   <nav class="nav" aria-label="Main">
     {% set _n = needs_you_count() %}<a href="/" {% if _n %}data-count="{{ _n }}" aria-label="Applications, {{ _n }} need you" {% endif %}{% if request.path == '/' or request.path.startswith('/application/') %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/' or request.path.startswith('/application/') }}">Applications</a>
+    <a href="/progress" {% if request.path == '/progress' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/progress' }}">Progress</a>
     <a href="/search-spec" {% if request.path == '/search-spec' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/search-spec' }}">Search Spec</a>
     <a href="/review-queue" {% if request.path == '/review-queue' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/review-queue' }}">Review Queue</a>
     <a href="/funnel" {% if request.path == '/funnel' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/funnel' }}">Funnel</a>
     <a href="/answer-bank" {% if request.path == '/answer-bank' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/answer-bank' }}">Answer Bank</a>
     <a href="/run-control" {% if request.path == '/run-control' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/run-control' }}">Run Control</a>
     <a href="/profile" {% if request.path in ('/profile', '/setup') %}aria-current="page" {% endif %}class="{{ 'active' if request.path in ('/profile', '/setup') }}">Profile</a>
+    <a href="/answers" {% if request.path == '/answers' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/answers' }}">Saved answers</a>
+    <a href="/settings" {% if request.path == '/settings' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/settings' }}">Settings</a>
     <a href="/health" {% if request.path == '/health' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/health' }}">System Health</a>
   </nav>
 </div></header>
