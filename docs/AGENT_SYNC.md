@@ -50,6 +50,12 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 
 ## 3. Current Repository State
 
+- **Antigravity: Direct ATS Aggregator Resolution & Web UI Safe Dispatch (5 November 2026)** (branch `feat/five-service-architecture`, commit `18f2968`):
+  - **Aggregator-to-Direct-Careers Resolution (`services/poller/ats_resolver.py`)**: Resolved the broken loop where jobs discovered on aggregators (LinkedIn Guest API, Indeed, etc.) were saved with raw social URLs, causing `apply.py` to abort with exit code 1 ("social site blocked: apply on employer site"). Added `is_aggregator_url`, `extract_aggregator_posting_details` (extracts Schema.org JSON-LD requisition IDs, hiring organization, and embedded direct application links), and `resolve_direct_career_url` (automatic PageUp / higher-ed and employer direct portal mapping).
+  - **Safe UI Dispatch (`web_ui.py`)**: Updated `apply_discovered(job_id)` to automatically resolve aggregator URLs to direct ATS career endpoints before spawning `apply.py`. If an aggregator URL cannot be resolved automatically, provides an explicit warning message guiding the user to the direct employer portal rather than silently failing.
+  - **TDD Regression Suite (`tests/test_aggregator_resolution.py`)**: 4/4 tests passing verifying aggregator detection, JSON-LD requisition parsing, UMass/PageUp mapping, and `resolve_and_seed_job` integration.
+  - **Code Health Ratchets & Replay Guard**: `tests/test_code_health_ratchets.py` passed 4/4; `replay_guard.py` verified 1,115 saved pages 100% stable with 0 regressions.
+
 - **Antigravity: Phase 2 Code Quality & Test Suite 100% Green (5 November 2026)** (branch `feat/five-service-architecture`):
   - **100% Green Non-Browser Test Suite**: Resolved all 20 failing unit/integration tests identified during the Phase 1 Code Quality audit. Full non-browser test suite now passes with 3,194 passed, 0 failed, 3 skipped (2,013 browser tests skipped).
   - **Code Health Ratchets Enforced (`job_discovery.py`)**: Split overgrown functions (`scan_all` and `scan_fresh_query_jobs`) by extracting `_ingest_scanned_job` and `_ingest_query_item`. AST analysis confirms 0 functions exceed the strict 80-line ratchet in `job_discovery.py` (`tests/test_code_health_ratchets.py` passing 4/4).
