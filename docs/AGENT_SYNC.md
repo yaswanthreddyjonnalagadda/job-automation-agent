@@ -50,6 +50,12 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 
 ## 3. Current Repository State
 
+- **Antigravity: Real-Time Query Discovery & Dynamic ATS Seeding (Tsenta/AiApply Architecture) (4-5 November 2026)** (branch `feat/five-service-architecture`):
+  - **Query-Driven Real-Time Discovery (`services/poller/query_discovery.py`)**: Resolves the "zero fresh jobs posted today" problem where static company lists miss market postings. Queries LinkedIn public guest search (`f_TPR=r86400` for exact 24-hour freshness) with resilient SSL/TLS fallback, Arbeitnow/Jobicy keyless feeds, and optional Google Jobs / JSearch RapidAPI wrapper.
+  - **ATS URL Resolver & Dynamic Seeding (`services/poller/ats_resolver.py`)**: Unrolls tracking redirects and detects destination ATS platforms (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, iCIMS). Dynamically registers newly discovered company tokens into `data/target_companies.json` and PostgreSQL `company_directory`.
+  - **Engine & Daemon Integration**: Added `scan_fresh_query_jobs()` to `job_discovery.py` (`JobDiscoveryEngine`), wired directly into `scan_all()`. Added 4-hour background query discovery cycle (`QUERY_DISCOVERY_INTERVAL_SECONDS=14400`) to `services/poller/poller_service.py`. Extended `scripts/fetch_jobs.py` with `--query`, `--today`, and `--location`.
+  - **Tests**: `tests/test_query_discovery.py` (8/8 passed). `replay_guard.py` (1,115 pages verified 100% stable).
+
 - **Antigravity: Robust 3-Tier Job Fetching Subsystem & CLI Script (4 November 2026)** (branch `feat/five-service-architecture`):
   - **Tier 1 (Direct ATS Pollers & Fixes)**: Added `services/poller/smartrecruiters.py` for direct SmartRecruiters API integration (`/v1/companies/{slug}/postings`). Fixed `services/poller/lever.py` content negotiation bug by forcing `Accept: application/json` header and browser user-agent, preventing Lever from returning raw HTML.
   - **Tier 2 (Resilient Generic Scraper)**: Added `services/poller/generic_scraper.py` featuring a resilient session with HTTP 429/5xx retry adapter, schema.org JSON-LD parsing (`JobPosting` and `ItemList`), and fallback DOM heuristic scraper with job container scoring.

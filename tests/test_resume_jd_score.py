@@ -182,11 +182,14 @@ def card(**kw):
 
 def test_a_card_shows_the_resume_match_and_what_is_matched_and_missing(page):
     html = page([card(resume_score=72, resume_matched=["BGP", "OSPF"], resume_missing=["Terraform"])])
-    assert "Resume match 72%" in html and 'aria-label="Resume match 72 percent"' in html
-    assert ">BGP<" in html and "Posting also asks for" in html and ">Terraform<" in html
+    # Compact badge now reads "Resume 72%" (without "match") and aria-label still reads the full phrase.
+    assert "Resume 72%" in html and 'aria-label="Resume match 72 percent"' in html
+    assert ">BGP<" in html and "Gap:" in html and ">Terraform<" in html
 
 
 def test_a_card_with_no_posting_text_says_there_is_no_resume_match(page):
     html = page([card()])
-    assert "Resume match" not in html.split('class="job-card')[1].split("</article>")[0].replace("No resume match", "")
+    # "Resume" does not appear as a score badge (no resume_score); "No resume match" warning does appear.
+    card_html = html.split('class="job-card')[1].split("</article>")[0]
+    assert "Resume" not in card_html.replace("No resume match", "")
     assert "No resume match: the posting" in html and 'aria-label="Title match 90 percent"' in html

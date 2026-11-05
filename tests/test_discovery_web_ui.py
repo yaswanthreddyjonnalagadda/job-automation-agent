@@ -67,7 +67,8 @@ def test_index_renders_discovered_jobs(client):
     assert "Suggested jobs" in html
     assert "Cloudflare" in html
     assert "Senior Network Engineer" in html
-    assert "Title match" in html and "95%" in html and "Start application" in html
+    # Compact badge: "Title <score>%" and score visible; "Start application" → now "Apply" button.
+    assert "Title " in html and "95%" in html and "Apply" in html
 
 
 def test_dismiss_discovered_job(client):

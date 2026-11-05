@@ -867,11 +867,129 @@ class JobDiscoveryEngine:
         finally:
             conn.close()
 
+        # Query-driven discovery pass for freshly posted jobs matching profile
+        try:
+            query_stats = self.scan_fresh_query_jobs(min_match_threshold=min_match_threshold)
+            stats["total_jobs_seen"] += query_stats.get("total_jobs_seen", 0)
+            stats["relevant_jobs_saved"] += query_stats.get("relevant_jobs_saved", 0)
+        except Exception as exc:
+            logger.debug("Query discovery pass error: %s", exc)
+
         logger.info(
             "Discovery complete: Scanned %d companies, evaluated %d jobs, saved %d relevant jobs (score >= %d)",
             stats["companies_scanned"], stats["total_jobs_seen"],
             stats["relevant_jobs_saved"], min_match_threshold
         )
+        return stats
+
+    def scan_fresh_query_jobs(
+        self,
+        keywords: Optional[list[str]] = None,
+        location: Optional[str] = None,
+        past_24_hours: bool = True,
+        limit_per_query: int = 25,
+        min_match_threshold: int = 50,
+    ) -> dict[str, int]:
+        """Queries live job aggregators (LinkedIn Guest, JSearch, Jobicy, Arbeitnow)
+        for jobs posted today matching candidate target titles."""
+        from services.poller.query_discovery import search_all_fresh_jobs
+        from services.poller.ats_resolver import resolve_and_seed_job
+        import geo_reference
+
+        titles_to_query = keywords or (self.profile.get("target_titles") or [])[:3]
+        if not titles_to_query:
+            return {"total_jobs_seen": 0, "relevant_jobs_saved": 0}
+
+        query_location = location or self.profile.get("current_location") or ""
+        if not query_location and self.profile.get("locations"):
+            query_location = self.profile["locations"][0]
+
+        conn = self._get_connection()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        home_country = self.profile.get("country_code", "")
+        if not home_country and query_location:
+            detected = geo_reference.location_countries(query_location)
+            home_country = next(iter(detected)) if detected else ""
+        store_at = min(min_match_threshold, STORE_FLOOR) if min_match_threshold > 0 else 0
+        submitted_cover = _submitted_cover(self._live_tracker)
+
+        stats = {"total_jobs_seen": 0, "relevant_jobs_saved": 0}
+
+        try:
+            for title_query in titles_to_query:
+                discovered = search_all_fresh_jobs(
+                    keywords=title_query,
+                    location=query_location,
+                    past_24_hours=past_24_hours,
+                    limit=limit_per_query,
+                )
+                stats["total_jobs_seen"] += len(discovered)
+
+                for item in discovered:
+                    score, matched_skills = calculate_match_score(
+                        item.title, item.location, self.profile
+                    )
+                    if score < store_at:
+                        continue
+
+                    resolved = resolve_and_seed_job(item.company_name, item.url)
+                    canonical_url = resolved["canonical_url"]
+                    ats_type = resolved["ats_type"]
+                    company_token = resolved["company_token"]
+
+                    if item.description:
+                        import matching_engine
+                        eligible, _ = matching_engine.check_hard_gates(
+                            item.description, self.profile, item.location
+                        )
+                        if not eligible:
+                            continue
+
+                    country_code = geo_reference.primary_country(item.location, home_country)
+                    dedup_key = compute_job_hash(
+                        item.company_name, item.title, item.location, canonical_url
+                    )
+
+                    job_dict = {
+                        "company_name": item.company_name,
+                        "company_token": company_token,
+                        "job_title": item.title,
+                        "location": item.location,
+                        "url": canonical_url,
+                    }
+                    init_status = _ingest_status(job_dict, submitted_cover)
+
+                    conn.execute("""
+                        INSERT INTO discovered_jobs (
+                            dedup_key, company_name, company_token, ats_type,
+                            job_title, location, is_remote, url, match_score,
+                            matched_skills, status, discovered_at, updated_at,
+                            posted_at, posted_precision, country_code
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(dedup_key) DO UPDATE SET
+                            match_score = excluded.match_score,
+                            matched_skills = excluded.matched_skills,
+                            country_code = excluded.country_code,
+                            posted_at = CASE WHEN excluded.posted_at != '' THEN excluded.posted_at
+                                             ELSE discovered_jobs.posted_at END,
+                            status = CASE 
+                                WHEN discovered_jobs.status IN ('submitted', 'queued', 'dismissed') THEN discovered_jobs.status
+                                ELSE excluded.status
+                            END,
+                            updated_at = excluded.updated_at
+                        WHERE status = 'discovered' OR status = 'submitted'
+                    """, (
+                        dedup_key, item.company_name, company_token, ats_type,
+                        item.title, item.location, 1 if item.is_remote else 0, canonical_url,
+                        score, json.dumps(matched_skills), init_status, now_iso, now_iso,
+                        item.posted_date or now_iso[:10], "day", country_code
+                    ))
+                    if init_status != 'submitted':
+                        stats["relevant_jobs_saved"] += 1
+            conn.commit()
+        finally:
+            conn.close()
+
         return stats
 
     def get_discovered_jobs(

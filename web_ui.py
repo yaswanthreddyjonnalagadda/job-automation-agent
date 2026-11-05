@@ -128,6 +128,7 @@ app.jinja_env.filters["aref"] = _artifact_ref
 app.jinja_env.globals.update(decision_view=detail_view.decision_view, answered_by=detail_view.answered_by,
                              history_rows=detail_view.group_events, worker_state=health_view.worker_state)
 app.jinja_env.globals.update(artifact_ok=lambda p: artifact_ok(p), needs_you_count=lambda: needs_you_count())
+app.jinja_env.globals["status_badge"] = ui_shell.status_badge
 
 
 from web_setup import setup_pages  # noqa: E402  (the pages import web_ui back, lazily)
@@ -2313,7 +2314,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
       <div class="item">
         <div style="min-width:0">
           <a href="/application/{{ a.id }}"><b>{{ a.title }}</b></a>
-          <small>{{ company_label(a.company) }} &middot; <span class="pill {{ status_class(a.status) }}">{{ status_label(a.status) }}</span></small>
+          <small>{{ company_label(a.company) }} &middot; {{ status_badge(a.status)|safe }}</small>
           {% if a.notes %}<small style="display:block;margin-top:2px">{{ a.notes[:180] }}</small>{% endif %}
         </div>
         <div class="dash-actions">
@@ -2384,7 +2385,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
             <a href="/application/{{ a.id }}">{{ a.title }}</a>
             <span class="loc">{{ a.location or 'Location not stated' }}</span>
           </td>
-          <td class="status"><span class="pill {{ status_class(a.status) }}" title="{{ a.notes[:200] if a.notes else status_label(a.status) }}">{{ status_label(a.status) }}</span></td>
+          <td class="status">{{ status_badge(a.status)|safe }}</td>
           <td class="when">{{ a.updated_at|local }}</td>
           <td class="actions"><div class="row-actions">
             {% if a.status != 'submitted' and status_group(a.status) != 'skipped' %}
@@ -2543,47 +2544,75 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
                 data-bulk-check aria-label="Select {{ dj.job_title }} at {{ dj.company_name }}"></label>
               <div class="ring {% if fit >= 85 %}high{% elif fit >= 70 %}mid{% endif %}" style="--p:{{ fit }}"
                    role="img" aria-label="{{ 'Resume match' if dj.resume_score is not none else 'Title match' }} {{ fit }} percent"><b>{{ fit }}%</b></div>
-              <div style="min-width:0">
+              <div style="min-width:0;flex:1">
                 <p class="job-company">{{ dj.company_name }}</p>
                 <h3 class="job-title"><a href="{{ dj.url }}" target="_blank" rel="noopener">{{ dj.job_title }}<span class="sr-only"> (opens the posting in a new tab)</span></a></h3>
               </div>
             </div>
+            {# meta row: location, remote tag, age, ATS — compact single line #}
             <div class="job-meta">
-              {% if dj.resume_score is not none %}<span class="tag" title="Your resume compared with the skills this posting asks for">Resume match {{ dj.resume_score }}%</span>{% endif %}
-              <span class="tag" title="Scored from the job title, location and seniority only">Title match {{ dj.match_score }}%</span>
-              {% if dj.place %}<span title="{{ dj.location }}">{{ dj.place }}{% if dj.more_places %} <small>+{{ dj.more_places }} more</small>{% endif %}</span>
-              {% elif not dj.is_remote %}<span>Location not stated</span>{% endif %}
+              {% if dj.place %}<span title="{{ dj.location }}">{{ dj.place }}{% if dj.more_places %}&thinsp;+{{ dj.more_places }} more{% endif %}</span>
+              {% elif not dj.is_remote %}<span class="muted">Location TBC</span>{% endif %}
               {% if dj.is_remote %}<span class="tag remote">Remote</span>{% endif %}
-              {% if dj.is_new %}<span class="tag new">New</span>{% endif %}
-              {% if dj.age %}<span class="muted"{% if dj.age_title %} title="{{ dj.age_title }}"{% endif %}>{{ dj.age }}</span>{% endif %}
-              {% if dj.other_openings %}<span class="muted" title="The same role is listed for other places; this is the best match">+{{ dj.other_openings }} other location{{ '' if dj.other_openings == 1 else 's' }}</span>{% endif %}
-              <span class="tag">{{ dj.ats_type | capitalize }}</span>
+              {% if dj.age %}<span class="muted" style="font-size:11.5px"{% if dj.age_title %} title="{{ dj.age_title }}"{% endif %}>{{ dj.age }}</span>{% endif %}
+              {% if dj.other_openings %}<span class="muted" style="font-size:11.5px">+{{ dj.other_openings }} loc</span>{% endif %}
+              {# Status indicator badge — minimalist dot-badge replaces verbose text #}
+              {% if dj.is_new %}<span class="tag new">New</span>
+              {% endif %}
+              <span class="tag" style="margin-left:auto">{{ dj.ats_type | capitalize }}</span>
             </div>
+            {# score row: resume match score badge + title match, condensed #}
+            <div class="job-meta">
+              {% if dj.resume_score is not none %}
+                <span class="status-badge matched" title="Your resume compared with the skills this posting asks for">Resume {{ dj.resume_score }}%</span>
+              {% endif %}
+              <span class="status-badge pending" title="Scored from the job title, location and seniority">Title {{ dj.match_score }}%</span>
+            </div>
+            {# skills matched / gaps — one compact line each, max 3 items #}
             {% if dj.resume_score is not none %}
-              {% if dj.resume_matched %}<div class="job-meta"><span class="muted">Your resume has:</span>{% for m in dj.resume_matched[:4] %}<span class="tag">{{ m }}</span>{% endfor %}</div>{% endif %}
-              {% if dj.resume_missing %}<div class="job-meta"><span class="muted">Posting also asks for:</span>{% for m in dj.resume_missing[:3] %}<span class="tag applied">{{ m }}</span>{% endfor %}</div>{% endif %}
+              {% if dj.resume_matched %}
+                <div class="job-meta skill-bar">
+                  <span class="muted" style="font-size:11.5px">Has:</span>
+                  {% for m in dj.resume_matched[:3] %}<span class="tag">{{ m }}</span>{% endfor %}
+                </div>
+              {% endif %}
+              {% if dj.resume_missing %}
+                <div class="job-meta skill-bar">
+                  <span class="muted" style="font-size:11.5px">Gap:</span>
+                  {% for m in dj.resume_missing[:2] %}<span class="tag skill-gap">{{ m }}</span>{% endfor %}
+                </div>
+              {% endif %}
             {% else %}
               <div class="job-meta"><span class="muted">No resume match: the posting's text was not read.</span></div>
-              {% if dj.matched_skills %}<div class="job-meta">{% for m in dj.matched_skills[:3] %}<span class="tag">{{ m }}</span>{% endfor %}</div>{% endif %}
+              {% if dj.matched_skills %}
+                <div class="job-meta skill-bar">
+                  {% for m in dj.matched_skills[:3] %}<span class="tag">{{ m }}</span>{% endfor %}
+                </div>
+              {% endif %}
             {% endif %}
+            {# readiness line or check button #}
             {% if dj.readiness %}
-              <div class="job-meta"><span class="muted">{{ dj.readiness }}</span></div>
+              <p class="muted" style="font-size:12px;margin:0">{{ dj.readiness }}</p>
             {% elif dj.ats_type == 'greenhouse' %}
-              <form method="post" action="/api/discovered/{{ dj.id }}/readiness" data-readiness>
+              <form method="post" action="/api/discovered/{{ dj.id }}/readiness" data-readiness style="margin:0">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="linklike">Check what it asks</button>
+                <button type="submit" class="linklike" style="font-size:12px">Check what it asks</button>
               </form>
             {% endif %}
+            {# foot: posting link (primary), start, dismiss — compact single line #}
             <div class="job-foot">
-              <a class="button ghost small" href="{{ dj.url }}" target="_blank" rel="noopener">Posting<span aria-hidden="true"> &nearr;</span><span class="sr-only"> (opens the posting in a new tab)</span></a>
-              <form method="post" action="/api/discovered/{{ dj.id }}/apply" data-apply-card>
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="small">Start application</button>
-              </form>
-              <form method="post" action="/api/discovered/{{ dj.id }}/dismiss" data-remove-card>
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="linklike" aria-label="Not interested in {{ dj.job_title }} at {{ dj.company_name }}">Not interested</button>
-              </form>
+              <a class="button ghost small" href="{{ dj.url }}" target="_blank" rel="noopener"
+                 style="padding:4px 10px;font-size:12.5px">Posting&thinsp;&nearr;<span class="sr-only"> (opens the posting in a new tab)</span></a>
+              <div style="display:flex;gap:6px;align-items:center">
+                <form method="post" action="/api/discovered/{{ dj.id }}/apply" data-apply-card style="margin:0">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <button type="submit" class="small" style="padding:4px 11px;font-size:12.5px">Apply</button>
+                </form>
+                <form method="post" action="/api/discovered/{{ dj.id }}/dismiss" data-remove-card style="margin:0">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <button type="submit" class="linklike" aria-label="Not interested in {{ dj.job_title }} at {{ dj.company_name }}" style="font-size:12px">Pass</button>
+                </form>
+              </div>
             </div>
           </article>
         {% endfor %}
@@ -2606,7 +2635,7 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
       <div class="head-facts">
         <strong style="color:var(--ink)">{{ company_label(a.company) }}</strong>
         {% if a.location %}<span>{{ a.location }}</span>{% endif %}
-        <span class="pill {{ status_class(a.status) }}">{{ status_label(a.status) }}</span>
+        {{ status_badge(a.status)|safe }}
         <a href="{{ a.url }}" target="_blank" rel="noopener">Open posting &rarr;</a>
         {% if run_log and artifact_ok(run_log) %}<a href="/log?path={{ run_log|aref|urlencode }}" target="_blank">View log</a>{% endif %}
       </div>

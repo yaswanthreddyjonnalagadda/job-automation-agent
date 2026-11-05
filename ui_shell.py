@@ -186,6 +186,33 @@ dialog textarea, dialog input[type=text] { margin-top:6px; }
   font-size:12px; line-height:1; font-weight:800; }
 .pill.rejected::before { content:"\\00d7"; width:auto; height:auto; background:none; font-size:13px; line-height:1; }
 
+/* --- minimalist status indicator badges (applied / pending / matched + application states) ----------- */
+/* Used in the job match feed and applications history for compact, high-density layouts.                */
+.sbadge {
+  display:inline-flex; align-items:center; gap:4px;
+  padding:1px 7px 1px 5px; border-radius:99px;
+  font-size:11.5px; font-weight:700; letter-spacing:.01em; white-space:nowrap;
+}
+.sbadge::before {
+  content:""; flex:none; width:5px; height:5px; border-radius:50%; background:currentColor; opacity:.85;
+}
+/* Three primary semantic states used in the feed */
+.sbadge.applied   { background:var(--ok-soft);     color:var(--ok); }
+.sbadge.pending   { background:var(--info-soft);    color:var(--info); }
+.sbadge.matched   { background:var(--violet-soft);  color:var(--violet); }
+/* Maps to existing application tracker statuses */
+.sbadge.submitted { background:var(--ok-soft);      color:var(--ok); }
+.sbadge.submitted::before { content:"\\2713"; width:auto; height:auto; background:none; font-size:10px; }
+.sbadge.working   { background:var(--accent-soft);  color:var(--accent); }
+.sbadge.queued    { background:var(--accent-soft);  color:var(--accent); }
+.sbadge.needs     { background:var(--warn-soft);    color:var(--warn); }
+.sbadge.needs::before { content:"!"; width:auto; height:auto; background:none; font-size:10px; font-weight:900; }
+.sbadge.skipped   { background:var(--grey-soft);    color:var(--muted); }
+.sbadge.rejected  { background:var(--bad-soft);     color:var(--bad); }
+.sbadge.rejected::before { content:"\\00d7"; width:auto; height:auto; background:none; font-size:12px; }
+.sbadge.offer     { background:var(--violet-soft);  color:var(--violet); }
+.sbadge.interviewing { background:var(--violet-soft); color:var(--violet); }
+
 /* --- tables --------------------------------------------------------------------------------------- */
 table { width:100%; border-collapse:collapse; }
 th, td { text-align:left; padding:12px 16px; border-bottom:1px solid var(--line-2); vertical-align:middle; }
@@ -329,6 +356,32 @@ def status_label(status: str) -> str:
 
 def status_class(status: str) -> str:
     return (status or "").strip().lower()
+
+
+# Semantic badge mapping: turns an application status into one of the three feed-visible semantic states
+# (applied / pending / matched) or a more detailed label for the history table.
+_BADGE_CLASS = {
+    "submitted": "submitted",
+    "interviewing": "interviewing",
+    "offer": "offer",
+    "rejected": "rejected",
+    "needs_user_review": "needs",
+    "blocked_validation_loop": "needs",
+    "ready_to_submit": "needs",
+    "form_filled": "working",
+    "prepared": "queued",
+    "ready_to_apply": "queued",
+    "skipped": "skipped",
+    "disqualified_policy_mismatch": "skipped",
+    "job_not_found": "skipped",
+    "already_applied": "applied",
+}
+
+def status_badge(status: str) -> str:
+    """Return an <span class='sbadge …'>Label</span> for inline minimalist status display."""
+    css = _BADGE_CLASS.get((status or "").strip().lower(), "working")
+    label = STATUS_LABELS.get(status or "", (status or "").replace("_", " ").capitalize())
+    return f'<span class="sbadge {css}">{label}</span>'
 
 
 # Which filter chip (and stat tile) a status belongs to.

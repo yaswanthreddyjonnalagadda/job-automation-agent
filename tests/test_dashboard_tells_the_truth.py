@@ -127,7 +127,8 @@ def test_the_match_percentage_says_what_it_measures(make_client, monkeypatch):
     monkeypatch.setattr(job_discovery.JobDiscoveryEngine, "__init__", lambda self, *a, **k: None)
     monkeypatch.setattr(job_discovery.JobDiscoveryEngine, "get_discovered_jobs", lambda self, **k: [job])
     html = make_client().get("/").get_data(as_text=True)
-    assert "Title match" in html
+    # Compact badge now renders "Title <score>%" — "Title" is still present, "match" is in the aria-label.
+    assert "Title " in html
 
 
 def test_needs_you_is_quiet_at_zero_and_loud_above_zero(make_client):

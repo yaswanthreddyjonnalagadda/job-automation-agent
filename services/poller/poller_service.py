@@ -7,6 +7,7 @@ import signal
 import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 import requests
 
@@ -70,6 +71,60 @@ def run_poll_cycle(storage: JobStorage, ats_filter: Optional[str] = None) -> Lis
     return results
 
 
+def run_query_discovery_cycle(storage: JobStorage, titles: Optional[List[str]] = None) -> int:
+    """Discovers fresh jobs posted today matching candidate titles via aggregators and seeds new ATS targets."""
+    from services.poller.query_discovery import search_all_fresh_jobs
+    from services.poller.ats_resolver import resolve_and_seed_job
+
+    target_titles = titles
+    if not target_titles:
+        profile_path = Path(__file__).resolve().parent.parent.parent / "config" / "user_profile.yaml"
+        if profile_path.exists():
+            try:
+                from services.matcher.scoring import _parse_simple_yaml
+                data = _parse_simple_yaml(profile_path.read_text(encoding="utf-8")) or {}
+                target_titles = data.get("target_roles", [])
+            except Exception:
+                pass
+    if not target_titles:
+        target_titles = ["Network Engineer", "Cloud Network Engineer", "Senior Network Engineer"]
+
+    total_discovered = 0
+    for title in target_titles[:4]:
+        try:
+            logger.info("Executing 4-hour background query discovery for '%s'...", title)
+            jobs = search_all_fresh_jobs(keywords=title, location="United States", past_24_hours=True, limit=25)
+            for j in jobs:
+                resolved = resolve_and_seed_job(j.company_name, j.url)
+                storage.upsert_company(
+                    company_name=j.company_name,
+                    ats_platform=resolved["ats_type"],
+                    board_slug=resolved["company_token"],
+                    board_url=resolved["canonical_url"],
+                )
+                batch = {
+                    "ats_platform": resolved["ats_type"],
+                    "company_slug": resolved["company_token"],
+                    "polled_at": datetime.now(timezone.utc).isoformat(),
+                    "jobs": [{
+                        "id": j.job_id or j.url,
+                        "title": j.title,
+                        "location": j.location,
+                        "remote": j.is_remote,
+                        "apply_url": resolved["canonical_url"],
+                        "description": j.description,
+                        "posted_date": j.posted_date,
+                    }],
+                }
+                process_poll_batch(batch, storage)
+                total_discovered += 1
+        except Exception as exc:
+            logger.warning("Query discovery failed for '%s': %s", title, exc)
+
+    logger.info("4-hour background query discovery complete: processed %d jobs", total_discovered)
+    return total_discovered
+
+
 def main() -> None:
     logging.basicConfig(
         level=os.getenv("LOG_LEVEL", "INFO"),
@@ -113,10 +168,23 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _handle_signal)
 
     poll_interval = int(os.getenv("POLL_INTERVAL_SECONDS", "300"))
-    logger.info("Poller daemon started with interval %ds", poll_interval)
+    query_discovery_interval = int(os.getenv("QUERY_DISCOVERY_INTERVAL_SECONDS", str(4 * 3600)))  # Every 4 hours
+    last_query_time = 0.0
+
+    logger.info("Poller daemon started with interval %ds, query discovery interval %ds (4h)", poll_interval, query_discovery_interval)
 
     while running:
-        logger.info("Starting poll cycle execution...")
+        current_time = time.time()
+        # Run 4-hour fresh query discovery cycle
+        if current_time - last_query_time >= query_discovery_interval:
+            logger.info("Triggering scheduled 4-hour query discovery cycle...")
+            try:
+                run_query_discovery_cycle(storage)
+            except Exception as exc:
+                logger.error("Error during query discovery cycle: %s", exc)
+            last_query_time = current_time
+
+        logger.info("Starting standard poll cycle execution...")
         try:
             results = run_poll_cycle(storage)
             total_new = sum(r.get("new_count", 0) for r in results)

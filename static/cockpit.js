@@ -179,6 +179,10 @@
   function renderTimeline(events) {
     const list = $('cockpit-timeline-list');
     if (!list) return;
+    // Skip the DOM update when the timeline panel is currently hidden — avoids layout work
+    // for the non-visible tab on every 2s polling tick.
+    const panel = $('tab-content-timeline');
+    if (panel && panel.hidden) return;
     const shown = (events || []).filter((e) => {
       const name = String(e.event || '');
       if (activeFilter === 'verified') return !!e.is_verified;
@@ -209,6 +213,9 @@
   function renderLedger(answers) {
     const body = $('cockpit-ledger-body');
     if (!body) return;
+    // Skip the DOM update when the ledger panel is currently hidden.
+    const panel = $('tab-content-ledger');
+    if (panel && panel.hidden) return;
     if (!answers || !answers.length) {
       body.replaceChildren(make('tr', {}, make('td', { colSpan: 5, class: 'muted', style: 'text-align:center;padding:16px', text: 'No answers recorded yet.' })));
       return;
@@ -297,7 +304,10 @@
     try {
       const res = await fetch('/api/cockpit-state', { headers: { Accept: 'application/json' } });
       if (!res.ok) throw new Error(String(res.status));
-      updateCockpit(await res.json());
+      // Schedule the DOM update on the next animation frame so the fetch + JSON parse
+      // cost does not block the current paint — zero-latency CSR optimisation.
+      const data = await res.json();
+      requestAnimationFrame(() => updateCockpit(data));
       failures = 0;
     } catch (err) {
       failures += 1;
@@ -362,6 +372,11 @@
     });
     setVisible('tab-content-timeline', name === 'timeline');
     setVisible('tab-content-ledger', name === 'ledger');
+    // Re-render the panel that just became visible, since we skip updates for hidden panels.
+    if (lastState) {
+      if (name === 'timeline') renderTimeline(lastState.recent_events || []);
+      else if (name === 'ledger') renderLedger(lastState.recent_answers || []);
+    }
   }
   function setFilter(name) {
     activeFilter = name;

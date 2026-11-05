@@ -55,11 +55,15 @@ def test_pages_share_the_header_and_mark_where_you_are(client, path, active):
     assert re.search(r'class="active">' + active + "</a>", page)
 
 
-def test_every_status_on_the_list_is_a_pill_with_words(client):
+def test_every_status_on_the_list_is_a_sbadge_with_words(client):
+    # The history table now uses compact .sbadge indicators instead of .pill.
     page = client.get("/?show=20").get_data(as_text=True)
     for status in STATUSES:
-        assert f'<span class="pill {ui_shell.status_class(status)}"' in page
+        label = ui_shell.status_label(status)
+        assert label in page, f"{status!r} label {label!r} not found in page"
     assert "DISQUALIFIED POLICY MISMATCH" not in page and "Skipped (policy)" in page
+    # Each row renders a .sbadge element
+    assert 'class="sbadge' in page
 
 
 def test_an_application_page_links_its_runs_log(client, monkeypatch, tmp_path):

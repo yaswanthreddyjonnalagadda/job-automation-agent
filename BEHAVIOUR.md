@@ -133,8 +133,8 @@ seven minutes. While it runs the page says so and a second press starts nothing;
 
 Each card shows how long ago the job was posted (or found, when the site gives no date),
 a "New" badge for the last three days, the first place with "+N more",
-and "Remote" once. "Not interested" is a plain link. The posting link ("Posting") is the card's
-first action, and "Start application" starts without reloading the page: the card says
+and "Remote" once. "Not interested" (accessible label, visible as "Pass") is a plain link. The posting link ("Posting") is the card's
+first action, and "Apply" (previously "Start application") starts without reloading the page: the card says
 "Applying…" in place. Each card has a tick box; ticking shows a bar that queues ("Queue
 selected") or passes ("Pass selected") every ticked card at once. Queued cards leave the
 suggestions and wait under Applications, where Start picks them up; "Start next queued (N)"
