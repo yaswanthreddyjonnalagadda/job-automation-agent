@@ -294,7 +294,8 @@ class AppConfig:
     browser_channel: str = field(default_factory=lambda: os.getenv("BROWSER_CHANNEL", "chrome").strip())
     # Headless=False on purpose: the human must see the browser to log in
     # and to review/submit each application themselves.
-    browser_headless: bool = False
+    # Headless=False on purpose; overridable via BROWSER_HEADLESS environment variable.
+    browser_headless: bool = field(default_factory=lambda: os.getenv('BROWSER_HEADLESS', '').lower() in ('1', 'true', 'yes'))
     claude_max_retries: int = 3
     claude_request_timeout: float = 60.0
     # Opt-in verified auto-submit. OFF unless AUTO_SUBMIT_VERIFIED_ONLY=true is
