@@ -117,7 +117,7 @@ class _FakeClock:
     def monotonic(self):
         return self.t
 
-    def sleep(self, seconds):
+    def record_sleep(self, seconds):
         self.sleeps.append(seconds)
         self.t += seconds
 
@@ -127,7 +127,7 @@ def test_two_boards_on_the_same_host_are_a_second_apart(storage, monkeypatch):
     _register(storage, "globex", host="boards-api.greenhouse.io")
     clock = _FakeClock()
     monkeypatch.setattr(time, "monotonic", clock.monotonic)
-    monkeypatch.setattr(time, "sleep", clock.sleep)
+    monkeypatch.setattr(time, "sleep", clock.record_sleep)
     read_at = []
 
     def fake_poll(company, session=None, storage=None):
