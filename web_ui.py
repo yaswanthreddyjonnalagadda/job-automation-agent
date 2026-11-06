@@ -2510,7 +2510,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
     <form method="get" action="/" id="job-filters" class="filter-row" aria-label="Filter suggested jobs">
       <input type="hidden" name="within" value="{{ within_key }}">
       <label class="filter-field">Role / Title
-        <input type="search" name="title" value="{{ title }}" maxlength="64" aria-label="Job title contains" placeholder="e.g. Network Engineer">
+        <input type="search" name="title" value="{{ title }}" maxlength="64" aria-label="Job title contains" placeholder="Any title">
       </label>
       <label class="filter-field">Company
         <input type="search" name="company" value="{{ company }}" maxlength="64" aria-label="Company name contains" placeholder="Any employer">

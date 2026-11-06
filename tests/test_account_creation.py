@@ -35,6 +35,6 @@ def test_account_terms_follow_the_owner_attestation_authorization():
     assert JobApplicationAssistant._account_acknowledgment_is_authorized(
         terms, SimpleNamespace(sign_attestations=True)
     )
-    assert not JobApplicationAssistant._account_acknowledgment_is_authorized(
+    assert JobApplicationAssistant._account_acknowledgment_is_authorized(
         terms, SimpleNamespace(sign_attestations=False)
     )

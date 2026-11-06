@@ -426,7 +426,7 @@ def test_review_mode_holds_an_eligible_application(page, tmp_path, agent, monkey
 
 def test_hybrid_mode_holds_at_the_daily_cap(page, tmp_path, agent, monkeypatch):
     """SUBMIT_MODE=hybrid with a full cap: eligible, but today is spent."""
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     serve(page,
           "<label for=c>City *</label><input id=c required>"

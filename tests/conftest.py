@@ -84,6 +84,11 @@ def _hermetic_tracker_unless_a_test_asks(monkeypatch):
         monkeypatch.setenv("TRACKER", "sqlite")
 
 
+@pytest.fixture(autouse=True)
+def _standard_desktop_checks_unless_a_test_asks(monkeypatch):
+    monkeypatch.delenv("ALLOW_BACKGROUND_DESKTOP", raising=False)
+
+
 _STARTS_PLAYWRIGHT: dict[str, bool] = {}
 
 

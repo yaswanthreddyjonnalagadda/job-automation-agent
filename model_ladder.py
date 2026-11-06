@@ -256,7 +256,7 @@ def on_ladder(base: type, name: str, tier: str, remember: bool):
             result = original(self, *args, **kwargs)
         finally:
             messages.tier = before
-        if key is not None and (result.get("choice") if isinstance(result, dict) else result):
+        if key is not None and ((result.get("choice") or result.get("answer")) if isinstance(result, dict) else result):
             memo[key] = result
         return result
     return run

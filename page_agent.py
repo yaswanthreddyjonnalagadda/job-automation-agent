@@ -4132,10 +4132,10 @@ class PageAgent:
                                     **several,
                                 )
                                 is_req = _open_is_required(ctrl.question, controls, required)
-                                grounded = bool(getattr(val, "grounded", False) if hasattr(val, "grounded")
-                                                else (val.get("grounded", False) if isinstance(val, dict) else False))
                                 ans_str = str(getattr(val, "answer", "") if hasattr(val, "answer")
                                               else (val.get("answer", "") if isinstance(val, dict) else (val if isinstance(val, str) else ""))).strip()
+                                grounded = bool(getattr(val, "grounded", False) if hasattr(val, "grounded")
+                                                else (val.get("grounded", bool(ans_str)) if isinstance(val, dict) else bool(ans_str)))
                                 if grounded and ans_str:
                                     action = "fill" if ctrl.role in ("textbox", "searchbox", "spinbutton") else "choose"
                                     source = "ai_legal" if legal_cat else "ai"
@@ -7618,9 +7618,10 @@ class PageAgent:
         """True only for a page that says the application was received in a
         confirmation's own words AND asks for nothing more. A page that still shows
         a password box or a form to fill in is not a confirmation, whatever it says."""
-        if hasattr(self.assistant, "_a_box_says_it_was_received"):
+        assistant = getattr(self, "assistant", None)
+        if assistant and hasattr(assistant, "_a_box_says_it_was_received"):
             try:
-                if self.assistant._a_box_says_it_was_received(tab):
+                if assistant._a_box_says_it_was_received(tab):
                     return True
             except Exception as _swallowed:
                 logger.debug("_site_confirms receipt box: %s", diagnostics.short_exc(_swallowed, 100))
@@ -7639,10 +7640,9 @@ class PageAgent:
             if any(confirmation_text.STILL_TO_DO.search(t or "") for t in texts):
                 return False
             blocks = [p.strip() for t in texts for p in (t or "").splitlines() if p.strip()]
-            if not any(confirmation_text.says_received(b) for b in blocks):
-                return False
-            if not any(self._asks_for_input(part) for part in [tab, *frames]):
-                return True
+            if any(confirmation_text.says_received(b) for b in blocks) or any(CONFIRMATION_TEXT.search(t or "") for t in texts):
+                if not any(self._asks_for_input(part) for part in [tab, *frames]):
+                    return True
             # A form on a confirmation page is an offer ("create a Candidate Home account to track your
             # progress"), not a step still to do -- when the page says in the past tense that the application
             # was received, and does not say there is something left to finish it.

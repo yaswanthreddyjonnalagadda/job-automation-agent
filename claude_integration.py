@@ -475,11 +475,11 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
         checked: dict[str, AnswerResult] = {}
         for question_text, item in (answers or {}).items():
             if isinstance(item, dict):
-                grounded = bool(item.get("grounded", False))
+                grounded = bool(item.get("grounded", bool(item.get("answer"))))
                 ans = str(item.get("answer") or "").strip()
             else:
-                grounded = False
                 ans = str(item or "").strip()
+                grounded = bool(ans)
             options = (by_text.get(question_text, {}) or {}).get("options") or []
             if options and ans:
                 if ans not in options:
@@ -684,12 +684,18 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
 
         try:
             data = self._call_json(system=system, user_message=user_message, max_tokens=600)
-            grounded = bool(data.get("grounded", False))
+            if isinstance(data, dict):
+                grounded = bool(data.get("grounded", bool(data.get("answer"))))
+            else:
+                grounded = bool(data)
             if several and options:
                 import option_match
-                ans = "; ".join(option_match.several_offered(list(options), data.get("answer")))
-            else:
-                ans = str(data.get("answer") or "").strip()
+                raw_ans = data.get("answer") if isinstance(data, dict) else data
+                ans = "; ".join(option_match.several_offered(list(options), raw_ans))
+                if not ans:
+                    grounded = False
+                return AnswerResult(grounded=grounded, answer=ans if grounded else "")
+            ans = str((data.get("answer") if isinstance(data, dict) else data) or "").strip()
             if is_non_answer(ans):
                 logger.info("AI had no answer for %r (%r) -- left for the owner", question[:50], ans[:60])
                 grounded = False

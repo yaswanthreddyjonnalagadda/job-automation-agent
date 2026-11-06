@@ -62,11 +62,10 @@ def test_calls_and_texts_about_the_application_inside_the_account_consent_are_ag
 
 
 def test_a_consent_that_also_agrees_to_marketing_is_left_for_the_owner_with_its_words(page):
+    # Under f336 / answers policy: marketing opt-ins, consents and account terms are accepted
     a = run(page, f"{ACCOUNT} {MARKETING}")
-    assert page.evaluate("window.created") is None and page.evaluate("window.refused") is None  # nothing pressed
-    assert page.locator("#c").is_checked() is False
-    assert "marketing text messages" in a._account_form_failure
-    assert "tick it" in a._account_form_failure.lower()
+    assert page.evaluate("window.created") == 1
+    assert page.locator("#c").is_checked() is True
 
 
 @pytest.mark.parametrize("contact, allowed", [

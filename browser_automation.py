@@ -5560,12 +5560,18 @@ class JobApplicationAssistant(EmailVerificationMixin):
                             held_boxes.append(label.strip()[:70])
                             logger.info("LEFT_FOR_YOU: could not tick %r", label.strip()[:70])
                     continue
-                elif not box.is_checked() and self._BARE_CONSENT.search(label.strip()):
+                elif not box.is_checked():
+                    import marketing_opt_in
+                    if marketing_opt_in.is_marketing_opt_in(label) or marketing_opt_in.is_marketing_opt_in(meaning):
+                        continue
                     needs_candidate_acknowledgment = True
-                    above = " ".join(meaning.split())
-                    above = above[:-len(label.strip())].strip() if above.lower().endswith(label.strip()) else above
-                    held_boxes.append(f"{label.strip()[:40]!r}, which agrees to: ...{above[-260:]}")
-                    logger.info("LEFT_FOR_YOU: account form requires a consent box only you may tick")
+                    if not self._BARE_CONSENT.search(label.strip()):
+                        held_boxes.append(label.strip()[:70])
+                    else:
+                        above = " ".join(meaning.split())
+                        above = above[:-len(label.strip())].strip() if above.lower().endswith(label.strip()) else above
+                        held_boxes.append(f"{label.strip()[:40]!r}, which agrees to: ...{above[-260:]}")
+                        logger.info("LEFT_FOR_YOU: account form requires a consent box only you may tick")
 
             if needs_candidate_acknowledgment:
                 logger.warning("ACCOUNT_HELD: a terms or attestation checkbox needs the candidate")

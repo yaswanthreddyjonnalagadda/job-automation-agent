@@ -53,12 +53,13 @@ def test_a_form_with_no_create_button_is_named(page):
 
 
 def test_a_box_only_the_owner_may_tick_is_named(page):
-    box = '<label><input type="checkbox"> I accept the Terms and Conditions</label>'
+    # Under f336/answers/6, standard terms are accepted, but job conditions and declarations remain for the owner
+    box = '<label><input type="checkbox"> I agree to relocate 100% on-site</label>'
     serve(page, BASE.format(extra=box, button="<button>Create Account</button>"))
     a = assistant_for(page, profile=SimpleNamespace(sign_attestations=False, accept_application_privacy_prompts=True,
                                                     full_name="", email=""))
     assert not fill(page, a)
-    assert "tick" in a._account_form_failure.lower() and "terms" in a._account_form_failure.lower()
+    assert "tick" in a._account_form_failure.lower() and "relocate" in a._account_form_failure.lower()
 
 
 def test_a_good_form_leaves_no_failure_behind(page):

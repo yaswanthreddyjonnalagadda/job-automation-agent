@@ -38,7 +38,7 @@ def test_bamboohr_poller_parses_job_list():
             },
         ]
     }
-    with patch("services.poller.bamboohr._http_get_resilient", return_value=json.dumps(mock_response)):
+    with patch("services.poller.bamboohr.get_json", return_value=mock_response):
         jobs = fetch_bamboohr_jobs("acme-networks", "Acme Networks")
         assert len(jobs) == 2
         assert jobs[0]["title"] == "Senior Network Engineer"
