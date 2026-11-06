@@ -59,6 +59,6 @@ def test_explicit_auth_evidence_keeps_its_meaning(heading, message, expected):
 ])
 def test_ai_option_answers_use_bounded_shared_resolution(question, answer, options, needs, expected):
     client = ClaudeClient.__new__(ClaudeClient)
-    client._call = lambda **kw: json.dumps({"answer": answer})
+    client._call = lambda **kw: json.dumps({"grounded": True, "answer": answer})
     profile = config.UserProfile(requires_visa_sponsorship=needs)
     assert client.answer_single_question(question, options=options, profile=profile) == expected

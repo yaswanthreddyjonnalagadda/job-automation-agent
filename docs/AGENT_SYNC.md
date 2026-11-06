@@ -58,6 +58,15 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
     - Calibrated `unanswerable_required_questions`: required questions are answerable whenever the AI may answer them (general text, textareas, choices).
     - Unanswerable fields triggering an early skip are strictly: (1) a legal question with no profile fact and no decline option, or (2) a required non-resume file upload (transcripts, certificates, etc.). Open questions such as "Why do you want to work here?" do not cause a skip.
     - Evaluates `answer_engine.py` rules before `concept_matcher.py`.
+  - **Candidate Signature & Attestation Truth Gating (`page_agent.py`)**:
+    - Added `_CANDIDATE_SIGNATURE_DECLARATION_RE` in `page_agent.py` to prevent candidate signature declarations (handwritten signature equivalents, penalty of perjury, typing name as signature, certification of true/complete information) from being prematurely answered in early form pass as acknowledgements.
+    - Preserves procedural agreement auto-ticking per `f336` while strictly ensuring candidate truth declarations and signatures remain deferred to `sign()` at page end, gated by `profile.sign_attestations` and dependent on other page answers remaining intact.
+  - **Strict Grounded AI Contract Adherence (`claude_integration.py`, `open_answers.py`)**:
+    - Enforced strict `grounded = bool(data.get("grounded", False))` across all AI question-answering and review methods per Task 2 Rule 4 (omitted `"grounded"` counts as False).
+    - Refreshed model ladder client instances in multi-call assertions to avoid memoized mock leakage, and updated legacy review mocks with `"grounded": True`.
+  - **Verification**:
+    - 71/71 targeted tests passing across `test_grounded_ai_answers.py` (12/12), `test_page_agent.py` signature/attestation tests (4/4), `test_open_answer_evidence.py` (30/30), `test_motivation_and_form_date.py` (8/8), `test_acknowledgements.py` (8/8), `test_account_creation.py` (4/4), and `test_a_box_the_site_redraws_is_not_failed.py` (4/4).
+    - `replay_guard.py` confirmed only 1 verified correction across 1,144 pages (`* I certify that all information provided by me on this application is complete and true...` properly deferred to `sign()`).
   - **Needs Answers Status Integration (`job_tracker.py`, `db.py`, `ui_shell.py`, `web_ui.py`)**:
     - Added `STATUS_NEEDS_ANSWERS = "needs_answers"` to `job_tracker.py` and `db.py`.
     - Registered `"needs_answers"` in `web_ui.VALID_STATUSES`, UI waiting query, and status dropdown.

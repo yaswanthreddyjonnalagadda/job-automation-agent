@@ -5,6 +5,7 @@ about it once per box -- eleven calls for one question -- with no list of the bo
 "choose exactly one" of nothing. A tick-box group is several answers drawn from the boxes the page shows; the model has
 to be given those boxes, asked for every one the resume supports, and its answer must name only boxes that exist.
 """
+import json
 import pathlib
 import tempfile
 from types import SimpleNamespace
@@ -24,11 +25,21 @@ QUESTION = "With which of the following do you have professional experience? *"
 # -- the model's side -------------------------------------------------------------------------------------------
 
 def client_saying(reply: str):
+    """A ClaudeClient whose _call always answers `reply`. Most of this file's fixtures predate the
+    "grounded" field answer_single_question now requires before trusting an answer; when `reply`'s own
+    JSON omits it, this adds grounded=true (as a real compliant model reply would already say), so this
+    helper's job stays "which box names come back", not "did the model's self-report arrive"."""
     client = ClaudeClient.__new__(ClaudeClient)
     seen = []
 
     def call(system, user_message, max_tokens):
         seen.append((system, user_message))
+        try:
+            data = json.loads(reply)
+        except ValueError:
+            return reply
+        if isinstance(data, dict) and "grounded" not in data:
+            return json.dumps({**data, "grounded": True})
         return reply
     client._call = call
     client.seen = seen

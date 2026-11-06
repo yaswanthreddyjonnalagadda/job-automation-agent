@@ -108,6 +108,7 @@ def test_gemini_client_follows_same_contract():
     assert res.get("answer") == "Yes"
 
     # Missing grounded -> False
+    client = GeminiClient(cfg)
     client._call_json = MagicMock(return_value={"answer": "Yes"})
     res_fail = client.answer_single_question("Do you have a driver's license?", options=["Yes", "No"])
     assert res_fail.get("grounded") is False
@@ -124,6 +125,7 @@ def test_openai_client_follows_same_contract():
     assert res.get("answer") == "Yes"
 
     # Missing grounded -> False
+    client = OpenAIClient(cfg)
     client._call_json = MagicMock(return_value={"answer": "Yes"})
     res_fail = client.answer_single_question("Do you have a driver's license?", options=["Yes", "No"])
     assert res_fail.get("grounded") is False

@@ -124,6 +124,9 @@ def test_gemma_gets_the_instructions_inside_the_message(google):
 
 
 def test_the_same_question_in_one_run_is_asked_once(google):
+    # answer_single_question's quick-tier ladder starts at lite-1 (config()'s gemini_quick_models);
+    # it must say grounded, or the gated answer comes back blank and is never worth remembering.
+    google.script["lite-1"] = [ok('{"grounded": true, "answer": "English"}')]
     client = g.GeminiClient(config())
     for _ in range(3):
         client.answer_single_question("Preferred language?", options=["English", "Spanish"])

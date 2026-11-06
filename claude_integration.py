@@ -475,7 +475,7 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
         checked: dict[str, AnswerResult] = {}
         for question_text, item in (answers or {}).items():
             if isinstance(item, dict):
-                grounded = bool(item.get("grounded", bool(item.get("answer"))))
+                grounded = bool(item.get("grounded", False))
                 ans = str(item.get("answer") or "").strip()
             else:
                 ans = str(item or "").strip()
@@ -685,7 +685,7 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
         try:
             data = self._call_json(system=system, user_message=user_message, max_tokens=600)
             if isinstance(data, dict):
-                grounded = bool(data.get("grounded", bool(data.get("answer"))))
+                grounded = bool(data.get("grounded", False))
             else:
                 grounded = bool(data)
             if several and options:

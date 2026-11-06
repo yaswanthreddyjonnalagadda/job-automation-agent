@@ -955,6 +955,12 @@ _TEXT_MESSAGES = re.compile(r"\bsms\b|text\s+messag|\btexts?\b.{0,40}\b(?:phone|
 _AGREEMENT = re.compile(r"\bi\s+(?:have\s+read|acknowledge|agree|understand|accept|consent|certify|confirm|attest)\b|"
                         r"\bby\s+(?:checking|ticking|selecting)\s+this\s+box\b|\bterms\s+(?:and|&)\s+conditions\b|"
                         r"\bprivacy\s+(?:policy|notice|statement)\b|\backnowledg", re.IGNORECASE)
+_CANDIDATE_SIGNATURE_DECLARATION_RE = re.compile(
+    r"\b(?:equivalent to a (?:handwritten|physical) signature|under penalt\w+ of perjury|by typing my name|"
+    r"certif\w+.*(?:true and (?:complete|correct)|information.*(?:true|complete)|statements)|"
+    r"grounds for (?:dismissal|termination|disqualification)|terms that apply where i reside)\b",
+    re.IGNORECASE,
+)
 _TICK_WORDS = frozenset({"yes", "no", "true", "false", "checked", "unchecked", "1", "0", "y", "n"})
 # The owner's identity and contact facts: the profile says them, over any saved answer.
 _PROFILE_OWNS = frozenset({"FIRST_NAME", "LAST_NAME", "MIDDLE_NAME", "FULL_NAME", "EMAIL", "PHONE_MOBILE",
@@ -3196,6 +3202,8 @@ class PageAgent:
         # text messages" is not an agreement to tick.
         if control.role in ("checkbox", "switch"):
             said = self._attestation_text(control)
+            if _CANDIDATE_SIGNATURE_DECLARATION_RE.search(said):
+                return "", ""
             import acknowledgements
             if acknowledgements.is_acknowledgement(said):
                 return "checked", "rule.acknowledgement"

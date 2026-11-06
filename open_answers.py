@@ -276,7 +276,7 @@ def _answer_from(raw: str) -> tuple[bool, str]:
         try:
             data = json.loads(match.group(0))
             ans = str(data.get("answer") or "").strip()
-            grounded = bool(data.get("grounded", bool(ans)))
+            grounded = bool(data.get("grounded", False))
             return grounded, ans
         except (ValueError, AttributeError) as _swallowed:
             logger.debug("_answer_from: %s", diagnostics.short_exc(_swallowed, 100))
@@ -358,7 +358,7 @@ def review(question: str, answer: str, *, ask: Callable[[str, str, int], str],
         issues = verdict["issues"]
         if any(not isinstance(issue, str) or not issue.strip() for issue in issues):
             return ["content review returned invalid issues"]
-        grounded = bool(verdict.get("grounded", verdict.get("supported", False)))
+        grounded = bool(verdict.get("grounded", False))
         if grounded and verdict.get("supported") is True and verdict.get("complete") is True and not issues:
             return []
         if not grounded and "answer is not grounded in candidate facts" not in issues:
