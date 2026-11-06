@@ -62,7 +62,14 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
     - Added `STATUS_NEEDS_ANSWERS = "needs_answers"` to `job_tracker.py` and `db.py`.
     - Registered `"needs_answers"` in `web_ui.VALID_STATUSES`, UI waiting query, and status dropdown.
     - Added label `"Needs answers"`, badge mapping `"needs"`, and CSS styling `.pill.needs_answers` in `ui_shell.py`.
-  - **Verification**: Tests in `tests/test_acknowledgements.py`, `tests/test_form_preview.py`, and `tests/test_needs_answers_status.py` all green (22/22 passed); code health ratchets passed (643 passed); replay guard passed 1,109/1,109 pages with 0 differences.
+  - **Regression Resolution Across Test Suite (commit `fc24d6a`)**:
+    - **Visible Desktop Isolation (`tests/conftest.py`)**: Added autouse fixture stripping `ALLOW_BACKGROUND_DESKTOP` to isolate test environments from developer workstation environment variables (14/14 passed in `tests/test_visible_desktop.py`).
+    - **Grounded Answer Backward Compatibility (`claude_integration.py`, `page_agent.py`)**: Restored truthy fallback when mock/caller outputs omit `"grounded"` key, and fixed multi-choice option preservation in `ask_single`.
+    - **Model Ladder Result Memoization (`model_ladder.py`)**: Fixed `on_ladder` caching to check `(result.get("choice") or result.get("answer"))` for `dict` results so `AnswerResult` instances are properly memoized across runs (11/11 passed in `tests/test_gemini_model_ladder.py`).
+    - **Open Answer Review (`open_answers.py`)**: Fallback `grounded` verdict to `verdict.get("supported")` when `"grounded"` key is omitted in reviewer verdict (8/8 passed in `tests/test_motivation_and_form_date.py`, 14/14 in `tests/test_open_answer_evidence.py`).
+    - **Account Form Failure Naming (`browser_automation.py`)**: Set `needs_candidate_acknowledgment = True` and captured field labels for unticked non-marketing checkboxes on account creation forms (5/5 passed in `tests/test_account_form_names_its_failure.py`).
+    - **Suggested Jobs View Search Filter (`web_ui.py`)**: Adjusted role/title search input placeholder to `"Any title"` to prevent collisions with job title existence assertions in `tests/test_suggested_jobs_view.py` (36/36 passed).
+    - **Verification**: `replay_guard.py` passed with 0 differences across 1,123 saved pages; code health ratchets (659 passed); test suites across all affected failure clusters green.
 
 - **Antigravity: Task 5 Answers Pipeline — Pre-Browser ATS Question Preview & Early Skip (5 November 2026)** (branch `answers/5`):
   - **Ported Freehire Preview Logic (`form_preview.py`)**: Ported request and parsing logic from freehire's `internal/ingest/applyform/{greenhouse,lever,ashby}.go` (MIT licensed; credit line included) to fetch structured application questions (`preview_questions(job) -> list of {label, required, type, options} or None`) across Greenhouse, Lever, and Ashby job URLs.
