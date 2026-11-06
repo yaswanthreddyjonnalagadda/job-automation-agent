@@ -50,6 +50,12 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 
 ## 3. Current Repository State
 
+- **Card 4: iCIMS board reader (6 November 2026, Muse)** (branch `jobsource/card4`):
+  - New reader `services/poller/icims.py`: `read_icims_board(board, session=None) -> ReaderResult` ported from `discovery_sources.fetch_icims_feed` (search request + card/link/place regexes). Lists the whole board (`ss=1`, no per-title search), follows every `/jobs/search` result page (`complete=True` only after the last page), dedupes by job id, never returns `[]` on an error (partial postings kept; codes `board_not_found`/`http_<status>`/`timeout`/`bad_json`). HTML is fetched under the shared `http.py` retry policy via `make_session("icims")` (`get_json` cannot serve HTML). Per-job detail pages deliberately not opened (list-only like SmartRecruiters), so `description`/`posted_at` stay empty. Not registered in `poller_service.py` (another agent owns it per card rules).
+  - Location fix from live read: the ported place pattern took Schwab'"'"'s first `JobHeaderData` span (Requisition ID `2026-129663`) as the location; the reader now prefers the card'"'"'s `Job Locations` labeled value and falls back to the legacy span (older layouts still parse).
+  - Tests `tests/test_job_source_icims.py` (11 tests) + fixtures `tests/fixtures/job_source/icims/` (`ok/empty/page1/page2/truncated.html` synthetic, `schwab.html` real-card excerpt): all offline (mocked sessions, temp-file SQLite JobStorage). TDD RED shown as `ModuleNotFoundError` before the reader existed; legacy-pattern demo shows the old regex yielding requisition IDs on the Schwab fixture. 11/11 pass; `tests/test_five_services_architecture.py` 9/9 alongside (20/20 total).
+  - Live reads (report only): `career-schwab.icims.com` -> 321 postings, complete (board is not empty; board_state 0 was stale); `jobs-mutualofenumclaw.icims.com` -> 22 postings, complete, after transient timeouts (flaky/slow host, not blocked, not a wrong id). Keyword `Network Engineer` search: Schwab 4 cards, Enumclaw 0. No reader changes beyond the location fix.
+
 - **Antigravity: Task 7 Answers Pipeline — Strict JSON Requirement for Open Answers & Grounded False on Plain Text (6 November 2026)** (branch `answers/7` from `feat/five-service-architecture`):
   - **Strict JSON Requirement for Open Answers (`open_answers._answer_from`)**:
     - Removed the non-JSON fallback lines `if raw and not raw.startswith("{"): return True, raw`. Any reply that does not parse as valid JSON now strictly returns `(False, "")`.
