@@ -74,6 +74,21 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
     - Added comprehensive 13-test test suite testing all ATS provider returns, complete vs incomplete diff behavior, error handling, flexible arg ordering, and `run_poll_cycle` integration.
     - Verified 55/55 passed across `test_jobsource_card1.py`, `test_five_services_architecture.py`, `test_fetching_at_scale.py`, `test_ats_reader_results.py`, and `test_code_health_ratchets.py`.
 
+- **Antigravity: Job Source Card 3 — Workday Reader Rewrite with Facet Splitting & Offset Latching (6 November 2026)** (branch `jobsource/card3` from `feat/five-service-architecture`):
+  - **Workday Board Ingestion Ported from freehire (`services/poller/workday.py`)**:
+    - Ported `freehire` logic (`parseWorkdayBoard`, `listPostings`, `pageAll`, `splitByFacet`, `splittableFacets`, `pickSplitDimension`, `detail`).
+    - Standardized signature: `read_workday_board(board, session=None, known_ids=None) -> ReaderResult`.
+    - Handles host shapes `^[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com$` and `^wd\d+\.myworkdaysite\.com$`, stripping locale prefixes (`/en-US/`, `/fr/`, etc.).
+    - Implemented offset latching (`page_all`): boards reporting `total=0` after page 1 preserve page 1's real total.
+    - Implemented facet dimension picking & splitting (`split_by_facet`): when total is 2000 (Workday limit cutoff), boards are dynamically split by the facet dimension whose sum >= 2000 and whose largest value is smallest; capped boards beyond depth 3 return `complete=False, error="capped_unsplittable"`.
+    - `external_id` strictly preserved as stable `externalPath`.
+    - Multi-threaded detail fetching (`ThreadPoolExecutor(max_workers=4)`) parses HTML description to plain text, location, remote flag, and apply URL; detail failures preserve posting with empty description.
+    - `known_ids` callable avoids redundant detail calls for already-indexed postings.
+  - **Verification & Offline Fixtures (`tests/test_job_source_workday.py`, `tests/fixtures/job_source/workday/*`)**:
+    - Created full offline fixture suite (`uncapped_p1/p2.json`, `latch_p1/p2.json`, `capped_root.json`, `slice_*.json`, `detail_ok/404.json`).
+    - 10 unit tests covering host shapes, locale stripping, 45-job uncapped pagination, 30-job latching, facet slicing, depth limit cutoff, detail fallback, known_ids skipping, externalPath ID stability, and SQLite JobStorage safety.
+    - Ran live report-only verification across active Workday boards (`copart`, `rackspace`, `adobe`, `autodesk`).
+
 - **Antigravity: Task 7 Answers Pipeline — Strict JSON Requirement for Open Answers & Grounded False on Plain Text (6 November 2026)** (branch `answers/7` from `feat/five-service-architecture`):
   - **Strict JSON Requirement for Open Answers (`open_answers._answer_from`)**:
     - Removed the non-JSON fallback lines `if raw and not raw.startswith("{"): return True, raw`. Any reply that does not parse as valid JSON now strictly returns `(False, "")`.

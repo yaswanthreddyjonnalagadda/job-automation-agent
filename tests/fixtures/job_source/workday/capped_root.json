@@ -1,0 +1,28 @@
+{
+  "total": 2000,
+  "jobPostings": [
+    {"title": "Capped Preview", "externalPath": "/job/capped-preview", "locationsText": "Remote", "postedOn": "2026-10-01"}
+  ],
+  "facets": [
+    {
+      "facetParameter": "jobFamilyGroup",
+      "values": [
+        {"id": "eng", "count": 2600, "descriptor": "Engineering"},
+        {"id": "sales", "count": 2600, "descriptor": "Sales"}
+      ]
+    },
+    {
+      "facetParameter": "locations",
+      "values": [
+        {"id": "us", "count": 2700, "descriptor": "United States"},
+        {"id": "eu", "count": 2500, "descriptor": "Europe"}
+      ]
+    },
+    {
+      "facetParameter": "distance",
+      "values": [
+        {"id": "d5", "count": 5, "descriptor": "5 miles"}
+      ]
+    }
+  ]
+}

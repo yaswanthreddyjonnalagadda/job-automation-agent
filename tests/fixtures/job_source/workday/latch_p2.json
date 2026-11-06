@@ -1,0 +1,15 @@
+{
+  "total": 0,
+  "jobPostings": [
+    {"title": "Latch Job 21", "externalPath": "/job/latch-21", "locationsText": "Remote", "postedOn": "2026-10-01"},
+    {"title": "Latch Job 22", "externalPath": "/job/latch-22", "locationsText": "Remote", "postedOn": "2026-10-01"},
+    {"title": "Latch Job 23", "externalPath": "/job/latch-23", "locationsText": "Remote", "postedOn": "2026-10-01"},
+    {"title": "Latch Job 24", "externalPath": "/job/latch-24", "locationsText": "Remote", "postedOn": "2026-10-01"},
+    {"title": "Latch Job 25", "externalPath": "/job/latch-25", "locationsText": "Remote", "postedOn": "2026-10-01"},
+    {"title": "Latch Job 26", "externalPath": "/job/latch-26", "locationsText": "Remote", "postedOn": "2026-10-01"},
+    {"title": "Latch Job 27", "externalPath": "/job/latch-27", "locationsText": "Remote", "postedOn": "2026-10-01"},
+    {"title": "Latch Job 28", "externalPath": "/job/latch-28", "locationsText": "Remote", "postedOn": "2026-10-01"},
+    {"title": "Latch Job 29", "externalPath": "/job/latch-29", "locationsText": "Remote", "postedOn": "2026-10-01"},
+    {"title": "Latch Job 30", "externalPath": "/job/latch-30", "locationsText": "Remote", "postedOn": "2026-10-01"}
+  ]
+}

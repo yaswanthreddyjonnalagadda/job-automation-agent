@@ -1,0 +1,25 @@
+{
+  "total": 45,
+  "jobPostings": [
+    {"title": "Job 1", "externalPath": "/job/uncapped-1", "locationsText": "New York, NY", "postedOn": "2026-10-01"},
+    {"title": "Job 2", "externalPath": "/job/uncapped-2", "locationsText": "New York, NY", "postedOn": "2026-10-01"},
+    {"title": "Job 3", "externalPath": "/job/uncapped-3", "locationsText": "New York, NY", "postedOn": "2026-10-01"},
+    {"title": "Job 4", "externalPath": "/job/uncapped-4", "locationsText": "New York, NY", "postedOn": "2026-10-01"},
+    {"title": "Job 5", "externalPath": "/job/uncapped-5", "locationsText": "New York, NY", "postedOn": "2026-10-01"},
+    {"title": "Job 6", "externalPath": "/job/uncapped-6", "locationsText": "New York, NY", "postedOn": "2026-10-01"},
+    {"title": "Job 7", "externalPath": "/job/uncapped-7", "locationsText": "New York, NY", "postedOn": "2026-10-01"},
+    {"title": "Job 8", "externalPath": "/job/uncapped-8", "locationsText": "New York, NY", "postedOn": "2026-10-01"},
+    {"title": "Job 9", "externalPath": "/job/uncapped-9", "locationsText": "New York, NY", "postedOn": "2026-10-01"},
+    {"title": "Job 10", "externalPath": "/job/uncapped-10", "locationsText": "New York, NY", "postedOn": "2026-10-01"},
+    {"title": "Job 11", "externalPath": "/job/uncapped-11", "locationsText": "New York, NY", "postedOn": "2026-10-01"},
+    {"title": "Job 12", "externalPath": "/job/uncapped-12", "locationsText": "New York, NY", "postedOn": "2026-10-01"},
+    {"title": "Job 13", "externalPath": "/job/uncapped-13", "locationsText": "New York, NY", "postedOn": "2026-10-01"},
+    {"title": "Job 14", "externalPath": "/job/uncapped-14", "locationsText": "New York, NY", "postedOn": "2026-10-01"},
+    {"title": "Job 15", "externalPath": "/job/uncapped-15", "locationsText": "New York, NY", "postedOn": "2026-10-01"},
+    {"title": "Job 16", "externalPath": "/job/uncapped-16", "locationsText": "New York, NY", "postedOn": "2026-10-01"},
+    {"title": "Job 17", "externalPath": "/job/uncapped-17", "locationsText": "New York, NY", "postedOn": "2026-10-01"},
+    {"title": "Job 18", "externalPath": "/job/uncapped-18", "locationsText": "New York, NY", "postedOn": "2026-10-01"},
+    {"title": "Job 19", "externalPath": "/job/uncapped-19", "locationsText": "New York, NY", "postedOn": "2026-10-01"},
+    {"title": "Job 20", "externalPath": "/job/uncapped-20", "locationsText": "New York, NY", "postedOn": "2026-10-01"}
+  ]
+}

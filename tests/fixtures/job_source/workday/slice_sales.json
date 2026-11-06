@@ -1,0 +1,15 @@
+{
+  "total": 2000,
+  "jobPostings": [
+    {"title": "Sales Preview", "externalPath": "/job/sales-preview", "locationsText": "Remote", "postedOn": "2026-10-01"}
+  ],
+  "facets": [
+    {
+      "facetParameter": "workerSubType",
+      "values": [
+        {"id": "regular", "count": 1500, "descriptor": "Regular"},
+        {"id": "contract", "count": 1500, "descriptor": "Contract"}
+      ]
+    }
+  ]
+}
