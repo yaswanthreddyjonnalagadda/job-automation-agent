@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import diagnostics
 import job_source_client
 
 logger = logging.getLogger("compare_sources")
@@ -96,7 +97,9 @@ def write_entry(entry: Dict[str, Any], out_path: Path) -> None:
             loaded = json.loads(out_path.read_text(encoding="utf-8"))
             if isinstance(loaded, list):
                 existing = loaded
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
+            logger.warning("Could not read existing comparisons at %s: %s",
+                            out_path, diagnostics.short_exc(exc, 100))
             existing = []
     existing = [e for e in existing if e.get("date") != entry["date"]]
     existing.append(entry)
