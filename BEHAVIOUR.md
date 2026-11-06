@@ -1,5 +1,13 @@
 # What the assistant does, and what it never does
 
+### Pre-browser required question preview and early skip (5 November 2026)
+
+Before launching a browser session for Greenhouse, Lever, and Ashby jobs (`form_preview.py`, ported from freehire applyform logic, MIT license; `apply_flow.py`), the agent previews application questions via public ATS APIs or apply-page markup:
+- Questions are evaluated in "dry" mode through deterministic profile concepts (`concept_matcher.py`), legal questions and decline rules (`legal_questions.py`), acknowledgements (`acknowledgements.py`), and approved answer bank entries (`answer_bank.py`) without incurring unnecessary AI spend.
+- If any required question cannot be answered from profile facts, approved answers, or decline options and would require user intervention, the browser is not launched. The application is early-skipped and recorded with status `needs_answers` and the list of unanswerable questions so the dashboard can surface them.
+- If all required questions are answerable, or if the ATS does not support preview APIs or the preview request fails, the agent starts the browser normally and inspects all page fields.
+
+
 ### Clear receipt requirement for submission status (5 November 2026)
 
 An application is marked `submitted` only on clear, unambiguous receipt evidence (`confirmation_text.says_received` or `f307` modal receipt dialog). If a page displays conditional wording, future promises ("once you verify your email your application will be submitted"), advice to complete further steps, or has no receipt evidence, the application is not marked submitted:

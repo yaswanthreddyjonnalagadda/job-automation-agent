@@ -2132,6 +2132,21 @@ def main() -> None:
     job_dir = config.output_dir / folder
     job_dir.mkdir(parents=True, exist_ok=True)
 
+    import form_preview
+    if form_preview.check_early_skip(job, profile, tracker, key):
+        logger.info("Application %s skipped before opening browser: required ATS questions need answers", key[:12])
+        if RuntimeEvent is not None:
+            RuntimeEvent.emit(
+                event_name=EventName.RUN_STOPPED,
+                component="apply_flow",
+                stage="init",
+                reason_code=ReasonCode.UNSUPPORTED_FIELD,
+                display_message="Skipped before opening browser: required ATS questions need answers",
+                application_key=key,
+                run_id=run_id,
+            )
+        return
+
     attach_resume = prepare_materials(claude, resume, job, profile, job_dir, tracker, key)
     tracker.update_materials(key, str(attach_resume), None)
     letter: tuple[Path, Path] | None = None  # (txt, pdf), written only if a form asks for one

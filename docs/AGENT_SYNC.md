@@ -50,6 +50,15 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 
 ## 3. Current Repository State
 
+- **Antigravity: Task 5 Answers Pipeline — Pre-Browser ATS Question Preview & Early Skip (5 November 2026)** (branch `answers/5`):
+  - **Ported Freehire Preview Logic (`form_preview.py`)**: Ported request and parsing logic from freehire's `internal/ingest/applyform/{greenhouse,lever,ashby}.go` (MIT licensed; credit line included) to fetch structured application questions (`preview_questions(job) -> list of {label, required, type, options} or None`) across Greenhouse, Lever, and Ashby job URLs.
+  - **Site Adapter Integration (`sites/base.py`, `sites/greenhouse.py`, `sites/lever.py`, `sites/ashby.py`)**: Added `preview_questions` to `SiteAdapter` and concrete implementations in `GreenhouseAdapter`, `LeverAdapter`, and `AshbyAdapter`.
+  - **Pre-Browser Dry-Mode Assessment & Early Skip (`apply_flow.py`)**:
+    - Before opening a browser, runs all required questions through Task 1/2 answer paths in "dry" mode (zero AI spend for questions answered by deterministic rules, profile facts, legal decline options, or approved answers).
+    - If any required question cannot be answered and would wait for human intervention, the browser session is not launched. The application is early-skipped and recorded with status `"needs_answers"` and the list of unanswerable questions.
+    - If all required questions are answerable or if the site has no preview API / fails, application proceeds to browser launch as before.
+  - **Verification**: Offline unit test suite `tests/test_form_preview.py` with mock fixtures (`greenhouse_job.json`, `ashby_job.json`, `lever_job.html`); passes 9/9 unit tests; code health ratchets (643 passed); place literals test passed; replay guard passed 1,109/1,109 pages with 0 differences.
+
 - **Antigravity: Task 4 Answers Pipeline — Clear Receipt Verification & Unconfirmed Submission Guard (5 November 2026)** (branch `answers/4`):
   - **Comprehensive Submission Audit**: Audited all places that mark an application submitted (`apply_flow.py`, `page_agent.py`, `safety.py`, `browser_automation.py`) and documented the evidence used by each.
   - **Receipt Condition Enforcement (`confirmation_text.py`, `page_agent.py`)**:

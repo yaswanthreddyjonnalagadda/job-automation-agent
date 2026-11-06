@@ -25,3 +25,8 @@ class AshbyAdapter(SiteAdapter):
     hosts = ("ashbyhq.com",)
     portal_list_patterns = ("/applications",)
 
+    def preview_questions(self, job, session=None):
+        import form_preview
+        url = getattr(job, "url", "") if hasattr(job, "url") else (job.get("url") if isinstance(job, dict) else "")
+        return form_preview.fetch_ashby_preview(url, session=session)
+

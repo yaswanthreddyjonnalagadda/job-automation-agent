@@ -100,6 +100,10 @@ class SiteAdapter:
         """Platform-specific confirmation detection (e.g. ADP Applied status button)."""
         return False
 
+    def preview_questions(self, job, session=None):
+        """Fetch required application questions from ATS API before browser launch."""
+        return None
+
 
 def merge_placeholders(adapter: SiteAdapter) -> re.Pattern:
     """A regex matching any 'nothing chosen yet' value for this platform."""

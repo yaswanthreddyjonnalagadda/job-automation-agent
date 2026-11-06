@@ -1,0 +1,41 @@
+{
+  "data": {
+    "jobPosting": {
+      "applicationFormDefinition": {
+        "sections": [
+          {
+            "fields": [
+              {
+                "title": "Full Name",
+                "isRequired": true,
+                "type": "text",
+                "selectableValues": []
+              },
+              {
+                "title": "Email",
+                "isRequired": true,
+                "type": "email",
+                "selectableValues": []
+              },
+              {
+                "title": "Resume",
+                "isRequired": true,
+                "type": "file",
+                "selectableValues": []
+              },
+              {
+                "title": "Will you now or in the future require sponsorship for an employment visa?",
+                "isRequired": true,
+                "type": "dropdown",
+                "selectableValues": [
+                  {"label": "Yes", "value": "yes"},
+                  {"label": "No", "value": "no"}
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
