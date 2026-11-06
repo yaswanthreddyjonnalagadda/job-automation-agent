@@ -50,6 +50,19 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 
 ## 3. Current Repository State
 
+- **Antigravity: Job Source Card 1 — ReaderResult Propagation & Safe Diff Application (6 November 2026)** (branch `jobsource/card1` from `feat/five-service-architecture`):
+  - **`ReaderResult` Return Contract in Poller (`services/poller/poller_service.py`)**:
+    - Updated `poll_single_company` to return the complete `ReaderResult` across all supported platforms (`greenhouse`, `lever`, `ashby`, `workday`, `smartrecruiters`, `bamboohr`, and generic scrapers) without discarding `complete` or `error`.
+    - Returns graceful `ReaderResult(postings=[], complete=False, error=...)` on unsupported ATS platforms or scraping exceptions.
+  - **Safe Diff Application (`services/diff_engine/diff_engine.py`)**:
+    - Implemented `apply_read_result(company, reader_result, storage)` to replace old lossy diff paths.
+    - Inserts new postings as `active` and refreshes `last_seen_at` for existing active jobs.
+    - **Failure Safety Invariant**: Missing jobs are marked as removed (`removed_ids = stored_ids - incoming_ids`) **only** when `is_complete and not error`. If `complete=False` or `error` is present, `removed_ids` is strictly empty, guaranteeing that transient HTTP errors, truncated JSON, or timeouts close nothing.
+    - Delegated legacy `process_poll_batch` to `apply_read_result` for full backward compatibility.
+  - **Verification & Testing (`tests/test_jobsource_card1.py`)**:
+    - Added comprehensive 13-test test suite testing all ATS provider returns, complete vs incomplete diff behavior, error handling, flexible arg ordering, and `run_poll_cycle` integration.
+    - Verified 55/55 passed across `test_jobsource_card1.py`, `test_five_services_architecture.py`, `test_fetching_at_scale.py`, `test_ats_reader_results.py`, and `test_code_health_ratchets.py`.
+
 - **Antigravity: Task 7 Answers Pipeline — Strict JSON Requirement for Open Answers & Grounded False on Plain Text (6 November 2026)** (branch `answers/7` from `feat/five-service-architecture`):
   - **Strict JSON Requirement for Open Answers (`open_answers._answer_from`)**:
     - Removed the non-JSON fallback lines `if raw and not raw.startswith("{"): return True, raw`. Any reply that does not parse as valid JSON now strictly returns `(False, "")`.

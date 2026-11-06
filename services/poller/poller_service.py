@@ -11,41 +11,46 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 import requests
 
-from services.diff_engine.diff_engine import process_poll_batch
+from services.diff_engine.diff_engine import apply_read_result, process_poll_batch
 from services.diff_engine.storage import JobStorage
 from services.poller.ashby import read_ashby_board
 from services.poller.bamboohr import read_bamboohr_board
 from services.poller.greenhouse import read_greenhouse_board
 from services.poller.lever import read_lever_board
+from services.poller.reader_result import ReaderResult
 from services.poller.smartrecruiters import read_smartrecruiters_board
 from services.poller.workday import read_workday_board
 
 logger = logging.getLogger("poller.service")
 
 
-def poll_single_company(company: Dict[str, Any], session: Optional[requests.Session] = None) -> List[Dict[str, Any]]:
+def poll_single_company(company: Dict[str, Any], session: Optional[requests.Session] = None) -> ReaderResult:
     platform = company.get("ats_platform", "").lower()
     slug = company.get("board_slug", "")
     board_url = company.get("board_url", "")
 
     if platform == "greenhouse":
-        return read_greenhouse_board(slug, session=session).postings
+        return read_greenhouse_board(slug, session=session)
     elif platform == "lever":
-        return read_lever_board(slug, session=session).postings
+        return read_lever_board(slug, session=session)
     elif platform == "ashby":
-        return read_ashby_board(slug, session=session).postings
+        return read_ashby_board(slug, session=session)
     elif platform == "workday":
-        return read_workday_board(board_url or company.get("api_endpoint", ""), session=session).postings
+        return read_workday_board(board_url or company.get("api_endpoint", ""), session=session)
     elif platform == "smartrecruiters":
-        return read_smartrecruiters_board(slug, session=session).postings
+        return read_smartrecruiters_board(slug, session=session)
     elif platform == "bamboohr":
-        return read_bamboohr_board(slug, company_name=company.get("company_name", ""), session=session).postings
+        return read_bamboohr_board(slug, company_name=company.get("company_name", ""), session=session)
     elif platform in ("generic", "custom", "html"):
         from services.poller.generic_scraper import scrape_career_page
-        return scrape_career_page(board_url or company.get("api_endpoint", ""), session=session)
+        try:
+            postings = scrape_career_page(board_url or company.get("api_endpoint", ""), session=session)
+            return ReaderResult(postings=postings, complete=True if postings else False)
+        except Exception as exc:
+            return ReaderResult(postings=[], complete=False, error=str(exc))
     else:
         logger.warning("Unsupported ATS platform: %s for %s", platform, slug)
-        return []
+        return ReaderResult(postings=[], complete=False, error=f"Unsupported ATS platform: {platform}")
 
 
 def run_poll_cycle(storage: JobStorage, ats_filter: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -58,14 +63,8 @@ def run_poll_cycle(storage: JobStorage, ats_filter: Optional[str] = None) -> Lis
         slug = comp.get("board_slug", "")
         platform = comp.get("ats_platform", "")
         try:
-            jobs = poll_single_company(comp, session=session)
-            batch = {
-                "ats_platform": platform,
-                "company_slug": slug,
-                "polled_at": datetime.now(timezone.utc).isoformat(),
-                "jobs": jobs,
-            }
-            diff_res = process_poll_batch(batch, storage)
+            reader_result = poll_single_company(comp, session=session)
+            diff_res = apply_read_result(comp, reader_result, storage)
             results.append(diff_res)
             time.sleep(0.3)  # 300ms polite delay between companies
         except Exception as exc:

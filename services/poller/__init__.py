@@ -19,4 +19,3 @@ __all__ = [
     "fetch_bamboohr_jobs",
     "poll_bamboohr",
 ]
-
