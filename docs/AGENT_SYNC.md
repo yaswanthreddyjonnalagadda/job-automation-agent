@@ -50,6 +50,14 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 
 ## 3. Current Repository State
 
+- **Antigravity: Task 7 Answers Pipeline — Strict JSON Requirement for Open Answers & Grounded False on Plain Text (6 November 2026)** (branch `answers/7` from `feat/five-service-architecture`):
+  - **Strict JSON Requirement for Open Answers (`open_answers._answer_from`)**:
+    - Removed the non-JSON fallback lines `if raw and not raw.startswith("{"): return True, raw`. Any reply that does not parse as valid JSON now strictly returns `(False, "")`.
+    - Gated all drafts to structured `{"grounded": true, "answer": "<draft>"}` format; plain-text replies fail the groundedness gate and are rejected with `"answer is not grounded in candidate facts"`.
+  - **Regression Testing (`tests/test_open_answers.py`, `tests/test_grounded_ai_answers.py`)**:
+    - Added tests verifying that plain-text replies directly return `(False, "")` from `_answer_from` and cause `open_answers.write()` to reject the draft with `"answer is not grounded in candidate facts"`.
+    - Verified all 101 tests pass across open answers and grounded AI answer suites, and full replay guard passed across 1,158 saved pages.
+
 - **Antigravity: Task 6 Answers Pipeline — Acknowledgement Job Condition Exclusions & Preview Unanswerable Calibration (5 November 2026)** (branch `answers/6`):
   - **Acknowledgement Catch-All Removal & Condition Exclusions (`reference/acknowledgements.json`, `acknowledgements.py`)**:
     - Removed the bare consent catch-all regex `(agree|accept|consent|acknowledge)` from `acknowledgements.is_acknowledgement` so matching only uses explicit catalog phrases in `reference/acknowledgements.json`.
