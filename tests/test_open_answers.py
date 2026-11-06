@@ -255,3 +255,17 @@ def test_a_question_with_choices_is_not_written_as_an_essay():
     client = ClaudeClient.__new__(ClaudeClient)
     client._call = lambda system, user_message, max_tokens: '{"grounded": true, "answer": "Yes"}'
     assert client.answer_single_question("Why not? Are you over 18?", options=["Yes", "No"]) == "Yes"
+
+def test_plain_text_reply_gives_grounded_false():
+    """A plain-text reply that is not JSON gives grounded=False."""
+    grounded, ans = open_answers._answer_from("I have six years of experience building cloud networks.")
+    assert grounded is False
+    assert ans == ""
+
+    # When open_answers.write is called with an ask function that returns plain text,
+    # it rejects the draft as not grounded.
+    plain_ask = lambda system, user, tokens: "I build cloud networks on AWS and Azure."
+    answer, issues = open_answers.write(WHY, ask=plain_ask, facts="", resume_text="")
+    assert answer == ""
+    assert "answer is not grounded in candidate facts" in issues
+

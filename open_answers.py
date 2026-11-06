@@ -280,8 +280,6 @@ def _answer_from(raw: str) -> tuple[bool, str]:
             return grounded, ans
         except (ValueError, AttributeError) as _swallowed:
             logger.debug("_answer_from: %s", diagnostics.short_exc(_swallowed, 100))
-    if raw and not raw.startswith("{"):
-        return True, raw
     return False, ""
 
 

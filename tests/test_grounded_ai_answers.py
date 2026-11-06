@@ -268,3 +268,10 @@ def test_page_agent_required_field_waits_when_ungrounded():
     # Required field stays in still_open and goes to required_left
     assert "Required Skill *" in still_open
     assert "Required Skill *" in required_left
+
+def test_plain_text_reply_gives_grounded_false():
+    """A plain-text reply without JSON formatting gives grounded=False."""
+    grounded, ans = open_answers._answer_from("Plain text reply without JSON")
+    assert grounded is False
+    assert ans == ""
+
