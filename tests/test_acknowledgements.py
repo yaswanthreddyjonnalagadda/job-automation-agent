@@ -140,3 +140,40 @@ def test_job_conditions_are_not_acknowledgements():
     assert not acknowledgements.is_acknowledgement("I agree to travel up to 50%")
     assert not acknowledgements.is_acknowledgement("I accept the shift hours and weekend schedule")
     assert acknowledgements.is_acknowledgement("I have read and agree to the privacy policy")
+
+
+def test_a_routine_certify_information_is_true_acknowledgement_is_still_ticked():
+    """"I certify that... is complete and true" is a routine certification almost every application has,
+    and is already required to tick (test_acknowledgements_json_exists_and_contains_required_categories /
+    Task 3) -- not a "signature equivalent" or "under penalty of perjury" declaration that needs
+    sign_attestations. The new _CANDIDATE_SIGNATURE_DECLARATION_RE guard (Task 6) used to catch this
+    phrasing too and blank it; replay_guard.py caught the regression on a real saved Pacific Life page."""
+    agent = _make_agent(UserProfile(sign_attestations=False, accept_application_privacy_prompts=False))
+    ctrl = Control(ref="c7", role="checkbox",
+                   name="I certify that all information provided by me on this application is complete "
+                        "and true to the best of my knowledge and belief.")
+    ans, _source = agent.known_answer(ctrl)
+    assert ans == "checked"
+
+
+def test_a_checkbox_named_only_by_its_container_is_still_read():
+    """A checkbox whose own accessible name is empty, with its real label sitting in a sibling/container
+    element instead (context: "nearby text, when the control has no name of its own") -- the ARIA shape
+    several real ATS forms use even for a standard "I agree to the Terms and Conditions" box -- used to
+    be blanked outright (`if not control.name: return "", ""`) before that context was ever read;
+    replay_guard.py caught the regression on a real saved Church Mutual page."""
+    agent = _make_agent(UserProfile(sign_attestations=False, accept_application_privacy_prompts=False))
+    ctrl = Control(ref="c8", role="checkbox", name="", context="I agree to the Terms and Conditions")
+    ans, _source = agent.known_answer(ctrl)
+    assert ans == "checked"
+
+
+def test_a_real_perjury_signature_declaration_is_still_left_for_the_owner():
+    """The new guard's actual target -- a declaration that explicitly invokes legal signature-equivalence
+    or perjury -- must still be left alone without sign_attestations; narrowing the regex to fix the two
+    cases above must not neuter the feature it was added for."""
+    agent = _make_agent(UserProfile(sign_attestations=False))
+    ctrl = Control(ref="c9", role="checkbox",
+                   name="I certify under penalty of perjury that the foregoing statements are true.")
+    ans, _source = agent.known_answer(ctrl)
+    assert ans != "checked"

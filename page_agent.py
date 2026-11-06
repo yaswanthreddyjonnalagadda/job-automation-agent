@@ -957,7 +957,6 @@ _AGREEMENT = re.compile(r"\bi\s+(?:have\s+read|acknowledge|agree|understand|acce
                         r"\bprivacy\s+(?:policy|notice|statement)\b|\backnowledg", re.IGNORECASE)
 _CANDIDATE_SIGNATURE_DECLARATION_RE = re.compile(
     r"\b(?:equivalent to a (?:handwritten|physical) signature|under penalt\w+ of perjury|by typing my name|"
-    r"certif\w+.*(?:true and (?:complete|correct)|information.*(?:true|complete)|statements)|"
     r"grounds for (?:dismissal|termination|disqualification)|terms that apply where i reside)\b",
     re.IGNORECASE,
 )
