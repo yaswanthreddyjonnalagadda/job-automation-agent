@@ -14,13 +14,14 @@ import requests
 
 import acknowledgements
 import answer_bank
+import answer_engine
 import concept_matcher
 import diagnostics
 import legal_questions
 
 logger = logging.getLogger(__name__)
 
-_UPLOAD = re.compile(r"\b(resume|c\.?v\.?|curriculum vitae|cover letter)\b", re.IGNORECASE)
+_RESUME_RE = re.compile(r"\b(resume|c\.?v\.?|curriculum vitae)\b", re.IGNORECASE)
 _GH_JOB_ID = re.compile(r"/jobs/(\d+)")
 _LEVER_QUESTION_BLOCK = re.compile(r'<div class="application-question">([\s\S]*?)</div>', re.IGNORECASE)
 _TAG = re.compile(r"<[^>]+>")
@@ -28,6 +29,16 @@ _TAG = re.compile(r"<[^>]+>")
 
 def _clean_text(s: str) -> str:
     return " ".join((s or "").split()).strip()
+
+
+def _is_file_upload(q: dict) -> bool:
+    if q.get("type") in ("file", "attachment"):
+        return True
+    return bool(re.search(r"\b(upload|attachment)\b", q.get("label") or "", re.IGNORECASE))
+
+
+def _is_resume_upload(label: str) -> bool:
+    return bool(_RESUME_RE.search(label or ""))
 
 
 def parse_greenhouse_response(data: dict) -> list[dict]:
@@ -215,16 +226,13 @@ def preview_questions(job: Any, session: Optional[requests.Session] = None) -> O
     return None
 
 
-def _is_file_upload(q: dict) -> bool:
-    if q.get("type") in ("file", "attachment"):
-        return True
-    return bool(_UPLOAD.search(q.get("label") or ""))
-
-
 def unanswerable_required_questions(questions: list[dict], profile: Any, job: Any) -> list[str]:
     """Runs required questions through Task 1/2 answer path in dry mode.
 
     Returns labels of required questions that would wait for owner intervention.
+    Unanswerable only:
+    - a legal question with no profile fact and no decline option
+    - a required non-resume file upload
     """
     company = getattr(job, "company", "") if hasattr(job, "company") else (job.get("company", "") if isinstance(job, dict) else "")
     unanswerable = []
@@ -233,11 +241,18 @@ def unanswerable_required_questions(questions: list[dict], profile: Any, job: An
         if not label or not q.get("required"):
             continue
         options = q.get("options") or []
+
+        # 1. Required file upload: resume is answerable; non-resume files are unanswerable
         if _is_file_upload(q):
+            if not _is_resume_upload(label):
+                unanswerable.append(label)
             continue
+
+        # 2. Acknowledgements
         if acknowledgements.is_acknowledgement(label):
             continue
-        # Task 1 legal questions:
+
+        # 3. Legal questions: only answerable if profile has facts or a decline option exists
         cat = legal_questions.classify_legal_question(label)
         if cat:
             facts = legal_questions.get_category_facts(cat, profile)
@@ -248,16 +263,33 @@ def unanswerable_required_questions(questions: list[dict], profile: Any, job: An
                 continue
             unanswerable.append(label)
             continue
-        # Deterministic profile / concept matcher
+
+        # 4. Try answer_engine rules before concept_matcher
+        try:
+            ask = answer_engine.Ask(
+                question=label,
+                options=tuple(options),
+                role=q.get("type") or "input",
+                profile=profile,
+                company=company,
+            )
+            ans, _src = answer_engine.answer(ask)
+            if ans:
+                continue
+        except Exception as exc:
+            logger.debug("answer_engine preview failed for %s: %s", label, exc)
+
+        # 5. Deterministic profile / concept matcher
         concept = concept_matcher.match_concept(label)
         val, _src = concept_matcher.resolve_profile_value(concept or "", profile, options, label)
         if val:
             continue
-        # Approved answers bank
+
+        # 6. Approved answers bank
         if answer_bank.lookup(label, company) is not None:
             continue
-        # Without facts or rules, grounded AI contract (Task 2) cannot answer required field
-        unanswerable.append(label)
+
+        # 7. Non-legal, non-file question: AI may answer it (does not skip)
     return unanswerable
 
 

@@ -205,6 +205,7 @@ STATUS_PREPARED = "prepared"                    # materials generated
 STATUS_FORM_FILLED = "form_filled"              # being filled in
 STATUS_READY_TO_SUBMIT = "ready_to_submit"      # filled + validated; the human clicks Submit
 STATUS_NEEDS_USER_REVIEW = "needs_user_review"  # something needs a person: blanks, errors,
+STATUS_NEEDS_ANSWERS = "needs_answers"
                                                 # a CAPTCHA, an attestation, or a submission
                                                 # we could not verify
 STATUS_SUBMITTED = "submitted"                  # confirmed by the site or a confirmation email

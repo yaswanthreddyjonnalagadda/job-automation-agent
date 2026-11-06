@@ -5,22 +5,38 @@
     {
       "label": "First Name",
       "required": true,
-      "fields": [{"type": "input"}]
+      "fields": [
+        {
+          "type": "input"
+        }
+      ]
     },
     {
       "label": "Last Name",
       "required": true,
-      "fields": [{"type": "input"}]
+      "fields": [
+        {
+          "type": "input"
+        }
+      ]
     },
     {
       "label": "Email",
       "required": true,
-      "fields": [{"type": "input"}]
+      "fields": [
+        {
+          "type": "input"
+        }
+      ]
     },
     {
       "label": "Resume/CV",
       "required": true,
-      "fields": [{"type": "file"}]
+      "fields": [
+        {
+          "type": "file"
+        }
+      ]
     },
     {
       "label": "Are you legally authorized to work in the United States?",
@@ -28,14 +44,27 @@
       "fields": [
         {
           "type": "select",
-          "values": [{"label": "Yes", "value": 1}, {"label": "No", "value": 2}]
+          "values": [
+            {
+              "label": "Yes",
+              "value": 1
+            },
+            {
+              "label": "No",
+              "value": 2
+            }
+          ]
         }
       ]
     },
     {
-      "label": "What is your secret favorite spaceship model from childhood?",
+      "label": "Upload your official transcripts",
       "required": true,
-      "fields": [{"type": "input"}]
+      "fields": [
+        {
+          "type": "file"
+        }
+      ]
     }
   ]
 }

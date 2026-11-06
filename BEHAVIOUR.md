@@ -3,9 +3,11 @@
 ### Pre-browser required question preview and early skip (5 November 2026)
 
 Before launching a browser session for Greenhouse, Lever, and Ashby jobs (`form_preview.py`, ported from freehire applyform logic, MIT license; `apply_flow.py`), the agent previews application questions via public ATS APIs or apply-page markup:
-- Questions are evaluated in "dry" mode through deterministic profile concepts (`concept_matcher.py`), legal questions and decline rules (`legal_questions.py`), acknowledgements (`acknowledgements.py`), and approved answer bank entries (`answer_bank.py`) without incurring unnecessary AI spend.
-- If any required question cannot be answered from profile facts, approved answers, or decline options and would require user intervention, the browser is not launched. The application is early-skipped and recorded with status `needs_answers` and the list of unanswerable questions so the dashboard can surface them.
+- Questions are evaluated in "dry" mode through `answer_engine.py` rules, deterministic profile concepts (`concept_matcher.py`), legal questions and decline rules (`legal_questions.py`), acknowledgements (`acknowledgements.py`), and approved answer bank entries (`answer_bank.py`).
+- A required question counts as answerable when the AI may answer it (open text/choice questions that are not legal declarations and not non-resume file uploads).
+- Unanswerable required questions that trigger an early skip are strictly: (1) a legal question with no profile fact and no decline option, or (2) a required non-resume file upload (transcripts, certificates, etc.). When present, the browser is not launched, and the application is recorded with status `needs_answers` and the list of unanswerable questions.
 - If all required questions are answerable, or if the ATS does not support preview APIs or the preview request fails, the agent starts the browser normally and inspects all page fields.
+- The `needs_answers` status is accepted and displayed across the tracker (`job_tracker.py`, `db.py`), UI shell (`ui_shell.py`), and web dashboard (`web_ui.py`).
 
 
 ### Clear receipt requirement for submission status (5 November 2026)
@@ -16,7 +18,7 @@ An application is marked `submitted` only on clear, unambiguous receipt evidence
 
 ### Standing consent, acknowledgements, and marketing opt-ins (5 November 2026)
 
-Reversing the f276 rule in marketing_opt_in.py, the agent always accepts agreements, terms and conditions, privacy notices, data processing terms, truthful certifications ('I certify / attest the information is true'), background check consents, e-signatures, at-will declarations, arbitration clauses, communication preferences, and marketing opt-ins (reference/acknowledgements.json, acknowledgements.py). Matching checkboxes are ticked, agree buttons on consent dialogs are pressed, and pre-ticked boxes (including Walmart's 'new arrivals' email opt-in) stay ticked. Checkboxes that represent legal status or eligibility answers (such as US work authorization or visa sponsorship) remain classified as legal questions under Task 1 and are never auto-ticked blindly as acknowledgements.
+Reversing the f276 rule in marketing_opt_in.py, the agent always accepts agreements, terms and conditions, privacy notices, data processing terms, truthful certifications ('I certify / attest the information is true'), background check consents, e-signatures, at-will declarations, arbitration clauses, communication preferences, and marketing opt-ins (reference/acknowledgements.json, acknowledgements.py). Matching checkboxes are ticked, agree buttons on consent dialogs are pressed, and pre-ticked boxes (including Walmart's 'new arrivals' email opt-in) stay ticked. Checkboxes that represent legal status or eligibility answers (such as US work authorization or visa sponsorship) remain classified as legal questions under Task 1 and are never auto-ticked blindly as acknowledgements. Job condition checkboxes (relocation, on-site, travel, salary, shift, overtime, weekends, hours) are recognized as questions, not acknowledgements (`reference/acknowledgements.json` `job_condition_exclusions`, `acknowledgements.py`), and are not auto-checked. Catch-all regex matching on bare consent words is removed: only explicit phrases in `reference/acknowledgements.json` match as acknowledgements.
 
 ### Grounded AI answering contract and optional field handling (5 November 2026)
 

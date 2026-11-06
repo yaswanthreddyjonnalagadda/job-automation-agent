@@ -64,11 +64,11 @@ def test_dry_mode_assessment_answerable_vs_unanswerable():
     unanswerable_ashby = form_preview.unanswerable_required_questions(ashby_questions, profile, job)
     assert unanswerable_ashby == []
 
-    # Greenhouse fixture has an unknown spaceship question
+    # Greenhouse fixture has a required non-resume file upload (transcripts)
     gh_data = json.loads((FIXTURES / "greenhouse_job.json").read_text(encoding="utf-8"))
     gh_questions = form_preview.parse_greenhouse_response(gh_data)
     unanswerable_gh = form_preview.unanswerable_required_questions(gh_questions, profile, job)
-    assert "What is your secret favorite spaceship model from childhood?" in unanswerable_gh
+    assert "Upload your official transcripts" in unanswerable_gh
 
 
 def test_early_skip_records_needs_answers():
@@ -85,7 +85,7 @@ def test_early_skip_records_needs_answers():
         call_args = tracker.update_status.call_args
         assert call_args[0][0] == "k1"
         assert call_args[0][1] == "needs_answers"
-        assert "spaceship" in call_args[1]["notes"].lower()
+        assert "transcripts" in call_args[1]["notes"].lower()
 
 
 def test_early_skip_passes_when_all_answerable():
@@ -133,3 +133,39 @@ def test_site_adapters_preview_questions():
         m_as.assert_called_once()
 
     assert sites.adapter_for(wd_job.url).preview_questions(wd_job) is None
+
+
+def test_ai_answerable_questions_do_not_skip():
+    """An open question like 'Why do you want to work here?' does NOT skip, but unanswerable EEO does."""
+    profile = config.get_user_profile()
+    job = SimpleNamespace(title="Engineer", company="Acme", url="https://boards.greenhouse.io/acme/jobs/123")
+
+    # Open questions the AI can answer
+    questions = [
+        {"label": "Why do you want to work here?", "required": True, "type": "textarea", "options": []},
+        {"label": "Please describe your experience with Python", "required": True, "type": "textarea", "options": []},
+    ]
+    unanswerable = form_preview.unanswerable_required_questions(questions, profile, job)
+    assert unanswerable == []
+
+    # EEO question with no fact and no decline option
+    empty_profile = config.UserProfile(gender="", ethnicity="", veteran_status="", disability_status="")
+    eeo_questions = [
+        {"label": "What is your gender?", "required": True, "type": "select", "options": ["Male", "Female"]},
+    ]
+    unanswerable_eeo = form_preview.unanswerable_required_questions(eeo_questions, empty_profile, job)
+    assert unanswerable_eeo == ["What is your gender?"]
+
+    # Non-resume required file upload causes a skip
+    doc_questions = [
+        {"label": "Upload your official transcripts", "required": True, "type": "file", "options": []},
+    ]
+    unanswerable_doc = form_preview.unanswerable_required_questions(doc_questions, profile, job)
+    assert unanswerable_doc == ["Upload your official transcripts"]
+
+    # Resume upload does not cause a skip
+    resume_questions = [
+        {"label": "Resume / CV", "required": True, "type": "file", "options": []},
+    ]
+    unanswerable_resume = form_preview.unanswerable_required_questions(resume_questions, profile, job)
+    assert unanswerable_resume == []

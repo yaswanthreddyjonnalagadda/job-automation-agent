@@ -142,7 +142,7 @@ input:focus, select:focus, textarea:focus { outline:none; border-color:var(--acc
 .pill::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; opacity:.8; }
 .pill.submitted { background:var(--ok-soft); color:var(--ok); }
 .pill.ready_to_submit { background:var(--info-soft); color:var(--info); }
-.pill.needs_user_review, .pill.blocked_validation_loop { background:var(--warn-soft); color:var(--warn); }
+.pill.needs_user_review, .pill.blocked_validation_loop, .pill.needs_answers { background:var(--warn-soft); color:var(--warn); }
 .pill.form_filled, .pill.prepared, .pill.ready_to_apply { background:var(--accent-soft); color:var(--accent); }
 .pill.interviewing, .pill.offer { background:var(--violet-soft); color:var(--violet); }
 .pill.rejected { background:var(--bad-soft); color:var(--bad); }
@@ -182,7 +182,7 @@ dialog textarea, dialog input[type=text] { margin-top:6px; }
 .toast.bad { background:var(--bad); color:#fff; }
 
 .pill.submitted::before { content:"\\2713"; width:auto; height:auto; background:none; font-size:11px; line-height:1; }
-.pill.needs_user_review::before, .pill.blocked_validation_loop::before { content:"!"; width:auto; height:auto; background:none;
+.pill.needs_user_review::before, .pill.blocked_validation_loop::before, .pill.needs_answers::before { content:"!"; width:auto; height:auto; background:none;
   font-size:12px; line-height:1; font-weight:800; }
 .pill.rejected::before { content:"\\00d7"; width:auto; height:auto; background:none; font-size:13px; line-height:1; }
 
@@ -348,7 +348,7 @@ def page(title: str, body: str, header: bool = True) -> str:
 # Statuses as a person reads them; the pill's colour comes from the status itself.
 STATUS_LABELS = {
     "prepared": "Ready to start", "ready_to_apply": "Ready to start", "form_filled": "Filling in", "ready_to_submit": "Ready to submit",
-    "needs_user_review": "Needs you", "submitted": "Submitted", "skipped": "Skipped",
+    "needs_user_review": "Needs you", "needs_answers": "Needs answers", "submitted": "Submitted", "skipped": "Skipped",
     "DISQUALIFIED_POLICY_MISMATCH": "Skipped (policy)", "BLOCKED_VALIDATION_LOOP": "Stuck (needs you)",
     "job_not_found": "Job doesn't exist", "already_applied": "Already applied",
     "interviewing": "Interviewing", "rejected": "Rejected", "offer": "Offer",
@@ -371,6 +371,7 @@ _BADGE_CLASS = {
     "offer": "offer",
     "rejected": "rejected",
     "needs_user_review": "needs",
+    "needs_answers": "needs",
     "blocked_validation_loop": "needs",
     "ready_to_submit": "needs",
     "form_filled": "working",
@@ -391,7 +392,7 @@ def status_badge(status: str) -> str:
 
 # Which filter chip (and stat tile) a status belongs to.
 _GROUPS = {
-    "needs": {"ready_to_submit", "needs_user_review", "blocked_validation_loop"},
+    "needs": {"ready_to_submit", "needs_user_review", "blocked_validation_loop", "needs_answers"},
     "done": {"submitted", "interviewing", "offer", "rejected"},
     "skipped": {"skipped", "disqualified_policy_mismatch", "job_not_found", "already_applied"},
 }

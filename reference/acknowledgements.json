@@ -11,7 +11,11 @@
         "general terms",
         "agree to the terms",
         "accept the terms",
-        "abide by the terms"
+        "abide by the terms",
+        "i accept",
+        "i agree to the above",
+        "i agree to creating this account",
+        "have read and agree to the"
       ]
     },
     "privacy": {
@@ -57,7 +61,8 @@
         "true, correct and complete",
         "under penalty of perjury",
         "certify that answers given",
-        "statements are true"
+        "statements are true",
+        "have read, understood, and agree to the foregoing"
       ]
     },
     "background_check": {
@@ -121,7 +126,8 @@
         "agree to receive text",
         "automated text messages",
         "recruiting communications",
-        "updates regarding my application"
+        "updates regarding my application",
+        "yes, i consent"
       ]
     },
     "marketing_opt_ins": {
@@ -174,5 +180,16 @@
     "proceed",
     "yes, i agree",
     "yes, i accept"
+  ],
+  "job_condition_exclusions": [
+    "relocate",
+    "on-site",
+    "onsite",
+    "travel",
+    "salary",
+    "shift",
+    "overtime",
+    "weekends",
+    "hours"
   ]
 }

@@ -50,6 +50,20 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 
 ## 3. Current Repository State
 
+- **Antigravity: Task 6 Answers Pipeline — Acknowledgement Job Condition Exclusions & Preview Unanswerable Calibration (5 November 2026)** (branch `answers/6`):
+  - **Acknowledgement Catch-All Removal & Condition Exclusions (`reference/acknowledgements.json`, `acknowledgements.py`)**:
+    - Removed the bare consent catch-all regex `(agree|accept|consent|acknowledge)` from `acknowledgements.is_acknowledgement` so matching only uses explicit catalog phrases in `reference/acknowledgements.json`.
+    - Added `job_condition_exclusions` (`relocate`, `on-site`, `onsite`, `travel`, `salary`, `shift`, `overtime`, `weekends`, `hours`) to `reference/acknowledgements.json` ensuring job condition checkboxes are treated as questions rather than auto-ticked acknowledgements (e.g. "I accept that this role is 100% on-site" and "I agree to relocate" return False; "I have read and agree to the privacy policy" returns True).
+  - **Form Preview Early-Skip Calibration (`form_preview.py`)**:
+    - Calibrated `unanswerable_required_questions`: required questions are answerable whenever the AI may answer them (general text, textareas, choices).
+    - Unanswerable fields triggering an early skip are strictly: (1) a legal question with no profile fact and no decline option, or (2) a required non-resume file upload (transcripts, certificates, etc.). Open questions such as "Why do you want to work here?" do not cause a skip.
+    - Evaluates `answer_engine.py` rules before `concept_matcher.py`.
+  - **Needs Answers Status Integration (`job_tracker.py`, `db.py`, `ui_shell.py`, `web_ui.py`)**:
+    - Added `STATUS_NEEDS_ANSWERS = "needs_answers"` to `job_tracker.py` and `db.py`.
+    - Registered `"needs_answers"` in `web_ui.VALID_STATUSES`, UI waiting query, and status dropdown.
+    - Added label `"Needs answers"`, badge mapping `"needs"`, and CSS styling `.pill.needs_answers` in `ui_shell.py`.
+  - **Verification**: Tests in `tests/test_acknowledgements.py`, `tests/test_form_preview.py`, and `tests/test_needs_answers_status.py` all green (22/22 passed); code health ratchets passed (643 passed); replay guard passed 1,109/1,109 pages with 0 differences.
+
 - **Antigravity: Task 5 Answers Pipeline — Pre-Browser ATS Question Preview & Early Skip (5 November 2026)** (branch `answers/5`):
   - **Ported Freehire Preview Logic (`form_preview.py`)**: Ported request and parsing logic from freehire's `internal/ingest/applyform/{greenhouse,lever,ashby}.go` (MIT licensed; credit line included) to fetch structured application questions (`preview_questions(job) -> list of {label, required, type, options} or None`) across Greenhouse, Lever, and Ashby job URLs.
   - **Site Adapter Integration (`sites/base.py`, `sites/greenhouse.py`, `sites/lever.py`, `sites/ashby.py`)**: Added `preview_questions` to `SiteAdapter` and concrete implementations in `GreenhouseAdapter`, `LeverAdapter`, and `AshbyAdapter`.

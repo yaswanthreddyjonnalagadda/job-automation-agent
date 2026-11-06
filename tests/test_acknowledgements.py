@@ -129,3 +129,14 @@ def test_page_agent_known_answer_does_not_auto_tick_sponsorship():
     ans, source = agent.known_answer(sponsor_ctrl)
     # Must NOT be auto-checked as an acknowledgement
     assert ans != "checked"
+
+
+def test_job_conditions_are_not_acknowledgements():
+    """Job conditions (on-site, relocate, travel, salary, shift, etc.) are questions, not acknowledgements."""
+    import acknowledgements
+
+    assert not acknowledgements.is_acknowledgement("I accept that this role is 100% on-site")
+    assert not acknowledgements.is_acknowledgement("I agree to relocate")
+    assert not acknowledgements.is_acknowledgement("I agree to travel up to 50%")
+    assert not acknowledgements.is_acknowledgement("I accept the shift hours and weekend schedule")
+    assert acknowledgements.is_acknowledgement("I have read and agree to the privacy policy")

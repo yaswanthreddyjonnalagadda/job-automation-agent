@@ -843,7 +843,7 @@ def stop_application(app_id: int):
 
 
 # What the status menu accepts (after submitting: interviewing, rejected, offer, for the Progress page).
-VALID_STATUSES = {"prepared", "form_filled", "ready_to_submit", "needs_user_review", "submitted", "skipped",
+VALID_STATUSES = {"prepared", "form_filled", "ready_to_submit", "needs_user_review", "needs_answers", "submitted", "skipped",
                   "job_not_found", "already_applied", "interviewing", "rejected", "offer"}
 
 
@@ -1978,7 +1978,7 @@ def progress_of(record, validation: dict) -> dict:
     """How far along an application is, for the dashboard's progress bar."""
     order = ["prepared", "form_filled", "ready_to_submit", "submitted"]
     step = order.index(record.status) + 1 if record.status in order else 0
-    blocked = record.status == "needs_user_review"
+    blocked = record.status in ("needs_user_review", "needs_answers")
     missing = list(validation.get("required_still_blank") or [])
     return {"step": step, "of": len(order), "blocked": blocked, "missing": missing,
             "errors": list(validation.get("errors_shown") or []),
@@ -2301,7 +2301,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
   </div>
   {% endif %}
 
-  {% set waiting = apps | selectattr('status', 'in', ['ready_to_submit', 'needs_user_review', 'BLOCKED_VALIDATION_LOOP']) | rejectattr('url', 'equalto', working_url or '-') | list %}
+  {% set waiting = apps | selectattr('status', 'in', ['ready_to_submit', 'needs_user_review', 'BLOCKED_VALIDATION_LOOP', 'needs_answers']) | rejectattr('url', 'equalto', working_url or '-') | list %}
 
   {% if signals or waiting %}
   <section class="dash-needs" aria-labelledby="needs-h">
@@ -2672,6 +2672,7 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
       <label for="status-select" class="muted" style="font-size:13px">Change status</label>
       <select id="status-select" name="status" style="width:auto; padding:7px 10px">
         <option value="needs_user_review" {% if a.status == 'needs_user_review' %}selected{% endif %}>Needs you</option>
+        <option value="needs_answers" {% if a.status == 'needs_answers' %}selected{% endif %}>Needs answers</option>
         <option value="submitted" {% if a.status == 'submitted' %}selected{% endif %}>Submitted</option>
         <option value="ready_to_submit" {% if a.status == 'ready_to_submit' %}selected{% endif %}>Ready to submit</option>
         <option value="form_filled" {% if a.status == 'form_filled' %}selected{% endif %}>Filling in</option>
