@@ -1650,20 +1650,47 @@ def _feed_filter_context(args) -> dict:
     }
 
 
+def _service_jobs(filters) -> list:
+    """Suggestion-card dicts from the new job-source service, with the same company/title/
+    remote filtering `job_discovery.get_discovered_jobs` does -- the service's `open_jobs`
+    view carries no country_code, so that one filter does not apply here."""
+    import math
+    import job_source_client
+    hours = filters["window"]["hours"]
+    days = max(1, math.ceil(hours / 24))
+    jobs = job_source_client.get_open_jobs(min_score=filters["min_score"], days=days, limit=40)
+
+    company_like = (filters.get("company") or "").lower()
+    title_like = (filters.get("title") or "").lower()
+    remote_only = filters.get("remote_only")
+    if company_like:
+        jobs = [j for j in jobs if company_like in (j.get("company_name") or "").lower()]
+    if title_like:
+        jobs = [j for j in jobs if title_like in (j.get("job_title") or "").lower()]
+    if remote_only is True:
+        jobs = [j for j in jobs if j.get("is_remote")]
+    elif remote_only is False:
+        jobs = [j for j in jobs if not j.get("is_remote")]
+    return jobs
+
+
 def _suggested_jobs(apps, filters) -> tuple:
     """The suggestion cards plus the filter row's country options; empty on failure, never raising."""
     try:
-        from job_discovery import JobDiscoveryEngine
-        discovery_engine = JobDiscoveryEngine()
-        # Posted inside the chosen window, newest first, and nothing the owner has already applied to, skipped or
-        # been turned down for: those never come back as suggestions.
-        jobs = discovered_view.prepare(
-            discovery_engine.get_discovered_jobs(min_score=filters["min_score"], limit=40, hide_applied=False,
-                                                 within_hours=filters["window"]["hours"],
-                                                 country_code=filters["country_code"],
-                                                 company_like=filters["company"],
-                                                 remote_only=filters["remote_only"],
-                                                 title_like=filters.get("title")), apps, newest_first=True)
+        if os.getenv("JOB_SOURCE", "legacy") == "service":
+            jobs = discovered_view.prepare(_service_jobs(filters), apps, newest_first=True)
+        else:
+            from job_discovery import JobDiscoveryEngine
+            discovery_engine = JobDiscoveryEngine()
+            # Posted inside the chosen window, newest first, and nothing the owner has already applied to,
+            # skipped or been turned down for: those never come back as suggestions.
+            jobs = discovered_view.prepare(
+                discovery_engine.get_discovered_jobs(min_score=filters["min_score"], limit=40, hide_applied=False,
+                                                     within_hours=filters["window"]["hours"],
+                                                     country_code=filters["country_code"],
+                                                     company_like=filters["company"],
+                                                     remote_only=filters["remote_only"],
+                                                     title_like=filters.get("title")), apps, newest_first=True)
     except Exception as _swallowed:
         logger.debug("suggested jobs: %s", diagnostics.short_exc(_swallowed, 100))
         jobs = []
