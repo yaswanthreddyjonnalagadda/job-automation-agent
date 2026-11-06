@@ -4,6 +4,7 @@ Calculates newly posted jobs, removed postings, and updates freshness timestamps
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 from services.diff_engine.storage import JobStorage
@@ -12,6 +13,9 @@ if TYPE_CHECKING:
     from services.poller.reader_result import ReaderResult
 
 logger = logging.getLogger("diff_engine")
+
+CLOSE_GRACE_HOURS = 48
+SUSPICIOUS_EMPTY_THRESHOLD = 5
 
 
 def _resolve_read_args(
@@ -72,7 +76,7 @@ def _resolve_read_args(
     return target_storage, target_result, ats_platform or "", company_slug or "", company_name or ""
 
 
-def apply_read_result(
+def _legacy_apply_diff(
     arg1: Any,
     arg2: Any = None,
     storage: Optional[JobStorage] = None,
@@ -81,7 +85,10 @@ def apply_read_result(
     ats_platform: Optional[str] = None,
     company_slug: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Apply an ATS ReaderResult (or batch) to storage.
+    """Legacy immediate-diff path kept ONLY for process_poll_batch's backward-compatible
+    callers (scripts/fetch_jobs.py, tests/test_five_services_architecture.py). Closes
+    missing jobs on the very next complete read, with no grace period and no run
+    tracking. New code must use the safe `apply_read_result` below instead.
 
     Rules:
       1. New jobs in result.postings are inserted as active.
@@ -162,7 +169,9 @@ def process_poll_batch(
     ats_platform: Optional[str] = None,
     company_slug: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Process a batch of scraped/polled jobs from an ATS platform. Backward compatibility wrapper."""
+    """Process a batch of scraped/polled jobs from an ATS platform. Backward compatibility wrapper
+    for legacy callers that expect the immediate-close diff behavior (no 48h grace period).
+    """
     from services.poller.reader_result import ReaderResult
 
     if isinstance(batch, dict):
@@ -172,9 +181,110 @@ def process_poll_batch(
         plat = batch.get("ats_platform", ats_platform or "")
         slug = batch.get("company_slug", company_slug or "")
         rr = ReaderResult(postings=jobs, complete=complete, error=error)
-        return apply_read_result(rr, storage, ats_platform=plat, company_slug=slug)
+        return _legacy_apply_diff(rr, storage, ats_platform=plat, company_slug=slug)
     elif isinstance(batch, list):
         rr = ReaderResult(postings=batch, complete=True, error=None)
-        return apply_read_result(rr, storage, ats_platform=ats_platform or "", company_slug=company_slug or "")
+        return _legacy_apply_diff(rr, storage, ats_platform=ats_platform or "", company_slug=company_slug or "")
     else:
-        return apply_read_result(batch, storage, ats_platform=ats_platform, company_slug=company_slug)
+        return _legacy_apply_diff(batch, storage, ats_platform=ats_platform, company_slug=company_slug)
+
+
+def apply_read_result(
+    result: "ReaderResult",
+    provider: str,
+    board: str,
+    storage: JobStorage,
+    run_id: Optional[int] = None,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Apply one ATS ReaderResult to storage, closing missing jobs safely.
+
+    Rules:
+      1. Every posting is upserted (new / seen / reopened), counted accordingly.
+      2. An incomplete or errored read closes nothing; it only records the failure
+         and pauses the board after 3 failures in a row.
+      3. A complete, error-free read closes jobs that have been missing for more
+         than CLOSE_GRACE_HOURS (48h) -- with two runs a day, a job must be absent
+         from 4 full reads in a row before it is considered gone.
+      4. A complete read with 0 postings, when the board had >= 5 active jobs, is
+         treated as suspicious: nothing is closed and the anomaly is recorded.
+         Only a second consecutive empty complete read is allowed to close.
+      5. The outcome of this board's read is recorded via record_board_run.
+    """
+    now = now or datetime.now(timezone.utc)
+    postings = result.postings or []
+    is_complete = bool(getattr(result, "complete", False))
+    error = getattr(result, "error", None)
+
+    new_count = 0
+    seen_count = 0
+    reopened_count = 0
+    new_job_ids: List[int] = []
+    for posting in postings:
+        job_id, label = storage.upsert_posting(provider, board, posting, now)
+        if label == "new":
+            new_count += 1
+            new_job_ids.append(job_id)
+        elif label == "reopened":
+            reopened_count += 1
+        else:
+            seen_count += 1
+
+    closed_count = 0
+    suspicious_empty = False
+
+    if not is_complete:
+        storage.record_board_failure(provider, board, error or "incomplete_read")
+        logger.info(
+            "Incomplete/errored read for %s on %s (error=%s): closing nothing",
+            board, provider, error,
+        )
+    elif not postings:
+        active_before = len(storage.get_active_job_ids(provider, board))
+        board_row = storage.get_board(provider, board)
+        previously_suspicious = bool(board_row and board_row.get("last_error") == "suspicious_empty")
+        if active_before >= SUSPICIOUS_EMPTY_THRESHOLD and not previously_suspicious:
+            storage.record_board_suspicious_empty(provider, board, now)
+            suspicious_empty = True
+            logger.warning(
+                "Suspicious empty complete read for %s on %s: %d active jobs, 0 returned -- closing nothing",
+                board, provider, active_before,
+            )
+        else:
+            closed_count = storage.close_unseen(
+                provider, board, older_than=now - timedelta(hours=CLOSE_GRACE_HOURS), now=now
+            )
+            storage.record_board_success(provider, board, now)
+    else:
+        closed_count = storage.close_unseen(
+            provider, board, older_than=now - timedelta(hours=CLOSE_GRACE_HOURS), now=now
+        )
+        storage.record_board_success(provider, board, now)
+
+    if run_id is not None:
+        storage.record_board_run(
+            run_id=run_id,
+            ats_platform=provider,
+            board=board,
+            complete=is_complete,
+            postings_seen=len(postings),
+            new_count=new_count,
+            reopened_count=reopened_count,
+            closed_count=closed_count,
+            error=error,
+            finished_at=now,
+        )
+
+    return {
+        "ats_platform": provider,
+        "company_slug": board,
+        "new_count": new_count,
+        "seen_count": seen_count,
+        "reopened_count": reopened_count,
+        "removed_count": closed_count,
+        "closed_count": closed_count,
+        "new_job_ids": new_job_ids,
+        "complete": is_complete,
+        "error": error,
+        "suspicious_empty": suspicious_empty,
+    }

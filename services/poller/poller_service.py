@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 import requests
 
-from services.diff_engine.diff_engine import apply_read_result, process_poll_batch
+from services.diff_engine.diff_engine import apply_read_result
 from services.diff_engine.storage import JobStorage
 from services.poller.ashby import read_ashby_board
 from services.poller.bamboohr import read_bamboohr_board
@@ -59,17 +59,31 @@ def run_poll_cycle(storage: JobStorage, ats_filter: Optional[str] = None) -> Lis
     session = requests.Session()
     results: List[Dict[str, Any]] = []
 
+    now = datetime.now(timezone.utc)
+    run_id = storage.start_crawl_run(ats_filter or "all", now=now)
+    boards_complete = 0
+    boards_failed = 0
+
     for comp in companies:
         slug = comp.get("board_slug", "")
         platform = comp.get("ats_platform", "")
         try:
             reader_result = poll_single_company(comp, session=session)
-            diff_res = apply_read_result(comp, reader_result, storage)
+            diff_res = apply_read_result(reader_result, platform, slug, storage, run_id=run_id, now=now)
             results.append(diff_res)
+            if diff_res.get("complete"):
+                boards_complete += 1
+            else:
+                boards_failed += 1
             time.sleep(0.3)  # 300ms polite delay between companies
         except Exception as exc:
             logger.error("Failed to poll %s (%s): %s", slug, platform, exc)
+            boards_failed += 1
 
+    storage.finish_crawl_run(
+        run_id, boards_total=len(companies), boards_complete=boards_complete, boards_failed=boards_failed,
+        now=datetime.now(timezone.utc),
+    )
     return results
 
 
