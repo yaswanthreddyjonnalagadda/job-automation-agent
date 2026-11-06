@@ -78,22 +78,65 @@ def parse_smartrecruiters_response(data: Any, slug: str = "") -> ReaderResult:
 
 
 def read_smartrecruiters_board(slug: str, session: Optional[requests.Session] = None) -> ReaderResult:
-    """Read SmartRecruiters public board returning ReaderResult:
-    GET https://api.smartrecruiters.com/v1/companies/{slug}/postings
+    """Read SmartRecruiters public board, paging through all results.
+
+    Requests offset += limit until offset >= totalFound.
+    If a later page fails, returns the postings accumulated so far with
+    complete=False and the error code from the failing page.
     """
     url = f"https://api.smartrecruiters.com/v1/companies/{slug}/postings"
     s = session or make_session("smartrecruiters")
-    try:
-        data = get_json(s, url)
-        return parse_smartrecruiters_response(data, slug=slug)
-    except BoardNotFound:
-        return ReaderResult(postings=[], complete=False, error="board_not_found")
-    except HttpError as exc:
-        return ReaderResult(postings=[], complete=False, error=f"http_{exc.status}")
-    except (requests.exceptions.Timeout, HttpTimeout):
-        return ReaderResult(postings=[], complete=False, error="timeout")
-    except (BadJson, json.JSONDecodeError):
-        return ReaderResult(postings=[], complete=False, error="bad_json")
+
+    accumulated: List[Dict[str, Any]] = []
+    limit = 100  # SmartRecruiters default page size
+    offset = 0
+
+    while True:
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        try:
+            data = get_json(s, url, params=params)
+        except BoardNotFound:
+            if offset == 0:
+                return ReaderResult(postings=[], complete=False, error="board_not_found")
+            # Board disappeared mid-pagination — preserve what we have
+            return ReaderResult(postings=accumulated, complete=False, error="board_not_found")
+        except HttpError as exc:
+            error_code = f"http_{exc.status}"
+            if offset == 0:
+                return ReaderResult(postings=[], complete=False, error=error_code)
+            return ReaderResult(postings=accumulated, complete=False, error=error_code)
+        except (requests.exceptions.Timeout, HttpTimeout):
+            if offset == 0:
+                return ReaderResult(postings=[], complete=False, error="timeout")
+            return ReaderResult(postings=accumulated, complete=False, error="timeout")
+        except (BadJson, json.JSONDecodeError):
+            if offset == 0:
+                return ReaderResult(postings=[], complete=False, error="bad_json")
+            return ReaderResult(postings=accumulated, complete=False, error="bad_json")
+
+        if not isinstance(data, dict) or "content" not in data:
+            if offset == 0:
+                return ReaderResult(postings=[], complete=False, error="bad_json")
+            return ReaderResult(postings=accumulated, complete=False, error="bad_json")
+
+        content = data.get("content", [])
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict):
+                    accumulated.append(_parse_smartrecruiters_item(item, slug=slug))
+
+        total_found = data.get("totalFound", len(accumulated))
+
+        # Use the page-level limit if the API echoes it, otherwise keep our default
+        page_limit = data.get("limit", limit)
+        if page_limit and isinstance(page_limit, int) and page_limit > 0:
+            limit = page_limit
+
+        offset += limit
+
+        if offset >= total_found or not content:
+            # All pages consumed
+            return ReaderResult(postings=accumulated, complete=True, error=None)
 
 
 def poll_smartrecruiters(slug: str, session: Optional[requests.Session] = None) -> List[Dict[str, Any]]:

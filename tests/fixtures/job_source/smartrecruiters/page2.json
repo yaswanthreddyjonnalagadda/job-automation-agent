@@ -1,0 +1,47 @@
+{
+  "content": [
+    {
+      "id": "744000001000003",
+      "name": "DevOps Engineer",
+      "releasedDate": "2026-10-26T08:00:00.000Z",
+      "location": {
+        "city": "",
+        "region": "Remote",
+        "country": "us",
+        "remote": true,
+        "hybrid": false
+      },
+      "department": {
+        "id": "dept2",
+        "label": "Infrastructure"
+      },
+      "typeOfEmployment": {
+        "id": "permanent",
+        "label": "Full-time"
+      }
+    },
+    {
+      "id": "744000001000004",
+      "name": "Product Manager",
+      "releasedDate": "2026-10-25T07:00:00.000Z",
+      "location": {
+        "city": "Austin",
+        "region": "Texas",
+        "country": "us",
+        "remote": false,
+        "hybrid": false
+      },
+      "department": {
+        "id": "dept3",
+        "label": "Product"
+      },
+      "typeOfEmployment": {
+        "id": "permanent",
+        "label": "Full-time"
+      }
+    }
+  ],
+  "totalFound": 4,
+  "offset": 2,
+  "limit": 2
+}
