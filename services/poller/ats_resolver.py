@@ -308,3 +308,86 @@ def resolve_and_seed_job(
         "is_newly_seeded": seeded,
         "is_direct_careers": is_direct,
     }
+
+
+def detect_ats_in_html(html: str) -> List[Tuple[str, str]]:
+    """Detect ATS providers and board slugs/identifiers inside careers page HTML.
+
+    Checks Greenhouse embed script (the for= query value) before plain board URL.
+    Patterns require non-alphanumeric boundary so look-alike hosts do not match.
+    """
+    if not html:
+        return []
+
+    found: List[Tuple[str, str]] = []
+    seen: Set[Tuple[str, str]] = set()
+
+    # 1. Greenhouse embed script (?for=slug)
+    gh_embed_re = re.compile(
+        r"""(?:^|[^A-Za-z0-9])(?:https?:)?//boards\.greenhouse\.io/embed/job_board(?:\.js)?\?[^"'>\s]*\bfor=([a-zA-Z0-9_-]+)""",
+        re.I,
+    )
+    for m in gh_embed_re.finditer(html):
+        slug = m.group(1).lower().strip()
+        if slug and slug not in ("embed", "api", "jobs") and ("greenhouse", slug) not in seen:
+            seen.add(("greenhouse", slug))
+            found.append(("greenhouse", slug))
+
+    # 2. Greenhouse plain boards
+    gh_re = re.compile(
+        r"""(?:^|[^A-Za-z0-9])https?://(?:boards|job-boards)\.greenhouse\.io/([a-zA-Z0-9_-]+)""",
+        re.I,
+    )
+    for m in gh_re.finditer(html):
+        slug = m.group(1).lower().strip()
+        if slug and slug not in ("embed", "api", "jobs") and ("greenhouse", slug) not in seen:
+            seen.add(("greenhouse", slug))
+            found.append(("greenhouse", slug))
+
+    # 3. Lever
+    lever_re = re.compile(
+        r"""(?:^|[^A-Za-z0-9])https?://jobs\.lever\.co/([a-zA-Z0-9_-]+)""",
+        re.I,
+    )
+    for m in lever_re.finditer(html):
+        slug = m.group(1).lower().strip()
+        if slug and slug not in ("embed", "api", "jobs") and ("lever", slug) not in seen:
+            seen.add(("lever", slug))
+            found.append(("lever", slug))
+
+    # 4. Ashby
+    ashby_re = re.compile(
+        r"""(?:^|[^A-Za-z0-9])https?://jobs\.ashbyhq\.com/([a-zA-Z0-9_-]+)""",
+        re.I,
+    )
+    for m in ashby_re.finditer(html):
+        slug = m.group(1).lower().strip()
+        if slug and slug not in ("embed", "api", "jobs") and ("ashby", slug) not in seen:
+            seen.add(("ashby", slug))
+            found.append(("ashby", slug))
+
+    # 5. SmartRecruiters
+    sr_re = re.compile(
+        r"""(?:^|[^A-Za-z0-9])https?://jobs\.smartrecruiters\.com/([a-zA-Z0-9_-]+)""",
+        re.I,
+    )
+    for m in sr_re.finditer(html):
+        slug = m.group(1).lower().strip()
+        if slug and slug not in ("embed", "api", "jobs") and ("smartrecruiters", slug) not in seen:
+            seen.add(("smartrecruiters", slug))
+            found.append(("smartrecruiters", slug))
+
+    # 6. Workday
+    wd_re = re.compile(
+        r"""(?:^|[^A-Za-z0-9])https?://([a-z0-9-]+\.wd\d+\.myworkdayjobs\.com)/([a-zA-Z0-9_/-]+)""",
+        re.I,
+    )
+    from services.directory_builder.common_crawl import extract_board
+    for m in wd_re.finditer(html):
+        full_match = f"https://{m.group(1)}/{m.group(2)}"
+        board = extract_board("workday", full_match)
+        if board and ("workday", board) not in seen:
+            seen.add(("workday", board))
+            found.append(("workday", board))
+
+    return found

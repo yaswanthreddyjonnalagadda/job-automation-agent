@@ -57,6 +57,33 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
   - New `scripts/run_job_source.bat`: Task Scheduler wrapper (2 daily triggers 6:00/18:00 documented in header comments), `venv` python preferred, appends to `data\job_source_runs.log`.
   - Tests `tests/test_job_source_run.py` (11 tests, offline, mocked readers, temp SQLite, patched clock/sleep): lock-held exit, stale takeover, release on raise, live-only, same-host 1 s gap, icims dispatch, workday known_ids, crawl row counts, --all fan-out, Postgres advisory path. 11/11 pass; five_services 9/9, lifecycle 12/12, jobsource_card1 13/13 alongside (45/45 total).
 
+- **Antigravity: Job Source Card 5 — Find More Boards (Wait for User Approval) (6 November 2026)** (branch `jobsource/card5`, worktree `C:\Users\jonna\jaa-card5`):
+  - **Common Crawl Index Mining (`services/directory_builder/common_crawl.py`)**:
+    - Paged CDX queries (`page=0, 1, 2...`) with 1-second polite throttling between pages, auto-resolving the newest crawl index (e.g. `CC-MAIN-2026-43-index`) via `collinfo.json` with fallback, and automatic retry with exponential backoff on transient 502/503/504 index gateway errors.
+    - Updated `ATS_PATTERNS` to include `greenhouse2`: `"job-boards.greenhouse.io/*"`.
+    - Implemented `extract_board(provider, url) -> str | None`:
+      - Workday: validates hostname against `^[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com$`, strips leading locale segments (`en-US`, `fr-FR`, etc.), filters static files (`robots.txt`, `sitemap.xml`, `.ico`), and formats canonical multi-site identifier `host/site`.
+      - Other providers (`greenhouse`, `greenhouse2`, `lever`, `ashby`, `smartrecruiters`): checks domain, skips reserved segments (`embed`, `api`, `jobs`), and extracts slug.
+  - **HTML Link & Embed Detection (`services/poller/ats_resolver.py`)**:
+    - Added `detect_ats_in_html(html: str) -> List[Tuple[str, str]]` bound by non-alphanumeric boundary `(?:^|[^A-Za-z0-9])` to strictly reject look-alike domain links.
+    - Extracts Greenhouse embed script `for=` query parameter before generic links, plus Lever, Ashby, SmartRecruiters, and Workday careers links.
+  - **Board Discovery Service (`services/directory_builder/discover.py`)**:
+    - CLI `python -m services.directory_builder.discover --provider <provider> --limit <limit> --db <dsn>`.
+    - Queries candidate boards, skips already-registered boards, probes candidate board using provider reader (`known_ids=lambda _: True` for Workday listing only), counts matching titles against `minimal_titles`, registers board in `company_directory` via `JobStorage`, records `total_jobs_last`, and strictly enforces status `"pending"` (NEVER `"live"`).
+    - Patches runaway facet-splitting on 2000-capped Workday boards to bound discovery time without altering reader implementation.
+    - Prints summary: candidates found, real boards, boards with >= 1 matching title.
+  - **Board Approval CLI (`services/directory_builder/approve.py`)**:
+    - CLI `python -m services.directory_builder.approve [--list] [--approve <ids...>] [--reject <ids...>] --db <dsn>`.
+    - `--list`: displays pending boards sorted with highest `total_jobs_last` first.
+    - `--approve`: sets board status to `"live"`.
+    - `--reject`: sets board status to `"paused"`.
+  - **Offline Tests & Fixtures (`tests/test_job_source_discovery.py`, `tests/fixtures/job_source/discovery/*`)**:
+    - 4 comprehensive offline test cases covering 20 sample URL extractions (including locale stripping, multi-site tenants, and look-alike rejection), 5 HTML page fixtures (embeds and look-alikes), strict `"pending"` status invariants in storage, and full approval CLI operations.
+  - **Real Pilot Discovery Run**:
+    - Tested against local SQLite copy: `python -m services.directory_builder.discover --provider workday --limit 500`.
+    - Summary: Candidates found: 32 | Real boards: 29 | Boards with >= 1 matching title: 6.
+  - **Verification**: `tests/test_job_source_discovery.py` (4/4), `tests/test_five_services_architecture.py` (9/9), `tests/test_job_source_lifecycle.py` (12/12), `tests/test_code_health_ratchets.py` (4/4) -- 29/29 passing. Commit: `cea407a`.
+
 - **Claude Code: Job Source Card 1 — Store Jobs and Close Them Safely (6 November 2026)** (branch `jobsource/card1`, worktree `C:\Users\jonna\jaa-card1`):
   - **Why a second pass on Card 1**: the prior Antigravity pass below (`ReaderResult` propagation, immediate-close `apply_read_result`) covered half the card -- it never built the migration, the 48h close grace period, the suspicious-empty guard, failure/pause tracking, or crawl/board run history that "store jobs and close them safely" actually asks for. This pass adds exactly that, without reverting the prior work.
   - **New migration (`migrations/002_job_source.sql`)**: `jobs.detail_status` ('done'|'pending') and `liveness_strikes`; `company_directory.status` ('live'|'paused'), `last_crawl_at`, `last_error`, `failures_in_row`; new `crawl_runs` and `board_runs` tables; `open_jobs` view (`status='active' AND detail_status='done'`). Mirrored in `JobStorage._init_sqlite` via an idempotent `_add_column_if_missing` helper so it's safe against both a fresh DB and one already on this schema. **Not run against the real Postgres `job-agent-db`** -- only exercised through SQLite temp-file fixtures in tests, per the parallel rules.
