@@ -1,0 +1,7 @@
+{
+  "total": 2,
+  "jobPostings": [
+    {"title": "Software Engineer", "externalPath": "/job/eng-1", "locationsText": "Boston, MA", "postedOn": "2026-10-01"},
+    {"title": "DevOps Engineer", "externalPath": "/job/eng-2", "locationsText": "Boston, MA", "postedOn": "2026-10-01"}
+  ]
+}
