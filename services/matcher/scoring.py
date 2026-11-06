@@ -85,6 +85,16 @@ def load_user_profile(path: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
+def _fetch_open_candidates(storage: JobStorage, limit: int = 10) -> List[Dict[str, Any]]:
+    """Unmatched jobs that also satisfy the `open_jobs` view's definition (active AND has a
+    description): fetches extra candidates through the existing active+unmatched query and
+    filters out the ones still pending a detail fetch here, in Python, since narrowing
+    storage.py's own query to join in `detail_status` is not this card's to make.
+    """
+    candidates = storage.get_unmatched_jobs(limit=max(limit * 5, limit))
+    return [job for job in candidates if job.get("description")][:limit]
+
+
 def score_job(job: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     prof = profile or load_user_profile()
     title = (job.get("title") or "").strip()
@@ -252,7 +262,7 @@ def main() -> None:
                 logger.warning("Error reading from Redis jobs:matching: %s", exc)
 
         if not jobs_to_process:
-            jobs_to_process = storage.get_unmatched_jobs(limit=10)
+            jobs_to_process = _fetch_open_candidates(storage, limit=10)
 
         if not jobs_to_process:
             elapsed = 0
