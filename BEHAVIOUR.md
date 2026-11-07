@@ -726,15 +726,37 @@ did not work shows what the site said.
 
 ## Creating an account
 
-On an employer's create-account form the agent ticks two kinds of box and no
-others: a privacy notice, and consent to creating the very account you asked it
-to create ("I agree to creating this account to allow me to apply for positions
-with ..."; your decision of 25 September 2026, decided in `safety.py`). Terms and
-conditions, declarations, signatures, marketing opt-ins and anything that shares
-your data stay unticked and are left for you. Some sites (Workday) draw the box
-under an overlay so a normal click ticks nothing: the agent then forces the tick,
-then uses the page's own click, and checks the box really is ticked. If it cannot
-tick a box it must, it does not press Create Account: it stops and says which box.
+On an employer's create-account form the agent ticks a privacy notice, consent to
+creating the very account you asked it to create ("I agree to creating this
+account to allow me to apply for positions with ..."; your decision of 25
+September 2026, decided in `safety.py`), and the ordinary boilerplate almost
+every application carries -- terms and conditions, certifications ("I certify
+this information is true"), e-signatures, background-check consent, at-will and
+arbitration acknowledgements, and marketing opt-ins (`acknowledgements.py`; your
+decision of 6 November 2026, extending every job portal, not just this one).
+What stays yours: a genuine legal-status question (sponsorship, work
+authorization, visa, citizenship, criminal history) and a job-condition question
+(relocation, travel, salary, shift) are never auto-answered as if they were
+boilerplate -- those are real questions, not consent. Some sites (Workday) draw
+the box under an overlay so a normal click ticks nothing: the agent then forces
+the tick, then uses the page's own click, and checks the box really is ticked.
+If it cannot tick a box it must, it does not press Create Account: it stops and
+says which box.
+
+This also covers a registration gate that never asks for a password at all
+(Phenom People's "Authentication screen. You don't need to have an account",
+confirmed on ADT Careers, 6 November 2026): every rule here used to assume a
+password box existed somewhere on the page, so a gate like this fell through
+unrecognised and the run looped on it instead of ever reaching this logic.
+`account_state.py` and `handle_auth_gate` now recognise it the same way the
+rest of this section already describes. One boundary this does not move: the
+click that advances past the now-ticked box still needs a control
+`SubmissionGuardV0` can positively identify as a create-account button (a
+two-password form with a button literally named Create Account/Register/Sign
+Up); a page whose own button just says Next or Continue, with no password box
+at all, stops instead with "the account-creation click could not be
+confirmed" -- the box is already ticked for you, and one click of your own
+finishes it.
 
 An account counts as created only when the site shows Candidate Home or the
 application. Landing on a Sign In page proves nothing (the site shows it when the

@@ -117,6 +117,14 @@ GOOGLE_SIGN_IN = re.compile(r"\b(?:sign|log)[\s-]?(?:in|on|up)\s+(?:with|using|v
                             r"\bcontinue\s+(?:with|using)\s+google\b|\bgoogle\s+sign[\s-]?(?:in|on)\b", re.IGNORECASE)
 _GOOGLE = GOOGLE_SIGN_IN
 _ACCOUNT_STEP = re.compile(r"create account\s*/\s*sign in|sign in\s*/\s*create account", re.IGNORECASE)
+# A registration gate that never asks for a password at all (Phenom People's widget, confirmed on
+# ADT Careers / Oracle Recruiting Cloud, 6 November 2026): "Authentication screen. You don't need
+# to have an account" / "Get started using your email", just an email box and a consent checkbox.
+# Every other rule in this module assumes at least one password box exists somewhere on the page,
+# so this fell through to NONE and the account handler that would tick its consent box was never
+# reached (f338).
+_PASSWORDLESS_REGISTRATION_RE = re.compile(
+    r"you don'?t need (?:to have )?an account|get started\b.{0,60}\busing your email\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -239,6 +247,10 @@ def read_state(snapshot: str, password_boxes: Optional[int] = None) -> AccountSt
         return state(CHOOSER, "; ".join(dict.fromkeys(ways))[:120])
     if _EMAIL_BOX.search(snapshot or "") and _first(_SIGN_IN, texts) and not _application_fields(snapshot):
         return state(EMAIL_FIRST, _first(_SIGN_IN, texts))
+    passwordless_said = _first(_PASSWORDLESS_REGISTRATION_RE, texts)
+    if passwords == 0 and passwordless_said and _EMAIL_BOX.search(snapshot or "") \
+            and not _application_fields(snapshot):
+        return state(CREATE_FORM, passwordless_said)
     if on_account_step:
         return state(LOADING, "the account step, with no form yet")
     return state(NONE)
