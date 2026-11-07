@@ -1449,21 +1449,68 @@ _CLICK_LABEL_JS = """e => {
 }"""
 
 
+_SET_CHECKBOX_JS = """(e, want) => {
+  let inp = (e.tagName === 'INPUT' && (e.type === 'checkbox' || e.type === 'radio')) ? e : null;
+  if (!inp && e.control) inp = e.control;
+  if (!inp && e.id) {
+    const lbl = document.querySelector(`label[for="${CSS.escape(e.id)}"]`);
+    if (lbl && lbl.control) inp = lbl.control;
+  }
+  if (!inp && e.closest) {
+    const parent = e.closest('label, .oj-choice-item, oj-checkboxset, [class*="checkbox"]');
+    if (parent) inp = parent.querySelector('input[type="checkbox"], input[type="radio"]');
+  }
+  if (!inp && e.parentElement) {
+    inp = e.parentElement.querySelector('input[type="checkbox"], input[type="radio"]');
+  }
+  if (inp) {
+    if (inp.checked !== want) {
+      inp.click();
+    }
+    if (inp.checked !== want) {
+      inp.checked = want;
+      inp.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    return inp.checked === want;
+  }
+  const label = (e.id && document.querySelector(`label[for="${CSS.escape(e.id)}"]`)) || e.closest('label')
+      || (e.nextElementSibling && e.nextElementSibling.tagName === 'LABEL' ? e.nextElementSibling : null);
+  if (label) {
+    label.click();
+  } else {
+    e.click();
+  }
+  return true;
+}"""
+
+
 def _is_checked(loc) -> Optional[bool]:
     """Whether a tick box shows as ticked -- a native box or one drawn with aria-checked."""
     try:
         return bool(loc.evaluate("""e => {
-            if (e.checked === true || e.getAttribute('aria-checked') === 'true'
-                || (e.classList && (e.classList.contains('oj-selected') || e.classList.contains('is-checked'))))
+            let inp = (e.tagName === 'INPUT' && (e.type === 'checkbox' || e.type === 'radio')) ? e : null;
+            if (!inp && e.control) inp = e.control;
+            if (!inp && e.id) {
+                const lbl = document.querySelector(`label[for="${CSS.escape(e.id)}"]`);
+                if (lbl && lbl.control) inp = lbl.control;
+            }
+            if (!inp && e.closest) {
+                const parent = e.closest('label, .oj-choice-item, oj-checkboxset, [class*="checkbox"]');
+                if (parent) inp = parent.querySelector('input[type="checkbox"], input[type="radio"]');
+            }
+            if (!inp && e.parentElement) {
+                inp = e.parentElement.querySelector('input[type="checkbox"], input[type="radio"]');
+            }
+            if (inp) {
+                return inp.checked === true || inp.getAttribute('aria-checked') === 'true';
+            }
+            if (e.checked === true || e.getAttribute('aria-checked') === 'true')
                 return true;
-            const input = (e.tagName === 'INPUT' && e.type === 'checkbox') ? e :
-                          (e.querySelector && e.querySelector('input[type="checkbox"]')) ? e.querySelector('input[type="checkbox"]') :
-                          (e.closest && e.closest('label, .oj-checkboxset, [class*="checkbox"], div')) ?
-                              (e.closest('label, .oj-checkboxset, [class*="checkbox"], div').querySelector('input[type="checkbox"]') ||
-                               (e.parentElement && e.parentElement.querySelector('input[type="checkbox"]'))) : null;
-            if (input && (input.checked === true || input.getAttribute('aria-checked') === 'true'))
+            if (e.classList && (e.classList.contains('oj-selected') || e.classList.contains('is-checked')))
                 return true;
-            if (e.closest && (e.closest('.oj-selected') || e.closest('[aria-checked="true"]')))
+            if (e.closest && (e.closest('.oj-selected') || e.closest('.is-checked') || e.closest('[aria-checked="true"]')))
                 return true;
             return false;
         }"""))
@@ -1843,6 +1890,7 @@ class PageAgent:
         self._circuit_breaker = None
         self._posting_reloads = 0
         self._captcha_passes = 0
+        self._form_bounce_count = 0
 
     # -- the page --------------------------------------------------------------
     @staticmethod
@@ -5800,7 +5848,8 @@ class PageAgent:
             # SK AX USA, 30 September) refuses set_checked and a click on the input: its label is clicked, then the
             # input's own click() is dispatched. Done only when the box then shows the state asked for.
             want = answer.action == "check"
-            for attempt in (lambda: loc.set_checked(want, timeout=5_000),
+            for attempt in (lambda: loc.evaluate(_SET_CHECKBOX_JS, want),
+                            lambda: loc.set_checked(want, timeout=3_000),
                             lambda: loc.click(timeout=3_000),
                             lambda: loc.evaluate(_CLICK_LABEL_JS),
                             lambda: loc.evaluate("e => e.click()")):
