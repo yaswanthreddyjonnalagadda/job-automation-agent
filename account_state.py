@@ -37,6 +37,15 @@ NONE = "none"                       # not an account page at all
 
 _TEXT = re.compile(r'"((?:[^"\\]|\\.)*)"|:\s+(.+)$')
 _EMAIL_BOX = re.compile(r'- textbox "[^"]*(e-?mail|user ?name)[^"]*"', re.IGNORECASE)
+# A registration gate with no password at all (Phenom People's widget, ADT Careers 6 November
+# 2026): "Authentication screen. You don't need to have an account" / "Get started right away by
+# simply using your email." With zero password boxes this fell through every other rule to NONE,
+# so a required-but-candidate-only consent box there (safety.is_attestation, BEHAVIOUR.md's
+# "Creating an account") never got the chance to be held: the page was filled generically, which
+# pressed Next past the unticked box and looped until the circuit breaker caught it.
+_PASSWORDLESS_REGISTRATION_RE = re.compile(
+    r"you don'?t need (?:to have )?an account|no account (?:is )?(?:necessary|needed|required)|"
+    r"get started .{0,40}(?:using|with) your email", re.IGNORECASE)
 _STEP = re.compile(r"current step (\d+) of (\d+)", re.IGNORECASE)
 
 _LOCKED = re.compile(
@@ -239,6 +248,10 @@ def read_state(snapshot: str, password_boxes: Optional[int] = None) -> AccountSt
         return state(CHOOSER, "; ".join(dict.fromkeys(ways))[:120])
     if _EMAIL_BOX.search(snapshot or "") and _first(_SIGN_IN, texts) and not _application_fields(snapshot):
         return state(EMAIL_FIRST, _first(_SIGN_IN, texts))
+    passwordless_said = _first(_PASSWORDLESS_REGISTRATION_RE, texts)
+    if passwords == 0 and passwordless_said and _EMAIL_BOX.search(snapshot or "") \
+            and not _application_fields(snapshot):
+        return state(CREATE_FORM, passwordless_said)
     if on_account_step:
         return state(LOADING, "the account step, with no form yet")
     return state(NONE)
