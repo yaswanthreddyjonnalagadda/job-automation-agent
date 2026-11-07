@@ -1463,6 +1463,11 @@ _SET_CHECKBOX_JS = """(e, want) => {
   if (!inp && e.parentElement) {
     inp = e.parentElement.querySelector('input[type="checkbox"], input[type="radio"]');
   }
+  if (!inp) {
+    const form = e.closest('form') || document;
+    const inputs = form.querySelectorAll('input[type="checkbox"]');
+    if (inputs.length === 1) inp = inputs[0];
+  }
   if (inp) {
     if (inp.checked !== want) {
       inp.click();
@@ -1502,6 +1507,11 @@ def _is_checked(loc) -> Optional[bool]:
             }
             if (!inp && e.parentElement) {
                 inp = e.parentElement.querySelector('input[type="checkbox"], input[type="radio"]');
+            }
+            if (!inp) {
+                const form = e.closest('form') || document;
+                const inputs = form.querySelectorAll('input[type="checkbox"]');
+                if (inputs.length === 1) inp = inputs[0];
             }
             if (inp) {
                 return inp.checked === true || inp.getAttribute('aria-checked') === 'true';
@@ -5842,6 +5852,12 @@ class PageAgent:
             if control.role in ("checkbox", "switch", "radio") and not loc.evaluate(
                     "e => ['checkbox', 'radio'].includes(e.type) || ['checkbox', 'switch', 'radio'].includes(e.getAttribute('role'))"):
                 box = tab.get_by_role(control.role, name=control.name, exact=True)
+                if box.count() != 1:
+                    first_words = " ".join(control.name.split()[:3])
+                    if first_words:
+                        box = tab.get_by_role(control.role, name=re.compile(re.escape(first_words), re.I))
+                if box.count() != 1:
+                    box = tab.locator(f'input[type="{control.role}"]')
                 if box.count() == 1:
                     loc = box
             # A tick box drawn as a hidden input behind a styled label (ADP's "Yes, I agree to sign electronically.",
