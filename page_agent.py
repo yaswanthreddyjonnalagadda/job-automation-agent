@@ -336,7 +336,8 @@ def parse_snapshot(snapshot: str) -> list[Control]:
     non_app_scopes: list[int] = []     # indents of job-alert / similar-jobs sections on a posting page (f280)
     sections: list[tuple[int, int, str]] = []  # heading indent, level and title
     signature_scopes: list[tuple[int, str]] = []
-    for raw in (snapshot or "").splitlines():
+    lines = (snapshot or "").splitlines()
+    for line_idx, raw in enumerate(lines):
         # A line whose text holds a colon comes wrapped in quotes:
         #   - 'heading "Apply: Network Engineer" [level=1] [ref=e2]'
         #   - 'combobox "Country: where you live" [ref=e20]': United States
@@ -527,7 +528,18 @@ def parse_snapshot(snapshot: str) -> list[Control]:
             # Whatever carries the box's own words is what a person clicks:
             # a label, the status line beside it, or the generic Oracle draws.
             beside = ref_m and role in ("generic", "status", "text", "paragraph", "label", "listitem")
-            if beside and _same_question((value or name).strip(), unclickable[1]):
+            words_match = False
+            if beside:
+                if _same_question((value or name).strip(), unclickable[1]):
+                    words_match = True
+                elif "[cursor=pointer]" in attrs:
+                    # Oracle JET and similar: clickable generic element (oj-checkboxset-checkbox)
+                    # has no name/value itself, followed by label words in child text/link nodes.
+                    label_words = [w.lower() for w in re.findall(r"[A-Za-z]{4,}", unclickable[1])]
+                    lookahead = "\n".join(lines[line_idx:line_idx + 6]).lower()
+                    if any(w in lookahead for w in label_words):
+                        words_match = True
+            if beside and words_match:
                 controls.append(Control(ref=ref_m.group(1), role=unclickable[0], name=unclickable[1],
                                         checked=unclickable[2], container=parent_group))
                 unclickable = None
@@ -1032,6 +1044,10 @@ def required_questions(snapshot: str) -> set[str]:
     """The questions a form marks with a star, or flags with its own "Required" alert."""
     n = _QUESTION_TEXT_MAX
     marked = set(re.findall(r'- generic "([^"]{2,%d})" \[ref=[\w-]+\]: "\*"' % n, snapshot or ""))
+    # Multi-line/indented child asterisks (Oracle Cloud, etc.)
+    star = r"[*∗⁎✱-✳⩪＊﹡]+"
+    marked |= {m.strip() for m in re.findall(r'- generic "([^"\n]{2,%d})"[^\n]*:\n\s*- generic[^\n]*: "' % n + star + r'"',
+                                             snapshot or "")}
     marked |= set(inline_required_questions(snapshot))
     marked |= {m.strip() for m in re.findall(r'- generic \[ref=[\w-]+\]: ([^\n]{2,%d}?) ?\*$' % n,
                                              snapshot or "", re.MULTILINE)}
@@ -3938,6 +3954,15 @@ class PageAgent:
                 continue
             snapshot = self.read_when_loaded(page)
             fingerprint = re.sub(r"\[ref=[\w-]+\]|\[active\]", "", snapshot)
+            if not hasattr(self, "_fp_history"):
+                self._fp_history = []
+            self._fp_history.append(fingerprint)
+            if len(self._fp_history) >= 6 and (
+                self._fp_history[-1] == self._fp_history[-3] == self._fp_history[-5]
+                and self._fp_history[-2] == self._fp_history[-4] == self._fp_history[-6]
+                and self._fp_history[-1] != self._fp_history[-2]
+            ):
+                return Outcome("owner_needed", page, ["the application is alternating between pages in a loop"])
             if fingerprint == last_fingerprint:
                 tries += 1
                 if tries >= MAX_TRIES_PER_PAGE:
@@ -7348,11 +7373,17 @@ class PageAgent:
             href = ""
         if href and job_sources.job_board(href):
             return "stop", page, "the proposed navigation leads to a social site or job board"
-        if plan.next_kind == "open_application" and hasattr(self.assistant, "follow_application_entry"):
-            if self.assistant.follow_application_entry(tab, locator):
-                self.settle(page, 2_500)
-                self._guard_the_new_page(page)
-                return "moved", page, "followed the posting's application link"
+        if plan.next_kind == "open_application":
+            if getattr(self, "_seen_form", False):
+                bounces = getattr(self, "_form_bounce_count", 0) + 1
+                self._form_bounce_count = bounces
+                if bounces >= 2:
+                    return "stop", page, "the application form bounced back to the job posting"
+            if hasattr(self.assistant, "follow_application_entry"):
+                if self.assistant.follow_application_entry(tab, locator):
+                    self.settle(page, 2_500)
+                    self._guard_the_new_page(page)
+                    return "moved", page, "followed the posting's application link"
 
         # Task 4.1: Deploy the State Fingerprint Circuit Breaker
         if not hasattr(self, "_circuit_breaker") or self._circuit_breaker is None:
