@@ -86,6 +86,15 @@ def test_an_email_that_already_has_an_account(message):
     ('- heading "Apply" [ref=e1]\n- button "Sign in with Google" [ref=e2]\n- button "Apply Manually" [ref=e3]', A.CHOOSER),
     ('- heading "Senior Engineer" [ref=e1]\n- button "Apply" [ref=e2]', A.NONE),
     ('- text: First Name\n- textbox "First Name" [ref=e1]\n- textbox "Email" [ref=e2]\n- button "Sign in" [ref=e3]', A.NONE),
+    # ADT Careers on Oracle/Phenom, 6 November 2026: a registration gate with no password field at
+    # all -- only an email box and a consent checkbox, then Next. Every existing rule here assumed
+    # at least one password box, so this fell through to NONE and was never routed to the account
+    # handler that would have ticked its "terms and conditions" box (f338).
+    ('- heading "Authentication screen" [ref=e1]\n'
+     '- text: You don\'t need to have an account. Get started using your email.\n'
+     '- textbox "Email Address" [ref=e2]\n'
+     '- checkbox "I agree with the terms and conditions" [ref=e3]\n'
+     '- button "Next" [ref=e4]', A.CREATE_FORM),
     # P0-B2, 7 October 2026: a second factor the agent has no authorized way to complete.
     ('- heading "Two-factor authentication" [ref=e1]\n- text: Enter the 6-digit code from your authenticator app.\n'
      '- textbox "Authentication code" [ref=e2]\n- button "Verify" [ref=e3]', A.MFA_REQUIRED),
