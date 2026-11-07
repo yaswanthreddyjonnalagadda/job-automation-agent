@@ -1,0 +1,70 @@
+{
+  "id": 12345,
+  "title": "Senior Network Engineer",
+  "questions": [
+    {
+      "label": "First Name",
+      "required": true,
+      "fields": [
+        {
+          "type": "input"
+        }
+      ]
+    },
+    {
+      "label": "Last Name",
+      "required": true,
+      "fields": [
+        {
+          "type": "input"
+        }
+      ]
+    },
+    {
+      "label": "Email",
+      "required": true,
+      "fields": [
+        {
+          "type": "input"
+        }
+      ]
+    },
+    {
+      "label": "Resume/CV",
+      "required": true,
+      "fields": [
+        {
+          "type": "file"
+        }
+      ]
+    },
+    {
+      "label": "Are you legally authorized to work in the United States?",
+      "required": true,
+      "fields": [
+        {
+          "type": "select",
+          "values": [
+            {
+              "label": "Yes",
+              "value": 1
+            },
+            {
+              "label": "No",
+              "value": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "label": "Upload your official transcripts",
+      "required": true,
+      "fields": [
+        {
+          "type": "file"
+        }
+      ]
+    }
+  ]
+}

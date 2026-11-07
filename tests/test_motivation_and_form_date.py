@@ -88,12 +88,12 @@ def test_motivation_contract_rejects_qualifications_only_then_rewrites():
         calls.append((system, payload))
         if "Review a job application answer" in system:
             if 'motivation' not in system.lower():
-                return json.dumps({"supported": True, "complete": True, "issues": []})
+                return json.dumps({"grounded": True, "supported": True, "complete": True, "issues": []})
             good = json.loads(payload)['answer'] == GOOD
-            return json.dumps({"supported": True, "complete": good,
+            return json.dumps({"grounded": True, "supported": True, "complete": good,
                                "issues": [] if good else ["Missing an employer or role reason; qualifications alone are insufficient"]})
         assert 'motivation' in system.lower()
-        return json.dumps({"answer": next(drafts)})
+        return json.dumps({"grounded": True, "answer": next(drafts)})
 
     answer, issues = open_answers.write(QUESTION, ask=ask, facts='', resume_text=RESUME, job_text=POSTING)
     assert answer == GOOD and not issues
@@ -105,7 +105,7 @@ def test_motivation_review_requires_employer_evidence_without_inventing_feelings
     captured = []
     def ask(system, payload, tokens):
         captured.append((system, json.loads(payload)))
-        return '{"supported":true,"complete":true,"issues":[]}'
+        return '{"grounded":true,"supported":true,"complete":true,"issues":[]}'
     open_answers.review(QUESTION, GOOD, ask=ask, facts='', resume_text=RESUME, job_text=POSTING)
     assert 'motivation' in captured[0][0].lower()
     assert 'qualifications alone' in captured[0][0].lower()
@@ -117,8 +117,8 @@ def test_unrepaired_motivation_remains_unapproved():
     def ask(system, payload, tokens):
         calls.append(system)
         if "Review a job application answer" in system:
-            return '{"supported":true,"complete":false,"issues":["qualifications alone do not answer motivation"]}'
-        return json.dumps({"answer": WEAK})
+            return '{"grounded":true,"supported":true,"complete":false,"issues":["qualifications alone do not answer motivation"]}'
+        return json.dumps({"grounded": True, "answer": WEAK})
     answer, issues = open_answers.write(QUESTION, ask=ask, facts='', resume_text=RESUME, job_text=POSTING)
     assert answer == '' and issues
     assert len(calls) <= 4

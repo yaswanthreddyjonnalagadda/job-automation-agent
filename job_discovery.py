@@ -712,7 +712,7 @@ class JobDiscoveryEngine:
         return sources.merge_companies(listed, sources.reference_employers(),
                                        sources.companies_from_history(self.history))
 
-    def scan_all(self, min_match_threshold: int = 50) -> dict[str, int]:
+    def scan_all(self, min_match_threshold: int = 50, include_query_discovery: bool = False) -> dict[str, int]:
         """Scans all configured target companies and ingests matching roles."""
         companies = self.get_target_companies()
         conn = self._get_connection()
@@ -742,7 +742,6 @@ class JobDiscoveryEngine:
             listings = list(pool.map(read, companies))
 
         try:
-            import geo_reference
             for entry, (jobs, error) in zip(companies, listings):
                 stats["companies_scanned"] += 1
                 stats["total_jobs_seen"] += len(jobs)
@@ -756,102 +755,14 @@ class JobDiscoveryEngine:
                     ("|".join(sources._identity(entry)), entry.get("ats"),
                      entry.get("token") or entry.get("tenant") or entry.get("host") or "",
                      now_iso, error, len(jobs)))
+                token_key = entry.get("token") or entry.get("tenant") or entry.get("host") or ""
                 if jobs:        # a board that failed to load (empty list) says nothing about its old rows
-                    still_listed.setdefault(entry.get("token") or entry.get("tenant") or entry.get("host") or "", set())
+                    still_listed.setdefault(token_key, set())
 
                 for job in jobs:
-                    score, matched_skills = calculate_match_score(
-                        job["job_title"], job["location"], self.profile
+                    self._ingest_scanned_job(
+                        conn, job, submitted_cover, still_listed, store_at, home_country, user_prof, now_iso, stats
                     )
-                    if score < store_at:
-                        continue
-                    if job.get("description"):
-                        # The posting text is in hand: the engine's hard gates
-                        # (sponsorship, clearance, onsite elsewhere) can rule it out.
-                        import matching_engine
-                        eligible, _why = matching_engine.check_hard_gates(
-                            job["description"], self.profile, job["location"]
-                        )
-                        if not eligible:
-                            continue
-
-                    resume_score, resume_matched, resume_missing = None, [], []
-                    if job.get("description") and self.resume_text:
-                        import matching_engine
-                        fit = matching_engine.evaluate(job["description"], self.profile, self.resume_text,
-                                                       job_location=job["location"])
-                        if fit.is_eligible:
-                            resume_score = fit.overall_score
-                            resume_matched, resume_missing = list(fit.matched_skills), list(fit.missing_skills)
-
-                    job["country_code"] = geo_reference.primary_country(job["location"], home_country)
-                    if score >= READINESS_SCORE and "readiness_json" not in job:
-                        if user_prof is None:
-                            try:
-                                import config
-                                user_prof = config.get_user_profile()
-                            except Exception as _swallowed:
-                                logger.debug("scan readiness profile: %s", diagnostics.short_exc(_swallowed, 100))
-                                user_prof = False
-                        if user_prof:
-                            job["readiness_json"] = assess_job_readiness(job, user_prof)
-                    dedup_key = compute_job_hash(
-                        job["company_name"], job["job_title"], job["location"], job["url"]
-                    )
-                    still_listed.setdefault(job["company_token"], set()).add(dedup_key)
-
-                    init_status = _ingest_status(job, submitted_cover)
-
-                    cur = conn.execute("""
-                        INSERT INTO discovered_jobs (
-                            dedup_key, company_name, company_token, ats_type,
-                            job_title, location, is_remote, url, match_score,
-                            matched_skills, status, discovered_at, updated_at,
-                            resume_score, resume_matched, resume_missing, posted_at, posted_precision,
-                            country_code, readiness_json
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(dedup_key) DO UPDATE SET
-                            match_score = excluded.match_score,
-                            matched_skills = excluded.matched_skills,
-                            resume_score = excluded.resume_score,
-                            resume_matched = excluded.resume_matched,
-                            resume_missing = excluded.resume_missing,
-                            country_code = excluded.country_code,
-                            readiness_json = CASE WHEN excluded.readiness_json != ''
-                                THEN excluded.readiness_json ELSE readiness_json END,
-                            posted_at = CASE WHEN excluded.posted_at != '' THEN excluded.posted_at
-                                             ELSE discovered_jobs.posted_at END,
-                            posted_precision = CASE WHEN excluded.posted_at != '' THEN excluded.posted_precision
-                                                    ELSE discovered_jobs.posted_precision END,
-                            status = CASE 
-                                WHEN discovered_jobs.status IN ('submitted', 'queued', 'dismissed') THEN discovered_jobs.status
-                                ELSE excluded.status
-                            END,
-                            updated_at = excluded.updated_at
-                        WHERE status = 'discovered' OR status = 'submitted'
-                    """, (
-                        dedup_key, job["company_name"], job["company_token"], job["ats_type"],
-                        job["job_title"], job["location"], job["is_remote"], job["url"],
-                        score, json.dumps(matched_skills), init_status, now_iso, now_iso,
-                        resume_score, json.dumps(resume_matched), json.dumps(resume_missing),
-                        job.get("posted_at") or "", job.get("posted_precision") or "",
-                        job.get("country_code") or "", job.get("readiness_json") or ""
-                    ))
-                    if init_status != 'submitted':
-                        stats["relevant_jobs_saved"] += 1
-
-                    if score >= 85 and cur.lastrowid:
-                        try:
-                            import notifications
-                            job_payload = dict(job)
-                            job_payload.update({
-                                "id": cur.lastrowid,
-                                "match_score": score,
-                                "matched_skills": matched_skills,
-                            })
-                            notifications.notify_discovered_job(job_payload)
-                        except Exception as _swallowed:
-                            logger.debug("scan_all: %s", diagnostics.short_exc(_swallowed, 100))
             # A suggestion the board no longer lists, or that the rules no longer pass, would keep its old score and be
             # shown on every refresh. Only suggestions still waiting for the owner expire; queued, submitted and
             # dismissed ones are theirs.
@@ -867,6 +778,15 @@ class JobDiscoveryEngine:
         finally:
             conn.close()
 
+        # Optional query-driven discovery pass for freshly posted jobs matching profile
+        if include_query_discovery:
+            try:
+                query_stats = self.scan_fresh_query_jobs(min_match_threshold=min_match_threshold)
+                stats["total_jobs_seen"] += query_stats.get("total_jobs_seen", 0)
+                stats["relevant_jobs_saved"] += query_stats.get("relevant_jobs_saved", 0)
+            except Exception as exc:
+                logger.debug("Query discovery pass error: %s", exc)
+
         logger.info(
             "Discovery complete: Scanned %d companies, evaluated %d jobs, saved %d relevant jobs (score >= %d)",
             stats["companies_scanned"], stats["total_jobs_seen"],
@@ -874,11 +794,227 @@ class JobDiscoveryEngine:
         )
         return stats
 
+    def _ingest_scanned_job(
+        self, conn, job: dict[str, Any], submitted_cover: tuple[set, set],
+        still_listed: dict[str, set[str]], store_at: int, home_country: str,
+        user_prof: Any, now_iso: str, stats: dict[str, int]
+    ) -> None:
+        """Evaluates and persists a single job from ATS board scraping."""
+        import geo_reference
+        score, matched_skills = calculate_match_score(job["job_title"], job["location"], self.profile)
+        if score < store_at:
+            return
+        if job.get("description"):
+            import matching_engine
+            eligible, _why = matching_engine.check_hard_gates(job["description"], self.profile, job["location"])
+            if not eligible:
+                return
+
+        resume_score, resume_matched, resume_missing = None, [], []
+        if job.get("description") and self.resume_text:
+            import matching_engine
+            fit = matching_engine.evaluate(job["description"], self.profile, self.resume_text, job_location=job["location"])
+            if fit.is_eligible:
+                resume_score = fit.overall_score
+                resume_matched, resume_missing = list(fit.matched_skills), list(fit.missing_skills)
+
+        job["country_code"] = geo_reference.primary_country(job["location"], home_country)
+        if score >= READINESS_SCORE and "readiness_json" not in job:
+            if user_prof is None:
+                try:
+                    import config
+                    user_prof = config.get_user_profile()
+                except Exception as _swallowed:
+                    logger.debug("scan readiness profile: %s", diagnostics.short_exc(_swallowed, 100))
+                    user_prof = False
+            if user_prof:
+                job["readiness_json"] = assess_job_readiness(job, user_prof)
+        dedup_key = compute_job_hash(job["company_name"], job["job_title"], job["location"], job["url"])
+        still_listed.setdefault(job["company_token"], set()).add(dedup_key)
+        init_status = _ingest_status(job, submitted_cover)
+
+        cur = conn.execute("""
+            INSERT INTO discovered_jobs (
+                dedup_key, company_name, company_token, ats_type,
+                job_title, location, is_remote, url, match_score,
+                matched_skills, status, discovered_at, updated_at,
+                resume_score, resume_matched, resume_missing, posted_at, posted_precision,
+                country_code, readiness_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(dedup_key) DO UPDATE SET
+                match_score = excluded.match_score,
+                matched_skills = excluded.matched_skills,
+                resume_score = excluded.resume_score,
+                resume_matched = excluded.resume_matched,
+                resume_missing = excluded.resume_missing,
+                country_code = excluded.country_code,
+                readiness_json = CASE WHEN excluded.readiness_json != '' THEN excluded.readiness_json ELSE readiness_json END,
+                posted_at = CASE WHEN excluded.posted_at != '' THEN excluded.posted_at ELSE discovered_jobs.posted_at END,
+                posted_precision = CASE WHEN excluded.posted_at != '' THEN excluded.posted_precision ELSE discovered_jobs.posted_precision END,
+                status = CASE WHEN discovered_jobs.status IN ('submitted', 'queued', 'dismissed') THEN discovered_jobs.status ELSE excluded.status END,
+                updated_at = excluded.updated_at
+            WHERE status = 'discovered' OR status = 'submitted'
+        """, (
+            dedup_key, job["company_name"], job["company_token"], job["ats_type"],
+            job["job_title"], job["location"], job["is_remote"], job["url"],
+            score, json.dumps(matched_skills), init_status, now_iso, now_iso,
+            resume_score, json.dumps(resume_matched), json.dumps(resume_missing),
+            job.get("posted_at") or "", job.get("posted_precision") or "",
+            job.get("country_code") or "", job.get("readiness_json") or ""
+        ))
+        if init_status != 'submitted':
+            stats["relevant_jobs_saved"] += 1
+
+        if score >= 85 and cur.lastrowid:
+            try:
+                import notifications
+                job_payload = dict(job)
+                job_payload.update({"id": cur.lastrowid, "match_score": score, "matched_skills": matched_skills})
+                notifications.notify_discovered_job(job_payload)
+            except Exception as _swallowed:
+                logger.debug("scan_all: %s", diagnostics.short_exc(_swallowed, 100))
+
+    def load_search_spec(self) -> Any:
+        """Loads the active SearchSpec, falling back to bootstrapping from profile."""
+        try:
+            from services.diff_engine.storage import JobStorage
+            storage = JobStorage()
+            spec = storage.get_active_search_spec()
+            if spec:
+                return spec
+        except Exception as exc:
+            logger.debug("Failed loading active search spec from storage: %s", exc)
+        from services.matcher.search_spec_parser import bootstrap_search_spec_from_profile
+        return bootstrap_search_spec_from_profile()
+
+    def scan_fresh_query_jobs(
+        self,
+        keywords: Optional[list[str]] = None,
+        location: Optional[str] = None,
+        past_24_hours: bool = True,
+        limit_per_query: int = 25,
+        min_match_threshold: int = 50,
+    ) -> dict[str, int]:
+        """Queries live job aggregators (LinkedIn Guest, JSearch, Jobicy, Arbeitnow)
+        for jobs posted today matching candidate target titles."""
+        from services.poller.query_discovery import search_all_fresh_jobs
+        from services.poller.ats_resolver import resolve_and_seed_job
+        import geo_reference
+
+        spec = self.load_search_spec()
+        titles_to_query = keywords or spec.all_wanted_titles()[:6]
+        if not titles_to_query:
+            return {"total_jobs_seen": 0, "relevant_jobs_saved": 0}
+
+        query_location = location or self.profile.get("current_location") or ""
+        if not query_location and self.profile.get("locations"):
+            query_location = self.profile["locations"][0]
+
+        conn = self._get_connection()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        home_country = self.profile.get("country_code", "")
+        if not home_country and query_location:
+            detected = geo_reference.location_countries(query_location)
+            home_country = next(iter(detected)) if detected else ""
+        store_at = min(min_match_threshold, STORE_FLOOR) if min_match_threshold > 0 else 0
+        submitted_cover = _submitted_cover(self._live_tracker)
+
+        stats = {"total_jobs_seen": 0, "relevant_jobs_saved": 0}
+
+        try:
+            for title_query in titles_to_query:
+                discovered = search_all_fresh_jobs(
+                    keywords=title_query,
+                    location=query_location,
+                    past_24_hours=past_24_hours,
+                    limit=limit_per_query,
+                )
+                stats["total_jobs_seen"] += len(discovered)
+
+                for item in discovered:
+                    self._ingest_query_item(
+                        conn, item, submitted_cover, store_at, home_country, now_iso, stats
+                    )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return stats
+
+    def _ingest_query_item(
+        self, conn, item: Any, submitted_cover: tuple[set, set],
+        store_at: int, home_country: str, now_iso: str, stats: dict[str, int]
+    ) -> None:
+        """Evaluates and persists a single discovered job item from query search."""
+        from services.poller.ats_resolver import resolve_and_seed_job
+        import geo_reference
+
+        score, matched_skills = calculate_match_score(
+            item.title, item.location, self.profile
+        )
+        if score < store_at:
+            return
+
+        resolved = resolve_and_seed_job(item.company_name, item.url, job_title=item.title)
+        canonical_url = resolved["canonical_url"]
+        ats_type = resolved["ats_type"]
+        company_token = resolved["company_token"]
+
+        if item.description:
+            import matching_engine
+            eligible, _ = matching_engine.check_hard_gates(
+                item.description, self.profile, item.location
+            )
+            if not eligible:
+                return
+
+        country_code = geo_reference.primary_country(item.location, home_country)
+        dedup_key = compute_job_hash(
+            item.company_name, item.title, item.location, canonical_url
+        )
+
+        job_dict = {
+            "company_name": item.company_name,
+            "company_token": company_token,
+            "job_title": item.title,
+            "location": item.location,
+            "url": canonical_url,
+        }
+        init_status = _ingest_status(job_dict, submitted_cover)
+
+        conn.execute("""
+            INSERT INTO discovered_jobs (
+                dedup_key, company_name, company_token, ats_type,
+                job_title, location, is_remote, url, match_score,
+                matched_skills, status, discovered_at, updated_at,
+                posted_at, posted_precision, country_code
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(dedup_key) DO UPDATE SET
+                match_score = excluded.match_score,
+                matched_skills = excluded.matched_skills,
+                country_code = excluded.country_code,
+                posted_at = CASE WHEN excluded.posted_at != '' THEN excluded.posted_at
+                                 ELSE discovered_jobs.posted_at END,
+                status = CASE 
+                    WHEN discovered_jobs.status IN ('submitted', 'queued', 'dismissed') THEN discovered_jobs.status
+                    ELSE excluded.status
+                END,
+                updated_at = excluded.updated_at
+            WHERE status = 'discovered' OR status = 'submitted'
+        """, (
+            dedup_key, item.company_name, company_token, ats_type,
+            item.title, item.location, 1 if item.is_remote else 0, canonical_url,
+            score, json.dumps(matched_skills), init_status, now_iso, now_iso,
+            item.posted_date or now_iso[:10], "day", country_code
+        ))
+        if init_status != 'submitted':
+            stats["relevant_jobs_saved"] += 1
+
     def get_discovered_jobs(
         self, min_score: int = 50, status: str = "discovered", limit: int = 50, hide_applied: bool = True,
         within_hours: Optional[float] = None, country_code: Optional[str] = None,
         company_like: Optional[str] = None, offset: int = 0,
-        remote_only: Optional[bool] = None,
+        remote_only: Optional[bool] = None, title_like: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         """Returns discovered jobs matching filters, ordered by highest match score -- or, with `within_hours`, only
         the jobs certainly posted inside that window (a job with no known posting date is never inside it), newest
@@ -898,6 +1034,11 @@ class JobDiscoveryEngine:
                 company_filter = "AND company_name LIKE ? ESCAPE '\\'"
                 escaped = str(company_like).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
                 query_params.append(f"%{escaped}%")
+            title_filter = ""
+            if title_like:
+                title_filter = "AND job_title LIKE ? ESCAPE '\\'"
+                escaped_title = str(title_like).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                query_params.append(f"%{escaped_title}%")
             remote_filter = ""
             if remote_only is True:
                 remote_filter = "AND is_remote = 1"
@@ -914,6 +1055,7 @@ class JobDiscoveryEngine:
                 WHERE match_score >= ? AND status = ?
                 {country_filter}
                 {company_filter}
+                {title_filter}
                 {remote_filter}
                 ORDER BY (resume_score IS NULL), resume_score DESC, match_score DESC, discovered_at DESC
                 LIMIT ? OFFSET ?

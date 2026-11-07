@@ -156,53 +156,166 @@
 .badge-ai { background: var(--warn-soft); color: var(--warn); }
 .badge-user { background: var(--ok-soft); color: var(--ok); }
 
-/* ---- suggested jobs ---------------------------------------------------------------------------------------- */
-.dash-jobs { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
-.job-card { position: relative; display: flex; flex-direction: column; gap: 10px; padding: 18px; background: var(--surface); border: 1px solid var(--line);
-  border-radius: 16px; box-shadow: var(--shadow); transition: transform .18s, box-shadow .18s, border-color .18s; }
-.job-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+/* ---- suggested jobs: high-density match feed grid ---------------------------------------------------- */
+/*
+   SAAS FEED LAYOUT: minmax(260px) gives ~4 cols on 1200px, ~3 on 900px, ~2 on 580px.
+   content-visibility: auto defers paint of off-screen cards for near-zero layout cost on large feeds.
+   contain: layout style paint groups card reflows so resizing one never forces a full grid re-layout.
+*/
+.dash-jobs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+  contain: layout style;
+}
+.job-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 13px 14px 11px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  /* Only opt-in to will-change on hover: avoids promoting every card as a GPU layer */
+  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 168px;   /* estimated compact height; prevents layout shift */
+}
+.job-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  will-change: transform;            /* promote only the hovered card */
+}
+.job-card:not(:hover) { will-change: auto; }
 .job-card[hidden] { display: none; }
-.job-top { display: flex; gap: 14px; align-items: center; }
-.ring { --p: 0; --c: var(--ring-low); flex: none; position: relative; width: 56px; height: 56px; border-radius: 50%;
-  background: conic-gradient(var(--c) calc(var(--p) * 1%), var(--line) 0); display: grid; place-items: center; }
-.ring::before { content: ""; position: absolute; inset: 6px; border-radius: 50%; background: var(--surface); }
-.ring b { position: relative; font-size: 14px; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+
+/* top row: checkbox + compact ring + company/title, tighter than before */
+.job-top { display: flex; gap: 10px; align-items: center; }
+.ring {
+  --p: 0; --c: var(--ring-low);
+  flex: none;
+  position: relative;
+  width: 44px; height: 44px;           /* smaller than the old 56px — still legible */
+  border-radius: 50%;
+  background: conic-gradient(var(--c) calc(var(--p) * 1%), var(--line) 0);
+  display: grid; place-items: center;
+}
+.ring::before { content: ""; position: absolute; inset: 5px; border-radius: 50%; background: var(--surface); }
+.ring b { position: relative; font-size: 12px; font-variant-numeric: tabular-nums; letter-spacing: -.02em; font-weight: 700; }
 .ring.high { --c: var(--ring-high); }
-.ring.mid { --c: var(--ring-mid); }
-.job-company { margin: 0; color: var(--ink-2); font-size: 14px; font-weight: 600; }
-.job-title { margin: 0; font-size: 16.5px; line-height: 1.3; letter-spacing: -.01em; }
+.ring.mid  { --c: var(--ring-mid); }
+
+.job-company { margin: 0; color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .01em; text-transform: uppercase; }
+.job-title { margin: 0; font-size: 14.5px; line-height: 1.35; letter-spacing: -.01em; }
 .job-title a { color: var(--ink); }
 .job-title a:hover { color: var(--accent); }
-.job-meta { display: flex; flex-wrap: wrap; gap: 6px; color: var(--ink-2); font-size: 13.5px; }
-.tag { display: inline-block; padding: 2px 9px; border-radius: 99px; background: var(--grey-soft); color: var(--ink-2); font-size: 12.5px; font-weight: 500; }
-.tag.remote { background: var(--ok-soft); color: var(--ok); }
-.job-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 4px; }
+
+/* meta row: tighter, smaller tags */
+.job-meta { display: flex; flex-wrap: wrap; gap: 4px; color: var(--ink-2); font-size: 12.5px; align-items: center; }
+.tag {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 99px;
+  background: var(--grey-soft);
+  color: var(--ink-2);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.tag.remote   { background: var(--ok-soft);      color: var(--ok); }
+.tag.new      { background: var(--accent);         color: #fff; }
+.tag.applied  { background: var(--ok-soft);        color: var(--ok);    font-weight: 600; }  /* applied = green check */
+.tag.pending  { background: var(--info-soft);      color: var(--info);  font-weight: 600; }  /* pending = blue */
+.tag.matched  { background: var(--violet-soft);    color: var(--violet);font-weight: 600; }  /* matched = violet */
+.tag.skill-gap{ background: var(--surface-2);      color: var(--ink-2); border: 1px solid var(--line); }
+
+/* status indicator badges — minimalist pill with a leading dot, replaces verbose text */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px 1px 5px;
+  border-radius: 99px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: .01em;
+  white-space: nowrap;
+}
+.status-badge::before {
+  content: "";
+  flex: none;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: .9;
+}
+.status-badge.applied  { background: var(--ok-soft);      color: var(--ok); }
+.status-badge.pending  { background: var(--info-soft);     color: var(--info); }
+.status-badge.matched  { background: var(--violet-soft);   color: var(--violet); }
+.status-badge.queued   { background: var(--accent-soft);   color: var(--accent); }
+.status-badge.skipped  { background: var(--grey-soft);     color: var(--muted); }
+.status-badge.rejected { background: var(--bad-soft);      color: var(--bad); }
+.status-badge.new-post { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+
+/* card foot: posting link first, then action row — single compact line */
+.job-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 3px;
+  border-top: 1px solid var(--line-2);
+}
 .job-foot form { margin: 0; }
-button.linklike { background: none; border: 0; box-shadow: none; color: var(--muted); text-decoration: underline; font-weight: 500; padding: 0 4px; min-height: 40px; }
-button.linklike:hover { color: var(--ink); background: none; filter: none; }
-.job-card.is-applied { opacity: .75; }
-.tag.new { background: var(--accent); color: #fff; border-color: var(--accent); }
-.tag.applied { background: var(--surface-2); color: var(--ink-2); font-weight: 600; }
-.dash-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.dash-chip { border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); padding: 5px 13px; border-radius: 99px; font-size: 13.5px; font-weight: 500; min-height: 40px; }
+button.linklike {
+  background: none; border: 0; box-shadow: none;
+  color: var(--muted); text-decoration: none;
+  font-weight: 500; font-size: 13px;
+  padding: 0 2px; min-height: 40px;
+}
+button.linklike:hover { color: var(--bad); background: none; filter: none; }
+.job-card.is-applied { opacity: .8; }
+
+/* skill bars (resume match detail) — compact two-line version */
+.skill-bar { display: flex; flex-wrap: wrap; gap: 3px; }
+
+/* filter chips (time-window and ATS chips) */
+.dash-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.dash-chip {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-2);
+  padding: 4px 11px;
+  border-radius: 99px;
+  font-size: 13px;
+  font-weight: 500;
+  min-height: 40px;
+}
 .dash-chip:hover { background: var(--surface-2); filter: none; }
 .dash-chip[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-.dash-chip.is-zero { opacity: .55; }
+.dash-chip[aria-current="true"]  { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.dash-chip.is-zero   { opacity: .5; }
 .dash-chip.has-items { border-color: var(--warn); font-weight: 700; box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 25%, transparent); }
-.dash-chip .n { opacity: .7; margin-left: 5px; font-variant-numeric: tabular-nums; }
-.dash-empty { text-align: center; padding: 40px 16px; color: var(--ink-2); border: 1px dashed var(--line); border-radius: 16px; background: var(--surface); }
-.dash-empty b { display: block; color: var(--ink); font-size: 16px; margin-bottom: 4px; }
+.dash-chip .n { opacity: .65; margin-left: 4px; font-variant-numeric: tabular-nums; }
+
+.dash-empty { text-align: center; padding: 36px 16px; color: var(--ink-2); border: 1px dashed var(--line); border-radius: 12px; background: var(--surface); }
+.dash-empty b { display: block; color: var(--ink); font-size: 15px; margin-bottom: 4px; }
 
 /* ---- history ------------------------------------------------------------------------------------------------ */
-.dash-history { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); }
-.dash-history .toolbar { border-radius: 16px 16px 0 0; }
+.dash-history { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
+.dash-history .toolbar { border-radius: 14px 14px 0 0; }
 .dash-history table { table-layout: auto; }
-.dash-history th, .dash-history td { padding: 14px 16px; }
+.dash-history th, .dash-history td { padding: 11px 14px; }
 .dash-history td.role a { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
-.dash-history td.role .loc { display: block; color: var(--muted); font-size: 13px; margin-top: 2px; }
+.dash-history td.role .loc { display: block; color: var(--muted); font-size: 12px; margin-top: 1px; }
 .dash-history td.company strong { font-weight: 650; }
-.dash-history td.when { font-size: 13px; }
-.dash-history .more { border-radius: 0 0 16px 16px; }
+.dash-history td.when { font-size: 12.5px; }
+/* status column uses .status-badge instead of .pill for minimalism */
+.dash-history td.status { white-space: nowrap; }
+.dash-history .more { border-radius: 0 0 14px 14px; }
 @media (max-width: 760px) { .dash-history th, .dash-history td { padding: 3px 0; } }
 
 /* ---- loading, narrow screens ---------------------------------------------------------------------------------- */
@@ -231,21 +344,21 @@ button.linklike:hover { color: var(--ink); background: none; filter: none; }
 
 .dash-bar-label { margin: 14px 0 6px; font-size: 13.5px; color: var(--ink-2); }
 
-.bulk-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-.bulk-bar[hidden] { display: none; }
-.bulk-pick { display: flex; align-items: center; justify-content: center; flex: none; min-width: 40px; min-height: 40px; margin: 0; cursor: pointer; }
-.bulk-pick input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
-.job-foot a.button { display: inline-flex; align-items: center; }
-
-.filter-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-end; margin-bottom: 6px; }
-.filter-field { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
-.filter-field select, .filter-field input { width: auto; min-height: 40px; font-size: 14px; }
-.filter-field input[type=search] { width: 170px; }
-
-.feed-tools { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.feed-tools { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .feed-tools .dash-chips, .feed-tools .bulk-bar { margin-bottom: 0; }
-.how-list { margin: 0 0 14px; }
+.how-list { margin: 0 0 10px; }
 .how-list summary { cursor: pointer; font-weight: 600; color: var(--ink-2); display: inline-flex; align-items: center; min-height: 40px; }
 .how-list p { margin: 4px 0 0; }
-.feed-hint { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin-bottom: 10px; }
+.feed-hint { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin-bottom: 8px; }
 .feed-hint[hidden] { display: none; }
+
+.bulk-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.bulk-bar[hidden] { display: none; }
+.bulk-pick { display: flex; align-items: center; justify-content: center; flex: none; min-width: 36px; min-height: 36px; margin: 0; cursor: pointer; }
+.bulk-pick input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.job-foot a.button { display: inline-flex; align-items: center; }
+
+.filter-row { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: flex-end; margin-bottom: 4px; }
+.filter-field { display: flex; flex-direction: column; gap: 2px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.filter-field select, .filter-field input { width: auto; min-height: 36px; font-size: 13.5px; }
+.filter-field input[type=search] { width: 160px; }

@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import os
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, Union
 
 import diagnostics
 from dotenv import load_dotenv
@@ -103,7 +104,7 @@ class UserProfile:
     willing_drug_test_and_physical: str = ""
     veteran_status: str = ""
     disability_status: str = ""
-    ethnicity: str = ""
+    ethnicity: Any = ""
     gender: str = ""
     work_arrangements: tuple[str, ...] = ()
     work_type: str = ""
@@ -141,10 +142,10 @@ class UserProfile:
     # Asked by many forms, and only yours to answer (30 September: with none of these in the profile the AI
     # guessed them). Empty = the question comes to you once, and your answer is kept.
     preferred_name: str = ""           # empty = you have none: the box is left blank
-    gender_identity: str = ""          # empty = your `gender` answers "gender identity" too
-    sexual_orientation: str = ""
+    gender_identity: Any = ""          # empty = your `gender` answers "gender identity" too
+    sexual_orientation: Any = ""
     transgender: str = ""
-    pronouns: str = ""
+    pronouns: Any = ""
     gpa: str = ""
     # The owner's standing decisions on consent, given once and applied on every form that asks, in any wording
     # (reference/concepts.json: AI_NOTETAKER_CONSENT, SHARE_DATA_WITH_PARTNERS, MARKETING_OPT_IN). "Yes" or "No";
@@ -197,6 +198,18 @@ class UserProfile:
     # that Gmail (read-only search results) for the employer's "application
     # received" email.
     check_gmail_for_confirmation: bool = False
+
+    def identities(self, field_name: str) -> list[str]:
+        """Return the values for an identity field as a list of strings."""
+        val = getattr(self, field_name, None)
+        if not val:
+            return []
+        if isinstance(val, (list, tuple)):
+            return [str(v).strip() for v in val if str(v).strip()]
+        if isinstance(val, str):
+            parts = [p.strip() for p in re.split(r"[;,\n]", val) if p.strip()]
+            return parts if parts else ([val.strip()] if val.strip() else [])
+        return [str(val).strip()]
 
 
 # The first default, gemini-2.5-flash, answered "no longer available to new users" on the owner's key (25
@@ -281,7 +294,8 @@ class AppConfig:
     browser_channel: str = field(default_factory=lambda: os.getenv("BROWSER_CHANNEL", "chrome").strip())
     # Headless=False on purpose: the human must see the browser to log in
     # and to review/submit each application themselves.
-    browser_headless: bool = False
+    # Headless=False on purpose; overridable via BROWSER_HEADLESS environment variable.
+    browser_headless: bool = field(default_factory=lambda: os.getenv('BROWSER_HEADLESS', '').lower() in ('1', 'true', 'yes'))
     claude_max_retries: int = 3
     claude_request_timeout: float = 60.0
     # Opt-in verified auto-submit. OFF unless AUTO_SUBMIT_VERIFIED_ONLY=true is
@@ -334,6 +348,8 @@ class AppConfig:
     # correction at hand-over; "leave" leaves it for the owner. A value the
     # owner entered is never changed either way. See site_prefill_policy().
     site_prefill_policy: str = field(default_factory=lambda: site_prefill_policy())
+
+
 
 
 # Profile fields where an empty value is itself the answer -- there is none -- rather than "not stated yet".

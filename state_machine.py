@@ -184,6 +184,22 @@ class StateFingerprintCircuitBreaker:
             )
             return True, self.state, meta
 
+        # Periodic cycle detection (period 2 or 3, e.g. A-B-A-B-A-B page bounce loops)
+        fps = [h[0] for h in self.history]
+        for k in (2, 3):
+            needed = k * self.consecutive_threshold
+            if len(fps) >= needed:
+                window = fps[-needed:]
+                if all(window[idx] == window[idx - k] for idx in range(k, needed)) and len(set(window[:k])) == k:
+                    self.tripped = True
+                    self.state = STATUS_BLOCKED_VALIDATION_LOOP
+                    logger.warning(
+                        "CIRCUIT BREAKER TRIPPED: Periodic state cycle (period %d) repeated %d times",
+                        k,
+                        self.consecutive_threshold,
+                    )
+                    return True, self.state, meta
+
         return False, self.state, meta
 
     def trip_and_dump(

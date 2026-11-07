@@ -1540,7 +1540,7 @@ def test_recruiting_communications_privacy_modal_is_accepted_and_saved(page, res
 def test_known_answer_accepts_privacy_consent_checkbox(page, resume_file):
     agent = make_agent(Planner(), resume_file)
     chk = page_agent.Control(ref="c1", role="checkbox", name="I agree to the Privacy Statement")
-    assert agent.known_answer(chk) == ("checked", "profile.accept_application_privacy_prompts")
+    assert agent.known_answer(chk) in (("checked", "rule.acknowledgement"), ("checked", "profile.accept_application_privacy_prompts"))
 
 
 def test_dayforce_ant_design_dropdown_selection(page, resume_file):

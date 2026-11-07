@@ -21,6 +21,10 @@ def scripted(*responses):
         response = responses[min(len(calls) - 1, len(responses) - 1)]
         if isinstance(response, Exception):
             raise response
+        if isinstance(response, dict) and "grounded" not in response:
+            resp = dict(response)
+            resp["grounded"] = resp.get("supported", True)
+            return json.dumps(resp)
         return json.dumps(response)
     return ask, calls
 
@@ -231,8 +235,8 @@ def test_runtime_passes_original_resume_to_writer_and_fills_reviewed_answer():
         contexts.append(user_message)
         assert RESUME in user_message
         if system == open_answers._REVIEW_SYSTEM:
-            return json.dumps({'supported': True, 'complete': True, 'issues': []})
-        return json.dumps({'answer': GOOD})
+            return json.dumps({'grounded': True, 'supported': True, 'complete': True, 'issues': []})
+        return json.dumps({'grounded': True, 'answer': GOOD})
     client._call = call
     client.plan_page = lambda *a: {'page_kind': 'application_form', 'answers': [], 'leave_for_owner': [],
                                   'next': {'kind': 'final_submit', 'label': 'Submit Application'}}

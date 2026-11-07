@@ -385,10 +385,7 @@ def _resume_with_current_email(path: Path, profile, job, job_dir: Path) -> Path:
     text = parse_resume(path).raw_text
     emails = re.findall(r"[\w.+-]+@[\w-]+\.[\w.]+", text)
     if not profile.email or not any(email.casefold() != profile.email.casefold() for email in emails):
-        if not target.exists() and path.exists():
-            import shutil
-            shutil.copy2(path, target)
-        return target if target.exists() else path
+        return path
     updated = re.sub(r"[\w.+-]+@[\w-]+\.[\w.]+", profile.email, text)
     text_path = target.with_suffix(".txt")
     text_path.write_text(ensure_resume_header(updated, profile, job), encoding="utf-8")
@@ -1366,8 +1363,15 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
             agent._ensure_state()
             agent.forget_sign_in_attempts(owner_acted=(decision == "continue"))
             if decision == "submitted_by_user":
-                evidence = getattr(assistant, "_confirmation_evidence", "") or "the page confirmed it"
-                status, note = safety.verification_status(evidence)
+                evidence = getattr(assistant, "_confirmation_evidence", "")
+                if not evidence and hasattr(assistant, "_a_box_says_it_was_received") and assistant._a_box_says_it_was_received(page):
+                    evidence = "the page confirmed it in a dialog"
+                elif not evidence and hasattr(assistant, "submission_confirmed") and assistant.submission_confirmed(page, getattr(job, "title", "")):
+                    evidence = "the page confirmed it"
+                if evidence:
+                    status, note = safety.verification_status(evidence)
+                else:
+                    status, note = "unconfirmed", "Submitted by user; unconfirmed (no receipt on page or email)"
                 tracker.update_status(key, status, notes=note)
                 logger.info("SUBMITTED_BY_USER: %s", note)
                 if RuntimeEvent is not None:
@@ -1484,8 +1488,15 @@ def run_page_agent(assistant, page, claude, config, profile, resume, job, tracke
                     except Exception as exc:
                         logger.warning("Could not clear pending account creation on continue: %s", exc)
         if decision == "submitted_by_user":
-            evidence = getattr(assistant, "_confirmation_evidence", "") or "the page confirmed it"
-            status, note = safety.verification_status(evidence)
+            evidence = getattr(assistant, "_confirmation_evidence", "")
+            if not evidence and hasattr(assistant, "_a_box_says_it_was_received") and assistant._a_box_says_it_was_received(page):
+                evidence = "the page confirmed it in a dialog"
+            elif not evidence and hasattr(assistant, "submission_confirmed") and assistant.submission_confirmed(page, getattr(job, "title", "")):
+                evidence = "the page confirmed it"
+            if evidence:
+                status, note = safety.verification_status(evidence)
+            else:
+                status, note = "unconfirmed", "Submitted by user; unconfirmed (no receipt on page or email)"
             tracker.update_status(key, status, notes=note)
             logger.info("SUBMITTED_BY_USER: %s", note)
             if RuntimeEvent is not None:
@@ -2121,6 +2132,21 @@ def main() -> None:
     job_dir = config.output_dir / folder
     job_dir.mkdir(parents=True, exist_ok=True)
 
+    import form_preview
+    if form_preview.check_early_skip(job, profile, tracker, key):
+        logger.info("Application %s skipped before opening browser: required ATS questions need answers", key[:12])
+        if RuntimeEvent is not None:
+            RuntimeEvent.emit(
+                event_name=EventName.RUN_STOPPED,
+                component="apply_flow",
+                stage="init",
+                reason_code=ReasonCode.UNSUPPORTED_FIELD,
+                display_message="Skipped before opening browser: required ATS questions need answers",
+                application_key=key,
+                run_id=run_id,
+            )
+        return
+
     attach_resume = prepare_materials(claude, resume, job, profile, job_dir, tracker, key)
     tracker.update_materials(key, str(attach_resume), None)
     letter: tuple[Path, Path] | None = None  # (txt, pdf), written only if a form asks for one
@@ -2447,11 +2473,17 @@ def main() -> None:
                     diagnostics.capture_safe_screenshot(page, job_dir / "submitted_confirmation.png")
                 except Exception as exc:
                     logger.warning("Could not capture confirmation screenshot: %s", exc)
-                evidence = getattr(assistant, "_confirmation_evidence", "") or \
-                    "the page confirmed it (see submitted_confirmation.png)"
-                status, note = safety.verification_status(evidence)
-                if status == STATUS_SUBMITTED:
-                    delete_screenshots(job_dir)
+                evidence = getattr(assistant, "_confirmation_evidence", "")
+                if not evidence and hasattr(assistant, "_a_box_says_it_was_received") and assistant._a_box_says_it_was_received(page):
+                    evidence = "the page confirmed it in a dialog"
+                elif not evidence and hasattr(assistant, "submission_confirmed") and assistant.submission_confirmed(page, getattr(job, "title", "")):
+                    evidence = "the page confirmed it"
+                if evidence:
+                    status, note = safety.verification_status(evidence)
+                    if status == STATUS_SUBMITTED:
+                        delete_screenshots(job_dir)
+                else:
+                    status, note = "unconfirmed", "Submitted by user; unconfirmed (no receipt on page or email)"
                 tracker.update_status(key, status, notes=note)
                 remember_progress(tracker, key, page, "submitted by the user", assistant=assistant)
                 logger.info("SUBMITTED_BY_USER: confirmation seen on %s", page.url)

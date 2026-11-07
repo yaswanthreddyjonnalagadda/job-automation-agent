@@ -30,12 +30,59 @@ UNANSWERED_PATH = config.DATA_DIR / "unanswered_questions.json"
 
 YES_NO = ("", "Yes", "No")
 
+ETHNICITY_CHOICES = (
+    "Asian",
+    "South Asian",
+    "East Asian",
+    "Southeast Asian",
+    "Black or African American",
+    "Hispanic or Latino",
+    "White",
+    "Native American or Alaska Native",
+    "Native Hawaiian or Other Pacific Islander",
+    "Middle Eastern or North African",
+    "Two or More Races",
+    "Decline to self-identify",
+)
+
+GENDER_IDENTITY_CHOICES = (
+    "Man",
+    "Woman",
+    "Non-binary",
+    "Transgender",
+    "Genderqueer",
+    "Agender",
+    "Prefer to self-describe",
+    "I don't wish to answer",
+)
+
+PRONOUN_CHOICES = (
+    "He/Him",
+    "She/Her",
+    "They/Them",
+    "He/They",
+    "She/They",
+    "Other",
+    "Prefer not to say",
+)
+
+SEXUAL_ORIENTATION_CHOICES = (
+    "Heterosexual / Straight",
+    "Gay or Lesbian",
+    "Bisexual",
+    "Queer",
+    "Asexual",
+    "Prefer to self-describe",
+    "I don't wish to answer",
+)
+
+
 
 @dataclasses.dataclass(frozen=True)
 class Field:
     name: str                      # the UserProfile field
     label: str
-    kind: str = "text"             # text | email | number | bool | choice | list | lines
+    kind: str = "text"             # text | email | number | bool | choice | multi_choice | list | lines
     choices: tuple[str, ...] = ()
     hint: str = ""
     required: bool = False
@@ -129,14 +176,16 @@ SECTIONS: tuple[tuple[str, str, tuple[Field, ...]], ...] = (
     ("Voluntary disclosures", "Optional. Employers must not use these to decide. 'I don't wish to answer' is "
                               "always accepted.", (
         Field("gender", "Gender"),
-        Field("gender_identity", "Gender identity", hint="e.g. Man. Leave blank to use Gender."),
-        Field("sexual_orientation", "Sexual orientation",
-              hint="Your own answer, or I don't wish to answer. Blank = you are asked once."),
+        Field("gender_identity", "Gender identity", "multi_choice", GENDER_IDENTITY_CHOICES,
+              hint="Select all that apply. Hold Ctrl / Cmd to select multiple. Leave blank to use Gender."),
+        Field("sexual_orientation", "Sexual orientation", "multi_choice", SEXUAL_ORIENTATION_CHOICES,
+              hint="Select all that apply. Blank = you are asked once."),
         Field("transgender", "Do you identify as transgender", "choice", YES_NO + ("I don't wish to answer",)),
-        Field("pronouns", "Pronouns", hint="e.g. He/him, or leave blank."),
+        Field("pronouns", "Pronouns", "multi_choice", PRONOUN_CHOICES,
+              hint="Select all that apply, or leave blank."),
         Field("hispanic_or_latino", "Hispanic or Latino", "choice", YES_NO + ("I don't wish to answer",)),
-        Field("ethnicity", "Race / ethnicity",
-              hint="The most specific one, e.g. South Asian: forms that offer only Asian still get it."),
+        Field("ethnicity", "Race / ethnicity", "multi_choice", ETHNICITY_CHOICES,
+              hint="Select all that apply. Forms offering broader categories (e.g. Asian) still match."),
         Field("veteran_status", "Veteran status", hint="e.g. I am not a protected veteran"),
         Field("disability_status", "Disability status", hint="e.g. No, I don't have a disability"),
     )),
@@ -284,7 +333,17 @@ def values_from_form(form: dict[str, Any]) -> dict[str, Any]:
             values[name] = raw in ("on", "true", "1", True)
             continue
         text = str(raw or "").strip()
-        if f.kind == "number":
+        if f.kind == "multi_choice":
+            if hasattr(form, "getlist"):
+                raw_list = form.getlist(name)
+            elif isinstance(raw, (list, tuple)):
+                raw_list = list(raw)
+            elif isinstance(raw, str) and raw:
+                raw_list = [p.strip() for p in re.split(r"[;,\n]", raw) if p.strip()]
+            else:
+                raw_list = [raw] if raw else []
+            values[name] = tuple(str(x).strip() for x in raw_list if str(x).strip())
+        elif f.kind == "number":
             values[name] = int(re.sub(r"[^\d]", "", text) or 0)
         elif f.kind == "list":
             values[name] = tuple(part.strip() for part in text.split(",") if part.strip())

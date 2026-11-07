@@ -142,7 +142,7 @@ input:focus, select:focus, textarea:focus { outline:none; border-color:var(--acc
 .pill::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; opacity:.8; }
 .pill.submitted { background:var(--ok-soft); color:var(--ok); }
 .pill.ready_to_submit { background:var(--info-soft); color:var(--info); }
-.pill.needs_user_review, .pill.blocked_validation_loop { background:var(--warn-soft); color:var(--warn); }
+.pill.needs_user_review, .pill.blocked_validation_loop, .pill.needs_answers { background:var(--warn-soft); color:var(--warn); }
 .pill.form_filled, .pill.prepared, .pill.ready_to_apply { background:var(--accent-soft); color:var(--accent); }
 .pill.interviewing, .pill.offer { background:var(--violet-soft); color:var(--violet); }
 .pill.rejected { background:var(--bad-soft); color:var(--bad); }
@@ -182,9 +182,36 @@ dialog textarea, dialog input[type=text] { margin-top:6px; }
 .toast.bad { background:var(--bad); color:#fff; }
 
 .pill.submitted::before { content:"\\2713"; width:auto; height:auto; background:none; font-size:11px; line-height:1; }
-.pill.needs_user_review::before, .pill.blocked_validation_loop::before { content:"!"; width:auto; height:auto; background:none;
+.pill.needs_user_review::before, .pill.blocked_validation_loop::before, .pill.needs_answers::before { content:"!"; width:auto; height:auto; background:none;
   font-size:12px; line-height:1; font-weight:800; }
 .pill.rejected::before { content:"\\00d7"; width:auto; height:auto; background:none; font-size:13px; line-height:1; }
+
+/* --- minimalist status indicator badges (applied / pending / matched + application states) ----------- */
+/* Used in the job match feed and applications history for compact, high-density layouts.                */
+.sbadge {
+  display:inline-flex; align-items:center; gap:4px;
+  padding:1px 7px 1px 5px; border-radius:99px;
+  font-size:11.5px; font-weight:700; letter-spacing:.01em; white-space:nowrap;
+}
+.sbadge::before {
+  content:""; flex:none; width:5px; height:5px; border-radius:50%; background:currentColor; opacity:.85;
+}
+/* Three primary semantic states used in the feed */
+.sbadge.applied   { background:var(--ok-soft);     color:var(--ok); }
+.sbadge.pending   { background:var(--info-soft);    color:var(--info); }
+.sbadge.matched   { background:var(--violet-soft);  color:var(--violet); }
+/* Maps to existing application tracker statuses */
+.sbadge.submitted { background:var(--ok-soft);      color:var(--ok); }
+.sbadge.submitted::before { content:"\\2713"; width:auto; height:auto; background:none; font-size:10px; }
+.sbadge.working   { background:var(--accent-soft);  color:var(--accent); }
+.sbadge.queued    { background:var(--accent-soft);  color:var(--accent); }
+.sbadge.needs     { background:var(--warn-soft);    color:var(--warn); }
+.sbadge.needs::before { content:"!"; width:auto; height:auto; background:none; font-size:10px; font-weight:900; }
+.sbadge.skipped   { background:var(--grey-soft);    color:var(--muted); }
+.sbadge.rejected  { background:var(--bad-soft);     color:var(--bad); }
+.sbadge.rejected::before { content:"\\00d7"; width:auto; height:auto; background:none; font-size:12px; }
+.sbadge.offer     { background:var(--violet-soft);  color:var(--violet); }
+.sbadge.interviewing { background:var(--violet-soft); color:var(--violet); }
 
 /* --- tables --------------------------------------------------------------------------------------- */
 table { width:100%; border-collapse:collapse; }
@@ -299,6 +326,11 @@ HEADER = """
   <nav class="nav" aria-label="Main">
     {% set _n = needs_you_count() %}<a href="/" {% if _n %}data-count="{{ _n }}" aria-label="Applications, {{ _n }} need you" {% endif %}{% if request.path == '/' or request.path.startswith('/application/') %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/' or request.path.startswith('/application/') }}">Applications</a>
     <a href="/progress" {% if request.path == '/progress' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/progress' }}">Progress</a>
+    <a href="/search-spec" {% if request.path == '/search-spec' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/search-spec' }}">Search Spec</a>
+    <a href="/review-queue" {% if request.path == '/review-queue' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/review-queue' }}">Review Queue</a>
+    <a href="/funnel" {% if request.path == '/funnel' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/funnel' }}">Funnel</a>
+    <a href="/answer-bank" {% if request.path == '/answer-bank' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/answer-bank' }}">Answer Bank</a>
+    <a href="/run-control" {% if request.path == '/run-control' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/run-control' }}">Run Control</a>
     <a href="/profile" {% if request.path in ('/profile', '/setup') %}aria-current="page" {% endif %}class="{{ 'active' if request.path in ('/profile', '/setup') }}">Profile</a>
     <a href="/answers" {% if request.path == '/answers' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/answers' }}">Saved answers</a>
     <a href="/settings" {% if request.path == '/settings' %}aria-current="page" {% endif %}class="{{ 'active' if request.path == '/settings' }}">Settings</a>
@@ -316,7 +348,7 @@ def page(title: str, body: str, header: bool = True) -> str:
 # Statuses as a person reads them; the pill's colour comes from the status itself.
 STATUS_LABELS = {
     "prepared": "Ready to start", "ready_to_apply": "Ready to start", "form_filled": "Filling in", "ready_to_submit": "Ready to submit",
-    "needs_user_review": "Needs you", "submitted": "Submitted", "skipped": "Skipped",
+    "needs_user_review": "Needs you", "needs_answers": "Needs answers", "submitted": "Submitted", "skipped": "Skipped",
     "DISQUALIFIED_POLICY_MISMATCH": "Skipped (policy)", "BLOCKED_VALIDATION_LOOP": "Stuck (needs you)",
     "job_not_found": "Job doesn't exist", "already_applied": "Already applied",
     "interviewing": "Interviewing", "rejected": "Rejected", "offer": "Offer",
@@ -331,9 +363,36 @@ def status_class(status: str) -> str:
     return (status or "").strip().lower()
 
 
+# Semantic badge mapping: turns an application status into one of the three feed-visible semantic states
+# (applied / pending / matched) or a more detailed label for the history table.
+_BADGE_CLASS = {
+    "submitted": "submitted",
+    "interviewing": "interviewing",
+    "offer": "offer",
+    "rejected": "rejected",
+    "needs_user_review": "needs",
+    "needs_answers": "needs",
+    "blocked_validation_loop": "needs",
+    "ready_to_submit": "needs",
+    "form_filled": "working",
+    "prepared": "queued",
+    "ready_to_apply": "queued",
+    "skipped": "skipped",
+    "disqualified_policy_mismatch": "skipped",
+    "job_not_found": "skipped",
+    "already_applied": "applied",
+}
+
+def status_badge(status: str) -> str:
+    """Return an <span class='sbadge …'>Label</span> for inline minimalist status display."""
+    css = _BADGE_CLASS.get((status or "").strip().lower(), "working")
+    label = STATUS_LABELS.get(status or "", (status or "").replace("_", " ").capitalize())
+    return f'<span class="sbadge {css}">{label}</span>'
+
+
 # Which filter chip (and stat tile) a status belongs to.
 _GROUPS = {
-    "needs": {"ready_to_submit", "needs_user_review", "blocked_validation_loop"},
+    "needs": {"ready_to_submit", "needs_user_review", "blocked_validation_loop", "needs_answers"},
     "done": {"submitted", "interviewing", "offer", "rejected"},
     "skipped": {"skipped", "disqualified_policy_mismatch", "job_not_found", "already_applied"},
 }

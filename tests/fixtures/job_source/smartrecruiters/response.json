@@ -1,0 +1,177 @@
+{
+  "content": [
+    {
+      "id": "744000158320111",
+      "name": "Senior / Lead Engineering Operations Manager",
+      "uuid": "a6f4c077-a7ac-4b8f-99d4-3756d1544f35",
+      "jobAdId": "a41acbab-0915-47ec-91b3-4ae2c3e91ffe",
+      "defaultJobAd": true,
+      "refNumber": "REF2042H",
+      "company": {
+        "identifier": "smartrecruiters",
+        "name": "SmartRecruiters Inc"
+      },
+      "releasedDate": "2026-10-28T15:14:43.941Z",
+      "location": {
+        "city": "Poland",
+        "region": "Remote",
+        "country": "pl",
+        "remote": true,
+        "hybrid": false,
+        "fullLocation": "Poland, Remote, Poland"
+      },
+      "industry": {
+        "id": "computer_software",
+        "label": "Computer Software"
+      },
+      "department": {
+        "id": "5408693",
+        "label": "Engineering"
+      },
+      "function": {
+        "id": "information_technology",
+        "label": "Information Technology"
+      },
+      "typeOfEmployment": {
+        "id": "permanent",
+        "label": "Full-time"
+      },
+      "experienceLevel": {
+        "id": "mid_senior_level",
+        "label": "Mid-Senior Level"
+      },
+      "customField": [
+        {
+          "fieldId": "58b7e4d6e4b0885c92cd98ee",
+          "fieldLabel": "Department",
+          "valueId": "5408693",
+          "valueLabel": "Engineering"
+        },
+        {
+          "fieldId": "68f89f37181dbd53b2d51cc1",
+          "fieldLabel": "SAP Cost Center",
+          "valueId": "bb09f314-6bf5-4ae3-8825-ff2c7527d196",
+          "valueLabel": "545000406"
+        },
+        {
+          "fieldId": "COUNTRY",
+          "fieldLabel": "Country/Region",
+          "valueId": "pl",
+          "valueLabel": "Poland"
+        },
+        {
+          "fieldId": "58b7e4d6e4b0885c92cd98eb",
+          "fieldLabel": "Brands",
+          "valueId": "default",
+          "valueLabel": "SmartRecruiters Inc"
+        },
+        {
+          "fieldId": "617043f52193e5503b7715c3",
+          "fieldLabel": "SR Cost Center",
+          "valueId": "7967e179-daf4-4cac-b2f7-001db784eac2",
+          "valueLabel": "4.06 R&D Continuous Improvement"
+        },
+        {
+          "fieldId": "627035b6330a2b4d25aa0882",
+          "fieldLabel": "Career Site Department Labels",
+          "valueId": "ff7b8056-0f7d-4647-aee0-6207b0c564e5",
+          "valueLabel": "Engineering"
+        }
+      ],
+      "visibility": "PUBLIC",
+      "ref": "https://api.smartrecruiters.com/v1/companies/smartrecruiters/postings/744000158320111",
+      "language": {
+        "code": "en",
+        "label": "English",
+        "labelNative": "English (US)"
+      }
+    },
+    {
+      "id": "744000158015889",
+      "name": "Customer support Representative",
+      "uuid": "3eaa424e-3ee9-4a7e-9182-7b4aaebfdf9f",
+      "jobAdId": "6d094756-3271-4b3c-bce0-08e85be7dd3d",
+      "defaultJobAd": true,
+      "refNumber": "REF2040E",
+      "company": {
+        "identifier": "smartrecruiters",
+        "name": "SmartRecruiters Inc"
+      },
+      "releasedDate": "2026-10-27T11:01:40.995Z",
+      "location": {
+        "city": "Poland",
+        "region": "Remote",
+        "country": "pl",
+        "remote": true,
+        "hybrid": false,
+        "fullLocation": "Poland, Remote, Poland"
+      },
+      "industry": {
+        "id": "computer_software",
+        "label": "Computer Software"
+      },
+      "department": {
+        "id": "5408914",
+        "label": "Support"
+      },
+      "function": {
+        "id": "engineering",
+        "label": "Engineering"
+      },
+      "typeOfEmployment": {
+        "id": "permanent",
+        "label": "Full-time"
+      },
+      "experienceLevel": {
+        "id": "mid_senior_level",
+        "label": "Mid-Senior Level"
+      },
+      "customField": [
+        {
+          "fieldId": "58b7e4d6e4b0885c92cd98ee",
+          "fieldLabel": "Department",
+          "valueId": "5408914",
+          "valueLabel": "Support"
+        },
+        {
+          "fieldId": "68f89f37181dbd53b2d51cc1",
+          "fieldLabel": "SAP Cost Center",
+          "valueId": "7debbf90-ecd8-4ade-9e4f-881ecaa3116d",
+          "valueLabel": "545000303"
+        },
+        {
+          "fieldId": "COUNTRY",
+          "fieldLabel": "Country/Region",
+          "valueId": "pl",
+          "valueLabel": "Poland"
+        },
+        {
+          "fieldId": "58b7e4d6e4b0885c92cd98eb",
+          "fieldLabel": "Brands",
+          "valueId": "default",
+          "valueLabel": "SmartRecruiters Inc"
+        },
+        {
+          "fieldId": "617043f52193e5503b7715c3",
+          "fieldLabel": "SR Cost Center",
+          "valueId": "a9704399-c01e-4086-8b3d-85b9940900ca",
+          "valueLabel": "3.01 COGS Customer Support"
+        },
+        {
+          "fieldId": "627035b6330a2b4d25aa0882",
+          "fieldLabel": "Career Site Department Labels",
+          "valueId": "62e1619a-7cf3-4245-aea0-bff8123602d2",
+          "valueLabel": "Customer Success"
+        }
+      ],
+      "visibility": "PUBLIC",
+      "ref": "https://api.smartrecruiters.com/v1/companies/smartrecruiters/postings/744000158015889",
+      "language": {
+        "code": "en",
+        "label": "English",
+        "labelNative": "English (US)"
+      }
+    }
+  ],
+  "totalFound": 2
+}

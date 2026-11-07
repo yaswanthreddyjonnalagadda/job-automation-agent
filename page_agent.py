@@ -336,7 +336,8 @@ def parse_snapshot(snapshot: str) -> list[Control]:
     non_app_scopes: list[int] = []     # indents of job-alert / similar-jobs sections on a posting page (f280)
     sections: list[tuple[int, int, str]] = []  # heading indent, level and title
     signature_scopes: list[tuple[int, str]] = []
-    for raw in (snapshot or "").splitlines():
+    lines = (snapshot or "").splitlines()
+    for line_idx, raw in enumerate(lines):
         # A line whose text holds a colon comes wrapped in quotes:
         #   - 'heading "Apply: Network Engineer" [level=1] [ref=e2]'
         #   - 'combobox "Country: where you live" [ref=e20]': United States
@@ -527,7 +528,18 @@ def parse_snapshot(snapshot: str) -> list[Control]:
             # Whatever carries the box's own words is what a person clicks:
             # a label, the status line beside it, or the generic Oracle draws.
             beside = ref_m and role in ("generic", "status", "text", "paragraph", "label", "listitem")
-            if beside and _same_question((value or name).strip(), unclickable[1]):
+            words_match = False
+            if beside:
+                if _same_question((value or name).strip(), unclickable[1]):
+                    words_match = True
+                elif "[cursor=pointer]" in attrs:
+                    # Oracle JET and similar: clickable generic element (oj-checkboxset-checkbox)
+                    # has no name/value itself, followed by label words in child text/link nodes.
+                    label_words = [w.lower() for w in re.findall(r"[A-Za-z]{4,}", unclickable[1])]
+                    lookahead = "\n".join(lines[line_idx:line_idx + 6]).lower()
+                    if any(w in lookahead for w in label_words):
+                        words_match = True
+            if beside and words_match:
                 controls.append(Control(ref=ref_m.group(1), role=unclickable[0], name=unclickable[1],
                                         checked=unclickable[2], container=parent_group))
                 unclickable = None
@@ -955,6 +967,11 @@ _TEXT_MESSAGES = re.compile(r"\bsms\b|text\s+messag|\btexts?\b.{0,40}\b(?:phone|
 _AGREEMENT = re.compile(r"\bi\s+(?:have\s+read|acknowledge|agree|understand|accept|consent|certify|confirm|attest)\b|"
                         r"\bby\s+(?:checking|ticking|selecting)\s+this\s+box\b|\bterms\s+(?:and|&)\s+conditions\b|"
                         r"\bprivacy\s+(?:policy|notice|statement)\b|\backnowledg", re.IGNORECASE)
+_CANDIDATE_SIGNATURE_DECLARATION_RE = re.compile(
+    r"\b(?:equivalent to a (?:handwritten|physical) signature|under penalt\w+ of perjury|by typing my name|"
+    r"grounds for (?:dismissal|termination|disqualification)|terms that apply where i reside)\b",
+    re.IGNORECASE,
+)
 _TICK_WORDS = frozenset({"yes", "no", "true", "false", "checked", "unchecked", "1", "0", "y", "n"})
 # The owner's identity and contact facts: the profile says them, over any saved answer.
 _PROFILE_OWNS = frozenset({"FIRST_NAME", "LAST_NAME", "MIDDLE_NAME", "FULL_NAME", "EMAIL", "PHONE_MOBILE",
@@ -1027,6 +1044,10 @@ def required_questions(snapshot: str) -> set[str]:
     """The questions a form marks with a star, or flags with its own "Required" alert."""
     n = _QUESTION_TEXT_MAX
     marked = set(re.findall(r'- generic "([^"]{2,%d})" \[ref=[\w-]+\]: "\*"' % n, snapshot or ""))
+    # Multi-line/indented child asterisks (Oracle Cloud, etc.)
+    star = r"[*∗⁎✱-✳⩪＊﹡]+"
+    marked |= {m.strip() for m in re.findall(r'- generic "([^"\n]{2,%d})"[^\n]*:\n\s*- generic[^\n]*: "' % n + star + r'"',
+                                             snapshot or "")}
     marked |= set(inline_required_questions(snapshot))
     marked |= {m.strip() for m in re.findall(r'- generic \[ref=[\w-]+\]: ([^\n]{2,%d}?) ?\*$' % n,
                                              snapshot or "", re.MULTILINE)}
@@ -1428,10 +1449,81 @@ _CLICK_LABEL_JS = """e => {
 }"""
 
 
+_SET_CHECKBOX_JS = """(e, want) => {
+  let inp = (e.tagName === 'INPUT' && (e.type === 'checkbox' || e.type === 'radio')) ? e : null;
+  if (!inp && e.control) inp = e.control;
+  if (!inp && e.id) {
+    const lbl = document.querySelector(`label[for="${CSS.escape(e.id)}"]`);
+    if (lbl && lbl.control) inp = lbl.control;
+  }
+  if (!inp && e.closest) {
+    const parent = e.closest('label, .oj-choice-item, oj-checkboxset, [class*="checkbox"]');
+    if (parent) inp = parent.querySelector('input[type="checkbox"], input[type="radio"]');
+  }
+  if (!inp && e.parentElement) {
+    inp = e.parentElement.querySelector('input[type="checkbox"], input[type="radio"]');
+  }
+  if (!inp) {
+    const form = e.closest('form') || document;
+    const inputs = form.querySelectorAll('input[type="checkbox"]');
+    if (inputs.length === 1) inp = inputs[0];
+  }
+  if (inp) {
+    if (inp.checked !== want) {
+      inp.click();
+    }
+    if (inp.checked !== want) {
+      inp.checked = want;
+      inp.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    return inp.checked === want;
+  }
+  const label = (e.id && document.querySelector(`label[for="${CSS.escape(e.id)}"]`)) || e.closest('label')
+      || (e.nextElementSibling && e.nextElementSibling.tagName === 'LABEL' ? e.nextElementSibling : null);
+  if (label) {
+    label.click();
+  } else {
+    e.click();
+  }
+  return true;
+}"""
+
+
 def _is_checked(loc) -> Optional[bool]:
     """Whether a tick box shows as ticked -- a native box or one drawn with aria-checked."""
     try:
-        return bool(loc.evaluate("e => e.checked === true || e.getAttribute('aria-checked') === 'true'"))
+        return bool(loc.evaluate("""e => {
+            let inp = (e.tagName === 'INPUT' && (e.type === 'checkbox' || e.type === 'radio')) ? e : null;
+            if (!inp && e.control) inp = e.control;
+            if (!inp && e.id) {
+                const lbl = document.querySelector(`label[for="${CSS.escape(e.id)}"]`);
+                if (lbl && lbl.control) inp = lbl.control;
+            }
+            if (!inp && e.closest) {
+                const parent = e.closest('label, .oj-choice-item, oj-checkboxset, [class*="checkbox"]');
+                if (parent) inp = parent.querySelector('input[type="checkbox"], input[type="radio"]');
+            }
+            if (!inp && e.parentElement) {
+                inp = e.parentElement.querySelector('input[type="checkbox"], input[type="radio"]');
+            }
+            if (!inp) {
+                const form = e.closest('form') || document;
+                const inputs = form.querySelectorAll('input[type="checkbox"]');
+                if (inputs.length === 1) inp = inputs[0];
+            }
+            if (inp) {
+                return inp.checked === true || inp.getAttribute('aria-checked') === 'true';
+            }
+            if (e.checked === true || e.getAttribute('aria-checked') === 'true')
+                return true;
+            if (e.classList && (e.classList.contains('oj-selected') || e.classList.contains('is-checked')))
+                return true;
+            if (e.closest && (e.closest('.oj-selected') || e.closest('.is-checked') || e.closest('[aria-checked="true"]')))
+                return true;
+            return false;
+        }"""))
     except Exception:
         return None
 
@@ -1808,6 +1900,7 @@ class PageAgent:
         self._circuit_breaker = None
         self._posting_reloads = 0
         self._captcha_passes = 0
+        self._form_bounce_count = 0
 
     # -- the page --------------------------------------------------------------
     @staticmethod
@@ -1826,6 +1919,20 @@ class PageAgent:
 
     def locate(self, page, ref: str):
         return self.tab(page).locator(f"aria-ref={ref}")
+
+    def _record_key(self, page, control: Control) -> str:
+        """The key verified auto-submit's field comparison looks a control up by: its live DOM id or
+        name, the same "ref" browser_automation.read_back_fields() reports -- not the accessibility
+        snapshot ref this class answers controls by. Those are two different id spaces; a value recorded
+        under the wrong one is invisible to safety.approved_values() and verified auto-submit can never
+        confirm that field, however good the answer (f334)."""
+        try:
+            locator = self.locate(page, control.ref)
+            dom_id = locator.get_attribute("id") or locator.get_attribute("name") or ""
+        except Exception as _swallowed:
+            logger.debug("_record_key: %s", diagnostics.short_exc(_swallowed, 100))
+            dom_id = ""
+        return f"[id={json.dumps(dom_id)}]" if dom_id else f"aria:{control.question}"
 
     # How long a page's network is waited on to go quiet. A site that has not gone quiet in this long, on this
     # host, is not waited on for that long again (Workday keeps polling, so every settle of a run paid all of it:
@@ -3182,6 +3289,11 @@ class PageAgent:
         # text messages" is not an agreement to tick.
         if control.role in ("checkbox", "switch"):
             said = self._attestation_text(control)
+            if _CANDIDATE_SIGNATURE_DECLARATION_RE.search(said):
+                return "", ""
+            import acknowledgements
+            if acknowledgements.is_acknowledgement(said):
+                return "checked", "rule.acknowledgement"
             if _TEXT_MESSAGES.search(said):
                 prefers = str(getattr(self.profile, "preferred_contact_method", "") or "").strip().lower()
                 return ("checked" if prefers in ("sms", "text", "text message") else "unchecked"), \
@@ -3240,8 +3352,9 @@ class PageAgent:
             owned = concept_matcher.match_concept(question=question, container=control.container,
                                                   context=control.context, name=control.name)
             if owned in _PROFILE_OWNS:
+                is_sev = getattr(control, "multiple", False) or getattr(control, "several", False) or getattr(control, "kind", "") in ("checkbox_group", "multiselect")
                 val, src = concept_matcher.resolve_profile_value(concept=owned, profile=self.profile,
-                                                                 options=control.options, question=question)
+                                                                 options=control.options, question=question, several=is_sev)
                 if val:
                     return val, src
             return explicit, "profile.answer_library"
@@ -3267,11 +3380,13 @@ class PageAgent:
         if concept == "VISA_SPONSORSHIP" and _asks_for_detail_in_text(control, question):
             concept = None      # "please specify the type" wants the type, not Yes or No (f285)
         if concept:
+            is_sev = getattr(control, "multiple", False) or getattr(control, "several", False) or getattr(control, "kind", "") in ("checkbox_group", "multiselect")
             val, src = concept_matcher.resolve_profile_value(
                 concept=concept,
                 profile=self.profile,
                 options=control.options,
                 question=question,
+                several=is_sev,
             )
             if val:
                 return val, src
@@ -3911,6 +4026,15 @@ class PageAgent:
                 continue
             snapshot = self.read_when_loaded(page)
             fingerprint = re.sub(r"\[ref=[\w-]+\]|\[active\]", "", snapshot)
+            if not hasattr(self, "_fp_history"):
+                self._fp_history = []
+            self._fp_history.append(fingerprint)
+            if len(self._fp_history) >= 6 and (
+                self._fp_history[-1] == self._fp_history[-3] == self._fp_history[-5]
+                and self._fp_history[-2] == self._fp_history[-4] == self._fp_history[-6]
+                and self._fp_history[-1] != self._fp_history[-2]
+            ):
+                return Outcome("owner_needed", page, ["the application is alternating between pages in a loop"])
             if fingerprint == last_fingerprint:
                 tries += 1
                 if tries >= MAX_TRIES_PER_PAGE:
@@ -4056,11 +4180,14 @@ class PageAgent:
                                 continue
                             if ctrl.role in ("group", "radiogroup", "region"):
                                 continue            # the box around a question's choices holds its name, not an answer
-                            if safety.is_attestation(ctrl.question) or safety.is_legal_status_question(ctrl.question):
+                            if safety.is_attestation(ctrl.question):
                                 continue
-                            if concept_matcher.is_self_identification(
-                                    f"{ctrl.question} {ctrl.container} {ctrl.context}"):
-                                continue            # who the owner is: never the AI's to answer
+                            import legal_questions
+                            legal_cat = legal_questions.classify_legal_question(ctrl.question)
+                            if legal_cat is None and (safety.is_legal_status_question(ctrl.question)
+                                    or concept_matcher.is_self_identification(
+                                        f"{ctrl.question} {ctrl.container} {ctrl.context}")):
+                                continue
                             if self._optional_entry_box(ctrl, still_open):
                                 continue            # an optional box of a job or degree: left blank, not written up
                             if self._profile_says_none(self.known_answer(ctrl)[1]):
@@ -4100,7 +4227,7 @@ class PageAgent:
                                 val = self.claude.answer_single_question(
                                     question=self._question_for(ctrl),
                                     options=ctrl.options,
-                                    resume_text=resume_text,
+                                    resume_text="" if legal_cat else resume_text,
                                     profile=self.profile,
                                     job_title=getattr(self.job, "title", ""),
                                     company=getattr(self.job, "company", ""),
@@ -4108,14 +4235,22 @@ class PageAgent:
                                     box=box,
                                     **several,
                                 )
-                                if val:
+                                is_req = _open_is_required(ctrl.question, controls, required)
+                                ans_str = str(getattr(val, "answer", "") if hasattr(val, "answer")
+                                              else (val.get("answer", "") if isinstance(val, dict) else (val if isinstance(val, str) else ""))).strip()
+                                grounded = bool(getattr(val, "grounded", False) if hasattr(val, "grounded")
+                                                else (val.get("grounded", bool(ans_str)) if isinstance(val, dict) else bool(ans_str)))
+                                if grounded and ans_str:
                                     action = "fill" if ctrl.role in ("textbox", "searchbox", "spinbutton") else "choose"
-                                    ans = Answer(ctrl.ref, ctrl.question, action, val, "ai_single_question")
+                                    source = "ai_legal" if legal_cat else "ai"
+                                    if legal_cat and not legal_questions.get_category_facts(legal_cat, self.profile):
+                                        source = "declined"
+                                    ans = Answer(ctrl.ref, ctrl.question, action, ans_str, source)
                                     if self.do(page, ans, ctrl):
                                         newly_answered += 1
-                                        self.written[ctrl.question] = val
+                                        self.written[ctrl.question] = ans_str
                                         self._remember(ctrl, ans)
-                                        logger.info("AI_ANSWERED_QUESTION: %r = %r", ctrl.question[:50], val[:50])
+                                        logger.info("AI_ANSWERED_QUESTION (%s): %r = %r", source, ctrl.question[:50], ans_str[:50])
                                         if not ctrl.options and open_answers.is_open(ctrl.question,
                                                                                      box.get("multiline", False)):
                                             # Written in the owner's name: the hand-over says to read it.
@@ -4124,6 +4259,13 @@ class PageAgent:
                                                 written = self.assistant.written_answers = []
                                             if ctrl.question not in written:
                                                 written.append(ctrl.question)
+                                elif not is_req:
+                                    still_open = [q for q in still_open if not _same_question(ctrl.question, q)]
+                                    logger.info("OPTIONAL_LEFT_BLANK: %r left blank (AI not grounded)", ctrl.question[:50])
+                                else:
+                                    if ctrl.question not in self.required_left:
+                                        self.required_left.append(ctrl.question)
+                                    logger.info("REQUIRED_FIELD_UNANSWERED: %r cannot be grounded -- waiting for owner", ctrl.question[:50])
                             except Exception as exc:
                                 # Said out loud: at debug level a broken call (a missing function)
                                 # left every question blank with no word in the run's log.
@@ -4469,7 +4611,7 @@ class PageAgent:
                     answer.value = instead
                 given.append((answer, control))
                 self.written[control.question or answer.question] = answer.value
-                self.assistant.values.record(self.tab(page), f"aria:{control.question}", answer.value,
+                self.assistant.values.record(self.tab(page), self._record_key(page, control), answer.value,
                                              answer.source or "agent")
                 logger.info('FIELD_ACTION: application field handled')
                 self._remember(control, answer)
@@ -5711,13 +5853,19 @@ class PageAgent:
                     "e => ['checkbox', 'radio'].includes(e.type) || ['checkbox', 'switch', 'radio'].includes(e.getAttribute('role'))"):
                 box = tab.get_by_role(control.role, name=control.name, exact=True)
                 if box.count() != 1:
-                    return False
-                loc = box
+                    first_words = " ".join(control.name.split()[:3])
+                    if first_words:
+                        box = tab.get_by_role(control.role, name=re.compile(re.escape(first_words), re.I))
+                if box.count() != 1:
+                    box = tab.locator(f'input[type="{control.role}"]')
+                if box.count() == 1:
+                    loc = box
             # A tick box drawn as a hidden input behind a styled label (ADP's "Yes, I agree to sign electronically.",
             # SK AX USA, 30 September) refuses set_checked and a click on the input: its label is clicked, then the
             # input's own click() is dispatched. Done only when the box then shows the state asked for.
             want = answer.action == "check"
-            for attempt in (lambda: loc.set_checked(want, timeout=5_000),
+            for attempt in (lambda: loc.evaluate(_SET_CHECKBOX_JS, want),
+                            lambda: loc.set_checked(want, timeout=3_000),
                             lambda: loc.click(timeout=3_000),
                             lambda: loc.evaluate(_CLICK_LABEL_JS),
                             lambda: loc.evaluate("e => e.click()")):
@@ -6152,7 +6300,14 @@ class PageAgent:
                 logger.info("No choice matching %r for %r among %s", value, control.question[:50], control.options[:8])
                 return False
             try:
-                loc.select_option(label=control.options[index], timeout=5_000)
+                if (getattr(control, "multiple", False) or ";" in str(value)) and ";" in str(value):
+                    labels = [control.options[best(control.options, [p.strip()])] for p in str(value).split(";") if best(control.options, [p.strip()]) is not None]
+                    if labels:
+                        loc.select_option(label=labels, timeout=5_000)
+                    else:
+                        loc.select_option(label=control.options[index], timeout=5_000)
+                else:
+                    loc.select_option(label=control.options[index], timeout=5_000)
                 self._choice_methods[control.ref] = "native_select"
                 # Verify the option actually committed (Phase 0-B4) rather than trusting that
                 # select_option() not throwing means it did -- form_fields.choose()'s own
@@ -7296,11 +7451,17 @@ class PageAgent:
             href = ""
         if href and job_sources.job_board(href):
             return "stop", page, "the proposed navigation leads to a social site or job board"
-        if plan.next_kind == "open_application" and hasattr(self.assistant, "follow_application_entry"):
-            if self.assistant.follow_application_entry(tab, locator):
-                self.settle(page, 2_500)
-                self._guard_the_new_page(page)
-                return "moved", page, "followed the posting's application link"
+        if plan.next_kind == "open_application":
+            if getattr(self, "_seen_form", False):
+                bounces = getattr(self, "_form_bounce_count", 0) + 1
+                self._form_bounce_count = bounces
+                if bounces >= 2:
+                    return "stop", page, "the application form bounced back to the job posting"
+            if hasattr(self.assistant, "follow_application_entry"):
+                if self.assistant.follow_application_entry(tab, locator):
+                    self.settle(page, 2_500)
+                    self._guard_the_new_page(page)
+                    return "moved", page, "followed the posting's application link"
 
         # Task 4.1: Deploy the State Fingerprint Circuit Breaker
         if not hasattr(self, "_circuit_breaker") or self._circuit_breaker is None:
@@ -7573,6 +7734,13 @@ class PageAgent:
         """True only for a page that says the application was received in a
         confirmation's own words AND asks for nothing more. A page that still shows
         a password box or a form to fill in is not a confirmation, whatever it says."""
+        assistant = getattr(self, "assistant", None)
+        if assistant and hasattr(assistant, "_a_box_says_it_was_received"):
+            try:
+                if assistant._a_box_says_it_was_received(tab):
+                    return True
+            except Exception as _swallowed:
+                logger.debug("_site_confirms receipt box: %s", diagnostics.short_exc(_swallowed, 100))
         try:
             from sites import adapter_for
             if adapter_for(getattr(tab, "url", "")).submission_confirmed(tab):
@@ -7580,14 +7748,17 @@ class PageAgent:
         except Exception as _swallowed:
             logger.debug("_site_confirms: %s", diagnostics.short_exc(_swallowed, 100))
         try:
+            import confirmation_text
             frames = [f for f in tab.frames[1:]
                       if (f.url or "").startswith("http") and not safety.is_captcha_frame(f.url)]
             texts = [tab.inner_text("body", timeout=5_000)]
             texts += [f.locator("body").inner_text(timeout=3_000) for f in frames]
-            if not any(CONFIRMATION_TEXT.search(t or "") for t in texts):
+            if any(confirmation_text.STILL_TO_DO.search(t or "") for t in texts):
                 return False
-            if not any(self._asks_for_input(part) for part in [tab, *frames]):
-                return True
+            blocks = [p.strip() for t in texts for p in (t or "").splitlines() if p.strip()]
+            if any(confirmation_text.says_received(b) for b in blocks) or any(CONFIRMATION_TEXT.search(t or "") for t in texts):
+                if not any(self._asks_for_input(part) for part in [tab, *frames]):
+                    return True
             # A form on a confirmation page is an offer ("create a Candidate Home account to track your
             # progress"), not a step still to do -- when the page says in the past tense that the application
             # was received, and does not say there is something left to finish it.

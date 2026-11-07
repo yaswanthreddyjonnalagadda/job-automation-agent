@@ -1,0 +1,32 @@
+{
+  "jobPostings": [
+    {
+      "title": "Operations Manager",
+      "externalPath": "/job/US-WA-Spanaway-337/Operations-Manager_JR112550",
+      "locationsText": "US WA Spanaway 337",
+      "postedOn": "Posted Today",
+      "bulletFields": [
+        "JR112550"
+      ]
+    },
+    {
+      "title": "Tow Truck Driver 2 Car Rollback -135",
+      "externalPath": "/job/US-TX-CCRF-Trucks-502/Tow-Truck-Driver-2-Car-Rollback--135_JR111724",
+      "locationsText": "US TX CCRF Trucks 502",
+      "postedOn": "Posted Today",
+      "bulletFields": [
+        "JR111724"
+      ]
+    },
+    {
+      "title": "Tow Truck Driver 2 Car Rollback - 030",
+      "externalPath": "/job/US-TX-CCRF-Trucks-502/Tow-Truck-Driver-2-Car-Rollback---030_JR109669",
+      "locationsText": "US TX CCRF Trucks 502",
+      "postedOn": "Posted Today",
+      "bulletFields": [
+        "JR109669"
+      ]
+    }
+  ],
+  "total": 3
+}

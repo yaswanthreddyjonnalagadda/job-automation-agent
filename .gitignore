@@ -9,6 +9,8 @@ output/
 logs/
 local_debug/
 data/*.db
+data/*.db*
+data/browser-profile/
 data/_*.json
 data/_*.txt
 
@@ -60,3 +62,8 @@ data/*.bak
 
 # Local assistant state.
 .claude/
+
+.agents/
+frontend/
+pip-*
+tmp*

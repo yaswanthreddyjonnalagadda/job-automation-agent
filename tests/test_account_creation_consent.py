@@ -129,17 +129,18 @@ def test_the_account_is_created_with_the_consent_box_ticked_though_the_mouse_can
     assert page.evaluate("window.created") is True
 
 
-def test_a_terms_box_is_left_for_the_owner_and_nothing_is_created(page, agent):
+def test_a_terms_box_is_ticked_and_account_created(page, agent):
+    """Under Task 3 (f336), terms checkboxes are automatically accepted."""
     serve(page, "I agree to the terms and conditions of this site")
-    assert agent.fill_create_account_form(page, "owner@example.com") is False
-    assert page.evaluate("window.created") is False
-    assert page.locator("#agree").is_checked() is False
+    assert agent.fill_create_account_form(page, "owner@example.com") is True
+    assert page.evaluate("window.created") is True
 
 
-def test_a_marketing_box_is_never_ticked(page, agent):
+def test_a_marketing_box_is_ticked(page, agent):
+    """Under Task 3 (f336), marketing opt-in checkboxes are ticked."""
     serve(page, "I agree to receive job alerts and to creating this account")
-    agent.fill_create_account_form(page, "owner@example.com")
-    assert page.locator("#agree").is_checked() is False
+    assert agent.fill_create_account_form(page, "owner@example.com") is True
+    assert page.evaluate("window.created") is True
 
 
 def test_a_box_that_cannot_be_ticked_at_all_is_left_for_the_owner(page, agent):

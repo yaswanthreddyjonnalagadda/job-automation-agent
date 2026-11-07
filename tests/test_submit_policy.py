@@ -1,5 +1,5 @@
 """Review vs hybrid submit policy (f320)."""
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import submit_policy as policy
@@ -35,7 +35,7 @@ def test_hybrid_needs_eligibility_and_room_under_the_cap(monkeypatch):
     monkeypatch.setenv("SUBMIT_MODE", "hybrid")
     monkeypatch.setenv("AUTO_SUBMIT_DAILY_CAP", "2")
     assert policy.auto_submit_allowed(False, tracker_with())[0] is False
-    day = datetime.now().date().isoformat()
+    day = datetime.now(timezone.utc).date().isoformat()
     full = tracker_with(record("submitted", day), record("submitted", day + "T10:00:00"))
     ok, reason = policy.auto_submit_allowed(True, full)
     assert ok is False and "cap" in reason.lower()
@@ -56,5 +56,5 @@ def test_only_todays_confirmed_submits_count(monkeypatch):
     monkeypatch.delenv("AUTO_SUBMIT_DAILY_CAP", raising=False)
     assert policy.daily_cap() == 10
     tracker = tracker_with(record("submitted", "2026-01-01"), record("already_applied", "2099-01-01"),
-                           record("submitted", datetime.now().date().isoformat()))
+                           record("submitted", datetime.now(timezone.utc).date().isoformat()))
     assert policy.submitted_today(tracker) == 1

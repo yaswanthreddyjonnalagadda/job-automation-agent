@@ -72,6 +72,9 @@ import web_guard  # noqa: E402
 web_guard.install(app)
 ui_shell.install(app)
 
+from services.web_control_panel import control_panel_bp
+app.register_blueprint(control_panel_bp)
+
 
 # ----------------------------------------------------------------------
 # Links to files the agent wrote (logs, screenshots, page captures)
@@ -128,6 +131,7 @@ app.jinja_env.filters["aref"] = _artifact_ref
 app.jinja_env.globals.update(decision_view=detail_view.decision_view, answered_by=detail_view.answered_by,
                              history_rows=detail_view.group_events, worker_state=health_view.worker_state)
 app.jinja_env.globals.update(artifact_ok=lambda p: artifact_ok(p), needs_you_count=lambda: needs_you_count())
+app.jinja_env.globals["status_badge"] = ui_shell.status_badge
 
 
 from web_setup import setup_pages  # noqa: E402  (the pages import web_ui back, lazily)
@@ -399,8 +403,19 @@ def apply_discovered(job_id: int):
         if wants_json:
             return jsonify({"ok": False, "error": error})
         return redirect(url_for("index", error=error))
-    if job.get("url"):
-        threading.Thread(target=_run_apply, args=(job["url"].strip(),), daemon=True).start()
+    target_url = (job.get("url") or "").strip()
+    if target_url:
+        from services.poller.ats_resolver import is_aggregator_url, resolve_direct_career_url
+        if is_aggregator_url(target_url):
+            direct_url = resolve_direct_career_url(job.get("company_name", ""), job.get("job_title", ""), target_url)
+            if direct_url:
+                target_url = direct_url
+            else:
+                error = f"Aggregator posting on {target_url.split('/')[2]}. Open posting directly to apply on employer portal."
+                if wants_json:
+                    return jsonify({"ok": False, "error": error})
+                return redirect(url_for("index", error=error))
+        threading.Thread(target=_run_apply, args=(target_url,), daemon=True).start()
     if wants_json:
         return jsonify({"ok": True, "started": True, "job_id": job_id,
                         "title": job.get("job_title"), "company": job.get("company_name")})
@@ -828,7 +843,7 @@ def stop_application(app_id: int):
 
 
 # What the status menu accepts (after submitting: interviewing, rejected, offer, for the Progress page).
-VALID_STATUSES = {"prepared", "form_filled", "ready_to_submit", "needs_user_review", "submitted", "skipped",
+VALID_STATUSES = {"prepared", "form_filled", "ready_to_submit", "needs_user_review", "needs_answers", "submitted", "skipped",
                   "job_not_found", "already_applied", "interviewing", "rejected", "offer"}
 
 
@@ -1605,6 +1620,7 @@ def _feed_filter_context(args) -> dict:
     if within_key not in JOB_WINDOWS:
         within_key = DEFAULT_JOB_WINDOW
     company = (args.get("company", "") or "").strip()[:64] or None
+    title = (args.get("title", "") or "").strip()[:64] or None
     try:
         min_score = int(args.get("min_score", 60))
     except (TypeError, ValueError) as _swallowed:
@@ -1619,6 +1635,8 @@ def _feed_filter_context(args) -> dict:
         kept["country"] = country_code
     if company:
         kept["company"] = company
+    if title:
+        kept["title"] = title
     if min_score != 60:
         kept["min_score"] = str(min_score)
     if workplace != "all":
@@ -1626,25 +1644,53 @@ def _feed_filter_context(args) -> dict:
     from urllib.parse import urlencode
     return {
         "country_code": country_code, "within_key": within_key, "window": JOB_WINDOWS[within_key],
-        "company": company, "min_score": min_score, "workplace": workplace,
+        "company": company, "title": title, "min_score": min_score, "workplace": workplace,
         "remote_only": {"remote": True, "onsite": False}.get(workplace),
         "kept_params": ("&" + urlencode(kept)) if kept else "",
     }
 
 
+def _service_jobs(filters) -> list:
+    """Suggestion-card dicts from the new job-source service, with the same company/title/
+    remote filtering `job_discovery.get_discovered_jobs` does -- the service's `open_jobs`
+    view carries no country_code, so that one filter does not apply here."""
+    import math
+    import job_source_client
+    hours = filters["window"]["hours"]
+    days = max(1, math.ceil(hours / 24))
+    jobs = job_source_client.get_open_jobs(min_score=filters["min_score"], days=days, limit=40)
+
+    company_like = (filters.get("company") or "").lower()
+    title_like = (filters.get("title") or "").lower()
+    remote_only = filters.get("remote_only")
+    if company_like:
+        jobs = [j for j in jobs if company_like in (j.get("company_name") or "").lower()]
+    if title_like:
+        jobs = [j for j in jobs if title_like in (j.get("job_title") or "").lower()]
+    if remote_only is True:
+        jobs = [j for j in jobs if j.get("is_remote")]
+    elif remote_only is False:
+        jobs = [j for j in jobs if not j.get("is_remote")]
+    return jobs
+
+
 def _suggested_jobs(apps, filters) -> tuple:
     """The suggestion cards plus the filter row's country options; empty on failure, never raising."""
     try:
-        from job_discovery import JobDiscoveryEngine
-        discovery_engine = JobDiscoveryEngine()
-        # Posted inside the chosen window, newest first, and nothing the owner has already applied to, skipped or
-        # been turned down for: those never come back as suggestions.
-        jobs = discovered_view.prepare(
-            discovery_engine.get_discovered_jobs(min_score=filters["min_score"], limit=40, hide_applied=False,
-                                                 within_hours=filters["window"]["hours"],
-                                                 country_code=filters["country_code"],
-                                                 company_like=filters["company"],
-                                                 remote_only=filters["remote_only"]), apps, newest_first=True)
+        if os.getenv("JOB_SOURCE", "legacy") == "service":
+            jobs = discovered_view.prepare(_service_jobs(filters), apps, newest_first=True)
+        else:
+            from job_discovery import JobDiscoveryEngine
+            discovery_engine = JobDiscoveryEngine()
+            # Posted inside the chosen window, newest first, and nothing the owner has already applied to,
+            # skipped or been turned down for: those never come back as suggestions.
+            jobs = discovered_view.prepare(
+                discovery_engine.get_discovered_jobs(min_score=filters["min_score"], limit=40, hide_applied=False,
+                                                     within_hours=filters["window"]["hours"],
+                                                     country_code=filters["country_code"],
+                                                     company_like=filters["company"],
+                                                     remote_only=filters["remote_only"],
+                                                     title_like=filters.get("title")), apps, newest_first=True)
     except Exception as _swallowed:
         logger.debug("suggested jobs: %s", diagnostics.short_exc(_swallowed, 100))
         jobs = []
@@ -1663,6 +1709,8 @@ def _filter_summary(filters, country_options) -> tuple:
     bits = []
     if filters["country_code"]:
         bits.append(dict(country_options).get(filters["country_code"], filters["country_code"]))
+    if filters.get("title"):
+        bits.append('Role "%s"' % filters["title"])
     if filters["company"]:
         bits.append('"%s"' % filters["company"])
     if filters["min_score"] != 60:
@@ -1753,6 +1801,7 @@ def index():
         job_windows=JOB_WINDOWS, job_window=filters["window"], scanning=scan_running(),
         scan_started=_SCAN["started"], country_code=filters["country_code"] or "",
         country_options=country_options, company=filters["company"] or "",
+        title=filters.get("title") or "",
         min_score=filters["min_score"], workplace=filters["workplace"],
         within_key=filters["within_key"], kept_params=filters["kept_params"],
         has_filters=has_filters, filter_summary=filter_summary,
@@ -1956,7 +2005,7 @@ def progress_of(record, validation: dict) -> dict:
     """How far along an application is, for the dashboard's progress bar."""
     order = ["prepared", "form_filled", "ready_to_submit", "submitted"]
     step = order.index(record.status) + 1 if record.status in order else 0
-    blocked = record.status == "needs_user_review"
+    blocked = record.status in ("needs_user_review", "needs_answers")
     missing = list(validation.get("required_still_blank") or [])
     return {"step": step, "of": len(order), "blocked": blocked, "missing": missing,
             "errors": list(validation.get("errors_shown") or []),
@@ -2279,7 +2328,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
   </div>
   {% endif %}
 
-  {% set waiting = apps | selectattr('status', 'in', ['ready_to_submit', 'needs_user_review', 'BLOCKED_VALIDATION_LOOP']) | rejectattr('url', 'equalto', working_url or '-') | list %}
+  {% set waiting = apps | selectattr('status', 'in', ['ready_to_submit', 'needs_user_review', 'BLOCKED_VALIDATION_LOOP', 'needs_answers']) | rejectattr('url', 'equalto', working_url or '-') | list %}
 
   {% if signals or waiting %}
   <section class="dash-needs" aria-labelledby="needs-h">
@@ -2313,7 +2362,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
       <div class="item">
         <div style="min-width:0">
           <a href="/application/{{ a.id }}"><b>{{ a.title }}</b></a>
-          <small>{{ company_label(a.company) }} &middot; <span class="pill {{ status_class(a.status) }}">{{ status_label(a.status) }}</span></small>
+          <small>{{ company_label(a.company) }} &middot; {{ status_badge(a.status)|safe }}</small>
           {% if a.notes %}<small style="display:block;margin-top:2px">{{ a.notes[:180] }}</small>{% endif %}
         </div>
         <div class="dash-actions">
@@ -2384,7 +2433,7 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
             <a href="/application/{{ a.id }}">{{ a.title }}</a>
             <span class="loc">{{ a.location or 'Location not stated' }}</span>
           </td>
-          <td class="status"><span class="pill {{ status_class(a.status) }}" title="{{ a.notes[:200] if a.notes else status_label(a.status) }}">{{ status_label(a.status) }}</span></td>
+          <td class="status">{{ status_badge(a.status)|safe }}</td>
           <td class="when">{{ a.updated_at|local }}</td>
           <td class="actions"><div class="row-actions">
             {% if a.status != 'submitted' and status_group(a.status) != 'skipped' %}
@@ -2487,14 +2536,17 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
     </nav>
     <form method="get" action="/" id="job-filters" class="filter-row" aria-label="Filter suggested jobs">
       <input type="hidden" name="within" value="{{ within_key }}">
+      <label class="filter-field">Role / Title
+        <input type="search" name="title" value="{{ title }}" maxlength="64" aria-label="Job title contains" placeholder="Any title">
+      </label>
+      <label class="filter-field">Company
+        <input type="search" name="company" value="{{ company }}" maxlength="64" aria-label="Company name contains" placeholder="Any employer">
+      </label>
       <label class="filter-field">Country
         <select name="country" aria-label="Country">
           <option value="">All countries</option>
           {% for code, name in country_options %}<option value="{{ code }}"{% if code == country_code %} selected{% endif %}>{{ name }}</option>{% endfor %}
         </select>
-      </label>
-      <label class="filter-field">Company
-        <input type="search" name="company" value="{{ company }}" maxlength="64" aria-label="Company name contains" placeholder="Any employer">
       </label>
       <label class="filter-field">Minimum score
         <select name="min_score" aria-label="Minimum match score">
@@ -2543,47 +2595,75 @@ INDEX_HTML = ui_shell.page("Applications &middot; Job Agent", """
                 data-bulk-check aria-label="Select {{ dj.job_title }} at {{ dj.company_name }}"></label>
               <div class="ring {% if fit >= 85 %}high{% elif fit >= 70 %}mid{% endif %}" style="--p:{{ fit }}"
                    role="img" aria-label="{{ 'Resume match' if dj.resume_score is not none else 'Title match' }} {{ fit }} percent"><b>{{ fit }}%</b></div>
-              <div style="min-width:0">
+              <div style="min-width:0;flex:1">
                 <p class="job-company">{{ dj.company_name }}</p>
                 <h3 class="job-title"><a href="{{ dj.url }}" target="_blank" rel="noopener">{{ dj.job_title }}<span class="sr-only"> (opens the posting in a new tab)</span></a></h3>
               </div>
             </div>
+            {# meta row: location, remote tag, age, ATS — compact single line #}
             <div class="job-meta">
-              {% if dj.resume_score is not none %}<span class="tag" title="Your resume compared with the skills this posting asks for">Resume match {{ dj.resume_score }}%</span>{% endif %}
-              <span class="tag" title="Scored from the job title, location and seniority only">Title match {{ dj.match_score }}%</span>
-              {% if dj.place %}<span title="{{ dj.location }}">{{ dj.place }}{% if dj.more_places %} <small>+{{ dj.more_places }} more</small>{% endif %}</span>
-              {% elif not dj.is_remote %}<span>Location not stated</span>{% endif %}
+              {% if dj.place %}<span title="{{ dj.location }}">{{ dj.place }}{% if dj.more_places %}&thinsp;+{{ dj.more_places }} more{% endif %}</span>
+              {% elif not dj.is_remote %}<span class="muted">Location TBC</span>{% endif %}
               {% if dj.is_remote %}<span class="tag remote">Remote</span>{% endif %}
-              {% if dj.is_new %}<span class="tag new">New</span>{% endif %}
-              {% if dj.age %}<span class="muted"{% if dj.age_title %} title="{{ dj.age_title }}"{% endif %}>{{ dj.age }}</span>{% endif %}
-              {% if dj.other_openings %}<span class="muted" title="The same role is listed for other places; this is the best match">+{{ dj.other_openings }} other location{{ '' if dj.other_openings == 1 else 's' }}</span>{% endif %}
-              <span class="tag">{{ dj.ats_type | capitalize }}</span>
+              {% if dj.age %}<span class="muted" style="font-size:11.5px"{% if dj.age_title %} title="{{ dj.age_title }}"{% endif %}>{{ dj.age }}</span>{% endif %}
+              {% if dj.other_openings %}<span class="muted" style="font-size:11.5px">+{{ dj.other_openings }} loc</span>{% endif %}
+              {# Status indicator badge — minimalist dot-badge replaces verbose text #}
+              {% if dj.is_new %}<span class="tag new">New</span>
+              {% endif %}
+              <span class="tag" style="margin-left:auto">{{ dj.ats_type | capitalize }}</span>
             </div>
+            {# score row: resume match score badge + title match, condensed #}
+            <div class="job-meta">
+              {% if dj.resume_score is not none %}
+                <span class="status-badge matched" title="Your resume compared with the skills this posting asks for">Resume {{ dj.resume_score }}%</span>
+              {% endif %}
+              <span class="status-badge pending" title="Scored from the job title, location and seniority">Title {{ dj.match_score }}%</span>
+            </div>
+            {# skills matched / gaps — one compact line each, max 3 items #}
             {% if dj.resume_score is not none %}
-              {% if dj.resume_matched %}<div class="job-meta"><span class="muted">Your resume has:</span>{% for m in dj.resume_matched[:4] %}<span class="tag">{{ m }}</span>{% endfor %}</div>{% endif %}
-              {% if dj.resume_missing %}<div class="job-meta"><span class="muted">Posting also asks for:</span>{% for m in dj.resume_missing[:3] %}<span class="tag applied">{{ m }}</span>{% endfor %}</div>{% endif %}
+              {% if dj.resume_matched %}
+                <div class="job-meta skill-bar">
+                  <span class="muted" style="font-size:11.5px">Has:</span>
+                  {% for m in dj.resume_matched[:3] %}<span class="tag">{{ m }}</span>{% endfor %}
+                </div>
+              {% endif %}
+              {% if dj.resume_missing %}
+                <div class="job-meta skill-bar">
+                  <span class="muted" style="font-size:11.5px">Gap:</span>
+                  {% for m in dj.resume_missing[:2] %}<span class="tag skill-gap">{{ m }}</span>{% endfor %}
+                </div>
+              {% endif %}
             {% else %}
               <div class="job-meta"><span class="muted">No resume match: the posting's text was not read.</span></div>
-              {% if dj.matched_skills %}<div class="job-meta">{% for m in dj.matched_skills[:3] %}<span class="tag">{{ m }}</span>{% endfor %}</div>{% endif %}
+              {% if dj.matched_skills %}
+                <div class="job-meta skill-bar">
+                  {% for m in dj.matched_skills[:3] %}<span class="tag">{{ m }}</span>{% endfor %}
+                </div>
+              {% endif %}
             {% endif %}
+            {# readiness line or check button #}
             {% if dj.readiness %}
-              <div class="job-meta"><span class="muted">{{ dj.readiness }}</span></div>
+              <p class="muted" style="font-size:12px;margin:0">{{ dj.readiness }}</p>
             {% elif dj.ats_type == 'greenhouse' %}
-              <form method="post" action="/api/discovered/{{ dj.id }}/readiness" data-readiness>
+              <form method="post" action="/api/discovered/{{ dj.id }}/readiness" data-readiness style="margin:0">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="linklike">Check what it asks</button>
+                <button type="submit" class="linklike" style="font-size:12px">Check what it asks</button>
               </form>
             {% endif %}
+            {# foot: posting link (primary), start, dismiss — compact single line #}
             <div class="job-foot">
-              <a class="button ghost small" href="{{ dj.url }}" target="_blank" rel="noopener">Posting<span aria-hidden="true"> &nearr;</span><span class="sr-only"> (opens the posting in a new tab)</span></a>
-              <form method="post" action="/api/discovered/{{ dj.id }}/apply" data-apply-card>
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="small">Start application</button>
-              </form>
-              <form method="post" action="/api/discovered/{{ dj.id }}/dismiss" data-remove-card>
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="linklike" aria-label="Not interested in {{ dj.job_title }} at {{ dj.company_name }}">Not interested</button>
-              </form>
+              <a class="button ghost small" href="{{ dj.url }}" target="_blank" rel="noopener"
+                 style="padding:4px 10px;font-size:12.5px">Posting&thinsp;&nearr;<span class="sr-only"> (opens the posting in a new tab)</span></a>
+              <div style="display:flex;gap:6px;align-items:center">
+                <form method="post" action="/api/discovered/{{ dj.id }}/apply" data-apply-card style="margin:0">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <button type="submit" class="small" style="padding:4px 11px;font-size:12.5px">Apply</button>
+                </form>
+                <form method="post" action="/api/discovered/{{ dj.id }}/dismiss" data-remove-card style="margin:0">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <button type="submit" class="linklike" aria-label="Not interested in {{ dj.job_title }} at {{ dj.company_name }}" style="font-size:12px">Pass</button>
+                </form>
+              </div>
             </div>
           </article>
         {% endfor %}
@@ -2606,7 +2686,7 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
       <div class="head-facts">
         <strong style="color:var(--ink)">{{ company_label(a.company) }}</strong>
         {% if a.location %}<span>{{ a.location }}</span>{% endif %}
-        <span class="pill {{ status_class(a.status) }}">{{ status_label(a.status) }}</span>
+        {{ status_badge(a.status)|safe }}
         <a href="{{ a.url }}" target="_blank" rel="noopener">Open posting &rarr;</a>
         {% if run_log and artifact_ok(run_log) %}<a href="/log?path={{ run_log|aref|urlencode }}" target="_blank">View log</a>{% endif %}
       </div>
@@ -2619,6 +2699,7 @@ DETAIL_HTML = ui_shell.page("{{ a.company }} &middot; {{ a.title }}", """
       <label for="status-select" class="muted" style="font-size:13px">Change status</label>
       <select id="status-select" name="status" style="width:auto; padding:7px 10px">
         <option value="needs_user_review" {% if a.status == 'needs_user_review' %}selected{% endif %}>Needs you</option>
+        <option value="needs_answers" {% if a.status == 'needs_answers' %}selected{% endif %}>Needs answers</option>
         <option value="submitted" {% if a.status == 'submitted' %}selected{% endif %}>Submitted</option>
         <option value="ready_to_submit" {% if a.status == 'ready_to_submit' %}selected{% endif %}>Ready to submit</option>
         <option value="form_filled" {% if a.status == 'form_filled' %}selected{% endif %}>Filling in</option>

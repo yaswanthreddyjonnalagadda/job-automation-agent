@@ -53,7 +53,7 @@ def test_the_ai_is_told_to_pick_an_offered_preference_rather_than_decline():
 
     def fake_call(system, user_message, max_tokens):
         seen["system"], seen["user"] = system, user_message
-        return json.dumps({"answer": "See It Through"})
+        return json.dumps({"grounded": True, "answer": "See It Through"})
 
     client._call = fake_call
     options = ["Create Raving Fans", "Innovate Always", "See It Through", "Support One Another"]

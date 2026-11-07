@@ -24,6 +24,11 @@ from visible_desktop import InvisibleDesktopError, refuse_if_invisible, why_invi
 ROOT = Path(__file__).parents[1]
 
 
+def test_allow_background_desktop_env_var(monkeypatch):
+    monkeypatch.setenv('ALLOW_BACKGROUND_DESKTOP', '1')
+    assert why_invisible(('WinSta0', 'exebox-1')) is None
+
+
 def test_the_owners_own_desktop_is_allowed():
     assert why_invisible(("WinSta0", "Default")) is None
     assert why_invisible(("winsta0", "default")) is None          # Windows names are not case-sensitive

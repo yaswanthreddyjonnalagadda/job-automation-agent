@@ -1,5 +1,35 @@
 # What the assistant does, and what it never does
 
+### Pre-browser required question preview and early skip (5 November 2026)
+
+Before launching a browser session for Greenhouse, Lever, and Ashby jobs (`form_preview.py`, ported from freehire applyform logic, MIT license; `apply_flow.py`), the agent previews application questions via public ATS APIs or apply-page markup:
+- Questions are evaluated in "dry" mode through `answer_engine.py` rules, deterministic profile concepts (`concept_matcher.py`), legal questions and decline rules (`legal_questions.py`), acknowledgements (`acknowledgements.py`), and approved answer bank entries (`answer_bank.py`).
+- A required question counts as answerable when the AI may answer it (open text/choice questions that are not legal declarations and not non-resume file uploads).
+- Unanswerable required questions that trigger an early skip are strictly: (1) a legal question with no profile fact and no decline option, or (2) a required non-resume file upload (transcripts, certificates, etc.). When present, the browser is not launched, and the application is recorded with status `needs_answers` and the list of unanswerable questions.
+- If all required questions are answerable, or if the ATS does not support preview APIs or the preview request fails, the agent starts the browser normally and inspects all page fields.
+- The `needs_answers` status is accepted and displayed across the tracker (`job_tracker.py`, `db.py`), UI shell (`ui_shell.py`), and web dashboard (`web_ui.py`).
+
+
+### Clear receipt requirement for submission status (5 November 2026)
+
+An application is marked `submitted` only on clear, unambiguous receipt evidence (`confirmation_text.says_received` or `f307` modal receipt dialog). If a page displays conditional wording, future promises ("once you verify your email your application will be submitted"), advice to complete further steps, or has no receipt evidence, the application is not marked submitted:
+- In `page_agent.py` `_site_confirms`, detection verifies `confirmation_text.says_received` across page blocks, checks modal receipt dialogs (`_a_box_says_it_was_received`), and verifies that `confirmation_text.STILL_TO_DO` does not match. Pages with conditional or deferred verification steps are rejected as receipts.
+- In `apply_flow.py`, user-directed submissions (`submitted_by_user`) require actual receipt evidence from the page or email; without observed receipt evidence, the application status is recorded as `unconfirmed` instead of fabricating `"the page confirmed it"` and recording `submitted`.
+
+### Standing consent, acknowledgements, and marketing opt-ins (5 November 2026)
+
+Reversing the f276 rule in marketing_opt_in.py, the agent always accepts agreements, terms and conditions, privacy notices, data processing terms, truthful certifications ('I certify / attest the information is true'), background check consents, e-signatures, at-will declarations, arbitration clauses, communication preferences, and marketing opt-ins (reference/acknowledgements.json, acknowledgements.py). Matching checkboxes are ticked, agree buttons on consent dialogs are pressed, and pre-ticked boxes (including Walmart's 'new arrivals' email opt-in) stay ticked. Checkboxes that represent legal status or eligibility answers (such as US work authorization or visa sponsorship) remain classified as legal questions under Task 1 and are never auto-ticked blindly as acknowledgements. Job condition checkboxes (relocation, on-site, travel, salary, shift, overtime, weekends, hours) are recognized as questions, not acknowledgements (`reference/acknowledgements.json` `job_condition_exclusions`, `acknowledgements.py`), and are not auto-checked. Catch-all regex matching on bare consent words is removed: only explicit phrases in `reference/acknowledgements.json` match as acknowledgements.
+
+### Grounded AI answering contract and optional field handling (5 November 2026)
+
+Every AI answering call (`claude_integration.py` `answer_single_question`, `choose_option`, `answer_screening_questions`; `open_answers.py` `write()`, `review()`) enforces a strict grounded contract across Claude, Gemini, and OpenAI clients. Models are instructed to answer only from the provided candidate facts and to return a structured JSON response containing `{"grounded": true/false, "answer": "<answer>"}`. Any response where `grounded` is missing or false, where the returned answer is empty, or where an option is not in the offered choices is treated as ungrounded:
+- If the field is optional: it is removed from open questions and left blank rather than filling a guess or hallucination.
+- If the field is required: the agent does not fill a fabricated answer; the question remains open and is escalated to the owner via handoff (`required_left` / `owner_needed`).
+
+### Legal screening questions and profile isolation (5 November 2026)
+
+Legal, compliance, and EEO questions (work authorization, sponsorship, citizenship, residency, criminal history, EEO gender, EEO race, EEO veteran, EEO disability) are classified via reference/legal_questions.json. Any question remaining after deterministic profile and rule matching goes to the AI unless form-answer mode is profile. When an AI model is queried for a legal question, the prompt is strictly isolated to include ONLY the profile facts for that category (no candidate name, location, other categories, or resume text). If the profile holds no facts for that legal category, the agent automatically selects an offered option that means decline / prefer not to say when present (recorded with source declined); if no decline option exists, the question is left unanswered to wait for the owner handoff rather than guessing. Normal non-legal questions continue to reach the AI with candidate context. Answers explicitly record their source: profile, rule, ai, ai_legal, or declined.
+
 Every suggested job carries the country its posting names (a US state counts as the US); the Suggested jobs page can show one country's jobs (`?country=US`), and a posting that names no country is left out of a country-filtered list rather than guessed into it. Jobs found before this change gain their country automatically.
 
 Labelled dropdown buttons with a nested placeholder (such as "State Select...") are recognised as unanswered questions. The agent opens the button itself through its guarded click helper, selects an offered option and verifies it; a denied click stops that attempt. Phone Type is resolved only when the primary phone uniquely matches an explicitly typed mobile, home or work number in the profile. A number without that evidence does not establish its type.
@@ -133,8 +163,8 @@ seven minutes. While it runs the page says so and a second press starts nothing;
 
 Each card shows how long ago the job was posted (or found, when the site gives no date),
 a "New" badge for the last three days, the first place with "+N more",
-and "Remote" once. "Not interested" is a plain link. The posting link ("Posting") is the card's
-first action, and "Start application" starts without reloading the page: the card says
+and "Remote" once. "Not interested" (accessible label, visible as "Pass") is a plain link. The posting link ("Posting") is the card's
+first action, and "Apply" (previously "Start application") starts without reloading the page: the card says
 "Applying…" in place. Each card has a tick box; ticking shows a bar that queues ("Queue
 selected") or passes ("Pass selected") every ticked card at once. Queued cards leave the
 suggestions and wait under Applications, where Start picks them up; "Start next queued (N)"
@@ -353,6 +383,22 @@ shows the answer. Both files are plain JSON kept on your machine (not committed)
 so the whole set can be carried to the next project. Nothing personal is written
 into the reasons (emails and phone numbers are masked), and a file that is
 damaged or cannot be written never stops a run.
+
+### A wider view of your profile, and fewer answers lost to a bad reply (4 November 2026)
+
+Two of the places that answer one question at a time (not the full-page
+planner, which already saw your whole profile) used to describe you to the AI
+from a short, hand-picked list of about twenty fields. A fact that lived
+anywhere else on your profile -- a LinkedIn URL, a GPA, a certification, a
+salary expectation -- was invisible to it even though it was right there, so
+that question was left for you unnecessarily. Both now also get every other
+fact your profile holds.
+
+Separately, if the AI's reply came back garbled or in an unexpected shape
+(which happened occasionally and, for one of these call sites, could stop the
+page outright), it is now asked again automatically, the same way the
+full-page planner already does for a reply cut off mid-answer, before the
+question is ever left for you.
 
 ## Values the site filled in
 

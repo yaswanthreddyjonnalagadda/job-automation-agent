@@ -44,15 +44,17 @@ def home(monkeypatch):
 
 
 @pytest.mark.parametrize("query,expected", [
-    ("", {"company_like": None, "min_score": 60, "remote_only": None}),
-    ("?company=acme", {"company_like": "acme", "min_score": 60, "remote_only": None}),
-    ("?company=%20%20", {"company_like": None, "min_score": 60, "remote_only": None}),
-    ("?min_score=80", {"company_like": None, "min_score": 80, "remote_only": None}),
-    ("?min_score=banana", {"company_like": None, "min_score": 60, "remote_only": None}),
-    ("?min_score=140", {"company_like": None, "min_score": 100, "remote_only": None}),
-    ("?workplace=remote", {"company_like": None, "min_score": 60, "remote_only": True}),
-    ("?workplace=onsite", {"company_like": None, "min_score": 60, "remote_only": False}),
-    ("?workplace=moon", {"company_like": None, "min_score": 60, "remote_only": None}),
+    ("", {"company_like": None, "title_like": None, "min_score": 60, "remote_only": None}),
+    ("?company=acme", {"company_like": "acme", "title_like": None, "min_score": 60, "remote_only": None}),
+    ("?company=%20%20", {"company_like": None, "title_like": None, "min_score": 60, "remote_only": None}),
+    ("?title=Network", {"company_like": None, "title_like": "Network", "min_score": 60, "remote_only": None}),
+    ("?title=%20%20", {"company_like": None, "title_like": None, "min_score": 60, "remote_only": None}),
+    ("?min_score=80", {"company_like": None, "title_like": None, "min_score": 80, "remote_only": None}),
+    ("?min_score=banana", {"company_like": None, "title_like": None, "min_score": 60, "remote_only": None}),
+    ("?min_score=140", {"company_like": None, "title_like": None, "min_score": 100, "remote_only": None}),
+    ("?workplace=remote", {"company_like": None, "title_like": None, "min_score": 60, "remote_only": True}),
+    ("?workplace=onsite", {"company_like": None, "title_like": None, "min_score": 60, "remote_only": False}),
+    ("?workplace=moon", {"company_like": None, "title_like": None, "min_score": 60, "remote_only": None}),
 ])
 def test_the_page_passes_each_filter_to_the_query(home, query, expected):
     home(query)
@@ -84,8 +86,9 @@ def test_the_country_select_lists_countries_with_suggestions(home):
 
 
 def test_the_row_carries_company_score_and_workplace(home):
-    html = home("?company=acme&min_score=85&workplace=onsite")
+    html = home("?title=Network&company=acme&min_score=85&workplace=onsite")
     assert '<form method="get" action="/" id="job-filters"' in html
+    assert 'name="title"' in html and 'value="Network"' in html
     assert 'name="company"' in html and 'value="acme"' in html
     assert '<option value="85" selected>' in html
     assert '<option value="onsite" selected>' in html
@@ -134,6 +137,12 @@ def test_company_search_treats_wildcards_as_letters(engine):
     assert {j["company_name"] for j in engine.get_discovered_jobs(min_score=0, company_like="Ac_me")} == {"Ac_me"}
     assert {j["company_name"] for j in engine.get_discovered_jobs(min_score=0, company_like="acm")} == {"Acme"}
     assert engine.get_discovered_jobs(min_score=0, company_like="%") == []
+
+
+def test_title_search_treats_wildcards_as_letters(engine):
+    assert {j["job_title"] for j in engine.get_discovered_jobs(min_score=0, title_like="NetOps")} == {"NetOps Lead"}
+    assert {j["job_title"] for j in engine.get_discovered_jobs(min_score=0, title_like="Network")} == {"Network Engineer"}
+    assert engine.get_discovered_jobs(min_score=0, title_like="%") == []
 
 
 def test_countries_lists_only_countries_with_live_suggestions(engine):

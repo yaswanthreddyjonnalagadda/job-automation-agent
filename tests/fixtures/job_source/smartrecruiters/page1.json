@@ -1,0 +1,47 @@
+{
+  "content": [
+    {
+      "id": "744000001000001",
+      "name": "Senior Network Engineer",
+      "releasedDate": "2026-10-28T10:00:00.000Z",
+      "location": {
+        "city": "San Francisco",
+        "region": "California",
+        "country": "us",
+        "remote": false,
+        "hybrid": false
+      },
+      "department": {
+        "id": "dept1",
+        "label": "Engineering"
+      },
+      "typeOfEmployment": {
+        "id": "permanent",
+        "label": "Full-time"
+      }
+    },
+    {
+      "id": "744000001000002",
+      "name": "Staff Software Engineer",
+      "releasedDate": "2026-10-27T09:00:00.000Z",
+      "location": {
+        "city": "New York",
+        "region": "New York",
+        "country": "us",
+        "remote": false,
+        "hybrid": true
+      },
+      "department": {
+        "id": "dept1",
+        "label": "Engineering"
+      },
+      "typeOfEmployment": {
+        "id": "permanent",
+        "label": "Full-time"
+      }
+    }
+  ],
+  "totalFound": 4,
+  "offset": 0,
+  "limit": 2
+}

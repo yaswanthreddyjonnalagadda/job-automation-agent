@@ -57,6 +57,8 @@ def where_this_runs() -> Optional[tuple[str, str]]:
 def why_invisible(where: Optional[tuple[str, str]] = ...) -> Optional[str]:
     """None when the owner can see this process's windows, else why not, in words
     for the owner. A desktop whose name cannot be read is refused too."""
+    if os.getenv("ALLOW_BACKGROUND_DESKTOP", "").strip().lower() in ("1", "true", "yes"):
+        return None
     if where is ...:
         where = where_this_runs()
     if where is None:

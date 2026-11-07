@@ -6,6 +6,7 @@ design live in one place.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import logging
@@ -15,6 +16,7 @@ from typing import Any, Optional
 
 import anthropic
 
+import diagnostics
 import field_timing
 from config import AppConfig, UserProfile
 from jd_analyzer import JobDescription
@@ -93,6 +95,26 @@ class ClaudeIntegrationError(RuntimeError):
     pass
 
 
+class AnswerResult(dict):
+    """Structured answer reply with grounded (bool) and answer (str)."""
+
+    def __init__(self, grounded: bool = False, answer: str = ""):
+        super().__init__(grounded=grounded, answer=answer)
+        self.grounded = grounded
+        self.answer = answer
+
+    def __bool__(self):
+        return bool(self.grounded and self.answer)
+
+    def __str__(self):
+        return self.answer
+
+    def __eq__(self, other):
+        if isinstance(other, str):
+            return self.answer == other
+        return super().__eq__(other)
+
+
 # A model's way of saying it does not know, which must never be typed into a form as the answer.
 _NON_ANSWER = re.compile(
     r"(?:n/?a|none|null|unknown|not applicable|no answer|-+|"
@@ -111,6 +133,60 @@ def is_non_answer(text: str) -> bool:
 
 # How much of a job posting goes with each question and page: enough for the requirements, not every benefit.
 JOB_POSTING_CHARS = 5_000
+
+# Fields already named in one of the hand-picked "CANDIDATE PROFILE" / "FACTS" summaries in
+# answer_screening_questions and answer_single_question below. UserProfile has grown past 70 fields since
+# those summaries were written by hand; a fact that lives only on a field not in this set was invisible to
+# the AI even though it was right there on the profile (f334's sibling gap -- plan_page already sees the
+# whole profile via page_agent.facts()'s asdict(), but these two narrower per-question paths didn't).
+_SUMMARIZED_PROFILE_FIELDS = frozenset({
+    "full_name", "email", "phone", "phone_country_code", "current_location", "years_experience",
+    "requires_visa_sponsorship", "work_authorization", "open_to_relocation", "willing_to_travel",
+    "work_arrangements", "preferred_contact_method", "preferred_language", "how_did_you_hear",
+    "security_clearance", "country_of_citizenship", "veteran_status", "disability_status", "ethnicity",
+    "gender", "availability_to_start", "employment_statuses",
+    "target_titles", "current_position_title", "current_employer",
+})
+
+# Structured fields (nested tuples, dicts) a flat "Label: value" line would render unreadably; each is
+# already formatted for its own purpose elsewhere (e.g. _open_answer_facts formats education).
+_STRUCTURED_PROFILE_FIELDS = frozenset({
+    "education", "education_dates", "education_details", "reasons_for_leaving",
+    "employer_contact_permissions", "answer_alternatives",
+})
+
+
+def _other_profile_facts(profile: Any) -> str:
+    """Every UserProfile field with a value that isn't already named in one of the hand-picked summaries
+    above, as 'Label: value' lines -- meant to be appended after those summaries, never replacing their
+    wording (a reworded line is a prompt change replay_guard would have to re-verify; an added line, for a
+    fact that was simply missing before, can only ever newly answer a question that used to be left for
+    the owner, never change one that already worked)."""
+    if not dataclasses.is_dataclass(profile):
+        return ""
+    lines = []
+    for f in dataclasses.fields(profile):
+        if f.name in _SUMMARIZED_PROFILE_FIELDS or f.name in _STRUCTURED_PROFILE_FIELDS:
+            continue
+        value = getattr(profile, f.name, None)
+        label = f.name.replace("_", " ").capitalize()
+        if isinstance(value, bool):
+            lines.append(f"{label}: {'Yes' if value else 'No'}")
+        elif isinstance(value, (list, tuple)):
+            items = [str(v).strip() for v in value if str(v).strip()]
+            if items:
+                lines.append(f"{label}: {', '.join(items)}")
+        elif isinstance(value, dict):
+            continue
+        elif value not in (None, "", 0):
+            lines.append(f"{label}: {value}")
+    return "\n".join(lines)
+
+# _call_json's own retry budget for a reply that didn't parse or had the wrong shape -- a fixed number,
+# not self._config.claude_max_retries: several tests build a bare ClaudeClient (object.__new__) with no
+# _config at all and replace _call directly, and this retry is a different failure class (a shape
+# problem, not a transport one) that does not need to share the owner's transport-retry setting.
+JSON_SHAPE_RETRIES = 3
 
 
 class ClaudeClient:
@@ -222,6 +298,32 @@ class ClaudeClient:
         except json.JSONDecodeError as exc:
             raise ClaudeIntegrationError(f"Expected JSON from Claude, got: {text[:300]}") from exc
 
+    def _call_json(self, *, system: str, user_message: str, max_tokens: int, expect: type = dict) -> Any:
+        """Like _call, but the reply must parse as JSON and be an `expect` (a dict, by default) -- and
+        retries, consuming one of the same attempts, when it isn't. plan_page already asks again on a
+        reply cut off mid-JSON; this generalizes that same recovery to every other JSON-returning call,
+        which previously had none: a bad parse, or a wrong top-level shape (e.g. a list where a dict was
+        expected -- f334, AttributeError on .items() with zero retries), used to fail the question outright."""
+        last_error: Exception | None = None
+        hint = ""
+        max_retries = JSON_SHAPE_RETRIES
+        for attempt in range(1, max_retries + 1):
+            raw = self._call(system=system, user_message=user_message + hint, max_tokens=max_tokens)
+            try:
+                data = self._extract_json(raw)
+                if not isinstance(data, expect):
+                    raise ClaudeIntegrationError(
+                        f"expected a JSON {expect.__name__}, got {type(data).__name__}: {raw[:200]}")
+                return data
+            except ClaudeIntegrationError as exc:
+                last_error = exc
+                if attempt < max_retries:
+                    logger.warning("%s JSON reply did not match what was expected (attempt %d/%d): %s -- "
+                                    "asking again", self.PROVIDER, attempt, max_retries, exc)
+                hint = ("\n\nYour last reply could not be read as the expected JSON. Answer again with "
+                        "ONLY JSON, no markdown fences, no commentary.")
+        raise ClaudeIntegrationError(f"Could not get a valid JSON reply after {max_retries} attempts: {last_error}")
+
     # ------------------------------------------------------------------
     # Resume structuring
     # ------------------------------------------------------------------
@@ -326,11 +428,11 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
             "below. If a question cannot be answered truthfully from that material "
             "(e.g. it asks about something not in the resume, or requires a "
             "subjective legal declaration like work authorization you're not certain "
-            "of), OMIT it from your JSON response entirely rather than guessing or "
+            "of), return grounded=false for it rather than guessing or "
             "fabricating -- a human will fill those in by hand. For 'select' or "
             "'radio' questions, your answer text must exactly match one of the given "
-            "options. Respond with ONLY a JSON object mapping each question_text you "
-            "can answer to its answer string, no markdown fences, no commentary."
+            "options. Respond with ONLY a JSON object mapping each question_text to an "
+            'object: {"grounded": true|false, "answer": "<exact option or concise answer>"}'
         )
         # Build a comprehensive profile summary with ALL available fields
         # so Claude can answer simple dropdowns like "country code", "how did you hear?"
@@ -358,25 +460,35 @@ Gender: {profile.gender}
 Availability to start: {profile.availability_to_start}
 Employment statuses desired: {", ".join(profile.employment_statuses) if profile.employment_statuses else "Not specified"}
 """
+        other_facts = _other_profile_facts(profile)
         user_message = (
             f"{profile_summary}\n"
-            f"CANDIDATE RESUME:\n{resume.raw_text}\n\n"
+            + (f"OTHER PROFILE FACTS:\n{other_facts}\n\n" if other_facts else "")
+            + f"CANDIDATE RESUME:\n{resume.raw_text}\n\n"
             f"JOB: {job.title} at {job.company}\n\n"
             f"SCREENING QUESTIONS (JSON):\n{json.dumps(questions, indent=2)}"
         )
-        raw = self._call(system=system, user_message=user_message, max_tokens=2000)
-        answers = self._extract_json(raw)
+        answers = self._call_json(system=system, user_message=user_message, max_tokens=2000)
         # A select/radio answer that isn't one of the offered options would be
         # a guess; drop it and let the user answer instead.
         by_text = {q.get("question_text", ""): q for q in questions}
-        checked: dict[str, str] = {}
-        for question_text, answer in (answers or {}).items():
+        checked: dict[str, AnswerResult] = {}
+        for question_text, item in (answers or {}).items():
+            if isinstance(item, dict):
+                grounded = bool(item.get("grounded", False))
+                ans = str(item.get("answer") or "").strip()
+            else:
+                ans = str(item or "").strip()
+                grounded = bool(ans)
             options = (by_text.get(question_text, {}) or {}).get("options") or []
-            if options and answer not in options:
-                logger.warning("Dropping %r -- %r is not one of the offered options",
-                               question_text[:60], str(answer)[:40])
-                continue
-            checked[question_text] = answer
+            if options and ans:
+                if ans not in options:
+                    match = next((o for o in options if o.strip().lower() == ans.lower()), "")
+                    ans = match
+            if not ans:
+                grounded = False
+            if grounded:
+                checked[question_text] = AnswerResult(grounded=True, answer=ans)
         return checked
 
     def choose_option(
@@ -400,20 +512,13 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
         system = (
             "You map a value onto a dropdown option on a real job application. "
             "Return the option that means the SAME THING as the intended value, "
-            "differing only in wording or granularity (e.g. 'Masters of Science' "
-            "and 'Masters' are the same qualification level; 'Company Career Site' "
-            "and 'Corporate Website' are the same source).\n\n"
-            "Set equivalent=false, and choice to the empty string, whenever the "
-            "nearest option would CHANGE the claim rather than reword it. That "
-            "includes: a different factual or legal status (veteran status, "
-            "criminal history, work authorization, disability); a yes/no answer "
-            "where the options instead demand a degree or amount of commitment; "
-            "or anything that would overstate a qualification. A wrong answer here "
-            "becomes a false statement on someone's real job application, so "
-            "refusing is always better than approximating.\n\n"
+            "differing only in wording or granularity. Answer only from the options given; "
+            "if they do not support an answer, return grounded=false.\n\n"
+            "Set equivalent=false and grounded=false, and answer to empty string, whenever the "
+            "nearest option would CHANGE the claim rather than reword it.\n\n"
             "Respond with ONLY a JSON object: "
-            '{"choice": "<exact option text, copied verbatim, or empty string>", '
-            '"equivalent": true|false, "reason": "<one short sentence>"}'
+            '{"grounded": true|false, "answer": "<exact option text, copied verbatim, or empty string>", '
+            '"reason": "<one short sentence>"}'
         )
         user_message = (
             f"QUESTION ON THE FORM: {question or '(not captured)'}\n"
@@ -421,17 +526,22 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
             f"AVAILABLE OPTIONS (choose verbatim from this list):\n"
             f"{json.dumps(options, indent=2)}"
         )
-        raw = self._call(system=system, user_message=user_message, max_tokens=500)
-        result = self._extract_json(raw)
+        result = self._call_json(system=system, user_message=user_message, max_tokens=500)
 
-        choice = (result.get("choice") or "").strip()
+        grounded = bool(result.get("grounded", False))
+        choice = (result.get("answer") or result.get("choice") or "").strip()
         # Never trust a returned string that isn't actually on the page.
         if choice and choice not in options:
             match = next((o for o in options if o.strip().lower() == choice.lower()), "")
             choice = match
+        if not choice:
+            grounded = False
+        equivalent = bool(grounded and choice)
         return {
-            "choice": choice,
-            "equivalent": bool(result.get("equivalent")) and bool(choice),
+            "grounded": equivalent,
+            "answer": choice if equivalent else "",
+            "choice": choice if equivalent else "",
+            "equivalent": equivalent,
             "reason": (result.get("reason") or "").strip(),
         }
 
@@ -459,22 +569,65 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
         `box` is what open_answers.read_box saw on the page.
         """
         if not question:
-            return ""
+            return AnswerResult(grounded=False, answer="")
         import safety
-        # is_attestation covers signatures too. (This called safety.is_signature_prompt, which does not
-        # exist: every call raised AttributeError, the caller logged it at debug level, and no question
-        # was ever answered this way.)
-        if safety.is_attestation(question) or safety.is_legal_status_question(question):
-            return ""
+        import legal_questions
+        if safety.is_attestation(question):
+            return AnswerResult(grounded=False, answer="")
+        legal_category = legal_questions.classify_legal_question(question)
+        if legal_category is None and safety.is_legal_status_question(question):
+            return AnswerResult(grounded=False, answer="")
+        if legal_category:
+            category_facts = legal_questions.get_category_facts(legal_category, profile)
+            if not category_facts:
+                decline_opt = legal_questions.find_decline_option(list(options or []))
+                return AnswerResult(grounded=bool(decline_opt), answer=decline_opt or "")
+            facts_lines = [f"{k}: {v}" for k, v in category_facts.items()]
+            system = (
+                "You answer legal and compliance screening questions on behalf of a real candidate. "
+                "Answer ONLY using the candidate facts provided below. If the facts do not support an answer, return grounded=false. "
+                "If options are provided, your answer must be an exact string from the options list. "
+                "Respond with ONLY JSON: {\"grounded\": true|false, \"answer\": \"<your concise answer>\"}"
+            )
+            user_message = (
+                f"FACTS:\n{chr(10).join(facts_lines)}\n\n"
+                f"QUESTION: {question}\n"
+            )
+            if options and several:
+                user_message += (f"\nAVAILABLE OPTIONS (choose EVERY one that applies; answer with a JSON list of them):\n"
+                                 f"{json.dumps(options, indent=2)}")
+            elif options:
+                user_message += f"\nAVAILABLE OPTIONS (choose exactly one):\n{json.dumps(options, indent=2)}"
+            try:
+                data = self._call_json(system=system, user_message=user_message, max_tokens=600)
+                grounded = bool(data.get("grounded", False))
+                if several and options:
+                    import option_match
+                    ans = "; ".join(option_match.several_offered(list(options), data.get("answer")))
+                else:
+                    ans = str(data.get("answer") or "").strip()
+                if options and ans:
+                    import option_match
+                    idx = option_match.best_option(list(options), ans)
+                    ans = options[idx] if idx is not None else ""
+                if not ans:
+                    grounded = False
+                return AnswerResult(grounded=grounded, answer=ans if grounded else "")
+            except Exception as exc:
+                logger.warning("Could not answer legal question %r: %s", question[:60], exc)
+                return AnswerResult(grounded=False, answer="")
+
         box = box or {}
         if not options:
             import open_answers
             if open_answers.is_open(question, box.get("multiline", False)):
-                return self._open_answer(question, resume_text, profile, job_title, company, job_text, box)
+                ans_text = self._open_answer(question, resume_text, profile, job_title, company, job_text, box)
+                return AnswerResult(grounded=bool(ans_text), answer=ans_text)
 
         system = (
             "You answer application questions for a real candidate. "
             "Answer ONLY using truthful facts from their profile and resume. "
+            "If the facts given do not support an answer, return grounded=false. "
             "The JOB POSTING says what the employer is asking about -- use it to understand the question and the "
             "role, never as a fact about the candidate: a skill, tool or years of experience counts only if the "
             "resume or profile shows it. "
@@ -489,12 +642,12 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
             "pronunciation, a nickname), answer No. "
             "If it is a text/essay question (e.g. 'Why are you interested in this role?'), provide a "
             "concise, professional 1-3 sentence response grounded in their background. "
-            "Respond with ONLY JSON: {\"answer\": \"<your concise answer>\"}"
+            "Respond with ONLY JSON: {\"grounded\": true|false, \"answer\": \"<your concise answer>\"}"
         )
         if several and options:
             system += (
                 " THIS QUESTION ALLOWS SEVERAL ANSWERS (a group of tick boxes): answer with every option the resume "
-                "or profile genuinely shows, as a JSON list of exact option strings -- {\"answer\": [\"<option>\", ...]}"
+                "or profile genuinely shows, as a JSON list of exact option strings -- {\"grounded\": true|false, \"answer\": [\"<option>\", ...]}"
                 " -- and never an option they do not support. A 'none of these' option is only for when no other "
                 "option applies, and is never combined with another."
             )
@@ -513,10 +666,12 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
             if profile.work_authorization:
                 facts_lines.append(f"Work Auth: {profile.work_authorization}")
 
+        other_facts = _other_profile_facts(profile) if profile else ""
         snippet = (resume_text or "").strip()[:2500]
         user_message = (
             f"FACTS:\n{chr(10).join(facts_lines)}\n\n"
-            f"RESUME EXCERPT:\n{snippet}\n\n"
+            + (f"OTHER PROFILE FACTS:\n{other_facts}\n\n" if other_facts else "")
+            + f"RESUME EXCERPT:\n{snippet}\n\n"
             f"TARGET JOB: {job_title or 'Engineer'} at {company or 'Company'}\n\n"
             + (f"JOB POSTING:\n{job_text.strip()[:JOB_POSTING_CHARS]}\n\n" if (job_text or "").strip() else "")
             + f"QUESTION: {question}\n"
@@ -528,31 +683,43 @@ Employment statuses desired: {", ".join(profile.employment_statuses) if profile.
             user_message += f"\nAVAILABLE OPTIONS (choose exactly one):\n{json.dumps(options, indent=2)}"
 
         try:
-            raw = self._call(system=system, user_message=user_message, max_tokens=600)
-            data = self._extract_json(raw)
+            data = self._call_json(system=system, user_message=user_message, max_tokens=600)
+            if isinstance(data, dict):
+                grounded = bool(data.get("grounded", False))
+            else:
+                grounded = bool(data)
             if several and options:
                 import option_match
-                # Only boxes the page has, joined as the box-ticking step reads them; nothing real means no answer.
-                return "; ".join(option_match.several_offered(list(options), data.get("answer")))
-            ans = str(data.get("answer") or "").strip()
+                raw_ans = data.get("answer") if isinstance(data, dict) else data
+                ans = "; ".join(option_match.several_offered(list(options), raw_ans))
+                if not ans:
+                    grounded = False
+                return AnswerResult(grounded=grounded, answer=ans if grounded else "")
+            ans = str((data.get("answer") if isinstance(data, dict) else data) or "").strip()
             if is_non_answer(ans):
-                # "Not provided in the resume" is the model saying it does not know; typed into Steelcase's
-                # Work Phone box (29 September) it would have gone to the employer as the owner's phone number.
                 logger.info("AI had no answer for %r (%r) -- left for the owner", question[:50], ans[:60])
-                return ""
+                grounded = False
+                ans = ""
             if options and ans:
                 import concept_matcher
                 import option_match
                 needs = getattr(profile, "requires_visa_sponsorship", None)
-                return option_match.resolve_offered(
+                resolved = option_match.resolve_offered(
                     list(options), ans,
                     needs_sponsorship=None if needs is None else concept_matcher._is_yes(needs),
                     availability=concept_matcher.match_concept(question=question) == "NOTICE_PERIOD",
                 )
-            return ans
+                if not resolved:
+                    grounded = False
+                    ans = ""
+                else:
+                    ans = resolved
+            if not ans:
+                grounded = False
+            return AnswerResult(grounded=grounded, answer=ans if grounded else "")
         except Exception as exc:
-            logger.info("Could not answer single question %r: %s", question[:50], exc)
-            return ""
+            logger.info("Could not answer single question %r: %s", question[:60], exc)
+            return AnswerResult(grounded=False, answer="")
 
     @staticmethod
     def _open_answer_facts(profile) -> str:
@@ -785,12 +952,21 @@ Rules -- follow every one:
                 self._record_usage(response)
                 raw = "".join(block.text for block in response.content if block.type == "text")
                 result = self._extract_json(raw)
+                if not isinstance(result, dict):
+                    raise ClaudeIntegrationError(
+                        f"expected a JSON dict, got {type(result).__name__}: {raw[:200]}")
                 return {"page": str(result.get("page") or "other"),
                         "click": str(result.get("click") or "").strip(),
                         "why": str(result.get("why") or "").strip()}
             except (self.RATE_LIMITED, self.CONNECTION_ERROR) as exc:
                 last_error = exc
                 time.sleep(2 ** attempt)
+            except ClaudeIntegrationError as exc:
+                # A reply that didn't parse, or a wrong shape (f334): worth asking again, same as
+                # plan_page already does for a reply cut off mid-JSON -- not a reason to give up at once.
+                last_error = exc
+                logger.debug("read_page reply did not match what was expected (attempt %d/%d): %s",
+                              attempt, self._config.claude_max_retries, diagnostics.short_exc(exc, 150))
             except Exception as exc:
                 last_error = exc
                 break

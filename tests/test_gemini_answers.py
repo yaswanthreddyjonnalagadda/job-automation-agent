@@ -140,9 +140,9 @@ def test_a_screenshot_goes_as_an_image_beside_the_goal(google, client):
 
 
 def test_the_checks_on_a_dropdown_answer_are_the_same_with_gemini(google, client):
-    google.default = ok_reply(json.dumps({"choice": "Masters", "equivalent": True, "reason": "same level"}))
+    google.default = ok_reply(json.dumps({"grounded": True, "choice": "Masters", "answer": "Masters", "equivalent": True, "reason": "same level"}))
     assert client.choose_option("Masters of Science", ["Bachelors", "Masters"], "Degree")["choice"] == "Masters"
-    google.default = ok_reply(json.dumps({"choice": "Doctorate", "equivalent": True, "reason": "x"}))
+    google.default = ok_reply(json.dumps({"grounded": True, "choice": "Doctorate", "answer": "Doctorate", "equivalent": True, "reason": "x"}))
     refused = client.choose_option("Masters of Science", ["Bachelors", "Masters"], "Highest degree")
     assert refused["choice"] == "" and refused["equivalent"] is False        # not on the page: never trusted
 
@@ -156,6 +156,56 @@ def test_a_screening_answer_that_is_not_an_offered_choice_is_dropped_with_gemini
                                             SimpleNamespace(title="Engineer", company="Praxis"),
                                             config.UserProfile(), questions)
     assert got == {"How did you hear about this job?": "LinkedIn"}
+
+
+def test_a_choose_option_reply_that_is_not_json_is_asked_again(google, client):
+    """Unlike plan_page (which already asks again on a reply it can't read), choose_option used to have no
+    retry at all for a malformed reply: one bad parse failed the question outright."""
+    google.script.append(ok_reply("not json at all"))
+    google.script.append(ok_reply(json.dumps({"grounded": True, "choice": "Masters", "answer": "Masters", "equivalent": True, "reason": "same level"})))
+    result = client.choose_option("Masters of Science", ["Bachelors", "Masters"], "Degree")
+    assert result["choice"] == "Masters"
+    assert len(google.requests) == 2
+    assert "could not be read" in google.requests[1]["body"]["contents"][0]["parts"][0]["text"]
+
+
+def test_answer_single_question_sees_profile_fields_beyond_the_hand_picked_list(google, client):
+    """answer_single_question's own 'FACTS' block has only ever named about six of UserProfile's 70+
+    fields (full_name, target_titles, current role, years_experience, current_location, work_authorization)
+    -- a fact that lives on any other field (here, linkedin_url) was invisible to the AI even though it was
+    right there on the profile. plan_page sees the whole profile already (page_agent.facts() dumps it via
+    asdict()); this is the narrower per-question path, which didn't."""
+    google.default = ok_reply(json.dumps({"grounded": True, "answer": "https://linkedin.com/in/pat"}))
+    profile = config.UserProfile(full_name="Pat Lee", linkedin_url="https://linkedin.com/in/pat")
+    client.answer_single_question("What is your LinkedIn profile URL?", profile=profile)
+    sent = google.requests[0]["body"]["contents"][0]["parts"][0]["text"]
+    assert "https://linkedin.com/in/pat" in sent
+
+
+def test_answer_screening_questions_sees_profile_fields_beyond_the_hand_picked_list(google, client):
+    """Same gap as answer_single_question, in the other per-question method: its own hand-picked
+    'CANDIDATE PROFILE' block names about 22 fields and silently drops everything else."""
+    google.default = ok_reply(json.dumps({}))
+    profile = config.UserProfile(full_name="Pat Lee", linkedin_url="https://linkedin.com/in/pat")
+    questions = [{"question_text": "LinkedIn URL?", "input_type": "text", "options": []}]
+    client.answer_screening_questions(SimpleNamespace(raw_text=""), SimpleNamespace(title="Engineer", company="Acme"),
+                                      profile, questions)
+    sent = google.requests[0]["body"]["contents"][0]["parts"][0]["text"]
+    assert "https://linkedin.com/in/pat" in sent
+
+
+def test_a_screening_reply_that_is_a_list_not_a_dict_is_asked_again(google, client):
+    """A top-level JSON array -- valid JSON, wrong shape -- used to crash with AttributeError on .items(),
+    never retried, unlike plan_page's own cut-off-reply recovery."""
+    google.script.append(ok_reply(json.dumps(["LinkedIn"])))
+    google.script.append(ok_reply(json.dumps({"How did you hear about this job?": "LinkedIn"})))
+    questions = [{"question_text": "How did you hear about this job?", "input_type": "select",
+                  "options": ["LinkedIn", "Referral"]}]
+    got = client.answer_screening_questions(SimpleNamespace(raw_text="five years"),
+                                            SimpleNamespace(title="Engineer", company="Praxis"),
+                                            config.UserProfile(), questions)
+    assert got == {"How did you hear about this job?": "LinkedIn"}
+    assert len(google.requests) == 2
 
 
 # --- when Google says no or is busy -----------------------------------------------------------------------

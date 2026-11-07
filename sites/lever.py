@@ -18,3 +18,8 @@ class LeverAdapter(SiteAdapter):
     name = "lever"
     hosts = ("lever.co",)
     portal_list_patterns = ()
+
+    def preview_questions(self, job, session=None):
+        import form_preview
+        url = getattr(job, "url", "") if hasattr(job, "url") else (job.get("url") if isinstance(job, dict) else "")
+        return form_preview.fetch_lever_preview(url, session=session)

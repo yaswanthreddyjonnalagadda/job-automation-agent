@@ -1,0 +1,19 @@
+{
+  "id": "f337",
+  "date": "2026-11-06",
+  "class": "Oracle Cloud terms checkbox omission and alternating page bounce loop",
+  "symptom": "ADT Careers (Cloud Network Engineer) application ran in an alternating 31-page loop between jobs.adt.com and the Oracle Cloud Candidate Experience auth screen before stopping with MAX_READS_PER_PAGE ('this page keeps asking the same things and is not moving on').",
+  "site": "Oracle Recruiting Cloud / Candidate Experience (jobs.adt.com / fa-erqb-saasfaprod1.fa.ocs.oraclecloud.com)",
+  "root_cause": "1. Oracle JET accessibility snapshots render checkboxes as unclickable checkbox elements followed by a generic pointer element (ref=f2e46), with label words split across child text and link nodes. parse_snapshot dropped the checkbox because the generic pointer element lacked a name/value and failed _same_question. 2. required_questions did not match asterisks on indented child lines. 3. Because the checkbox was dropped, profile_plan marked the page PAGE_FULLY_KNOWN and clicked 'Next', triggering HTML5 valueMissing validation failure and bouncing back to jobs.adt.com. 4. StateFingerprintCircuitBreaker and page_agent.run only compared consecutive single-step fingerprints (fingerprint == last_fingerprint), resetting tries on alternating A-B-A-B sequences. 5. press_next lacked a limit on following open_application once _seen_form was True.",
+  "why_tests_missed": "Existing circuit breaker and page_agent tests checked identical consecutive pages (period 1), never multi-period (period 2 or 3) page oscillation, and unclickable checkbox tests did not cover Oracle JET's split label and generic pointer structure.",
+  "fix": "1. In page_agent.parse_snapshot, when an unclickable checkbox/radio is followed by a generic pointer element ([cursor=pointer]), match it if significant words of the checkbox question appear in the subsequent lines. 2. In page_agent.required_questions, match asterisks on child lines. 3. In state_machine.StateFingerprintCircuitBreaker, add multi-period cycle detection for periods 2 and 3. 4. In page_agent.press_next, stop if open_application bounces back more than once after _seen_form is True. 5. In page_agent.run, detect top-level alternating 2-cycles.",
+  "tests": [
+    "tests/test_oracle_cloud_bounce_loop.py::test_oracle_cloud_terms_checkbox_parsed_from_pointer_generic",
+    "tests/test_oracle_cloud_bounce_loop.py::test_required_questions_detects_indented_asterisk",
+    "tests/test_oracle_cloud_bounce_loop.py::test_circuit_breaker_detects_period_2_oscillation",
+    "tests/test_oracle_cloud_bounce_loop.py::test_press_next_guards_against_repeated_open_application_bounce",
+    "tests/test_oracle_cloud_bounce_loop.py::test_page_agent_run_detects_alternating_fingerprints"
+  ],
+  "prevention": "Ensure all custom ATS checkbox implementations are parsed with their visual pointer targets, and enforce multi-period cycle detection in circuit breakers to stop bouncing runs early."
+}
+

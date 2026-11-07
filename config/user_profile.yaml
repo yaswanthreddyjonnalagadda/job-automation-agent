@@ -1,0 +1,58 @@
+# user_profile.yaml
+target_roles:
+  - "Network Engineer"
+  - "Senior Network Engineer"
+  - "Cloud Network Engineer"
+  - "Network Deployment Engineer"
+  - "Network Automation Engineer"
+  - "Network Security Engineer"
+  - "SD-WAN Engineer"
+  - "Data Center Network Engineer"
+  - "Network Infrastructure Engineer"
+  - "Network Architect"
+  - "NAC Engineer"
+  - "Firewall Engineer"
+
+preferred_locations:
+  - "Remote"
+  - "Fairfax, VA"
+  - "Arlington, VA"
+  - "New Jersey"
+  - "New York, NY"
+
+salary_range:
+  min: 120000
+  max: 180000
+  currency: "USD"
+
+employment_type: "full-time"
+
+must_have_keywords:
+  - "network"
+  - "cisco"
+  - "infrastructure"
+
+nice_to_have_keywords:
+  - "AWS"
+  - "Azure"
+  - "Cisco"
+  - "Palo Alto"
+  - "Fortinet"
+  - "Terraform"
+  - "Ansible"
+  - "Python"
+  - "BGP"
+  - "OSPF"
+  - "SD-WAN"
+
+disqualifiers:
+  - "security clearance"
+  - "public trust"
+  - "TS/SCI"
+  - "US citizen only"
+  - "no sponsorship"
+  - "cannot sponsor"
+
+visa_sponsorship_required: true
+
+max_applications_per_day: 50
