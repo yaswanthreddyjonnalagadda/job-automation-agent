@@ -1452,7 +1452,21 @@ _CLICK_LABEL_JS = """e => {
 def _is_checked(loc) -> Optional[bool]:
     """Whether a tick box shows as ticked -- a native box or one drawn with aria-checked."""
     try:
-        return bool(loc.evaluate("e => e.checked === true || e.getAttribute('aria-checked') === 'true'"))
+        return bool(loc.evaluate("""e => {
+            if (e.checked === true || e.getAttribute('aria-checked') === 'true'
+                || (e.classList && (e.classList.contains('oj-selected') || e.classList.contains('is-checked'))))
+                return true;
+            const input = (e.tagName === 'INPUT' && e.type === 'checkbox') ? e :
+                          (e.querySelector && e.querySelector('input[type="checkbox"]')) ? e.querySelector('input[type="checkbox"]') :
+                          (e.closest && e.closest('label, .oj-checkboxset, [class*="checkbox"], div')) ?
+                              (e.closest('label, .oj-checkboxset, [class*="checkbox"], div').querySelector('input[type="checkbox"]') ||
+                               (e.parentElement && e.parentElement.querySelector('input[type="checkbox"]'))) : null;
+            if (input && (input.checked === true || input.getAttribute('aria-checked') === 'true'))
+                return true;
+            if (e.closest && (e.closest('.oj-selected') || e.closest('[aria-checked="true"]')))
+                return true;
+            return false;
+        }"""))
     except Exception:
         return None
 
@@ -5780,9 +5794,8 @@ class PageAgent:
             if control.role in ("checkbox", "switch", "radio") and not loc.evaluate(
                     "e => ['checkbox', 'radio'].includes(e.type) || ['checkbox', 'switch', 'radio'].includes(e.getAttribute('role'))"):
                 box = tab.get_by_role(control.role, name=control.name, exact=True)
-                if box.count() != 1:
-                    return False
-                loc = box
+                if box.count() == 1:
+                    loc = box
             # A tick box drawn as a hidden input behind a styled label (ADP's "Yes, I agree to sign electronically.",
             # SK AX USA, 30 September) refuses set_checked and a click on the input: its label is clicked, then the
             # input's own click() is dispatched. Done only when the box then shows the state asked for.

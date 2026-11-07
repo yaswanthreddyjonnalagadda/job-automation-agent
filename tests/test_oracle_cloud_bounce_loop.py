@@ -184,3 +184,32 @@ def test_page_agent_run_detects_alternating_fingerprints():
     assert outcome.kind in ("owner_needed", "needs_user")
     assert any("alternating between pages" in reason for reason in outcome.reasons)
 
+
+def test_do_ticks_pointer_generic_checkbox():
+    """PageAgent.do succeeds on generic pointer element checkbox when get_by_role count is 0."""
+    agent = page_agent.PageAgent.__new__(page_agent.PageAgent)
+    agent.tab = lambda p: p
+    page = MagicMock()
+
+    checked_state = [False]
+    def mock_eval(js, *args, **kwargs):
+        if "oj-selected" in js or "checked" in js:
+            return checked_state[0]
+        return False
+
+    loc = MagicMock()
+    loc.evaluate.side_effect = mock_eval
+    def mock_click(*args, **kwargs):
+        checked_state[0] = True
+    loc.click.side_effect = mock_click
+
+    agent.locate = lambda p, ref: loc
+    page.get_by_role.return_value.count.return_value = 0
+
+    control = Control(ref="f4e46", role="checkbox", name="I agree with the terms and conditions", checked=False)
+    ans = page_agent.Answer(ref="f4e46", question="I agree with the terms and conditions", action="check", value="checked", source="rule.acknowledgement")
+
+    assert agent.do(page, ans, control) is True
+    assert checked_state[0] is True
+
+
