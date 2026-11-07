@@ -688,6 +688,12 @@ email box, or the box will not keep your email, it does not press Create Account
 the passwords are never sent alone. Sign-in works the same way: email first, checked,
 then the password.
 
+Some sites' create-account gate asks only for your email and never a password at all
+("Authentication screen. You don't need to have an account" -- ADT Careers, 6 November
+2026). The agent recognises this the same way and the same rule applies: a privacy
+notice and consent to creating the account may be ticked; terms and conditions stay
+left for you, and the run stops and says which box rather than pressing on past it.
+
 After creating the account it signs in once with your email and `ATS_PASSWORD` (your
 decision of 28 September 2026). If the site then emails a one-time code, the agent
 reads it from your Gmail under the rules in "When a one-time code may be read from

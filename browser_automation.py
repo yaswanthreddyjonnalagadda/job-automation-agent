@@ -4015,7 +4015,10 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 return False if self._create_form_attempted else self.create_ats_account(page, email)
 
             if pw_count == 0:
-                return False
+                if self.account_on_record():
+                    return False  # an account already exists here; a passwordless gate is not where sign-in happens
+                self._create_form_attempted = False
+                return self.fill_create_account_form(page, email)
             if not self._read_ats_password():
                 return False
             if pw_count >= 2:
@@ -5444,8 +5447,8 @@ class JobApplicationAssistant(EmailVerificationMixin):
             return self._account_form_failed("a CAPTCHA is on the form: only you can complete it")
         visible = lambda loc: [loc.nth(i) for i in range(loc.count()) if loc.nth(i).is_visible()]
         pw_fields = visible(page.locator("input[type='password']"))
-        if len(pw_fields) < 2 and not (len(pw_fields) == 1 and self._heading_says_create(page)):
-            return False  # not a Create Account form
+        if len(pw_fields) == 1 and not self._heading_says_create(page):
+            return False  # a lone password with no "create" heading is a sign-in form, not this one
         self._create_form_attempted = True
         site = urlparse(page.url).netloc.lower()
         held = login_guard.may_create_account(site, email)
@@ -5474,10 +5477,11 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 box.press_sequentially(password, delay=25)
                 box.press("Tab")
                 page.wait_for_timeout(250)
-            password_values = [(box.input_value() or "") for box in pw_fields]
-            if not self._password_pair_matches(password_values, password):
-                logger.warning("ACCOUNT_CREATE_FAILED: password confirmation did not retain both entries")
-                return self._account_form_failed("the password boxes did not keep both entries")
+            if pw_fields:
+                password_values = [(box.input_value() or "") for box in pw_fields]
+                if not self._password_pair_matches(password_values, password):
+                    logger.warning("ACCOUNT_CREATE_FAILED: password confirmation did not retain both entries")
+                    return self._account_form_failed("the password boxes did not keep both entries")
 
             if full_name:
                 for field in self.detect_form_fields(page):
@@ -5641,9 +5645,10 @@ class JobApplicationAssistant(EmailVerificationMixin):
                 "button", name=re.compile(r"^\s*(create (my |your )?account|create (my |your )?profile|register|sign up|submit|submit profile)\s*$", re.IGNORECASE)
             )
             button = next((submit.nth(i) for i in range(submit.count()) if submit.nth(i).is_visible()), None)
-            if button is None and self._heading_says_create(page):
-                # A form whose heading says it creates the account names its button for the step, not the act:
-                # UKG's "Create your account" goes on with "Continue" (30 September).
+            if button is None and (self._heading_says_create(page) or not pw_fields):
+                # A form whose heading says it creates the account names its button for the step, not the act
+                # (UKG's "Create your account" goes on with "Continue", 30 September); a passwordless gate
+                # never uses "Create Account" wording at all and must be matched the same way.
                 onward = page.get_by_role("button", name=re.compile(r"^\s*(continue|next|get started|join)\s*$",
                                                                     re.IGNORECASE))
                 button = next((onward.nth(i) for i in range(onward.count()) if onward.nth(i).is_visible()), None)
