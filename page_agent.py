@@ -1469,6 +1469,19 @@ _SET_CHECKBOX_JS = """(e, want) => {
     if (inputs.length === 1) inp = inputs[0];
   }
   if (inp) {
+    const parentContainer = inp.closest('label, .input-row, form, .oj-choice-item');
+    const toggleBtn = parentContainer ? parentContainer.querySelector('.apply-flow-input-checkbox__button, [data-bind*="toggleAccepted"], [class*="checkbox__button"]') : null;
+    if (toggleBtn) {
+      const isChecked = toggleBtn.classList.contains('apply-flow-input-checkbox__button--checked') || inp.checked;
+      if (isChecked !== want) {
+        toggleBtn.click();
+      }
+      if (inp.checked !== want) {
+        inp.checked = want;
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      return true;
+    }
     if (inp.checked !== want) {
       inp.click();
     }
@@ -1514,6 +1527,9 @@ def _is_checked(loc) -> Optional[bool]:
                 if (inputs.length === 1) inp = inputs[0];
             }
             if (inp) {
+                const parent = inp.closest('label, .input-row, form');
+                const btn = parent ? parent.querySelector('.apply-flow-input-checkbox__button, [class*="checkbox__button"]') : null;
+                if (btn && btn.classList.contains('apply-flow-input-checkbox__button--checked')) return true;
                 return inp.checked === true || inp.getAttribute('aria-checked') === 'true';
             }
             if (e.checked === true || e.getAttribute('aria-checked') === 'true')
@@ -2971,7 +2987,10 @@ class PageAgent:
                 m_len = re.search(r"\b(\d+)\s*[- ]?(?:character|digit|letter)\s+code\b", local_context, re.IGNORECASE)
                 if m_len:
                     expected = int(m_len.group(1))
-            code = self.assistant.passcode_from_gmail(tab, previous=self._last_code, length=expected)
+            host = urlparse(tab.url).netloc.lower()
+            email = (getattr(self.config, "ats_email", "") or "").strip() or getattr(self.profile, "email", "")
+            prev_code = self._last_code or login_guard.last_code(host, email)
+            code = self.assistant.passcode_from_gmail(tab, previous=prev_code, length=expected)
             if code and expected:
                 # It must fit the boxes: a number picked out of the wrong part
                 # of the message was typed in and refused ("The code isn't
@@ -2995,7 +3014,7 @@ class PageAgent:
                     logger.info("CODE: asking the site to send a new one")
                     self.locate(page, fresh.ref).click(timeout=8_000)
                     tab.wait_for_timeout(4_000)
-                    code = self.assistant.passcode_from_gmail(tab, previous=self._last_code, length=expected)
+                    code = self.assistant.passcode_from_gmail(tab, previous=prev_code, length=expected)
             if not code:
                 logger.info("CODE: it has not arrived yet -- the agent will look again")
                 return False
@@ -7201,7 +7220,17 @@ class PageAgent:
         """Whether a button sits in the site's header, navigation or footer rather than in the page's content."""
         try:
             return bool(self.locate(page, control.ref).evaluate(
-                "e => !!e.closest('header, nav, footer, [role=banner], [role=navigation], [role=contentinfo]')",
+                """e => {
+                    const menu = e.closest('header, nav, footer, [role=banner], [role=navigation], [role=contentinfo]');
+                    if (!menu) return false;
+                    if (menu.closest('main, [role=main], form')) {
+                        if (menu.tagName === 'FOOTER' || menu.tagName === 'HEADER') return false;
+                    }
+                    if (menu.matches('.apply-flow-pagination__buttons, [class*="pagination"], [class*="actions"], [class*="form-footer"]')) {
+                        return false;
+                    }
+                    return true;
+                }""",
                 timeout=2_000))
         except Exception:
             return False
@@ -7325,7 +7354,7 @@ class PageAgent:
         # header's "Find Opportunities", searched the board and opened another job's link. Once the form has been
         # seen, a page that offers only the menu is left for the job's own page, where the application is resumed.
         if getattr(self, "_seen_form", False) and plan.next_kind != "open_application" \
-                and not re.search(r"\bapply\b", label, re.IGNORECASE) and self._in_site_menu(page, control):
+                and not re.search(r"\b(?:apply|next|continue|submit|review|save)\b", label, re.IGNORECASE) and self._in_site_menu(page, control):
             back = str(getattr(self.job, "url", "") or "")
             if not back:
                 return "stop", page, f"{label!r} is the site's own menu -- the page has left the application"

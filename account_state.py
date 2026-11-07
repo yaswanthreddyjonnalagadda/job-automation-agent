@@ -41,7 +41,7 @@ _STEP = re.compile(r"current step (\d+) of (\d+)", re.IGNORECASE)
 
 _LOCKED = re.compile(
     r"account (is|has been) (locked|disabled|deactivated|inactive|suspended)|too many (failed |unsuccessful )?"
-    r"(sign.?in |log.?in )?attempts|temporarily locked|account is inactive", re.IGNORECASE)
+    r"(sign.?in |log.?in )?attempts|maximum number of attempts|temporarily locked|account is inactive", re.IGNORECASE)
 _WRONG_PASSWORD = re.compile(
     r"(wrong|incorrect|invalid) (email|e-mail|user ?name|password|credentials|sign.?in)|"
     r"(email|user ?name|password) (is|was|are) (incorrect|invalid|wrong)|does not match (our|any) (records|account)|"
@@ -203,8 +203,9 @@ def read_state(snapshot: str, password_boxes: Optional[int] = None) -> AccountSt
             continue
         said = _first(pattern, [_RULE_WORDING.sub("", t) for t in texts] if creating and kind == WRONG_PASSWORD
                       else texts)
-        if said and (passwords or on_account_step or _first(_SIGN_IN, texts) or _first(_CREATE, texts)):
-            return state(kind, said)
+        if said:
+            if kind == LOCKED or (passwords or on_account_step or _first(_SIGN_IN, texts) or _first(_CREATE, texts)):
+                return state(kind, said)
     # The page's own channel wording (an authenticator app, SMS/text, a security key) outranks a
     # generic code box: the agent may read an emailed code (CODE_ENTRY below), never one that must
     # come from a channel it has no authorized way to read.

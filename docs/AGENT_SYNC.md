@@ -50,6 +50,22 @@ All Python modules live at the repository root (so imports and `replay_guard.py`
 
 ## 3. Current Repository State
 
+- **Antigravity: Fix f338 — Oracle Cloud Rate Limit Lockout Unhandled & Stale Passcode from Gmail Thread (7 November 2026)** (branch `feat/five-service-architecture`):
+  - **Incident Investigated**: ADT Careers – Cloud Network Engineer (`output/ADT_Careers_Cloud_Network_Engineer/pages/20261107_005628`) bounced back and forth between `/apply/email`, 'Too Many Attempts. Try Again Later.' rate limit page, and the job description, finally stopping with 'the application form bounced back to the job posting'.
+  - **Root Causes**:
+    1. In `email_verification.py` (`passcode_from_gmail`), when Gmail's row preview snippet `tr.zA` contained an older code from an earlier message in the same thread (e.g. `156548` from 2:07 AM), `_extract_code` found the code in preview text and skipped opening the thread. If `previous` was empty or matched, it returned the stale expired code, or broke out without inspecting the newest expanded message in the thread.
+    2. When the expired code was submitted repeatedly, Oracle Recruiting Cloud displayed a 30-minute lockout screen: `Too Many Attempts. Try Again Later. You reached the maximum number of attempts. Try again in 30 minutes.` with a single 'Continue' button and zero password fields.
+    3. `account_state.read_state()` required password boxes or explicit sign-in/create buttons to classify `kind == LOCKED`, falling through to `NONE` on zero-password error pages. `page_agent` therefore treated 'Continue' as standard forward progression, restarting the auth flow on `/apply/email` and bouncing back to the job description.
+  - **Fixes**:
+    1. In `account_state.py`, expanded `_LOCKED` to match 'maximum number of attempts' and allowed `kind == LOCKED` to classify without requiring password fields or sign-in buttons so lockouts stop cleanly with `Step(FOR_OWNER)` instead of clicking Continue in a loop.
+    2. In `login_guard.py`, persisted the last used code in `record_code_read` and provided `last_code(host, email)` so the agent remembers previous codes across runs.
+    3. In `email_verification.py` (`passcode_from_gmail`), when code from preview text equals `previous`, do not break: click `rows.nth(i)` and inspect `reversed(tab.locator('div.a3s'))` for a fresh candidate code differing from `previous`.
+    4. In `page_agent.py` (`complete_account_code`), passed `prev_code` from `_last_code` or `login_guard.last_code` to ensure stale codes are never resubmitted.
+  - **Tests**:
+    - `tests/test_account_state.py::test_a_lockout_or_rate_limit_without_password_fields_is_classified_as_locked` (148 passed)
+    - `tests/test_emailed_code_rule.py::test_mail_reader_opens_thread_when_snippet_has_previous_code` (85 passed)
+    - `tests/test_failures_catalogue.py` (636 passed)
+
 - **Claude Code: Fix f338 — Passwordless Registration Gate Never Reached the Account Handler (6 November 2026)** (branch `fix/passwordless-gate-f5sa`, worktree `C:\Users\jonna\jaa-fix-passwordless-f5sa`, PR [#79](https://github.com/yaswanthreddyjonnalagadda/job-automation-agent/pull/79) against `feat/five-service-architecture`):
   - **Same ADT Careers incident, a different symptom than f337 below**: the registration gate itself (Phenom People's "Authentication screen. You don't need to have an account" -- email box, honeypot, a required "I agree with the terms and conditions" checkbox, then Next) has **no password field at all**. `account_state.read_state()` classifies every account/registration state from password-box count; zero passwords and no sign-in wording fell through every rule to `NONE`, so the page was never routed to `handle_auth_gate`. Even if it had been, `handle_auth_gate`'s `pw_count==0` branch returned `False` immediately, and `fill_create_account_form`'s own entry guard required at least one password box -- so the already-broad acknowledgement logic (`acknowledgements.is_acknowledgement`, f336) that already ticks a routine terms-and-conditions box never got a chance to run.
   - **Owner's explicit decision this session**: after I explained the legal-signature tradeoff of auto-ticking terms/attestation boxes, the owner said to do it "for every job portal" -- confirmed that broad policy already exists (`acknowledgements.py`, f336); the actual gap here was these password-count assumptions, not the ticking policy itself.

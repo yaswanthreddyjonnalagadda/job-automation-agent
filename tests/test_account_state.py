@@ -374,6 +374,22 @@ def test_a_locked_account_is_never_reset_by_the_agent():
     assert step(A.LOCKED, account_exists=True, email_given=True).action == A.FOR_OWNER
 
 
+def test_a_lockout_or_rate_limit_without_password_fields_is_classified_as_locked():
+    # ADT Careers / Oracle Cloud (f338): rate limit lockout displays heading 'Too Many Attempts.
+    # Try Again Later.' with a single 'Continue' button and zero password fields. Must be classified
+    # as LOCKED and stop for the owner/cooldown, not fall through to NONE and click Continue in a loop.
+    snapshot = (
+        '- heading "Job application form" [level=1] [ref=f1]\n'
+        '- heading "Too Many Attempts. Try Again Later." [level=1] [ref=f2]\n'
+        '- note [ref=f3]: You reached the maximum number of attempts. Try again in 30 minutes.\n'
+        '- button "Continue" [ref=f4] [cursor=pointer]'
+    )
+    state = A.read_state(snapshot)
+    assert state.kind == A.LOCKED
+    assert "Too Many Attempts" in state.why
+    assert A.next_step(state, A.Memory()).action == A.FOR_OWNER
+
+
 # --- a refusal remembered from an earlier run (Mutual of Enumclaw, iCIMS, 29 September, 18:54) ------------------------
 
 def test_a_password_refused_in_an_earlier_run_is_reset_not_retyped_or_handed_over():

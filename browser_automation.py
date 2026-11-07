@@ -762,6 +762,8 @@ class JobApplicationAssistant(EmailVerificationMixin):
             "button:has-text('Accept Cookies')",
             "button:has-text('Allow all')",
             "button[id*='accept' i]",
+            ".cookie-consent-modal button",
+            "[class*='cookie-consent'] button",
         ):
             try:
                 btn = page.locator(selector).first

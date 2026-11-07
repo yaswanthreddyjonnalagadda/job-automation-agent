@@ -197,11 +197,24 @@ class EmailVerificationMixin:
                     if employer and employer.lower() not in text.lower() and i > 0:
                         continue  # prefer this employer's mail beyond the very newest
                     code = self._extract_code(length=length, text=text)
-                    if not code:
+                    if not code or (previous and code == previous):
                         rows.nth(i).click()
                         tab.wait_for_timeout(3_000)
-                        body = " ".join(tab.locator("div.a3s, [role=main]").first.inner_text().split())
-                        code = self._extract_code(length=length, text=body)
+                        body_locs = tab.locator("div.a3s").all()
+                        for body_loc in reversed(body_locs):
+                            try:
+                                body = " ".join(body_loc.inner_text().split())
+                                candidate_code = self._extract_code(length=length, text=body)
+                                if candidate_code and candidate_code != previous:
+                                    code = candidate_code
+                                    break
+                            except Exception as _swallowed:
+                                logger.debug("passcode_from_gmail message extract: %s", diagnostics.short_exc(_swallowed, 100))
+                        if not code or (previous and code == previous):
+                            body = " ".join(tab.locator("div.a3s, [role=main]").first.inner_text().split())
+                            candidate_code = self._extract_code(length=length, text=body)
+                            if candidate_code and candidate_code != previous:
+                                code = candidate_code
                     if code and code != previous:
                         logger.info("PASSCODE: found a one-time passcode in Gmail")  # never the mail's text: it holds the code
                         if RuntimeEvent is not None:
@@ -217,7 +230,9 @@ class EmailVerificationMixin:
                         login_guard.record_code_read(
                             urlparse(page.url).netloc.lower(),
                             (getattr(getattr(self, "_config", None), "ats_email", "") or "").strip()
-                            or getattr(self._owner_profile(), "email", ""))
+                            or getattr(self._owner_profile(), "email", ""),
+                            code=code,
+                        )
                         return code
                     break
                 logger.info("PASSCODE: no new passcode email yet -- checking again in 15s")

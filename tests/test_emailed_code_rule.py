@@ -555,3 +555,20 @@ def test_a_privacy_popup_over_the_code_step_is_answered_before_the_code_box_is_r
     loop = text.index("if self.complete_account_code(page, controls, snapshot):")
     assert text.rfind("self.assistant.accept_consent_dialog(tab)", 0, loop) > text.rfind("def ", 0, loop)
     assert text.count("self.assistant.accept_consent_dialog(tab)") == 1
+
+
+def test_mail_reader_opens_thread_when_snippet_has_previous_code(context):
+    # f338: If the Gmail row preview text still contains an older code (from an earlier
+    # message in the thread), the reader must not stop: it must open the thread and
+    # inspect the newest message for the new code.
+    thread_html = (
+        '<!doctype html><button aria-label="Google Account: Owner (owner@example.com)">Account</button>'
+        '<table><tr class="zA"><td>Example ATS</td><td>Your verification code is 156548</td></tr></table>'
+        '<div class="a3s">Your verification code is 156548</div>'
+        '<div class="a3s">Your new verification code is 839201</div>'
+    )
+    context.route("https://mail.google.com/**", lambda route: route.fulfill(
+        status=200, content_type="text/html", body=thread_html))
+    page = employer_page(context)
+    code = assistant_for(ALLOWED).passcode_from_gmail(page, previous="156548", wait_seconds=5)
+    assert code == "839201"

@@ -1,0 +1,15 @@
+{
+  "id": "f338",
+  "date": "2026-11-07",
+  "class": "Oracle Cloud rate limit lockout unhandled and stale passcode from Gmail thread",
+  "symptom": "ADT Careers (Cloud Network Engineer) application bounced back and forth between /apply/email, 'Too Many Attempts. Try Again Later.' rate limit page, and the job description, finally stopping with 'the application form bounced back to the job posting'.",
+  "site": "Oracle Recruiting Cloud / Candidate Experience (jobs.adt.com / fa-erqb-saasfaprod1.fa.ocs.oraclecloud.com)",
+  "root_cause": "1. In email_verification.passcode_from_gmail, when Gmail's row preview snippet tr.zA contained an older code from an earlier message in the same thread (e.g. 156548 from an attempt 26 minutes prior), _extract_code found the code in the preview text and skipped opening the thread. If previous was empty or matched, it returned the stale expired code, or broke out without inspecting the newest expanded message in the thread. 2. When the expired code was submitted repeatedly, Oracle Recruiting Cloud displayed a 30-minute lockout screen: 'Too Many Attempts. Try Again Later. You reached the maximum number of attempts. Try again in 30 minutes.' with a single 'Continue' button and zero password fields. 3. account_state.read_state() required password boxes or explicit sign-in/create buttons to classify kind == LOCKED, falling through to NONE on zero-password error pages. page_agent therefore treated 'Continue' as standard forward progression, restarting the auth flow on /apply/email and bouncing back to the job description.",
+  "why_tests_missed": "Existing account_state tests for LOCKED included a mock sign-in form with passwords or sign-in buttons, never testing standalone lockout error screens with only a Continue button; existing passcode_from_gmail tests tested single message rows where the preview contained the fresh code.",
+  "fix": "1. In account_state.py, expand _LOCKED to match 'maximum number of attempts' and allow kind == LOCKED to classify without requiring password fields or sign-in buttons so lockouts stop cleanly with Step(FOR_OWNER) instead of clicking Continue in a loop. 2. In login_guard.py, persist the last used code in record_code_read and provide last_code(host, email) so the agent remembers previous codes across runs. 3. In email_verification.passcode_from_gmail, when code from preview text equals previous, do not break: click rows.nth(i) and inspect reversed(tab.locator('div.a3s')) for a fresh candidate code differing from previous. 4. In page_agent.py complete_account_code, pass prev_code from _last_code or login_guard.last_code to ensure stale codes are never resubmitted.",
+  "tests": [
+    "tests/test_account_state.py::test_a_lockout_or_rate_limit_without_password_fields_is_classified_as_locked",
+    "tests/test_emailed_code_rule.py::test_mail_reader_opens_thread_when_snippet_has_previous_code"
+  ],
+  "prevention": "Ensure portal lockout/rate-limit screens are recognized regardless of password field counts, and always inspect actual message bodies in threaded emails when preview snippets hold previously used codes."
+}
