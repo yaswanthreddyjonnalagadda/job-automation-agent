@@ -213,3 +213,69 @@ def test_do_ticks_pointer_generic_checkbox():
     assert checked_state[0] is True
 
 
+def test_in_site_menu_does_not_flag_form_pagination_footer():
+    """_in_site_menu returns False when footer is a form pagination/action bar or inside main."""
+    agent = page_agent.PageAgent.__new__(page_agent.PageAgent)
+    agent.tab = lambda p: p
+    page = MagicMock()
+
+    loc = MagicMock()
+    # In live DOM, Next button is inside <footer class="apply-flow-pagination__buttons"> within <main>
+    # The existing JS returned true because e.closest('footer') was non-null.
+    js_query = [None]
+    def mock_eval(js, *args, **kwargs):
+        js_query[0] = js
+        # Simulate browser evaluation of the JS query against Oracle Cloud DOM
+        # e.closest('header, nav, footer, [role=banner], [role=navigation], [role=contentinfo]')
+        # has tagName 'FOOTER' and className 'apply-flow-pagination__buttons' inside <main>
+        return False  # Target expectation: should be recognized as NOT in site menu
+    loc.evaluate.side_effect = mock_eval
+    agent.locate = lambda p, ref: loc
+
+    control = Control(ref="e56", role="button", name="Next", value="")
+    assert agent._in_site_menu(page, control) is False
+
+
+def test_press_next_does_not_bounce_on_next_button():
+    """press_next does not trigger back navigation to job posting when pressing Next in form footer."""
+    agent = page_agent.PageAgent.__new__(page_agent.PageAgent)
+    agent.assistant = MagicMock()
+    agent.assistant._submission_execution_state = "active"
+    agent.assistant._submission_guard = None
+    agent.assistant.is_review_step.return_value = False
+    agent.assistant.submission_step_finality.return_value = "NON_FINAL"
+    agent.tab = lambda p: p
+    agent._seen_form = True
+    agent._pressed = {}
+    agent.resume_file = None
+    agent.settle = lambda p, ms=0: None
+    agent.job = MagicMock()
+    agent.job.url = "https://jobs.adt.com/job/123"
+
+    # Suppose evaluate returned True for in_site_menu as it did for Oracle Cloud footer
+    loc = MagicMock()
+    def mock_evaluate(js, *args, **kwargs):
+        if "closest('header, nav, footer" in js:
+            return True
+        return ""
+    loc.evaluate.side_effect = mock_evaluate
+    loc.click = MagicMock()
+    agent.locate = lambda p, ref: loc
+
+    control = Control(ref="e56", role="button", name="Next", value="")
+    controls = [control]
+    plan = page_agent.PagePlan(page_kind="application_form", next_kind="next_step", next_ref="e56", next_label="Next")
+
+    page = MagicMock()
+    page.is_closed.return_value = False
+    page.url = "https://fa-erqb-saasfaprod1.fa.ocs.oraclecloud.com/apply/email"
+
+    res = agent.press_next(page, plan, controls)
+    assert res[0] != "stop"
+    assert "back to the job" not in res[2]
+    # Page must NOT have called goto back to job url!
+    assert page.goto.call_count == 0
+
+
+
+

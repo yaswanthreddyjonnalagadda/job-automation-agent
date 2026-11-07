@@ -135,6 +135,21 @@ def _guard_script(capability: str) -> str:
         return !Array.from(candidate.form.elements).some(
           el => el !== candidate && labels(el).some(label => submitLabel.test(label)));
       };
+      // A candidate identity verification / OTP passcode step (e.g. Oracle Cloud Candidate Experience,
+      // Greenhouse "enter verification code", ADP/Workday emailed passcodes). The form holds code/pin boxes
+      // and a button like "Verify", "Verify Code", or "Confirm". It is never a final application submit.
+      const verificationLabel = /^(?:verify|confirm)(?:\s+(?:code|identity|passcode))?$/i;
+      const verificationStep = candidate => {
+        const own = labels(candidate);
+        if (!candidate.form || !own.length || !own.every(label => verificationLabel.test(label))) return false;
+        const formText = [
+          candidate.form.innerText || "",
+          ...Array.from(candidate.form.elements).map(e => e.getAttribute("aria-label") || "")
+        ].join(" ");
+        if (!/(?:verification\s*code|confirm\s*(?:your\s*)?identity|one-time\s*(?:pass\s*code|code)|passcode|pin\s*code)/i.test(formText)) return false;
+        return !Array.from(candidate.form.elements).some(
+          el => el !== candidate && labels(el).some(label => submitLabel.test(label)));
+      };
       const finalControl = element => {
         if (!(element instanceof Element)) return null;
         const candidate = element.closest(selector);
@@ -143,6 +158,7 @@ def _guard_script(capability: str) -> str:
         if (adpFinalReviewNext(candidate)) return candidate;
         if (labels(candidate).some(label => submitLabel.test(label))) return candidate;
         if (consentStep(candidate)) return null;
+      if (verificationStep(candidate)) return null;
         if (structuralSubmitter(candidate) && !ordinaryNavigation(candidate)) return candidate;
         return soleRemainingAction(candidate) ? candidate : null;
       };

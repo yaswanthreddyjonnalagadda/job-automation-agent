@@ -103,12 +103,20 @@ def record_account_attempt(host: str, email: str) -> None:
     _save(data)
 
 
-def record_code_read(host: str, email: str) -> None:
+def record_code_read(host: str, email: str, code: str = "") -> None:
     data = _load()
     entry = _entry(data, host, email)
     entry["code_reads"] = [*(entry.get("code_reads") or []), _stamp()][-20:]
+    if code:
+        entry["last_code"] = code
     data[_key(host, email)] = entry
     _save(data)
+
+
+def last_code(host: str, email: str) -> str:
+    data = _load()
+    entry = _entry(data, host, email)
+    return str(entry.get("last_code") or "")
 
 
 def record_reset_request(host: str, email: str) -> None:
